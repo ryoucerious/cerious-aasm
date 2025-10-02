@@ -1,0 +1,124 @@
+    <div class="tab-content">
+      <div class="automation-status-row">
+        <div class="status-item-inline">
+          <span class="status-label">Auto-start:</span>
+          <span class="automation-badge" [class.enabled]="serverInstance.autoStartOnAppLaunch">
+            {{ getAutoStartStatus() }}
+          </span>
+        </div>
+        <div class="status-item-inline">
+          <span class="status-label">Crash Detection:</span>
+          <span class="automation-badge" [class.enabled]="serverInstance.crashDetectionEnabled">
+            {{ serverInstance.crashDetectionEnabled ? 'Enabled' : 'Disabled' }}
+          </span>
+        </div>
+        <div class="status-item-inline">
+          <span class="status-label">Scheduled Restart:</span>
+          <span class="automation-badge" [class.enabled]="serverInstance.scheduledRestartEnabled">
+            {{ getScheduledRestartStatus() }}
+          </span>
+        </div>
+      </div>
+
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Server Automation Settings</h4>
+        <p class="form-control-label desc">Configure automatic startup, crash detection, and scheduled restart options for your server.</p>
+      </div>
+
+      <!-- Auto-start Settings -->
+      <div class="settings-section">
+          <h5>Auto-start Configuration</h5>
+          <p class="section-desc">Configure automatic server startup when the application launches.</p>
+
+          <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.autoStartOnAppLaunch" (change)="onSaveAutoStartSettings()" [disabled]="isAutomationLocked" tabindex="0" />
+            <span class="toggle-text">Auto-start on app launch</span>
+          </div>
+          <div class="form-control-label desc">Automatically start this server when the application launches.</div>
+        </div>
+        </div>
+
+        <!-- Crash Detection Settings -->
+        <div class="settings-section">
+          <h5>Crash Detection & Recovery</h5>
+          <p class="section-desc">Monitor server process and automatically restart if crashes occur.</p>
+
+          <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.crashDetectionEnabled" (change)="onSaveCrashDetectionSettings()" [disabled]="isAutomationLocked" tabindex="0" />
+            <span class="toggle-text">Enable crash detection</span>
+          </div>
+          <div class="form-control-label desc">Monitor server process and automatically restart if it crashes or becomes unresponsive.</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Crash detection interval (seconds)</label>
+          <input class="form-control input" type="number" min="30" max="300" [(ngModel)]="serverInstance.crashDetectionInterval" (blur)="onSaveCrashDetectionSettings(); onValidateField('crashDetectionInterval', serverInstance.crashDetectionInterval)" [disabled]="isAutomationLocked || !serverInstance.crashDetectionEnabled" />
+          <div class="form-control-label desc">How often to check if the server process is running (30-300 seconds).</div>
+          <div *ngIf="hasFieldError('crashDetectionInterval')" class="validation-error">{{ getFieldError('crashDetectionInterval') }}</div>
+          <div *ngIf="hasFieldWarning('crashDetectionInterval')" class="validation-warning">{{ getFieldWarning('crashDetectionInterval') }}</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Max restart attempts</label>
+          <input class="form-control input" type="number" min="1" max="10" [(ngModel)]="serverInstance.maxRestartAttempts" (blur)="onSaveCrashDetectionSettings(); onValidateField('maxRestartAttempts', serverInstance.maxRestartAttempts)" [disabled]="isAutomationLocked || !serverInstance.crashDetectionEnabled" />
+          <div class="form-control-label desc">Maximum number of restart attempts before giving up (1-10).</div>
+          <div *ngIf="hasFieldError('maxRestartAttempts')" class="validation-error">{{ getFieldError('maxRestartAttempts') }}</div>
+          <div *ngIf="hasFieldWarning('maxRestartAttempts')" class="validation-warning">{{ getFieldWarning('maxRestartAttempts') }}</div>
+        </div>
+        </div>
+
+        <!-- Scheduled Restart Settings -->
+        <div class="settings-section">
+          <h5>Scheduled Restarts</h5>
+          <p class="section-desc">Configure automatic server restarts at scheduled intervals.</p>
+
+          <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.scheduledRestartEnabled" (change)="onSaveScheduledRestartSettings()" [disabled]="isAutomationLocked" tabindex="0" />
+            <span class="toggle-text">Enable scheduled restarts</span>
+          </div>
+          <div class="form-control-label desc">Automatically restart the server at scheduled times to maintain performance.</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Restart frequency</label>
+          <div class="custom-dropdown" [class.disabled]="isAutomationLocked || !serverInstance.scheduledRestartEnabled">
+            <button type="button" class="form-control input" [disabled]="isAutomationLocked || !serverInstance.scheduledRestartEnabled" (click)="onToggleRestartFrequencyDropdown()">
+              <span>{{ getRestartFrequencyDisplayName(serverInstance.restartFrequency) || 'Select frequency...' }}</span>
+              <span class="material-icons">arrow_drop_down</span>
+            </button>
+            <div *ngIf="restartFrequencyDropdownOpen && !isAutomationLocked && serverInstance.scheduledRestartEnabled" class="dropdown-menu show">
+              <div *ngFor="let opt of getRestartFrequencyOptions()" (mousedown)="onRestartFrequencySelect(opt.value)" [ngClass]="{'selected': serverInstance.restartFrequency === opt.value}">{{ opt.display }}</div>
+            </div>
+          </div>
+          <div class="form-control-label desc">How often to restart the server automatically.</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Restart time</label>
+          <input type="time" class="form-control input" [(ngModel)]="serverInstance.restartTime" (blur)="onSaveScheduledRestartSettings()" [disabled]="isAutomationLocked || !serverInstance.scheduledRestartEnabled" />
+          <div class="form-control-label desc">Time of day to restart the server (24-hour format).</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Warning period (minutes)</label>
+          <input class="form-control input" type="number" min="1" max="60" [(ngModel)]="serverInstance.restartWarningMinutes" (blur)="onSaveScheduledRestartSettings(); onValidateField('restartWarningMinutes', serverInstance.restartWarningMinutes)" [disabled]="isAutomationLocked || !serverInstance.scheduledRestartEnabled" />
+          <div class="form-control-label desc">How many minutes before restart to warn players (1-60 minutes).</div>
+          <div *ngIf="hasFieldError('restartWarningMinutes')" class="validation-error">{{ getFieldError('restartWarningMinutes') }}</div>
+          <div *ngIf="hasFieldWarning('restartWarningMinutes')" class="validation-warning">{{ getFieldWarning('restartWarningMinutes') }}</div>
+        </div>
+
+        <div class="form-group" *ngIf="serverInstance.restartFrequency === 'weekly' || serverInstance.restartFrequency === 'custom'">
+          <label class="form-control-label">Restart days</label>
+          <div class="checkbox-group">
+            <div class="form-control-label toggle-label" *ngFor="let day of weekDays; let i = index">
+              <input type="checkbox" class="toggle-switch" [checked]="isRestartDaySelected(i)" (change)="onRestartDayToggle(i, $event)" [disabled]="isAutomationLocked || !serverInstance.scheduledRestartEnabled" />
+              <span class="toggle-text">{{ day }}</span>
+            </div>
+          </div>
+          <div class="form-control-label desc">Select which days of the week to restart the server.</div>
+        </div>
+        </div>
+      </div>

@@ -1,0 +1,50 @@
+<div class="card">
+  <div class="card-header button-header collapsible-header" (click)="toggleVisibility()">
+    <h2>SERVER STATE</h2>
+    <div class="button-header-actions">
+      <button class="btn" (click)="onStartServer($event)"
+        [disabled]="!canStart">
+        <i class="material-icons">play_arrow</i> Start
+      </button>
+      <button class="btn" (click)="onStopServer($event)" [disabled]="!canStop">
+        <i class="material-icons">stop</i> Stop
+      </button>
+      <button class="btn" (click)="onForceStopServer($event)" [disabled]="!canForceStop">
+        <i class="material-icons">power_off</i> Force
+      </button>
+      <span class="material-icons">
+        {{ isVisible ? 'expand_more' : 'expand_less' }}
+      </span>
+    </div>
+  </div>
+  <div class="card-body" *ngIf="isVisible">
+    <div class="server-state-header-row">
+      <span>Status:</span>
+      <span class="status-badge" [ngClass]="statusClasses">
+        {{ statusText }}
+      </span>
+      <span class="players-indicator" *ngIf="serverInstance.state && serverInstance.state === 'Running' && maxPlayers !== null">
+        Players: {{ currentPlayers }} / {{ maxPlayers }}
+      </span>
+      <span class="memory-indicator" *ngIf="serverInstance.state && serverInstance.state === 'Running' && memoryUsage">
+        Memory: {{ memoryUsage }} MB
+      </span>
+    </div>
+    <br />
+    <div *ngIf="serverMessage">
+      {{ serverMessage }}
+    </div>
+    <div class="console-log-container" #logContainer>
+      <ng-container *ngIf="logs && logs.length; else noLogs">
+        <div class="console-log-line" *ngFor="let line of logs">
+          {{ line }}
+        </div>
+      </ng-container>
+      <ng-template #noLogs>
+        <div class="console-log-placeholder">
+          No output yet. Start the server to see logs...
+        </div>
+      </ng-template>
+    </div>
+  </div>
+</div>

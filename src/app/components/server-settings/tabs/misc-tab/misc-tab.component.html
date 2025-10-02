@@ -1,0 +1,29 @@
+<!-- Misc Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Miscellaneous Settings</h4>
+    <p class="form-control-label desc">Additional server configuration options including advanced gameplay mechanics, special features, and other settings that don't fit into other categories.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Advanced Server Settings</h5>
+    <p class="section-desc">Configure special gameplay mechanics and advanced server features.</p>
+
+    <ng-container *ngFor="let field of miscFields">
+      <div class="form-group">
+        <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+          <span class="toggle-text">{{ field.label }}</span>
+        </div>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label">
+          <span>{{ field.label }}</span>
+        </label>
+        <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min" [max]="field.max" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+        <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+        <div class="form-control-label desc">{{ field.description }}</div>
+        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
+        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+      </div>
+    </ng-container>
+  </div>
+</div>

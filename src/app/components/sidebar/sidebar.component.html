@@ -1,0 +1,213 @@
+<div class="sidebar" style="display:flex;flex-direction:column;">
+  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:4px 8px 8px 4px;box-sizing:border-box;">
+    <div class="sidebar-header" (click)="showServers = !showServers" style="cursor:pointer;display:flex;align-items:center;gap:8px;margin:0;">
+      <h3 style="margin:0;">Servers</h3>
+      <span class="material-icons" style="font-size:20px;user-select:none;">
+        {{ showServers ? 'expand_more' : 'chevron_right' }}
+      </span>
+    </div>
+
+  </div>
+  
+  <div class="sidebar-content" *ngIf="showServers">
+    <div class="server-list">
+      <div 
+        *ngFor="let server of servers; trackBy: trackByServerId" 
+        class="server-item"
+        [class.selected]="selectedServerId === server.id"
+        (click)="onServerClick(server)">
+        <span class="server-status-icon" [ngClass]="getServerStatusClass(server)">
+          <i class="material-icons">{{ getServerStatusIcon(server) }}</i>
+        </span>
+        <span 
+          *ngIf="editingServerId !== server.id"
+          class="server-name" 
+          [class.editable]="!isServerBusy(server)"
+          (dblclick)="onServerNameDoubleClick(server, $event)">
+          {{ server.name }}
+        </span>
+        <input 
+          *ngIf="editingServerId === server.id"
+          type="text"
+          class="form-control editing-server-name"
+          [(ngModel)]="editingServerName"
+          (keydown)="onServerNameKeydown($event, server)"
+          (blur)="onServerNameBlur(server)">
+        <button 
+          *ngIf="servers.length > 1 && editingServerId !== server.id && (server.state || '').toLowerCase() === 'stopped'"
+          class="delete-server-btn" 
+          title="Delete Server"
+          (click)="onDeleteServer(server, $event)">
+          &#10006;
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <div class="sidebar-footer">
+    <button 
+      class="btn btn-ghost" 
+      (click)="onAddServerClick()"
+      title="Add Server">
+      <i class="material-icons">add</i>
+      Add Server
+    </button>
+    <button 
+      class="btn btn-ghost" 
+      (click)="onSettingsClick()"
+      title="Settings">
+      <i class="material-icons">settings</i>
+    </button>
+    <!-- Logout button for web mode when authentication is enabled -->
+    <button 
+      *ngIf="isWebMode && authenticationEnabled"
+      class="btn btn-ghost" 
+      (click)="onLogoutClick()"
+      title="Logout">
+      <i class="material-icons">logout</i>
+    </button>
+  </div>
+</div>
+
+<app-modal 
+  [title]="'Add Server'" 
+  [show]="showAddModal" 
+  (close)="onCancelAdd()">
+  
+  <!-- Mode Selection -->
+  <div class="form-group">
+    <div class="tabs import-mode-selector">
+      <button 
+        type="button" 
+        class="btn tab" 
+        [class.active]="importMode === 'create'"
+        (click)="setImportMode('create')">
+        <i class="material-icons">add</i>
+        Create New Server
+      </button>
+      <button 
+        type="button" 
+        class="btn tab" 
+        [class.active]="importMode === 'import'"
+        (click)="setImportMode('import')">
+        <i class="material-icons">file_upload</i>
+        Import from Backup
+      </button>
+      <button 
+        type="button" 
+        class="btn tab" 
+        [class.active]="importMode === 'clone'"
+        (click)="setImportMode('clone')">
+        <i class="material-icons">content_copy</i>
+        Clone Existing Server
+      </button>
+    </div>
+  </div>
+
+  <!-- Fixed height container for form content -->
+  <div class="modal-form-content">
+    <!-- Create New Server Form -->
+    <div *ngIf="importMode === 'create'" class="form-group">
+      <label class="form-control-label">Server Name</label>
+      <input 
+        #serverNameInput 
+        class="form-control" 
+        [(ngModel)]="serverName" 
+        name="serverName" 
+        required 
+        placeholder="Enter server name" 
+        (keyup.enter)="onAddServer()"/>
+    </div>
+
+    <!-- Import from Backup Form -->
+    <div *ngIf="importMode === 'import'">
+      <div class="form-group">
+        <label class="form-control-label">Server Name</label>
+        <input 
+          class="form-control" 
+          [(ngModel)]="serverName" 
+          name="serverName" 
+          required 
+          placeholder="Enter server name"/>
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Backup File</label>
+        <div class="file-input-wrapper">
+          <input 
+            type="text" 
+            class="form-control" 
+            [(ngModel)]="selectedBackupFilePath"
+            placeholder="Enter file path or click Browse"
+            style="flex: 1;"/>
+          <button 
+            type="button" 
+            class="btn btn-ghost" 
+            (click)="selectBackupFile()"
+            style="margin-left: 8px;">
+            Browse
+          </button>
+        </div>
+        <!-- Hidden file input for fallback -->
+        <input 
+          type="file" 
+          accept=".zip"
+          style="display: none;"
+          (change)="onBackupFileSelect($event)"
+          #backupFileInput/>
+        <div class="form-control-label desc">Select a backup ZIP file to restore. You can type the path directly or click Browse.</div>
+      </div>
+    </div>
+
+    <!-- Clone Existing Server Form -->
+    <div *ngIf="importMode === 'clone'">
+      <div class="form-group">
+        <label class="form-control-label">New Server Name</label>
+        <input 
+          class="form-control" 
+          [(ngModel)]="serverName" 
+          name="serverName" 
+          required 
+          placeholder="Enter name for cloned server"/>
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Clone From</label>
+        <select 
+          class="form-control" 
+          [(ngModel)]="selectedServerToClone" 
+          name="selectedServerToClone" 
+          required>
+          <option [ngValue]="null">Select a server to clone...</option>
+          <option *ngFor="let server of servers" [ngValue]="server">
+            {{ server.name }}
+          </option>
+        </select>
+        <div class="form-control-label desc">Choose an existing server to copy all settings from. The new server will have identical configuration but a different name.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-group-modal" style="margin-top: 10px;">
+    <button type="button" (click)="onCancelAdd()" class="btn btn-ghost">Cancel</button>
+    <button 
+      type="button" 
+      (click)="onAddServer()" 
+      [disabled]="!canAddServer()" 
+      class="btn btn-ghost">
+      {{ importMode === 'create' ? 'Add' : importMode === 'import' ? 'Import' : 'Clone' }}
+    </button>
+  </div>
+</app-modal>
+
+<app-modal 
+  [title]="'Confirm Delete'" 
+  [show]="showConfirmDeleteModal" 
+  (close)="onCancelDelete()">
+  <div class="modal-confirmation">
+    Are you sure you want to delete <span class="modal-target">{{ serverToDelete?.name }}</span>?
+    <p class="warning-text">This action cannot be undone.</p>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" (click)="onCancelDelete()" class="btn">Cancel</button>
+    <button type="button" (click)="onConfirmDelete()" class="btn btn-ghost">Delete</button>
+  </div>
+</app-modal>

@@ -1,0 +1,171 @@
+<div class="card">
+  <div class="card-header button-header collapsible-header" (click)="onToggleVisibility()">
+    <h2>SERVER SETTINGS</h2>
+    <div class="button-header-actions">
+      <button *ngIf="isElectron" class="btn" (click)="onOpenDirectory($event)">
+        <i class="material-icons">folder_open</i> Open Directory
+      </button>
+      <span class="material-icons">
+        {{ isVisible ? 'expand_more' : 'expand_less' }}
+      </span>
+    </div>
+  </div>
+  <div class="card-body" *ngIf="isVisible">
+    <div class="tabs">
+      <button class="tab" [class.active]="activeTab === 'general'" (click)="onTabChange('general')">
+        <i class="material-icons">tune</i> General
+      </button>
+      <button class="tab" [class.active]="activeTab === 'rates'" (click)="onTabChange('rates')">
+        <i class="material-icons">speed</i> Rates
+      </button>
+      <button class="tab" [class.active]="activeTab === 'structures'" (click)="onTabChange('structures')">
+        <i class="material-icons">home</i> Structures
+      </button>
+      <button class="tab" [class.active]="activeTab === 'stats'" (click)="onTabChange('stats')">
+        <i class="material-icons">bar_chart</i> Stat Multipliers
+      </button>
+      <button class="tab" [class.active]="activeTab === 'misc'" (click)="onTabChange('misc')">
+        <i class="material-icons">settings</i> Miscellaneous
+      </button>
+      <button class="tab" [class.active]="activeTab === 'cluster'" (click)="onTabChange('cluster')">
+        <i class="material-icons">group_work</i> Cluster
+      </button>
+      <button class="tab" [class.active]="activeTab === 'mods'" (click)="onTabChange('mods')">
+        <i class="material-icons">extension</i> Mods
+      </button>
+      <button class="tab" [class.active]="activeTab === 'automation'" (click)="onTabChange('automation')">
+        <i class="material-icons">schedule</i> Automation
+      </button>
+      <button class="tab" [class.active]="activeTab === 'firewall'" (click)="onTabChange('firewall')"
+              *ngIf="isLinux">
+        <i class="material-icons">security</i> Firewall
+      </button>
+      <button class="tab" [class.active]="activeTab === 'backup'" (click)="onBackupTabClick()">
+        <i class="material-icons">backup</i> Backup
+      </button>
+    </div>
+    
+    <!-- General Tab Content -->
+    <app-general-tab
+      *ngIf="activeTab === 'general'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      [generalFields]="generalFields"
+      [dropdownOpen]="dropdownOpen"
+      (saveSettings)="onSaveSettings()"
+      (validateField)="validateField($event.key, $event.value)"
+      (toggleMultiOption)="onToggleMultiOption($event.key, $event.option, $event.checked)"
+      (mapSelect)="onMapSelect($event.value, $event.key)"
+      (mapInput)="onMapInput($event.event, $event.key)"
+      (dropdownToggle)="dropdownOpen = $event">
+    </app-general-tab>    <!-- Rates Tab Content -->
+    <app-rates-tab
+      *ngIf="activeTab === 'rates'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      [ratesFields]="ratesFields"
+      (saveSettings)="onSaveSettings()"
+      (validateField)="validateField($event.key, $event.value)">
+    </app-rates-tab>
+    
+    <!-- Structures Tab Content -->
+    <app-structures-tab
+      *ngIf="activeTab === 'structures'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      [structuresFields]="structuresFields"
+      (saveSettings)="onSaveSettings()"
+      (validateField)="validateField($event.key, $event.value)">
+    </app-structures-tab>
+    
+    <!-- Stats Tab Content -->
+    <app-stat-multipliers-tab
+      *ngIf="activeTab === 'stats'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      [statList]="statList"
+      [selectedStatIndex]="selectedStatIndex"
+      [statSelectorDropdownOpen]="statSelectorDropdownOpen"
+      (statMultiplierChanged)="onStatMultiplierChange($event.type, $event.statIndex, $event.value)"
+      (resetStatToDefaults)="onResetStatToDefaults($event)"
+      (copyStatToAll)="onCopyStatToAll($event)"
+      (toggleStatSelectorDropdown)="toggleStatSelectorDropdown()"
+      (statSelectorSelect)="onStatSelectorSelect($event)">
+    </app-stat-multipliers-tab>
+    
+    <!-- Misc Tab Content -->
+    <app-misc-tab
+      *ngIf="activeTab === 'misc'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      [miscFields]="miscFields"
+      (saveSettings)="onSaveSettings()"
+      (validateField)="validateField($event.key, $event.value)">
+    </app-misc-tab>
+
+    <!-- Cluster Tab Content -->
+    <app-cluster-tab
+      *ngIf="activeTab === 'cluster'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      (validateField)="validateField($event.key, $event.value)">
+    </app-cluster-tab>
+    
+    <!-- Mods Tab Content -->
+    <app-mods-tab
+      *ngIf="activeTab === 'mods'"
+      [isLocked]="isLocked"
+      [modList]="modList"
+      (addMod)="addMod.emit($event)"
+      (removeMod)="removeMod.emit($event)"
+      (toggleMod)="toggleMod.emit($event)"
+      (updateModSettings)="updateModSettings.emit($event)">
+    </app-mods-tab>
+    
+    <!-- Backup Tab Content -->
+    <app-backup-tab
+      *ngIf="activeTab === 'backup'"
+      [backupScheduleEnabled]="backupScheduleEnabled"
+      [backupFrequency]="backupFrequency"
+      [backupTime]="backupTime"
+      [backupDayOfWeek]="backupDayOfWeek"
+      [maxBackupsToKeep]="maxBackupsToKeep"
+      [backupList]="backupList"
+      [isBackupLocked]="isBackupLocked"
+      [backupFrequencyDropdownOpen]="backupFrequencyDropdownOpen"
+      [backupDayDropdownOpen]="backupDayDropdownOpen"
+      (createManualBackup)="onCreateManualBackup()"
+      (backupScheduleToggle)="onBackupScheduleToggle()"
+      (backupFrequencySelect)="onBackupFrequencySelect($event)"
+      (backupTimeChange)="onBackupTimeChange($event)"
+      (backupDaySelect)="onBackupDaySelect($event)"
+      (maxBackupsToKeepChange)="onMaxBackupsToKeepChange($event)"
+      (restoreBackup)="onRestoreBackup($event)"
+      (downloadBackup)="onDownloadBackup($event)"
+      (deleteBackup)="onDeleteBackup($event)"
+      (validateField)="validateField($event.key, $event.value)"
+      (toggleBackupFrequencyDropdown)="toggleBackupFrequencyDropdown()"
+      (toggleBackupDayDropdown)="toggleBackupDayDropdown()">
+    </app-backup-tab>
+
+    <!-- Automation Tab Content -->
+    <app-automation-tab
+      *ngIf="activeTab === 'automation'"
+      [serverInstance]="serverInstance"
+      [restartFrequencyDropdownOpen]="restartFrequencyDropdownOpen"
+      (saveAutoStartSettings)="onSaveAutoStartSettings()"
+      (saveCrashDetectionSettings)="onSaveCrashDetectionSettings()"
+      (saveScheduledRestartSettings)="onSaveScheduledRestartSettings()"
+      (validateField)="validateField($event.key, $event.value)"
+      (restartDayToggle)="onRestartDayToggle($event.dayIndex, $event.event)"
+      (restartFrequencySelect)="onRestartFrequencySelect($event)"
+      (toggleRestartFrequencyDropdown)="toggleRestartFrequencyDropdown()">
+    </app-automation-tab>
+
+    <!-- Firewall Tab Content -->
+    <app-firewall-tab
+      *ngIf="activeTab === 'firewall'"
+      [serverInstance]="serverInstance">
+    </app-firewall-tab>
+  </div>
+</div>

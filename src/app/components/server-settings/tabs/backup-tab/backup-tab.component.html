@@ -1,0 +1,122 @@
+    <div class="tab-content">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Server Backup Management</h4>
+        <p class="form-control-label desc">Create and manage backups of your server instance folder.</p>
+      </div>
+
+      <!-- Manual Backup Section -->
+      <div class="settings-section">
+        <h5>Manual Backup</h5>
+        <p class="section-desc">Create an immediate backup of your server files.</p>
+
+        <div class="form-group" style="grid-column: 1 / -1;">
+          <label class="form-control-label">Create Backup</label>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button class="btn btn-ghost" (click)="onCreateManualBackup()" [disabled]="isBackupLocked">
+              <i class="material-icons">backup</i>
+              Create Backup Now
+            </button>
+          </div>
+          <div class="form-control-label desc">Create an immediate backup of the server instance.</div>
+        </div>
+      </div>
+
+      <!-- Scheduled Backup Section -->
+      <div class="settings-section">
+        <h5>Backup Schedule</h5>
+        <p class="section-desc">Configure automatic backup schedules and retention settings.</p>
+        <div class="backup-schedule">
+          <div class="form-group">
+            <label class="form-control-label toggle-label">
+              <input type="checkbox" class="toggle-switch" [checked]="backupScheduleEnabled" (change)="onBackupScheduleToggle()" [disabled]="isBackupLocked" />
+              <span class="slider"></span>
+              <span class="toggle-text">Enable Automatic Backups</span>
+            </label>
+          </div>
+
+          <div *ngIf="backupScheduleEnabled" class="schedule-settings">
+            <div class="form-group">
+              <label class="form-control-label">Backup Frequency</label>
+              <div class="custom-dropdown" [class.disabled]="isBackupLocked">
+                <button type="button" class="form-control input" [disabled]="isBackupLocked" (click)="onToggleBackupFrequencyDropdown()">
+                  <span>{{ getBackupFrequencyDisplayName(backupFrequency) || 'Select frequency...' }}</span>
+                  <span class="material-icons">arrow_drop_down</span>
+                </button>
+                <div *ngIf="backupFrequencyDropdownOpen && !isBackupLocked" class="dropdown-menu show">
+                  <div *ngFor="let opt of getBackupFrequencyOptions()" (mousedown)="onBackupFrequencySelect(opt.value)" [ngClass]="{'selected': backupFrequency === opt.value}">{{ opt.display }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div *ngIf="backupFrequency === 'daily' || backupFrequency === 'weekly'" class="form-group">
+              <label class="form-control-label">Time</label>
+              <input type="time" class="form-control input" [value]="backupTime" (change)="onBackupTimeChange($event)" [disabled]="isBackupLocked" />
+            </div>
+
+            <div *ngIf="backupFrequency === 'weekly'" class="form-group">
+              <label class="form-control-label">Day of Week</label>
+              <div class="custom-dropdown" [class.disabled]="isBackupLocked">
+                <button type="button" class="form-control input" [disabled]="isBackupLocked" (click)="onToggleBackupDayDropdown()">
+                  <span>{{ getBackupDayDisplayName(backupDayOfWeek) || 'Select day...' }}</span>
+                  <span class="material-icons">arrow_drop_down</span>
+                </button>
+                <div *ngIf="backupDayDropdownOpen && !isBackupLocked" class="dropdown-menu show">
+                  <div *ngFor="let opt of getBackupDayOptions()" (mousedown)="onBackupDaySelect(opt.value)" [ngClass]="{'selected': backupDayOfWeek === opt.value}">{{ opt.display }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-control-label">Max Backups to Keep</label>
+              <input type="number" class="form-control input" min="1" max="50" [value]="maxBackupsToKeep" (blur)="onValidateField('maxBackupsToKeep', maxBackupsToKeep)" (change)="onMaxBackupsToKeepChange($event)" [disabled]="isBackupLocked" />
+              <div class="form-control-label desc">Older backups will be automatically deleted when this limit is reached.</div>
+              <div *ngIf="hasFieldError('maxBackupsToKeep')" class="validation-error">{{ getFieldError('maxBackupsToKeep') }}</div>
+              <div *ngIf="hasFieldWarning('maxBackupsToKeep')" class="validation-warning">{{ getFieldWarning('maxBackupsToKeep') }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup List Section -->
+      <div class="settings-section">
+        <h5>Available Backups</h5>
+        <p class="section-desc">Manage your existing backups - restore, download, or delete.</p>
+
+        <div class="form-group backup-table-container" style="grid-column: 1 / -1;">
+        <div class="backup-list">
+          <table class="backup-table">
+            <thead>
+              <tr>
+                <th>Backup Name</th>
+                <th>Created Date</th>
+                <th>File Size</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngIf="!backupList || backupList.length === 0" class="no-data-row">
+                <td colspan="4" class="no-data">No backups available</td>
+              </tr>
+              <tr *ngFor="let backup of backupList; trackBy: trackByBackupId" class="table-row">
+                <td class="backup-name">{{ backup.name }}</td>
+                <td class="backup-date">{{ getFormattedDate(backup.createdAt) }}</td>
+                <td class="backup-size">{{ formatFileSize(backup.size) }}</td>
+                <td class="backup-actions">
+                  <button class="btn btn-sm btn-ghost" (click)="onRestoreBackup(backup)" [disabled]="isBackupLocked" title="Restore Backup">
+                    <i class="material-icons">restore</i>
+                  </button>
+                  <button class="btn btn-sm btn-ghost" (click)="onDownloadBackup(backup)" title="Download Backup">
+                    <i class="material-icons">download</i>
+                  </button>
+                  <button class="btn btn-sm btn-ghost" (click)="onDeleteBackup(backup)" title="Delete Backup">
+                    <i class="material-icons">delete_outline</i>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="form-control-label desc">Click restore to replace current server files with backup, or delete to remove a backup.</div>
+      </div>
+    </div>
+    </div>

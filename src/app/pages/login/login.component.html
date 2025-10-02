@@ -1,0 +1,46 @@
+<div class="login-container">
+  <div class="login-card">
+    <div class="login-header">
+      <h1>Cerious AASM</h1>
+      <h2>Web Interface Login</h2>
+    </div>
+    <div class="login-form">
+      <div class="form-group">
+        <label class="form-control-label">Username</label>
+        <input 
+          type="text" 
+          [(ngModel)]="username" 
+          (keydown)="onEnterKey($event)"
+          class="form-control" 
+          placeholder="Enter username"
+          autofocus
+        />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Password</label>
+        <input 
+          type="password" 
+          [(ngModel)]="password" 
+          (keydown)="onEnterKey($event)"
+          class="form-control" 
+          placeholder="Enter password"
+        />
+      </div>
+      <div *ngIf="errorMessage" class="form-group">
+        <label class="form-control-label desc" style="color: #d73527;">
+          {{ errorMessage }}
+        </label>
+      </div>
+      <div class="form-group button-group" style="margin-top: 20px;">
+        <button 
+          class="btn" 
+          (click)="onLogin()" 
+          [disabled]="!username.trim() || !password.trim() || isLoading"
+        >
+          <span *ngIf="!isLoading">Login</span>
+          <span *ngIf="isLoading">Logging in...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

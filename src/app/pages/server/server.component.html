@@ -1,0 +1,132 @@
+<ng-template #noServerSelected>
+  <div class="card">
+    <div class="card-body" style="text-align:center; min-height:180px; display:flex; align-items:center; justify-content:center;">
+      <div>
+        <h2 style="color:#b0b6c1; font-weight:400;">No Server Selected</h2>
+        <p style="color:#6b7280;">Select a server from the list to view its details.</p>
+      </div>
+    </div>
+  </div>
+</ng-template>
+<ng-container *ngIf="activeServerInstance; else noServerSelected">
+  <app-server-state
+    [serverInstance]="activeServerInstance"
+    [logs]="filteredLogs"
+    [isVisible]="showServerState"
+    (startServer)="startServer()"
+    (stopServer)="stopServer()"
+    (forceStopServer)="forceStopServer()"
+    (visibilityToggled)="showServerState = $event">
+  </app-server-state>
+  
+  <app-rcon-control 
+    [rconConnected]="rconConnected"
+    [serverState]="mapServerState(activeServerInstance?.state)"
+    [knownCommands]="knownRconCommands"
+    [lastResponse]="rconLastResponse"
+    (sendMessage)="sendRconMessage($event)"
+    (inputFocus)="onRconInputFocus()"
+    (inputBlur)="onRconInputBlur()"
+    (commandFill)="fillRconCommand($event)">
+  </app-rcon-control>
+  <app-server-settings
+    [serverInstance]="activeServerInstance"
+    [isVisible]="showServerSettings"
+    [activeTab]="activeTab"
+    [isLocked]="settingsLocked"
+    [generalFields]="generalFields"
+    [ratesFields]="ratesFields"
+    [structuresFields]="structuresPvpFields"
+    [miscFields]="miscFields"
+    [modsFields]="modsFields"
+    [modList]="modList"
+    [statList]="statList"
+    [selectedStatIndex]="selectedStatIndex"
+    [modsInput]="modsInput"
+    [playerStatMultiplier]="getStatMultiplier('Player', selectedStatIndex)"
+    [dinoWildStatMultiplier]="getStatMultiplier('DinoWild', selectedStatIndex)"
+    [dinoTamedStatMultiplier]="getStatMultiplier('DinoTamed', selectedStatIndex)"
+    [dinoTamedAddStatMultiplier]="getStatMultiplier('DinoTamed_Add', selectedStatIndex)"
+    [dinoTamedAffinityStatMultiplier]="getStatMultiplier('DinoTamed_Affinity', selectedStatIndex)"
+    [dinoTamedTorpidityStatMultiplier]="getStatMultiplier('DinoTamed_Torpidity', selectedStatIndex)"
+    [dinoTamedClampStatMultiplier]="getStatMultiplier('DinoTamed_Clamp', selectedStatIndex)"
+    [backupScheduleEnabled]="backupScheduleEnabled"
+    [backupFrequency]="backupFrequency"
+    [backupTime]="backupTime"
+    [backupDayOfWeek]="backupDayOfWeek"
+    [maxBackupsToKeep]="maxBackupsToKeep"
+    [backupList]="backupList"
+    (toggleVisibility)="showServerSettings = !showServerSettings"
+    (openDirectory)="openServerDirectory()"
+    (tabChanged)="activeTab = $event"
+    (backupTabClicked)="activeTab = 'backup'"
+    (settingsChanged)="saveSettings()"
+    (toggleMultiOption)="onToggleMultiOption($event.fieldKey, $event.option, $event.checked)"
+    (mapSelected)="activeServerInstance.mapName = $event; saveSettings(); dropdownOpen = false"
+    (statMultiplierChanged)="setStatMultiplier($event.type, $event.statIndex, $event.value)"
+    (resetStatToDefaults)="resetStatToDefaults($event)"
+    (copyStatToAll)="copyStatToAll($event)"
+    (modsInputChanged)="onModsInputChange()"
+    (addMod)="onAddMod($event)"
+    (removeMod)="onRemoveMod($event)"
+    (toggleMod)="onToggleMod($event)"
+    (updateModSettings)="onUpdateModSettings($event)"
+    (createManualBackup)="createManualBackup()"
+    (backupScheduleToggle)="onBackupScheduleToggle()"
+    (backupFrequencyChange)="onBackupFrequencyChange($event)"
+    (backupTimeChange)="onBackupTimeChange($event)"
+    (backupDayOfWeekChange)="onBackupDayOfWeekChange($event)"
+    (maxBackupsToKeepChange)="onMaxBackupsToKeepChange($event)"
+    (restoreBackup)="restoreBackup($event)"
+    (downloadBackup)="downloadBackup($event)"
+    (deleteBackup)="deleteBackup($event)"
+    (saveAutomationSettings)="saveAutomationSettings()"
+    (saveAutoStartSettings)="saveAutoStartSettings()"
+    (saveCrashDetectionSettings)="saveCrashDetectionSettings()"
+    (saveScheduledRestartSettings)="saveScheduledRestartSettings()">>
+  </app-server-settings>
+
+  <!-- Backup Name Modal -->
+  <app-modal 
+    [title]="'Create Backup'" 
+    [show]="showBackupNameModal" 
+    (close)="onBackupNameCancel()">
+    <div class="modal-form">
+      <div class="form-group">
+        <label class="form-control-label">Backup Name</label>
+        <input 
+          type="text" 
+          class="form-control" 
+          [(ngModel)]="backupName" 
+          placeholder="Enter backup name..."
+          maxlength="50"
+          [disabled]="isCreatingBackup">
+        <div class="form-control-label desc">
+          Modify the name or keep the default timestamp
+        </div>
+        <br />
+      </div>
+    </div>
+    <div class="action-group-modal">
+      <button type="button" (click)="onBackupNameCancel()" class="btn btn-ghost" [disabled]="isCreatingBackup">Cancel</button>
+      <button type="button" (click)="onBackupNameConfirm()" class="btn btn-ghost" [disabled]="isCreatingBackup">
+        <span *ngIf="isCreatingBackup" class="material-icons spinner">refresh</span>
+        Create Backup
+      </button>
+    </div>
+  </app-modal>
+
+  <!-- Delete Backup Confirmation Modal -->
+  <app-modal 
+    [title]="'Confirm Delete'" 
+    [show]="showDeleteBackupModal" 
+    (close)="onDeleteBackupCancel()">
+    <div class="modal-confirmation">
+      <p>Are you sure you want to delete the backup <span class="modal-target">"{{ backupToDelete?.name }}"</span>?</p>
+      <p class="warning-text">This action cannot be undone.</p>
+    </div>
+    <div class="action-group-modal">
+      <button type="button" (click)="onDeleteBackupCancel()" class="btn">Cancel</button>
+      <button type="button" (click)="onDeleteBackupConfirm()" class="btn btn-ghost">Delete</button>
+    </div>
+  </app-modal>

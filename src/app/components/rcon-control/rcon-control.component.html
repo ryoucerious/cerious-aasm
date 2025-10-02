@@ -1,0 +1,39 @@
+<div class="card rcon-card">
+  <div class="card-header button-header collapsible-header" (click)="showRcon = !showRcon">
+    <h2>RCON</h2>
+    <div class="button-header-actions">
+      <button class="btn btn-ghost" [disabled]="!rconConnected || serverState !== 'Running' || !rconMessage.trim()" (click)="$event.stopPropagation(); onSendMessage();">
+        <i class="material-icons">send</i> Send
+      </button>
+      <span class="material-icons">
+        {{ showRcon ? 'expand_more' : 'expand_less' }}
+      </span>
+    </div>
+  </div>
+  <div class="card-body" *ngIf="showRcon">
+    <div class="rcon-status-row">
+      <span>Status:</span>
+      <span class="status-badge" [ngClass]="{
+        'status-running': rconConnected,
+        'status-stopped': !rconConnected
+      }">
+        {{ rconConnected ? 'Connected' : 'Disconnected' }}
+      </span>
+    </div>
+    <br />
+    <div class="rcon-send-row" *ngIf="rconConnected && serverState === 'Running'" style="position: relative; width: 100%;">
+      <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%; position: relative;">
+        <input class="form-control input" style="flex: 1 1 auto;" [(ngModel)]="rconMessage" placeholder="Type RCON command or message..." (keyup.enter)="onSendMessage()" (focus)="onInputFocus()" (blur)="onInputBlur()" />
+        <div *ngIf="inputFocused" class="rcon-known-commands" style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 10; box-shadow: 0 2px 8px #0007; min-width: 220px; width: 100%;">
+          <div *ngFor="let cmd of knownCommands" (mousedown)="fillCommand(cmd)" style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em; white-space: pre;">
+            {{ cmd }}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div *ngIf="lastResponse" class="rcon-response" style="background: #23272f; border: 1px solid #444; border-radius: 6px; margin-top: 1rem; padding: 0.75rem 1rem; color: #b0b6c1; font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace; font-size: 0.98em; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">
+      <div style="font-weight: bold; color: #8ab4f8; margin-bottom: 0.25rem;">Last Response:</div>
+      <div>{{ lastResponse }}</div>
+    </div>
+  </div>
+</div>

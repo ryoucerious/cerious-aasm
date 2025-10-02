@@ -1,0 +1,102 @@
+    <div class="tab-content">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Firewall Configuration</h4>
+        <p class="form-control-label desc">Configure firewall rules for your ARK server to allow player connections.</p>
+      </div>
+
+      <div class="settings-section">
+        <h5>Firewall Status & Port Information</h5>
+        <p class="section-desc">Current firewall status and required port configuration.</p>
+
+        <!-- Firewall Status -->
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Firewall Status</h4>
+        <div class="automation-status-row">
+          <div class="status-item-inline">
+            <span class="status-label">Firewall Status:</span>
+            <span class="status-badge status-stopping">
+              Manual Configuration Required
+            </span>
+          </div>
+          <div class="status-item-inline">
+            <span class="status-label">Platform:</span>
+            <span class="status-badge status-stopping">Linux</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Port Information -->
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Server Port Configuration</h4>
+        <div class="port-info">
+          <div class="port-item">
+            <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
+          </div>
+          <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
+            <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Server browser and status queries
+          </div>
+          <div class="port-item" *ngIf="serverInstance?.rconPort">
+            <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
+          </div>
+        </div>
+        <div class="form-control-label desc">These ports need to be accessible through your firewall for players to connect and for server management.</div>
+      </div>
+
+      <!-- Linux Firewall Configuration -->
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Linux Firewall Configuration</h4>
+        <div class="linux-firewall-instructions">
+          <p><strong>Manual firewall configuration is required on Linux.</strong> Use one of the following methods:</p>
+
+          <h5>UFW (Ubuntu/Debian):</h5>
+          <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port</span>
+<span *ngIf="serverInstance?.rconPort">sudo ufw allow {{ serverInstance.rconPort }}/tcp  # RCON port</span></pre>
+
+          <h5>Firewalld (CentOS/RHEL/Fedora):</h5>
+          <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ serverInstance?.gamePort || 7777 }}/udp
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo firewall-cmd --permanent --add-port={{ serverInstance.queryPort }}/udp</span>
+<span *ngIf="serverInstance?.rconPort">sudo firewall-cmd --permanent --add-port={{ serverInstance.rconPort }}/tcp</span>
+sudo firewall-cmd --reload</pre>
+
+          <h5>Iptables (Advanced users):</h5>
+          <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ serverInstance?.gamePort || 7777 }} -j ACCEPT
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span>
+<span *ngIf="serverInstance?.rconPort">sudo iptables -A INPUT -p tcp --dport {{ serverInstance.rconPort }} -j ACCEPT</span></pre>
+        </div>
+        <div class="form-control-label desc">Remember to save your iptables rules if using the iptables method.</div>
+      </div>
+      </div>
+
+      <div class="settings-section">
+        <h5>Router & Network Configuration</h5>
+        <p class="section-desc">Additional network setup for external access.</p>
+
+        <!-- Router/NAT Information -->
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <h4>Router & NAT Configuration</h4>
+        <p class="form-control-label desc">
+          <strong>Important:</strong> If your server is behind a router/NAT, you'll also need to configure port forwarding:
+        </p>
+        <ul class="firewall-notes">
+          <li>Forward Game Port {{ serverInstance?.gamePort || 7777 }} (UDP) to your server's internal IP</li>
+          <li *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
+          <li *ngIf="serverInstance?.rconPort">Forward RCON Port {{ serverInstance.rconPort }} (TCP) to your server's internal IP (if remote access needed)</li>
+          <li>Set your server's IP to static or use DHCP reservation</li>
+          <li>Configure UPnP if supported by your router for automatic port forwarding</li>
+        </ul>
+      </div>
+
+      <div class="settings-section">
+        <h5>Troubleshooting</h5>
+        <p class="section-desc">Common issues and solutions for network connectivity.</p>
+
+        <ul class="firewall-notes">
+          <li><strong>Players can't connect:</strong> Check firewall rules and router port forwarding</li>
+          <li><strong>Server not visible in browser:</strong> Ensure Query Port is properly forwarded</li>
+          <li><strong>RCON not working:</strong> Check RCON port firewall rule and forwarding</li>
+          <li><strong>Commands not working:</strong> Ensure you have sudo privileges for firewall commands</li>
+          <li><strong>Rules not persisting:</strong> Some distributions require saving firewall rules manually</li>
+        </ul>
+      </div>
+    </div>

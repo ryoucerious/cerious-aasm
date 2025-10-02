@@ -1,0 +1,201 @@
+/* --- UNIFIED DESIGN SYSTEM VARIABLES --- */
+
+// =========================
+// BREAKPOINTS
+// =========================
+$breakpoint-sm: 480px;   // Small mobile
+$breakpoint-md: 768px;   // Tablet
+$breakpoint-lg: 1024px;  // Desktop
+$breakpoint-xl: 1200px;  // Large desktop
+
+// =========================
+// COLORS
+// =========================
+
+// Primary brand colors
+$primary: #0ea5e9;
+$success: #22c55e;
+$danger: #ef4444;
+$warning: #facc15;
+$info: #15a1bb;
+$secondary: #6b7280;
+
+// Background colors
+$background-dark: #23272f;
+$background-darker: #1e2228;
+$background-card: rgba(255, 255, 255, 0.02);
+$background-hover: #31343c;
+
+// Text colors
+$text-primary: #b0b6c1;
+$text-secondary: #888c94;
+$text-white: #fff;
+$text-light: #e5e7eb;
+$text-muted: #9ca3af;
+
+// Border colors
+$border-color: #5e6870;
+$border-dark: #444;
+$border-darker: #333;
+$border-subtle: #44474d;
+
+// Focus and interaction colors
+$focus-color: #8ab4f8;
+
+// =========================
+// BORDER RADIUS
+// =========================
+$radius-sm: 3px;
+$radius-md: 4px;
+$radius-lg: 6px;
+$radius-xl: 8px;
+$radius-pill: 9999px;
+
+// =========================
+// TRANSITIONS
+// =========================
+$transition-fast: 0.15s ease;
+$transition-normal: 0.2s ease;
+$transition-colors: background 0.15s, color 0.15s, border 0.15s;
+
+// =========================
+// TYPOGRAPHY
+// =========================
+$font-normal: 400;
+$font-medium: 500;
+$font-semibold: 600;
+$font-bold: 700;
+
+// =========================
+// SPACING
+// =========================
+$spacing-xs: 0.25rem;
+$spacing-sm: 0.5rem;
+$spacing-md: 1rem;
+$spacing-lg: 1.5rem;
+$spacing-xl: 2rem;
+
+// =========================
+// MIXINS
+// =========================
+
+// Responsive breakpoint mixins
+@mixin mobile-only {
+  @media (max-width: #{$breakpoint-md - 1px}) {
+    @content;
+  }
+}
+
+@mixin tablet-up {
+  @media (min-width: #{$breakpoint-md}) {
+    @content;
+  }
+}
+
+@mixin desktop-up {
+  @media (min-width: #{$breakpoint-lg}) {
+    @content;
+  }
+}
+
+@mixin large-desktop-up {
+  @media (min-width: #{$breakpoint-xl}) {
+    @content;
+  }
+}
+
+// Additional responsive mixins for common patterns found in codebase
+@mixin small-mobile-only {
+  @media (max-width: #{$breakpoint-sm}) {
+    @content;
+  }
+}
+
+@mixin tablet-only {
+  @media (min-width: #{$breakpoint-md}) and (max-width: #{$breakpoint-lg - 1px}) {
+    @content;
+  }
+}
+
+@mixin below-desktop {
+  @media (max-width: #{$breakpoint-lg - 1px}) {
+    @content;
+  }
+}
+
+@mixin below-900px {
+  @media (max-width: 900px) {
+    @content;
+  }
+}
+
+@mixin below-large-desktop {
+  @media (max-width: #{$breakpoint-xl - 1px}) {
+    @content;
+  }
+}
+
+// Custom breakpoints for specific use cases (maintaining existing behavior)
+@mixin below-700px {
+  @media (max-width: 700px) {
+    @content;
+  }
+}
+
+@mixin below-600px {
+  @media (max-width: 600px) {
+    @content;
+  }
+}
+
+@mixin below-500px {
+  @media (max-width: 500px) {
+    @content;
+  }
+}
+
+@mixin below-480px {
+  @media (max-width: 480px) {
+    @content;
+  }
+}
+
+@mixin below-400px {
+  @media (max-width: 400px) {
+    @content;
+  }
+}
+
+@mixin above-700px {
+  @media (min-width: 701px) {
+    @content;
+  }
+}
+
+// Common utility mixins
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@mixin text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin button-reset {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}

@@ -1,0 +1,149 @@
+<!-- Stats Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Per-Level Stat Multipliers</h4>
+    <p class="form-control-label desc">Configure how much each stat increases per level for players and dinosaurs. Higher values make characters and creatures more powerful per level.</p>
+  </div>
+
+  <div class="form-group stat-multiplier-container" style="grid-column: 1 / -1;">
+    <div class="stat-selection-header">
+      <h5>Select Stat to Configure</h5>
+      <div class="stat-selector">
+        <div class="custom-dropdown">
+          <button type="button" class="form-control input" style="width: 200px;" (click)="onToggleStatSelectorDropdown()">
+            <span>{{ getStatSelectorDisplayName(selectedStatIndex) }}</span>
+            <span class="material-icons">arrow_drop_down</span>
+          </button>
+          <div *ngIf="statSelectorDropdownOpen" class="dropdown-menu show">
+            <div *ngFor="let stat of statList; let i = index" (mousedown)="onStatSelectorSelect(i)" [ngClass]="{'selected': selectedStatIndex === i}">{{ stat }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Multiplier Configuration -->
+    <div *ngIf="selectedStatIndex !== null" class="stat-multiplier-content">
+      <div class="current-stat-header">
+        <h4>{{ statList[selectedStatIndex] }} Multipliers</h4>
+        <p class="form-control-label desc">Configure how {{ statList[selectedStatIndex] }} scales for players and dinosaurs.</p>
+      </div>
+
+      <!-- Player Multipliers Section -->
+      <div class="multiplier-section">
+        <h5>Player Multipliers</h5>
+        <p class="section-desc">Controls how much this stat increases per level for players.</p>
+
+        <div class="form-group">
+          <label class="form-control-label">Player Level Multiplier</label>
+          <input class="form-control input"
+                 type="number"
+                 step="0.01"
+                 min="0"
+                 [ngModel]="getStatMultiplier('Player', selectedStatIndex)"
+                 (ngModelChange)="onStatMultiplierChange('Player', selectedStatIndex, $event)"
+                 [disabled]="isLocked" />
+          <div class="form-control-label desc">Multiplier for {{ statList[selectedStatIndex] }} gained per player level (default: 1.0)</div>
+        </div>
+      </div>
+
+      <!-- Wild Dino Multipliers Section -->
+      <div class="multiplier-section">
+        <h5>Wild Dinosaur Multipliers</h5>
+        <p class="section-desc">Controls stat scaling for wild dinosaurs found in the world.</p>
+
+        <div class="form-group">
+          <label class="form-control-label">Wild Dino Multiplier</label>
+          <input class="form-control input"
+                 type="number"
+                 step="0.01"
+                 min="0"
+                 [ngModel]="getStatMultiplier('DinoWild', selectedStatIndex)"
+                 (ngModelChange)="onStatMultiplierChange('DinoWild', selectedStatIndex, $event)"
+                 [disabled]="isLocked" />
+          <div class="form-control-label desc">Base multiplier for wild dinosaur {{ statList[selectedStatIndex] }} per level (default: 1.0)</div>
+        </div>
+      </div>
+
+      <!-- Tamed Dino Multipliers Section -->
+      <div class="multiplier-section">
+        <h5>Tamed Dinosaur Multipliers</h5>
+        <p class="section-desc">Controls how tamed dinosaurs gain stats through leveling and taming bonuses.</p>
+
+        <div class="multiplier-grid">
+          <div class="form-group">
+            <label class="form-control-label">Tamed Level Multiplier</label>
+            <input class="form-control input"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   [ngModel]="getStatMultiplier('DinoTamed', selectedStatIndex)"
+                   (ngModelChange)="onStatMultiplierChange('DinoTamed', selectedStatIndex, $event)"
+                   [disabled]="isLocked" />
+            <div class="form-control-label desc">Base {{ statList[selectedStatIndex] }} per level for tamed dinos</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-control-label">Tamed Additive Bonus</label>
+            <input class="form-control input"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   [ngModel]="getStatMultiplier('DinoTamed_Add', selectedStatIndex)"
+                   (ngModelChange)="onStatMultiplierChange('DinoTamed_Add', selectedStatIndex, $event)"
+                   [disabled]="isLocked" />
+            <div class="form-control-label desc">Additional flat bonus added per level</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-control-label">Taming Affinity Bonus</label>
+            <input class="form-control input"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   [ngModel]="getStatMultiplier('DinoTamed_Affinity', selectedStatIndex)"
+                   (ngModelChange)="onStatMultiplierChange('DinoTamed_Affinity', selectedStatIndex, $event)"
+                   [disabled]="isLocked" />
+            <div class="form-control-label desc">Bonus based on taming effectiveness</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-control-label">Torpidity Multiplier</label>
+            <input class="form-control input"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   [ngModel]="getStatMultiplier('DinoTamed_Torpidity', selectedStatIndex)"
+                   (ngModelChange)="onStatMultiplierChange('DinoTamed_Torpidity', selectedStatIndex, $event)"
+                   [disabled]="isLocked" />
+            <div class="form-control-label desc">Torpidity scaling for tamed creatures</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-control-label">Level Cap Multiplier</label>
+            <input class="form-control input"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   [ngModel]="getStatMultiplier('DinoTamed_Clamp', selectedStatIndex)"
+                   (ngModelChange)="onStatMultiplierChange('DinoTamed_Clamp', selectedStatIndex, $event)"
+                   [disabled]="isLocked" />
+            <div class="form-control-label desc">Maximum level cap scaling factor</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="multiplier-section">
+        <h5>Quick Actions</h5>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button class="btn btn-ghost" (click)="onResetStatToDefaults(selectedStatIndex)" [disabled]="isLocked">
+            <i class="material-icons">refresh</i> Reset to Defaults
+          </button>
+          <button class="btn btn-ghost" (click)="onCopyStatToAll(selectedStatIndex)" [disabled]="isLocked">
+            <i class="material-icons">content_copy</i> Copy to All Stats
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

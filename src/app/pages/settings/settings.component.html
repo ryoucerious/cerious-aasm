@@ -1,0 +1,267 @@
+<div class="card">
+  <div class="card-header button-header collapsible-header" (click)="showSettings = !showSettings">
+    <h2>SETTINGS</h2>
+    <div class="button-header-actions">
+      <span class="material-icons">
+        {{ showSettings ? 'expand_more' : 'expand_less' }}
+      </span>
+    </div>
+  </div>
+  <div class="card-body" *ngIf="showSettings">
+    <div class="tabs">
+      <button *ngFor="let tab of tabs" 
+              class="tab"
+              [class.active]="activeTab === tab.id"
+              (click)="selectTab(tab.id)">
+        <i class="material-icons">{{ tab.icon }}</i>
+        {{ tab.label }}
+        <span *ngIf="tab.showUpdateBadge" class="update-badge" title="Update Available">!</span>
+      </button>
+    </div>
+    
+    <!-- Server Installation Tab -->
+    <div *ngIf="activeTab === 'server-installation'">
+      <div class="action-group-settings">
+        <button class="btn btn-ghost" (click)="onInstallServer()">
+          <i class="material-icons">download</i>
+          Install/Update Ark Server
+        </button>
+
+        <button class="btn btn-ghost" (click)="onOpenConfigDirectory()" *ngIf="isElectron">
+          <i class="material-icons">folder_open</i>
+          Open Config Directory
+        </button>
+
+        <button class="btn btn-ghost" (click)="onCheckForUpdates()">
+          <i class="material-icons">refresh</i>
+          Check for Updates
+        </button>
+      </div>
+    </div>
+    
+    <!-- Web Server Tab -->
+    <div *ngIf="activeTab === 'web-server'">
+      <div class="card sub-card">
+        <div class="card-header button-header">
+          <h2>WEB SERVER STATUS</h2>
+          <div class="button-header-actions">
+            <button class="btn" *ngIf="!webServerRunning" (click)="onStartWebServer()" [disabled]="!isElectron">
+              <i class="material-icons">play_arrow</i> Start
+            </button>
+            <button class="btn" *ngIf="webServerRunning" (click)="onStopWebServer()" [disabled]="!isElectron">
+              <i class="material-icons">stop</i> Stop
+            </button>
+          </div>
+        </div>
+        <div class="card-body ">
+          <div>
+            <span>Status:</span>
+            <span class="status-badge" [ngClass]="webServerRunning ? 'status-running' : 'status-stopped'">
+              {{ webServerRunning ? 'Running' : 'Stopped' }}
+            </span>
+          </div>
+          <br />
+          <div *ngIf="!webServerRunning">
+            Web server is not running. Click "Start" to launch the web interface server.
+          </div>
+        </div>
+      </div>
+      <div class="card sub-card">
+        <div class="card-header instance-card-header-normal">
+          <h2>SERVER SETTINGS</h2>
+        </div>
+        <div class="card-body ">
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Port</h4>
+            <div class="form-group">
+              <label class="form-control-label">Port</label>
+              <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (ngModelChange)="onPortChange($event)" [disabled]="webServerRunning" class="form-control input" />
+              <label class="form-control-label desc">Port number for the web server (1024-65535)</label>
+            </div>
+            <div class="form-group">
+              <div class="form-control-label toggle-label">
+                <input type="checkbox" class="toggle-switch" [checked]="startWebServerOnLoad" (change)="onStartOnLoadChange($event.target.checked)" tabindex="0" />
+                <span class="slider"></span>
+                <span class="toggle-text">Start web server on app load</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Authentication</h4>
+            <div class="form-group">
+              <div class="form-control-label toggle-label">
+                <input type="checkbox" class="toggle-switch" [checked]="authenticationEnabled" (change)="onAuthenticationEnabledChange($event.target.checked)" [disabled]="webServerRunning" tabindex="0" />
+                <span class="slider"></span>
+                <span class="toggle-text">Enable authentication</span>
+              </div>
+              <label class="form-control-label desc">Require username and password to access the web interface</label>
+            </div>
+            <div *ngIf="authenticationEnabled" class="form-group">
+              <label class="form-control-label">Username</label>
+              <input type="text" [ngModel]="authenticationUsername" (input)="authenticationUsername = $event.target.value" (blur)="onAuthenticationUsernameChange($event.target.value)" [disabled]="webServerRunning" class="form-control input" placeholder="Enter username" />
+              <label class="form-control-label desc">Username for web interface login</label>
+            </div>
+            <div *ngIf="authenticationEnabled" class="form-group">
+              <label class="form-control-label">Password</label>
+              <input type="password" [ngModel]="authenticationPassword" (input)="authenticationPassword = $event.target.value" (blur)="onAuthenticationPasswordChange($event.target.value)" [disabled]="webServerRunning" class="form-control input" placeholder="Enter password" />
+              <label class="form-control-label desc">Password for web interface login</label>
+            </div>
+            <div *ngIf="authenticationEnabled && (!authenticationUsername.trim() || !authenticationPassword.trim())" class="form-group">
+              <label class="form-control-label desc" style="color: #d73527; font-style: italic;">
+                ⚠ Please enter both username and password above to complete authentication setup.
+              </label>
+            </div>
+            <div *ngIf="authenticationEnabled && webServerRunning" class="form-group">
+              <div class="status-info">
+                <i class="material-icons">info</i>
+                <span>Authentication settings cannot be changed while the web server is running. Stop the server to make changes.</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Backup Settings Section -->
+          <div class="settings-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Backup Downloads</h4>
+            <div class="form-group">
+              <label class="form-control-label">Max Download Size (MB)</label>
+              <input type="number" 
+                     [ngModel]="maxBackupDownloadSizeMB" 
+                     (input)="maxBackupDownloadSizeMB = +$event.target.value" 
+                     (blur)="onMaxBackupDownloadSizeChange($event.target.value)" 
+                     class="form-control input" 
+                     min="1" 
+                     max="2048" 
+                     placeholder="100" />
+              <div class="form-control-label desc">
+                Maximum file size for backup downloads in web browsers. Larger backups will show a warning and require desktop app access.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- About Tab -->
+    <div *ngIf="activeTab === 'about'">
+      <div class="about-container">
+        <!-- Header Section -->
+        <div class="about-header">
+          <div class="about-title-section">
+            <img src="assets/logo.png" alt="Cerious AASM Logo" class="about-logo">
+            <h1 class="about-title">Cerious AASM</h1>
+            <p class="about-subtitle">ARK: Survival Ascended Server Manager</p>
+            <div class="about-version">Version {{ getAppVersion() }}</div>
+          </div>
+        </div>
+
+        <!-- Content Grid -->
+        <div class="about-content-grid">
+          <!-- Features Section -->
+          <div class="about-section features-section">
+            <h2 class="section-title">Features</h2>
+            <div class="features-list">
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">Multi-server management</span>
+              </div>
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">Automatic server installation</span>
+              </div>
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">RCON integration</span>
+              </div>
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">Mod management</span>
+              </div>
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">Backup system</span>
+              </div>
+              <div class="feature-item">
+                <i class="material-icons feature-check">check_circle</i>
+                <span class="feature-text">Real-time monitoring</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- System Info Section -->
+          <div class="about-section system-info-section">
+            <h2 class="section-title">System Info</h2>
+            <div class="system-info-list">
+              <div class="system-info-item">
+                <i class="material-icons system-icon">computer</i>
+                <span class="system-text">Platform: {{ getPlatform() }}</span>
+              </div>
+              <div class="system-info-item">
+                <i class="material-icons system-icon">memory</i>
+                <span class="system-text">Node.js: {{ getNodeVersion() }}</span>
+              </div>
+              <div class="system-info-item">
+                <i class="material-icons system-icon">desktop_windows</i>
+                <span class="system-text">Electron: {{ getElectronVersion() }}</span>
+              </div>
+              <div class="system-info-item">
+                <i class="material-icons system-icon">folder</i>
+                <span class="system-text">Config: {{ getConfigPath() }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="about-footer">
+          <p>&copy; 2025 r YOU cerious. All rights reserved.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<app-modal 
+  [title]="'Installing Ark Ascended Server'" 
+  [show]="showInstallModal" 
+  (close)="onCancelInstall()">
+  <div class="install-phase">
+    <div class="install-phase-header">
+      {{installProgress?.step}}
+    </div>
+    <div class="install-phase-desc">{{installProgress?.message}}</div>
+    <div class="install-progress-bar">
+      <div [style.width.%]="installProgress?.percent" class="install-progress-bar-inner"></div>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button class="btn" (click)="onCancelInstall()" *ngIf="installProgress && !installProgress.blocked && !installProgress.success">Cancel Install</button>
+    <button class="btn" (click)="onCloseInstall()" *ngIf="installProgress?.blocked || installProgress?.success">Close</button>
+  </div>
+</app-modal>
+
+<app-modal 
+  [title]="'Sudo Password Required'" 
+  [show]="showSudoPasswordModal" 
+  (close)="onSudoPasswordCancel()">
+  <div class="sudo-password-content">
+    <p>Linux dependencies need to be installed. Please enter your sudo password to continue:</p>
+    <div class="form-group">
+      <label for="sudoPassword">Sudo Password:</label>
+      <input 
+        type="password" 
+        id="sudoPassword"
+        [(ngModel)]="sudoPassword" 
+        placeholder="Enter your sudo password"
+        class="form-control"
+        (keyup.enter)="onSudoPasswordConfirm()" />
+    </div>
+    <p class="sudo-disclaimer">
+      Your password is only used temporarily to install required system packages and is not stored.
+    </p>
+  </div>
+  <div class="action-group-modal">
+    <button class="btn" (click)="onSudoPasswordCancel()">Cancel</button>
+    <button class="btn" (click)="onSudoPasswordConfirm()" [disabled]="!sudoPassword.trim()">Continue</button>
+  </div>
+</app-modal>

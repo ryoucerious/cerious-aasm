@@ -1,0 +1,166 @@
+<!-- Cluster Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Server Cluster Configuration</h4>
+    <p class="form-control-label desc">Configure this server to be part of an ARK cluster for cross-server character and item transfers.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Cluster Settings</h5>
+    <p class="section-desc">Configure cluster directory, ID, and basic cluster properties.</p>
+
+    <!-- Cluster Directory -->
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <label class="form-control-label">Cluster Directory Path</label>
+    <input
+      type="text"
+      class="form-control input"
+      [(ngModel)]="serverInstance.clusterDirOverride"
+      (blur)="onValidateField('clusterDirOverride', serverInstance.clusterDirOverride)"
+      placeholder="e.g., /mnt/cluster-data or Z:\Shared\Cluster"
+      [disabled]="isLocked">
+    <div class="form-control-label desc">
+      Absolute path to shared cluster directory (recommended for multi-machine clusters). Can be relative to installation directory for single-machine setups. All servers in the cluster must use the same directory path. This directory stores character and item transfer data.
+    </div>
+    <div *ngIf="hasFieldError('clusterDirOverride')" class="validation-error">{{ getFieldError('clusterDirOverride') }}</div>
+    <div *ngIf="hasFieldWarning('clusterDirOverride')" class="validation-warning">{{ getFieldWarning('clusterDirOverride') }}</div>
+  </div>
+
+  <!-- Cluster ID -->
+  <div class="form-group">
+    <label class="form-control-label">Cluster ID</label>
+    <input
+      type="text"
+      class="form-control input"
+      [(ngModel)]="serverInstance.clusterId"
+      (blur)="onValidateField('clusterId', serverInstance.clusterId)"
+      placeholder="e.g., MyCluster01"
+      [disabled]="isLocked">
+    <div class="form-control-label desc">
+      Unique identifier for this cluster. All servers in the same cluster should use the same ID.
+    </div>
+    <div *ngIf="hasFieldError('clusterId')" class="validation-error">{{ getFieldError('clusterId') }}</div>
+    <div *ngIf="hasFieldWarning('clusterId')" class="validation-warning">{{ getFieldWarning('clusterId') }}</div>
+  </div>
+
+  <!-- Cluster Name -->
+  <div class="form-group">
+    <label class="form-control-label">Cluster Name (Display)</label>
+    <input
+      type="text"
+      class="form-control input"
+      [(ngModel)]="serverInstance.clusterName"
+      (blur)="onValidateField('clusterName', serverInstance.clusterName)"
+      placeholder="e.g., My PvP Cluster"
+      [disabled]="isLocked">
+    <div class="form-control-label desc">
+      Human-readable name for the cluster (for UI display only).
+    </div>
+    <div *ngIf="hasFieldError('clusterName')" class="validation-error">{{ getFieldError('clusterName') }}</div>
+    <div *ngIf="hasFieldWarning('clusterName')" class="validation-warning">{{ getFieldWarning('clusterName') }}</div>
+  </div>
+
+  <!-- Test Connection Button -->
+  <div class="form-group" style="grid-column: 1 / -1;" *ngIf="serverInstance.clusterDirOverride">
+    <div>
+      <button
+        type="button"
+        class="btn btn-ghost"
+        (click)="testClusterConnectivity()"
+        [disabled]="!serverInstance.clusterDirOverride || isLocked">
+        <i class="material-icons">wifi_tethering</i> Test Cluster Directory Connection
+      </button>
+      <div class="form-control-label desc">
+        Test if the cluster directory is accessible and can be used for cross-server transfers.
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- Transfer Restrictions -->
+<div class="settings-section">
+  <h5>Transfer Restrictions</h5>
+  <p class="section-desc">Configure what can be transferred between cluster servers.</p>
+
+  <!-- No Transfer Filtering -->
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.noTransferFromFiltering" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Allow All Transfers</span>
+    </label>
+    <div class="form-control-label desc">
+      When enabled, allows transfers from any server in the cluster without filtering.
+    </div>
+  </div>
+
+  <!-- Download Restrictions -->
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadSurvivors" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Character Downloads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from downloading characters from the cluster to this server.
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadItems" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Item Downloads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from downloading items from the cluster to this server.
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadDinos" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Dino Downloads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from downloading tamed creatures from the cluster to this server.
+    </div>
+  </div>
+
+  <!-- Upload Restrictions -->
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadSurvivors" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Character Uploads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from uploading characters from this server to the cluster.
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadItems" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Item Uploads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from uploading items from this server to the cluster.
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadDinos" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Prevent Dino Uploads</span>
+    </label>
+    <div class="form-control-label desc">
+      Prevent players from uploading tamed creatures from this server to the cluster.
+    </div>
+  </div>
+</div>

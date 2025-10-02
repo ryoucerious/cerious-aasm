@@ -1,0 +1,129 @@
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Basic Server Configuration</h4>
+    <p class="form-control-label desc">Configure the essential server settings including name, map, passwords, and basic gameplay options.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Server Settings</h5>
+    <p class="section-desc">Configure your server's basic properties and settings.</p>
+
+    <ng-container *ngFor="let field of generalFields">
+      <div class="form-group">
+        <ng-container *ngIf="field.type === 'multi-toggle'; else defaultField">
+          <label class="form-control-label">{{ field.label }}</label>
+          <div class="toggle-group" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; align-items: flex-start;">
+            <ng-container *ngFor="let opt of field.options">
+              <span style="display: inline-flex; align-items: center;">
+                <div class="toggle-label" style="margin-bottom: 0;">
+                  <input type="checkbox" class="toggle-switch" [checked]="serverInstance[field.key]?.includes(opt)" (change)="onToggleMultiOption(field.key, opt, $event.target.checked)" [disabled]="isLocked" tabindex="0" />
+                  <span class="toggle-text">{{ opt }}</span>
+                </div>
+              </span>
+            </ng-container>
+          </div>
+          <div class="form-control-label desc">{{ field.description }}</div>
+        </ng-container>
+        <ng-template #defaultField>
+          <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+            <span class="toggle-text">{{ field.label }}</span>
+          </div>
+          <label *ngIf="field.type !== 'boolean'" class="form-control-label">
+            <span>{{ field.label }}</span>
+          </label>
+          <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min || null" [max]="field.max || null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+          <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+          <div *ngIf="field.type === 'dropdown'">
+            <div class="custom-dropdown" [class.disabled]="isLocked" style="position: relative;">
+              <button type="button" class="form-control input" [disabled]="isLocked" (click)="onDropdownToggle()" style="width: 100%; text-align: left; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between;">
+                <span>{{ getMapDisplayName(serverInstance.mapName) || 'Select a map...' }}</span>
+                <span class="material-icons" style="font-size: 1.1em;">arrow_drop_down</span>
+              </button>
+              <div *ngIf="dropdownOpen && !isLocked" class="dropdown-menu show" style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem;">
+                <div *ngFor="let opt of field.options" (mousedown)="onMapSelect(opt.value)" style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em; white-space: pre;" [ngClass]="{'selected': serverInstance.mapName === opt.value}">{{ opt.display }}</div>
+              </div>
+            </div>
+          </div>
+          <div *ngIf="field.type === 'combo'">
+            <div class="custom-dropdown" [class.disabled]="isLocked" style="position: relative;">
+              <input *ngIf="field.key !== 'mapName'" type="text" class="form-control input" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" (focus)="onDropdownToggle()" (input)="onMapInput($event, field.key)" placeholder="Enter value or select from list..." style="width: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 2.5rem 0.5rem 1rem; font-size: 0.97em;" />
+              <input *ngIf="field.key === 'mapName'" type="text" class="form-control input" [(ngModel)]="mapDisplayValue" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" (focus)="onDropdownToggle()" (input)="onMapInput($event, field.key)" placeholder="Enter map name or select from list..." style="width: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 2.5rem 0.5rem 1rem; font-size: 0.97em;" />
+              <button type="button" class="dropdown-toggle" [disabled]="isLocked" (click)="onDropdownToggle()" style="position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #b0b6c1; cursor: pointer;">
+                <span class="material-icons" style="font-size: 1.1em;">{{ dropdownOpen ? 'arrow_drop_up' : 'arrow_drop_down' }}</span>
+              </button>
+              <div *ngIf="dropdownOpen && !isLocked" class="dropdown-menu show" style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem; max-height: 200px; overflow-y: auto;">
+                <div *ngFor="let opt of field.options" (mousedown)="onMapSelect(opt.value, field.key)" style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em; white-space: pre;" [ngClass]="{'selected': serverInstance[field.key] === opt.value}">{{ opt.display }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="form-control-label desc">{{ field.description }}</div>
+          <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
+          <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+        </ng-template>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- Network Settings -->
+  <div class="settings-section">
+    <h5>Network Settings</h5>
+    <p class="section-desc">Configure network ports and connectivity options.</p>
+
+    <div class="form-group">
+      <label class="form-control-label">Game Port</label>
+      <input class="form-control input"
+             type="number"
+             min="1024"
+             max="65535"
+             [(ngModel)]="serverInstance.gamePort"
+             (blur)="onSaveSettings(); onValidateField('gamePort', serverInstance.gamePort)"
+             [disabled]="isLocked" />
+      <div class="form-control-label desc">UDP port for player connections (default: 7777). This is the main port players use to connect to your server.</div>
+      <div *ngIf="hasFieldError('gamePort')" class="validation-error">{{ getFieldError('gamePort') }}</div>
+      <div *ngIf="hasFieldWarning('gamePort')" class="validation-warning">{{ getFieldWarning('gamePort') }}</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-control-label">Query Port</label>
+      <input class="form-control input"
+             type="number"
+             min="1024"
+             max="65535"
+             [(ngModel)]="serverInstance.queryPort"
+             (blur)="onSaveSettings(); onValidateField('queryPort', serverInstance.queryPort)"
+             [disabled]="isLocked" />
+      <div class="form-control-label desc">UDP port for server queries and status information (default: 27015). Used by server browsers and monitoring tools.</div>
+      <div *ngIf="hasFieldError('queryPort')" class="validation-error">{{ getFieldError('queryPort') }}</div>
+      <div *ngIf="hasFieldWarning('queryPort')" class="validation-warning">{{ getFieldWarning('queryPort') }}</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-control-label">RCON Port</label>
+      <input class="form-control input"
+             type="number"
+             min="1024"
+             max="65535"
+             [(ngModel)]="serverInstance.rconPort"
+             (blur)="onSaveSettings(); onValidateField('rconPort', serverInstance.rconPort)"
+             [disabled]="isLocked" />
+      <div class="form-control-label desc">TCP port for remote console access (required). Default: 27020. Used for server administration and management.</div>
+      <div *ngIf="hasFieldError('rconPort')" class="validation-error">{{ getFieldError('rconPort') }}</div>
+      <div *ngIf="hasFieldWarning('rconPort')" class="validation-warning">{{ getFieldWarning('rconPort') }}</div>
+    </div>
+  </div>
+
+  <!-- Security Settings -->
+  <div class="settings-section">
+    <h5>Security Settings</h5>
+    <p class="section-desc">Configure anti-cheat and security features for your server.</p>
+
+    <div class="form-group">
+      <div class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.battleEye" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+        <span class="toggle-text">Enable BattlEye Anti-Cheat</span>
+      </div>
+      <div class="form-control-label desc">Enable BattlEye anti-cheat system to detect and prevent cheating. Recommended for public servers.</div>
+    </div>
+  </div>
+</div>

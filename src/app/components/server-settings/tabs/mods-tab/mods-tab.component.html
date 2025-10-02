@@ -1,0 +1,120 @@
+<!-- Mods Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Server Mod Management</h4>
+    <p class="form-control-label desc">Add and manage CurseForge mods for your server. Enter mod IDs from the CurseForge to install and configure mods.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Mod Management</h5>
+    <p class="section-desc">Add new mods and manage your current mod list.</p>
+
+    <!-- Add Mod Section -->
+    <div class="form-group" style="grid-column: 1 / -1;">
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="btn btn-ghost" (click)="openAddModModal()" [disabled]="isLocked" style="white-space: nowrap;">
+          <i class="material-icons">add</i> Add Mod
+        </button>
+      </div>
+    </div>
+
+    <!-- Mod List Section -->
+    <div class="form-group mod-table-container" style="grid-column: 1 / -1;">
+      <label class="form-control-label">Installed Mods</label>
+      <div class="mod-list">
+        <table class="mod-table">
+        <thead>
+          <tr>
+            <th>Mod ID</th>
+            <th>Mod Name</th>
+            <th>Enabled</th>
+            <th style="text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="!modList || modList.length === 0" class="no-data-row">
+            <td colspan="4" class="no-data">No mods installed</td>
+          </tr>
+          <tr *ngFor="let mod of modList; trackBy: trackByModId" class="table-row">
+            <td class="mod-id">{{ mod.id }}</td>
+            <td class="mod-name">{{ mod.name || 'Loading...' }}</td>
+            <td class="mod-status">
+              <div class="form-control-label toggle-label">
+                <input type="checkbox" class="toggle-switch" [(ngModel)]="mod.enabled" (change)="onToggleMod(mod)" [disabled]="isLocked" tabindex="0" />
+                <span class="toggle-text">{{ mod.enabled ? 'Enabled' : 'Disabled' }}</span>
+              </div>
+            </td>
+            <td class="mod-actions">
+              <button class="btn btn-sm btn-ghost" (click)="openSettingsModal(mod)" [disabled]="isLocked" title="Mod Settings">
+                <i class="material-icons">settings</i>
+              </button>
+              <button class="btn btn-sm btn-ghost" (click)="onRemoveMod(mod)" [disabled]="isLocked" title="Remove Mod">
+                <i class="material-icons">delete_outline</i>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="form-control-label desc">Mods are automatically downloaded when the server starts. Remove unused mods to improve server performance.</div>
+  </div>
+  </div>
+
+  <!-- Add Mod Modal -->
+  <app-modal [title]="'Add New Mod'" [show]="showAddModModal" (close)="closeModal()">
+    <div class="modal-form">
+      <div class="form-group">
+        <label class="form-control-label">Mod ID</label>
+        <input class="form-control input" type="text" [(ngModel)]="newModId" placeholder="Enter CurseForge Mod ID (e.g., 123456789)" />
+        <div class="form-control-label desc">The numeric ID from the mod's CurseForge page URL.</div>
+      </div>
+      <br />
+      <div class="form-group">
+        <label class="form-control-label">Mod Name</label>
+        <input class="form-control input" type="text" [(ngModel)]="newModName" placeholder="Enter mod name (e.g., Structures Plus)" />
+        <div class="form-control-label desc">A descriptive name for the mod.</div>
+      </div>
+      
+      <div class="action-group-modal">
+        <button class="btn btn-secondary" (click)="closeModal()">Cancel</button>
+        <button class="btn btn-primary" (click)="onAddMod()" [disabled]="!newModId || !newModName">Add Mod</button>
+      </div>
+    </div>
+  </app-modal>
+
+  <!-- Mod Settings Modal -->
+  <app-modal [title]="'Mod Settings - ' + (selectedMod?.name || 'Unknown Mod')" [show]="showSettingsModal" (close)="closeModal()">
+    <div class="modal-form">
+      <div class="form-group">
+        <label class="form-control-label">Mod Settings</label>
+        <div class="mod-settings-editor">
+          <div *ngFor="let setting of objectKeys(modSettings); trackBy: trackBySetting" class="setting-row">
+            <input 
+              class="form-control input setting-key" 
+              type="text" 
+              [value]="editingKey === setting ? tempKeyValue : setting"
+              (focus)="startEditingKey(setting)"
+              (input)="tempKeyValue = $any($event.target).value"
+              (blur)="finishEditingKey(setting)"
+              (keydown.enter)="finishEditingKey(setting)"
+              (keydown.escape)="cancelEditingKey()"
+              placeholder="Setting name" />
+            <input class="form-control input setting-value" type="text" [(ngModel)]="modSettings[setting]" placeholder="Setting value" />
+            <button class="btn btn-sm btn-ghost" (click)="removeSetting(setting)" title="Remove Setting">
+              <i class="material-icons">remove</i>
+            </button>
+          </div>
+          <button class="btn btn-sm btn-secondary" (click)="addSetting()" style="margin-top: 0.5rem;">
+            <i class="material-icons">add</i> Add Setting
+          </button>
+        </div>
+        <div class="form-control-label desc">Configure custom settings for this mod. These will be written to the mod's INI section.</div>
+      </div>
+      
+      <div class="action-group-modal">
+        <button class="btn btn-secondary" (click)="closeModal()">Cancel</button>
+        <button class="btn btn-primary" (click)="saveModSettings()">Save Settings</button>
+      </div>
+    </div>
+  </app-modal>
+</div>
