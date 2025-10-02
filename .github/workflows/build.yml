@@ -27,13 +27,6 @@ jobs:
         with:
           name: electron-windows-installer
           path: dist-electron/*.exe
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: dist-electron/*.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
     runs-on: ubuntu-latest
@@ -63,13 +56,35 @@ jobs:
         with:
           name: electron-linux-rpm
           path: dist-electron/*.rpm
+
+  create-release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Installer
+        uses: actions/download-artifact@v4
+        with:
+          name: electron-windows-installer
+          path: ./release-files/
+      - name: Download Linux AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: electron-linux-appimage
+          path: ./release-files/
+      - name: Download Linux DEB
+        uses: actions/download-artifact@v4
+        with:
+          name: electron-linux-deb
+          path: ./release-files/
+      - name: Download Linux RPM
+        uses: actions/download-artifact@v4
+        with:
+          name: electron-linux-rpm
+          path: ./release-files/
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            dist-electron/*.AppImage
-            dist-electron/*.deb
-            dist-electron/*.rpm
+          files: ./release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
