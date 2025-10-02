@@ -30,7 +30,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: dist-electron/*.exe
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
   build-linux:
     runs-on: ubuntu-latest
@@ -69,4 +69,4 @@ jobs:
             dist-electron/*.deb
             dist-electron/*.rpm
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
