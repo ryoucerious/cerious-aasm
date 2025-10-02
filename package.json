@@ -104,6 +104,7 @@
   "build": {
     "appId": "com.cerious.aasm",
     "productName": "Cerious AASM",
+    "publish": "never",
     "directories": {
       "output": "dist-electron"
     },
