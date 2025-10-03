@@ -127,7 +127,12 @@
     },
     "win": {
       "icon": "logo.ico",
-      "target": "nsis"
+      "target": "nsis",
+      "requestedExecutionLevel": "asInvoker",
+      "fileDescription": "Cerious AASM",
+      "productName": "Cerious AASM",
+      "companyName": "r YOU cerious",
+      "copyright": "Copyright © 2025 r YOU cerious"
     },
     "linux": {
       "icon": "logo.png",
