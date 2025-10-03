@@ -12,6 +12,7 @@
   { "tab": "general", "label": "Server Password", "key": "serverPassword", "type": "text", "default": "", "description": "Players must enter this password to join your server. Leave blank for no password." },
 
   { "tab": "general", "label": "Admin Password", "key": "serverAdminPassword", "type": "text", "default": "", "description": "Required to use admin commands in-game. Keep this private." },
+  { "tab": "general", "label": "Enable Whitelist", "key": "useExclusiveList", "type": "boolean", "default": false, "description": "Enable exclusive join mode - only whitelisted players can join the server. Uses PlayersExclusiveJoinList.txt file." },
   { "tab": "general", "label": "Crossplay Platforms", "key": "crossplay", "type": "multi-toggle", "options": ["Steam (PC)", "Xbox (XSX)", "PlayStation (PS5)", "Windows Store (WINGDK)" ], "default": ["Steam (PC)"], "description": "Select all platforms that should be able to join this server. Only players on the selected platforms will be able to connect." },
 
   { "tab": "rates", "label": "XP Multiplier", "key": "xpMultiplier", "type": "number", "step": 0.01, "default": 1.0, "description": "Multiplier for experience gain. Higher values = faster leveling, lower values = slower leveling." },

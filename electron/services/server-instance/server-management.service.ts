@@ -117,6 +117,36 @@ export class ServerManagementService {
         };
       }
 
+      // Handle whitelist file generation after successful save
+      if (saved && saved.id && instance.useExclusiveList) {
+        try {
+          const path = require('path');
+          const { getInstancesBaseDir } = require('../../utils/ark/instance.utils');
+          const { whitelistService } = require('../whitelist.service');
+          
+          const instanceDir = path.join(getInstancesBaseDir(), saved.id);
+          
+          // Extract player IDs from the new exclusiveJoinPlayers array
+          let playerIds: string[] = [];
+          if (instance.exclusiveJoinPlayers && Array.isArray(instance.exclusiveJoinPlayers)) {
+            playerIds = instance.exclusiveJoinPlayers.map((player: any) => player.playerId).filter((id: string) => id && id.trim());
+          } else if (instance.exclusiveJoinPlayerIds && Array.isArray(instance.exclusiveJoinPlayerIds)) {
+            // Fallback to old format for backward compatibility
+            playerIds = instance.exclusiveJoinPlayerIds.filter((id: string) => id && id.trim());
+          }
+          
+          // Write whitelist file to instance directory
+          const result = whitelistService.writeWhitelistFile(instanceDir, playerIds);
+          if (result.success) {
+            console.log(`[server-management-service] Whitelist file written for instance ${saved.id}: ${playerIds.length} players`);
+          } else {
+            console.warn(`[server-management-service] Failed to write whitelist file for instance ${saved.id}: ${result.error}`);
+          }
+        } catch (error) {
+          console.error(`[server-management-service] Error writing whitelist file for instance ${saved.id}:`, error);
+        }
+      }
+
       return {
         success: true,
         instance: saved
@@ -248,18 +278,48 @@ export class ServerManagementService {
   }
 
   /**
-   * Prepare instance configuration (generate RCON password, save config)
+   * Prepare instance configuration (generate RCON password, write config files, copy whitelist)
    */
   async prepareInstanceConfiguration(instanceId: string, instance: any): Promise<void> {
+    const path = require('path');
+    const fs = require('fs');
+    const { getInstancesBaseDir } = require('../../utils/ark/instance.utils');
+    const { arkConfigService } = require('../ark-config.service');
+    const { whitelistService } = require('../whitelist.service');
+    
+    const instanceDir = path.join(getInstancesBaseDir(), instanceId);
+    
     // Generate a random RCON password if missing
     if (!instance.rconPassword) {
       instance.rconPassword = generateRandomPassword(16);
       // Save it back to config.json
       try {
-        const configPath = require('path').join(require('../../utils/ark/instance.utils').getInstancesBaseDir(), instanceId, 'config.json');
-        require('fs').writeFileSync(configPath, JSON.stringify(instance, null, 2), 'utf8');
+        const configPath = path.join(instanceDir, 'config.json');
+        fs.writeFileSync(configPath, JSON.stringify(instance, null, 2), 'utf8');
       } catch (e) {
         console.error('[server-management-service] Failed to save generated RCON password:', e);
+      }
+    }
+
+    // Write ARK configuration files (GameUserSettings.ini, Game.ini)
+    try {
+      arkConfigService.writeArkConfigFiles(instanceDir, instance);
+      console.log(`[server-management-service] ARK config files written for instance ${instanceId}`);
+    } catch (error) {
+      console.error(`[server-management-service] Failed to write ARK config files for instance ${instanceId}:`, error);
+    }
+
+    // Copy whitelist file to main ARK directory (if whitelist is enabled)
+    if (instance.useExclusiveList) {
+      try {
+        const result = whitelistService.copyWhitelistToMainDir(instanceDir);
+        if (result.success) {
+          console.log(`[server-management-service] Whitelist file copied for instance ${instanceId}: ${result.message}`);
+        } else {
+          console.warn(`[server-management-service] Failed to copy whitelist for instance ${instanceId}: ${result.error}`);
+        }
+      } catch (error) {
+        console.error(`[server-management-service] Error copying whitelist for instance ${instanceId}:`, error);
       }
     }
   }

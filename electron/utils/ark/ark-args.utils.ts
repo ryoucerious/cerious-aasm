@@ -58,6 +58,7 @@ export function buildArkServerArgs(config: any): string[] {
 
   // Add standard flags
   if (config.battleEye === false) args.push('-NoBattlEye');
+  if (config.useExclusiveList) args.push('-exclusivejoin');
 
   // Server platform - convert crossplay array if serverPlatform not set
   if (config.serverPlatform) {

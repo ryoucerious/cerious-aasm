@@ -1080,7 +1080,8 @@ html, body {
   
   /* Make tables more responsive */
   .backup-table-container,
-  .mod-table-container {
+  .mod-table-container,
+  .whitelist-table-container {
     margin-left: -1rem !important;
     margin-right: -1rem !important;
     padding-left: 1rem !important;
@@ -2538,8 +2539,10 @@ p {
   }
 }
 
-// Specific styling for backup table container - full width within main container
-.backup-table-container {
+/* --- UNIFIED TABLE SYSTEM --- */
+
+// Base table container - shared by all data tables
+.data-table-container {
   width: 100% !important;
   max-width: none !important;
   grid-column: 1 / -1 !important;
@@ -2551,10 +2554,20 @@ p {
   padding-right: 0.75rem !important;
 }
 
-.backup-list {
+// Base table list wrapper - shared by all data tables
+.data-table-list {
   width: 100%;
   max-width: none;
   overflow-x: auto;
+}
+
+// Specific table containers extend the base
+.backup-table-container {
+  @extend .data-table-container;
+}
+
+.backup-list {
+  @extend .data-table-list;
 }
 
 .backup-table {
@@ -2642,22 +2655,13 @@ p {
   }
 }
 
-// Mod table styles (based on backup table)
+// Mod table containers extend the base
 .mod-table-container {
-  width: 100% !important;
-  max-width: none !important;
-  grid-column: 1 / -1 !important;
-  
-  margin-left: -0.75rem !important;
-  margin-right: -0.75rem !important;
-  padding-left: 0.75rem !important;
-  padding-right: 0.75rem !important;
+  @extend .data-table-container;
 }
 
 .mod-list {
-  width: 100%;
-  max-width: none;
-  overflow-x: auto;
+  @extend .data-table-list;
 }
 
 .mod-table {
@@ -2719,6 +2723,75 @@ p {
     
     .mod-actions {
       width: 15%;
+    }
+  }
+}
+
+// Whitelist table containers extend the base
+.whitelist-table-container {
+  @extend .data-table-container;
+}
+
+.whitelist-list {
+  @extend .data-table-list;
+}
+
+.whitelist-table {
+  @extend .data-table;
+  
+  // Whitelist-specific column styles
+  .whitelist-id {
+    width: 30%;
+    font-family: monospace;
+    font-size: 0.9rem;
+    color: #a7b3c1;
+  }
+  
+  .whitelist-name {
+    width: 30%;
+    font-weight: 500;
+    color: #ffffff;
+  }
+  
+  .whitelist-date {
+    width: 25%;
+    color: #9ca3af;
+    font-size: 0.9rem;
+  }
+  
+  .whitelist-actions {
+    @extend .table-actions;
+    width: 15%;
+    min-width: 80px;
+    text-align: right;
+  }
+}
+
+@include mobile-only {
+  .whitelist-table {
+    font-size: 0.9rem;
+    
+    th, td {
+      padding: 0.5rem 0.75rem;
+    }
+    
+    .whitelist-id {
+      width: 35%;
+      font-size: 0.8rem;
+    }
+    
+    .whitelist-name {
+      width: 35%;
+    }
+    
+    .whitelist-date {
+      width: 20%;
+      font-size: 0.8rem;
+    }
+    
+    .whitelist-actions {
+      width: 10%;
+      min-width: 60px;
     }
   }
 }

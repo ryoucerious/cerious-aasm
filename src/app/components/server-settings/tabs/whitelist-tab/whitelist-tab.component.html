@@ -1,0 +1,207 @@
+<!-- Whitelist Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Server Whitelist Management</h4>
+    <p class="form-control-label desc">Manage the server's exclusive join list. Only whitelisted players can join when whitelist mode is enabled.</p>
+  </div>
+
+  <!-- Enable Whitelist Setting -->
+  <div class="settings-section">
+    <h5>Whitelist Configuration</h5>
+    <p class="section-desc">Configure exclusive join mode for your server.</p>
+
+    <div class="form-group">
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" 
+               class="toggle-switch" 
+               [checked]="serverInstance?.useExclusiveList" 
+               (change)="onUseExclusiveListChange($event.target.checked)" 
+               [disabled]="isLocked" 
+               tabindex="0" />
+        <span class="slider"></span>
+        <span class="toggle-text">Enable Whitelist (Exclusive Join)</span>
+      </label>
+      <div class="form-control-label desc">When enabled, only players on the whitelist can join the server. Requires server restart to take effect.</div>
+    </div>
+
+    <!-- Whitelist Status -->
+    <div class="form-group" style="grid-column: 1 / -1;">
+      <div class="whitelist-status" [ngClass]="{ 'enabled': serverInstance?.useExclusiveList, 'disabled': !serverInstance?.useExclusiveList }">
+        <span class="status-indicator"></span>
+        {{ serverInstance?.useExclusiveList ? 'Whitelist Active' : 'Whitelist Disabled' }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Player Management Section -->
+  <div class="settings-section" *ngIf="serverInstance?.useExclusiveList">
+    <h5>Player Management</h5>
+    <p class="section-desc">Add individual players or manage existing whitelist entries.</p>
+
+    <!-- Add Player Actions -->
+    <div class="form-group" style="grid-column: 1 / -1;">
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="btn btn-ghost" 
+                (click)="openAddPlayerModal()" 
+                [disabled]="isLocked">
+          <i class="material-icons">person_add</i> Add Player
+        </button>
+        <button class="btn btn-ghost" 
+                (click)="openBulkAddModal()" 
+                [disabled]="isLocked">
+          <i class="material-icons">group_add</i> Bulk Add
+        </button>
+        <button class="btn btn-ghost btn-danger" 
+                (click)="clearWhitelist()" 
+                [disabled]="isLocked || whitelistedPlayers.length === 0">
+          <i class="material-icons">clear_all</i> Clear All
+        </button>
+      </div>
+    </div>
+
+    <!-- Whitelist Table -->
+    <div class="form-group whitelist-table-container" style="grid-column: 1 / -1;">
+      <label class="form-control-label">Whitelisted Players ({{ whitelistedPlayers.length }})</label>
+      <div class="whitelist-list">
+        <table class="whitelist-table">
+          <thead>
+            <tr>
+              <th>Player ID</th>
+              <th>Player Name</th>
+              <th>Date Added</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="whitelistedPlayers.length === 0" class="no-data-row">
+              <td colspan="4" class="no-data">No players whitelisted</td>
+            </tr>
+            <tr *ngFor="let player of whitelistedPlayers; trackBy: trackByPlayerId" class="table-row">
+              <td class="whitelist-id">{{ player.playerId }}</td>
+              <td class="whitelist-name">{{ player.playerName || 'Unknown' }}</td>
+              <td class="whitelist-date">{{ player.dateAdded || 'Unknown' }}</td>
+              <td class="whitelist-actions">
+                <button class="btn btn-sm btn-ghost" 
+                        (click)="openRemoveConfirmModal(player.playerId)" 
+                        [disabled]="isLocked" 
+                        title="Remove from whitelist">
+                  <i class="material-icons">person_remove</i>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Message -->
+  <div *ngIf="statusMessage" class="form-group" style="grid-column: 1 / -1;">
+    <div class="status-message" [ngClass]="'status-' + statusType">
+      <i class="material-icons">{{ statusType === 'success' ? 'check_circle' : statusType === 'warning' ? 'warning' : 'error' }}</i>
+      {{ statusMessage }}
+    </div>
+  </div>
+</div>
+
+<!-- Add Player Modal -->
+<div class="modal-backdrop" *ngIf="showAddPlayerModal" (click)="closeModal()">
+  <div class="modal modal-form" (click)="$event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Add Player to Whitelist</h2>
+    </div>
+    
+    <div class="modal-body">
+      <p class="section-desc">Enter the player's EOS ID to add them to the whitelist.</p>
+      
+      <div class="form-group">
+        <label class="form-control-label">Player ID (EOS ID) *</label>
+        <input type="text" 
+               class="form-control input" 
+               [(ngModel)]="newPlayerId" 
+               placeholder="Enter EOS Player ID"
+               (keyup.enter)="addPlayer()"
+               autofocus />
+        <div class="form-control-label desc">The Epic Online Services (EOS) Player ID for the player.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-control-label">Player Name (Optional)</label>
+        <input type="text" 
+               class="form-control input" 
+               [(ngModel)]="newPlayerName" 
+               placeholder="Enter player display name"
+               (keyup.enter)="addPlayer()" />
+        <div class="form-control-label desc">Optional display name for easier identification.</div>
+      </div>
+      
+      <div class="form-group" style="margin-top: 20px;">
+        <div style="display: flex; gap: 0.75rem; justify-content: center;">
+          <button class="btn btn-ghost" (click)="closeModal()">Cancel</button>
+          <button class="btn btn-ghost" 
+                  (click)="addPlayer()" 
+                  [disabled]="!newPlayerId.trim()">
+            Add Player
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk Add Players Modal -->
+<div class="modal-backdrop" *ngIf="showBulkAddModal" (click)="closeModal()">
+  <div class="modal modal-form" (click)="$event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Bulk Add Players</h2>
+    </div>
+    
+    <div class="modal-body">
+      <p class="section-desc">Enter multiple EOS Player IDs, one per line.</p>
+      
+      <div class="form-group">
+        <label class="form-control-label">Player IDs (One per line)</label>
+        <textarea class="form-control input" 
+                  rows="12" 
+                  [(ngModel)]="bulkPlayerIds" 
+                  placeholder="Enter one EOS Player ID per line..."
+                  autofocus></textarea>
+        <div class="form-control-label desc">Enter one EOS Player ID per line. Empty lines will be ignored.</div>
+      </div>
+      
+      <div class="form-group" style="margin-top: 20px;">
+        <div style="display: flex; gap: 0.75rem; justify-content: center;">
+          <button class="btn btn-ghost" (click)="closeModal()">Cancel</button>
+          <button class="btn btn-ghost" 
+                  (click)="bulkAddPlayers()" 
+                  [disabled]="!bulkPlayerIds.trim()">
+            Add Players
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Remove Player Confirmation Modal -->
+<div class="modal-backdrop" *ngIf="showRemoveConfirmModal" (click)="closeModal()">
+  <div class="modal modal-confirmation" (click)="$event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Remove Player</h2>
+    </div>
+    
+    <div class="modal-body">
+      <p>Are you sure you want to remove player <strong>{{ playerToRemove }}</strong> from the whitelist?</p>
+      <p class="form-control-label desc">This action cannot be undone.</p>
+      
+      <div class="form-group" style="margin-top: 20px;">
+        <div style="display: flex; gap: 0.75rem; justify-content: center;">
+          <button class="btn btn-ghost" (click)="closeModal()">Cancel</button>
+          <button class="btn btn-ghost" (click)="removePlayer()">
+            Remove Player
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

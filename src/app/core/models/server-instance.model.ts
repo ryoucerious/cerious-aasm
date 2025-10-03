@@ -21,6 +21,12 @@ export interface ServerInstance {
   crossplay?: string[]; // e.g., ['Steam', 'Epic', 'Xbox', 'PlayStation']
   mods?: string[];
 
+  // Whitelist/Exclusive Join configuration
+  useExclusiveList?: boolean; // Enable exclusive join mode (UseExclusiveList=true)
+  exclusiveJoinPlayerIds?: string[]; // Array of EOS/Player IDs allowed to join
+  exclusiveJoinPlayers?: Array<{playerId: string, playerName?: string, dateAdded?: string}>; // Player objects with names
+  whitelistKickMessage?: string; // Custom message when non-whitelisted players are kicked
+
   // Advanced ARK server config fields
   xpMultiplier?: number;
   tamingSpeedMultiplier?: number;

@@ -72,6 +72,7 @@ export class ArkConfigService {
     {"key":"bAllowPlatformSaddleMultiFloors","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":""},
     {"key":"bUseCorpseLocator","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":""},
     {"key":"bUseSingleplayerSettings","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":""},
+    {"key":"useExclusiveList","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"UseExclusiveList - Enable whitelist/exclusive join mode"},
 
     // GameUserSettings.ini [SessionSettings] section  
     {"key":"sessionName","destination":"GameUserSettings.ini","ini_section_or_header":"[SessionSettings]","notes":"SessionName - Server display name"},

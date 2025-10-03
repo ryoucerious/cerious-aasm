@@ -197,6 +197,20 @@ export class ServerOperationsService {
   async destroyPlayer(instanceId: string, playerId: string): Promise<RconResult> {
     return await this.executeRconCommand(instanceId, `DestroyPlayer ${playerId}`);
   }
+
+  /**
+   * Add a player to the whitelist (exclusive join list)
+   */
+  async allowPlayerToJoinNoCheck(instanceId: string, playerId: string): Promise<RconResult> {
+    return await this.executeRconCommand(instanceId, `cheat AllowPlayerToJoinNoCheck ${playerId}`);
+  }
+
+  /**
+   * Remove a player from the whitelist (exclusive join list)
+   */
+  async disallowPlayerToJoinNoCheck(instanceId: string, playerId: string): Promise<RconResult> {
+    return await this.executeRconCommand(instanceId, `cheat DisallowPlayerToJoinNoCheck ${playerId}`);
+  }
 }
 
 // Export singleton instance

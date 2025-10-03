@@ -33,6 +33,9 @@
       <button class="tab" [class.active]="activeTab === 'mods'" (click)="onTabChange('mods')">
         <i class="material-icons">extension</i> Mods
       </button>
+      <button class="tab" [class.active]="activeTab === 'whitelist'" (click)="onTabChange('whitelist')">
+        <i class="material-icons">people</i> Whitelist
+      </button>
       <button class="tab" [class.active]="activeTab === 'automation'" (click)="onTabChange('automation')">
         <i class="material-icons">schedule</i> Automation
       </button>
@@ -121,6 +124,16 @@
       (toggleMod)="toggleMod.emit($event)"
       (updateModSettings)="updateModSettings.emit($event)">
     </app-mods-tab>
+    
+    <!-- Whitelist Tab Content -->
+    <app-whitelist-tab
+      *ngIf="activeTab === 'whitelist'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      (saveSettings)="onSaveSettings()"
+      (validateField)="validateField($event.key, $event.value)"
+      (statusUpdate)="onWhitelistStatusUpdate($event)">
+    </app-whitelist-tab>
     
     <!-- Backup Tab Content -->
     <app-backup-tab

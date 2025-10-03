@@ -60,6 +60,7 @@ import './handlers/proton-handler';
 import './handlers/linux-deps-handler';
 import './handlers/firewall-handler';
 import './handlers/system-info-handler';
+import './handlers/whitelist-handler';
 
 // =========================
 // Service Initialization
