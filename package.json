@@ -34,7 +34,7 @@
     "check-platform": "node scripts/check-platform.js",
     "setup-linux": "./scripts/setup-linux-deps.sh",
     "preinstall": "node scripts/check-platform.js",
-    "postinstall": "npx electron-rebuild -f -w node-pty -v 21.4.4"
+    "postinstall": "electron-builder install-app-deps"
   },
   "private": true,
   "dependencies": {
@@ -106,15 +106,18 @@
     "productName": "Cerious AASM",
     "publish": null,
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron",
+      "buildResources": "."
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*"
     ],
+    "extraResources": [],
     "mac": {
-      "icon": "logo.png",
+      "icon": "./logo.png",
       "category": "public.app-category.games",
       "target": [
         {
@@ -126,16 +129,12 @@
       ]
     },
     "win": {
-      "icon": "logo.ico",
+      "icon": "./logo.ico",
       "target": "nsis",
-      "requestedExecutionLevel": "asInvoker",
-      "fileDescription": "Cerious AASM",
-      "productName": "Cerious AASM",
-      "companyName": "r YOU cerious",
-      "copyright": "Copyright © 2025 r YOU cerious"
+      "requestedExecutionLevel": "asInvoker"
     },
     "linux": {
-      "icon": "logo.png",
+      "icon": "./logo.png",
       "target": [
         {
           "target": "AppImage",
@@ -164,7 +163,12 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "./logo.ico",
+      "uninstallerIcon": "./logo.ico",
+      "installerHeaderIcon": "./logo.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "asarUnpack": [
       "**/node_modules/node-pty/**"
