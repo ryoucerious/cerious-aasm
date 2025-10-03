@@ -1,9 +1,30 @@
 // =========================
+// Command Line Arguments & Sandbox Configuration
+// MUST BE FIRST - Before any Electron imports!
+// =========================
+// Check if running in headless mode or if we need to disable sandbox
+const isHeadlessMode = process.argv.includes('--headless');
+const isLinux = process.platform === 'linux';
+
+// =========================
 // Core Dependencies
 // =========================
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+
+// Apply sandbox fixes immediately after app import
+if (isLinux || isHeadlessMode) {
+  app.commandLine.appendSwitch('--no-sandbox');
+  app.commandLine.appendSwitch('--disable-setuid-sandbox');
+}
+
+// Additional stability switches for headless mode
+if (isHeadlessMode) {
+  app.commandLine.appendSwitch('--disable-gpu');
+  app.commandLine.appendSwitch('--disable-software-rasterizer');
+  app.commandLine.appendSwitch('--disable-dev-shm-usage');
+}
 
 // =========================
 // Services

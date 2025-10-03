@@ -163,19 +163,26 @@
 
 ### Command Line Usage (Headless Mode)
 
+For the installed Linux package, headless mode requires the `--no-sandbox` flag:
+
 ```bash
 # Basic headless mode
-cerious-aasm --headless
+cerious-aasm --no-sandbox --headless
 
 # With custom port
-cerious-aasm --headless --port=8080
+cerious-aasm --no-sandbox --headless --port=8080
 
 # With authentication
-cerious-aasm --headless --auth-enabled --username=admin --password=yourpassword
+cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
 
-# Get help
+# Full example with all options
+cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
+
+# Get help (use the GUI version for help)
 cerious-aasm --help
 ```
+
+**Note:** The `--no-sandbox` flag is required for headless mode on Linux due to Chrome sandbox restrictions. This is a security trade-off necessary for headless operation. For GUI mode, simply use `cerious-aasm` without any flags.
 
 ## Uninstallation
 

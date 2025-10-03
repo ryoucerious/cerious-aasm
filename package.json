@@ -4,9 +4,9 @@
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
-    "email": "support@cerious.dev"
+    "email": "ryoucerious.dev@gmail.com"
   },
-  "homepage": "https://github.com/cerious/cerious-aasm",
+  "homepage": "https://github.com/ryoucerious/cerious-aasm",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",

@@ -105,14 +105,37 @@ export function getServerPort(): number {
  */
 export function startServer(app: express.Express, port: number): void {
   const serverId = Math.random().toString(36).substring(2, 8);
+  const isHeadless = process.argv.includes('--headless');
 
   const server = app.listen(port, () => {
+    const message = `Server started successfully on port ${port} (instance: ${serverId})`;
+    
+    // Log to console in headless mode
+    if (isHeadless) {
+      console.log('\n' + '='.repeat(60));
+      console.log('🚀 Cerious AASM Headless Mode Started');
+      console.log('='.repeat(60));
+      console.log(`📡 Web server listening on port: ${port}`);
+      console.log(`🔗 Access the web interface at: http://localhost:${port}`);
+      
+      // Check if authentication is enabled
+      const authEnabled = process.argv.includes('--auth-enabled');
+      if (authEnabled) {
+        const username = process.argv.find(arg => arg.startsWith('--username='))?.split('=')[1] || 'admin';
+        console.log(`🔐 Authentication: ENABLED (username: ${username})`);
+      } else {
+        console.log(`🔓 Authentication: DISABLED`);
+      }
+      
+      console.log('='.repeat(60) + '\n');
+    }
+    
     // Notify main process that server is ready
     if (process.send) {
       process.send({
         type: 'server-ready',
         port,
-        message: `Server started successfully on port ${port} (instance: ${serverId})`
+        message
       });
     }
   });

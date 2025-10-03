@@ -21,7 +21,7 @@ Standard Electron application with full GUI interface.
 ### Headless Mode
 Run the application without GUI, providing web-based access.
 
-#### Basic Headless Usage
+#### Development Mode (npm scripts)
 ```bash
 # Run without authentication
 npm run headless
@@ -29,24 +29,36 @@ npm run headless
 # Run with custom port
 npm run headless -- --port=8080
 
-# Get help on command line options
-electron main.js --help
-```
-
-#### Headless Mode with Authentication
-```bash
 # Run with default authentication (username: admin, password: admin123)
 npm run headless:auth
 
 # Run with custom credentials
 npm run headless:auth:custom
-
-# Manual command with custom settings
-electron main.js --headless --auth-enabled --username=myuser --password=mypassword --port=3000
 ```
 
+#### Production Mode (Installed Package)
+When using the installed `.deb`, `.rpm`, or AppImage package on Linux:
+
+```bash
+# Basic headless mode
+cerious-aasm --no-sandbox --headless
+
+# With custom port
+cerious-aasm --no-sandbox --headless --port=8080
+
+# With authentication (default username: admin)
+cerious-aasm --no-sandbox --headless --auth-enabled --password=admin123 --port=3000
+
+# With custom credentials
+cerious-aasm --no-sandbox --headless --auth-enabled --username=myuser --password=mypassword
+
+# Full example with all options
+cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
+```
+
+**Note for Linux users:** The `--no-sandbox` flag is required when running in headless mode on Linux due to Chrome sandbox restrictions. This flag is only needed for headless mode, not for the GUI version.
+
 #### Command Line Parameters
-- `--headless` - Run in headless mode (no GUI)
 - `--port=<port>` - Set web server port (default: 3000)
 - `--auth-enabled` - Enable authentication for web interface
 - `--username=<username>` - Set authentication username (default: admin)
@@ -55,14 +67,14 @@ electron main.js --headless --auth-enabled --username=myuser --password=mypasswo
 
 #### Examples
 ```bash
-# Headless on port 8080 without authentication
-electron main.js --headless --port=8080
+# Development: Headless on port 8080 without authentication
+npm run headless -- --port=8080
 
-# Headless with authentication on default port
-electron main.js --headless --auth-enabled --username=admin --password=secret123
+# Production: Headless with authentication on default port
+cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=secret123
 
-# Headless with authentication on custom port
-electron main.js --headless --port=5000 --auth-enabled --password=mypassword
+# Production: Headless with authentication on custom port
+cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --password=mypassword
 ```
 
 ## Installation Process
