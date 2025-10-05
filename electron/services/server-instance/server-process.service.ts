@@ -53,21 +53,18 @@ export class ServerProcessService {
     const instanceDir = path.join(baseDir, instanceId);
 
     // Set up save directory for this instance
-    const saveDir = path.join(instanceDir, 'SavedArks');
+    const saveDir = path.join('Servers', instanceId, 'SavedArks');
     const formattedSaveDir = saveDir.replace(/\\/g, '/');
     const formattedConfigDir = instanceDir.replace(/\\/g, '/');
     const formattedLogDir = path.join(ArkPathUtils.getArkServerDir(), 'ShooterGame', 'Saved', 'Logs').replace(/\\/g, '/');
-
-    // Set altSaveDirectoryName to just the folder name (for querystring)
-    const altSaveDirName = path.basename(saveDir);
-
+    
     // Build the ARK server command arguments
     const args = buildArkServerArgs({
       ...instance,
       saveDir: formattedSaveDir,
       configDir: formattedConfigDir,
       logDir: formattedLogDir,
-      altSaveDirName
+      altSaveDirName: saveDir
     });
 
     // Use cross-platform command preparation for Proton support on Linux

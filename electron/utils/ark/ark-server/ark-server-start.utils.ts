@@ -79,10 +79,6 @@ function prepareServerConfig(instanceDir: string, config: any): any {
     }
   }
 
-  // Set altSaveDirectoryName to just the folder name
-  // ARK will create this folder under ShooterGame/Saved/SavedArks/
-  config.altSaveDirectoryName = path.join('Servers', path.basename(instanceDir), 'SavedArks');
-
   return config;
 }
 

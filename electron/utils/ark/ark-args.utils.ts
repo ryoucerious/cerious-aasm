@@ -23,7 +23,7 @@ export function buildArkServerArgs(config: any): string[] {
   if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
   if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
   if (config.queryPort) paramParts.push(`QueryPort=${config.queryPort}`);
-  if (config.altSaveDirectoryName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirectoryName}`);
+  if (config.altSaveDirName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirName}`);
 
   // Cluster parameters
   if (config.clusterDirOverride) {
