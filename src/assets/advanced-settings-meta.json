@@ -6,7 +6,8 @@
     { "value": "ScorchedEarth_WP", "display": "Scorched Earth" },
     { "value": "TheCenter_WP", "display": "The Center" },
     { "value": "Ragnarok_WP", "display": "Ragnarok" },
-    { "value": "Aberration_WP", "display": "Aberration" }
+    { "value": "Aberration_WP", "display": "Aberration" },
+    { "value": "LostColony_WP", "display": "Lost Colony" }
   ], "description": "The map to use for this server instance. Select from common maps or enter a custom map name." },
   { "tab": "general", "label": "Max Players", "key": "maxPlayers", "type": "number", "min": 1, "max": 255, "default": 70, "description": "The maximum number of players allowed on the server at once." },
   { "tab": "general", "label": "Server Password", "key": "serverPassword", "type": "text", "default": "", "description": "Players must enter this password to join your server. Leave blank for no password." },
