@@ -114,12 +114,7 @@ export class ArkUpdateService {
       ], { cwd: steamcmdPath });
       
       proc.stdout.on('data', (data) => {
-        const str = data.toString();
-        output += str;
-        const buildIdMatch = str.match(/buildid.*?(\d+)/i);
-        if (buildIdMatch) {
-          latestBuildId = buildIdMatch[1];
-        }
+        output += data.toString();
       });
       
       proc.stderr.on('data', (data) => {
@@ -127,8 +122,24 @@ export class ArkUpdateService {
       });
       
       proc.on('close', () => {
+        // Look for the "public" branch buildid which indicates the live version
+        // The structure is usually "branches" { "public" { "buildid" "123456" ... } }
+        // We use [\s\S] to match across newlines
+        const publicMatch = output.match(/"public"\s*\{[\s\S]*?"buildid"\s+"(\d+)"/i);
+        
+        if (publicMatch) {
+          latestBuildId = publicMatch[1];
+        } else {
+          // Fallback: looking for basic buildid if structure parsing fails, but this is less reliable
+          // Only do this if strictly necessary, but sticking to public branch is safer.
+          const fallbackMatch = output.match(/"buildid"\s+"(\d+)"/i);
+          if (fallbackMatch) {
+            latestBuildId = fallbackMatch[1];
+          }
+        }
+        
         if (!latestBuildId) {
-          console.error('[ark-update-service] Could not find buildid in SteamCMD output:', output);
+          console.error('[ark-update-service] Could not find legitimate buildid in SteamCMD output'); // Don't spam full output unless debug needed
         }
         resolve(latestBuildId);
       });

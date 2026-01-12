@@ -24,11 +24,9 @@ export function isArkServerInstalled(): boolean {
 export async function getCurrentInstalledVersion(): Promise<string | null> {
   try {
     const serverPath = getArkServerDir();
-    const versionFile = path.join(serverPath, 'version.txt');
-    if (fs.existsSync(versionFile)) {
-      const version = fs.readFileSync(versionFile, 'utf8').trim();
-      if (version) return version;
-    }
+    
+    // Priority: AppManifest (Build ID) > version.txt (Display Version)
+    // We prioritize Build ID because that's what we compare against SteamCMD for updates.
     const steamappsPath = path.join(serverPath, 'steamapps');
     if (fs.existsSync(steamappsPath)) {
       const manifestPath = path.join(steamappsPath, `appmanifest_${ARK_APP_ID}.acf`);
@@ -40,6 +38,14 @@ export async function getCurrentInstalledVersion(): Promise<string | null> {
         }
       }
     }
+
+    // Fallback to version.txt if manifest not found (legacy or corrupted install)
+    const versionFile = path.join(serverPath, 'version.txt');
+    if (fs.existsSync(versionFile)) {
+      const version = fs.readFileSync(versionFile, 'utf8').trim();
+      if (version) return version;
+    }
+
     return null;
   } catch (error) {
     console.error('[ark-server] Error getting current version:', error);
