@@ -60,6 +60,10 @@ export interface ServerInstance {
   preventDownloadDinos?: boolean;
   preventDownloadItems?: boolean;
   preventDownloadSurvivors?: boolean;
+  preventUploadDinos?: boolean;
+  preventUploadItems?: boolean;
+  preventUploadSurvivors?: boolean;
+  crossArkAllowForeignDinoDownloads?: boolean;
   overrideOfficialDifficulty?: number;
   dayCycleSpeedScale?: number;
   dayTimeSpeedScale?: number;

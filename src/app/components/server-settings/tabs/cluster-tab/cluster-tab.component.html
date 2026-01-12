@@ -163,4 +163,16 @@
       Prevent players from uploading tamed creatures from this server to the cluster.
     </div>
   </div>
+
+  <!-- Additional Transfer Settings -->
+  <div class="form-group">
+    <label class="form-control-label toggle-label">
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.crossArkAllowForeignDinoDownloads" [disabled]="isLocked" />
+      <span class="slider"></span>
+      <span class="toggle-text">Allow Foreign Dino Downloads</span>
+    </label>
+    <div class="form-control-label desc">
+      Allow downloading creatures from other ARK games/maps in the cluster. Essential for cross-server creature transfers.
+    </div>
+  </div>
 </div>

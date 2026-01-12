@@ -103,7 +103,7 @@ export class ArkConfigService {
     {"key":"preventUploadSurvivors","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"PreventUploadSurvivors"},
     {"key":"preventUploadItems","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"PreventUploadItems"},
     {"key":"preventUploadDinos","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"PreventUploadDinos"},
-    {"key":"crossARKAllowForeignDinosCheat","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"CrossARKAllowForeignDinosCheat"},
+    {"key":"crossArkAllowForeignDinoDownloads","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"CrossArkAllowForeignDinoDownloads"},
     {"key":"disableImprinting","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"DisableImprinting"},
     {"key":"allowAnyoneBabyImprintCuddle","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"AllowAnyoneBabyImprintCuddle"},
     {"key":"babyImprintingStatScaleMultiplier","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"BabyImprintingStatScaleMultiplier"},
