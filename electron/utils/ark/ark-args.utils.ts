@@ -56,9 +56,14 @@ export function buildArkServerArgs(config: any): string[] {
 
   args.push(mainArg);
 
+  // Helper to safely check boolean values (handles boolean and string 'true'/'false') 
+  // Note: duplicate definition is fine if scoped, but we should make isTrue available or locally defined correctly
+  const isTrue = (val: any) => val === true || val === 'true';
+  const isFalse = (val: any) => val === false || val === 'false';
+
   // Add standard flags
-  if (config.battleEye === false) args.push('-NoBattlEye');
-  if (config.useExclusiveList) args.push('-exclusivejoin');
+  if (isFalse(config.battleEye)) args.push('-NoBattlEye');
+  if (isTrue(config.useExclusiveList)) args.push('-exclusivejoin');
 
   // Server platform - convert crossplay array if serverPlatform not set
   if (config.serverPlatform) {
@@ -86,14 +91,17 @@ export function buildArkServerArgs(config: any): string[] {
   const launchParams = getArkLaunchParameters(config);
   args.push(...launchParams);
 
+  // Helper to safely check boolean values (handles boolean and string 'true'/'false')
+  const isTrue = (val: any) => val === true || val === 'true';
+
   // Cluster flags (legacy support - these might be better handled in INI)
-  if (config.noTransferFromFiltering) args.push('-NoTransferFromFiltering');
-  if (config.preventDownloadSurvivors) args.push('-PreventDownloadSurvivors');
-  if (config.preventDownloadItems) args.push('-PreventDownloadItems');
-  if (config.preventDownloadDinos) args.push('-PreventDownloadDinos');
-  if (config.preventUploadSurvivors) args.push('-PreventUploadSurvivors');
-  if (config.preventUploadItems) args.push('-PreventUploadItems');
-  if (config.preventUploadDinos) args.push('-PreventUploadDinos');
+  if (isTrue(config.noTransferFromFiltering)) args.push('-NoTransferFromFiltering');
+  if (isTrue(config.preventDownloadSurvivors)) args.push('-PreventDownloadSurvivors');
+  if (isTrue(config.preventDownloadItems)) args.push('-PreventDownloadItems');
+  if (isTrue(config.preventDownloadDinos)) args.push('-PreventDownloadDinos');
+  if (isTrue(config.preventUploadSurvivors)) args.push('-PreventUploadSurvivors');
+  if (isTrue(config.preventUploadItems)) args.push('-PreventUploadItems');
+  if (isTrue(config.preventUploadDinos)) args.push('-PreventUploadDinos');
 
   return args;
 
