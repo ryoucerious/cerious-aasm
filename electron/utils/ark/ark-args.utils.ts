@@ -77,6 +77,11 @@ export function buildArkServerArgs(config: any): string[] {
     args.push('-ServerPlatform=PC');
   }
 
+  // Windows Live Max Players (Required for some crossplay configurations to show up in lists)
+  if (config.winLiveMaxPlayers) {
+    args.push(`-WinLiveMaxPlayers=${config.winLiveMaxPlayers}`);
+  }
+
   // Add launch parameters from INI utils (handles mods, crossplay, maxPlayers, etc.)
   const launchParams = getArkLaunchParameters(config);
   args.push(...launchParams);

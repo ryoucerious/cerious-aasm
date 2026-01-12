@@ -127,7 +127,23 @@ export class ArkConfigService {
     {"key":"GlobalSpoilingTimeMultiplier","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":""},
     {"key":"FuelConsumptionIntervalMultiplier","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"ASA docs specify Game.ini"},
     {"key":"bAllowFlyerSpeedLeveling","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":""},
-    {"key":"bAllowSpeedLeveling","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":""}
+    {"key":"bAllowSpeedLeveling","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":""},
+
+    // Additional Missing GameUserSettings.ini [ServerSettings]
+    {"key":"serverCrosshair","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"ServerCrosshair"},
+    {"key":"showFloatingDamageText","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"ShowFloatingDamageText"},
+    {"key":"allowHitMarkers","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"AllowHitMarkers"},
+    {"key":"adminLogging","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"AdminLogging"},
+    {"key":"clampResourceHarvestDamage","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"ClampResourceHarvestDamage"},
+    {"key":"kickIdlePlayersPeriod","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"KickIdlePlayersPeriod"},
+    {"key":"autoDestroyDecayedDinos","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"AutoDestroyDecayedDinos"},
+    {"key":"maxPersonalTamedDinos","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"MaxPersonalTamedDinos"},
+    {"key":"preventJoinEvents","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"PreventJoinEvents"},
+    {"key":"preventLeaveEvents","destination":"GameUserSettings.ini","ini_section_or_header":"[ServerSettings]","notes":"PreventLeaveEvents"},
+
+    // Additional Missing Game.ini [/script/shootergame.shootergamemode]
+    {"key":"maxDifficulty","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"MaxDifficulty"},
+    {"key":"bUseDinoLevelToCreateCharacter","destination":"Game.ini","ini_section_or_header":"[/script/shootergame.shootergamemode]","notes":"bUseDinoLevelToCreateCharacter"}
   ];
 
   /**
