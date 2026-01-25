@@ -1,0 +1,75 @@
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Discord Integration</h4>
+    <p class="form-control-label desc">Send server status updates to a Discord channel via Webhook.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>General Settings</h5>
+    
+    <div class="form-group">
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" 
+               class="toggle-switch" 
+               [(ngModel)]="enabled" 
+               (change)="onSaveSettings()" 
+               [disabled]="isLocked" 
+               tabindex="0" />
+        <span class="slider"></span>
+        <span class="toggle-text">Enable Discord Notifications</span>
+      </label>
+    </div>
+
+    <div class="form-group" *ngIf="enabled">
+      <label class="form-control-label">Webhook URL</label>
+      <input 
+        type="text" 
+        class="form-control input" 
+        [(ngModel)]="webhookUrl"
+        (blur)="onSaveSettings()" 
+        [disabled]="isLocked" 
+        placeholder="https://discord.com/api/webhooks/..."
+      >
+      <div class="form-control-label desc">
+        Create a Webhook in your Discord Server Settings > Integrations > Webhooks.
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="enabled" class="settings-section">
+    <h5>Notification Events</h5>
+    <p class="section-desc">Select which events should trigger a Discord notification.</p>
+
+    <div class="form-group">
+      <div class="toggle-group" style="display: flex; flex-direction: column; gap: 0.5rem;">
+        
+        <div class="toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="notifications.serverStart" (change)="onSaveSettings()" [disabled]="isLocked" />
+          <span class="toggle-text">Server Start</span>
+        </div>
+
+        <div class="toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="notifications.serverStop" (change)="onSaveSettings()" [disabled]="isLocked" />
+          <span class="toggle-text">Server Stop / Shutdown</span>
+        </div>
+
+        <div class="toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="notifications.serverCrash" (change)="onSaveSettings()" [disabled]="isLocked" />
+          <span class="toggle-text">Server Crash</span>
+        </div>
+
+        <div class="toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="notifications.serverUpdate" (change)="onSaveSettings()" [disabled]="isLocked" />
+          <span class="toggle-text">Server Update Available</span>
+        </div>
+
+        <div class="toggle-label" style="opacity: 0.6;">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="notifications.serverJoin" [disabled]="true" />
+          <span class="toggle-text">Player Join (Coming Soon)</span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>

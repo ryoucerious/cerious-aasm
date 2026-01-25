@@ -175,6 +175,33 @@ messagingService.on('connect-rcon', async (payload, sender) => {
   }
 });
 
+/**
+ * Handles the 'get-online-players' request.
+ * Fetches and parses the list of online players from RCON.
+ */
+messagingService.on('get-online-players', async (payload, sender) => {
+  const { id, requestId } = payload || {};
+  try {
+    const rconService = require('../services/rcon.service').rconService;
+    const players = await rconService.getOnlinePlayers(id);
+    
+    messagingService.sendToOriginator('get-online-players', {
+      success: true,
+      instanceId: id,
+      players: players,
+      requestId
+    }, sender);
+  } catch (error) {
+    console.error(`[server-instance-handler] Failed to get online players for ${id}:`, error);
+    messagingService.sendToOriginator('get-online-players', {
+      success: false,
+      instanceId: id,
+      error: (error as Error)?.message,
+      requestId
+    }, sender);
+  }
+});
+
 /** Handles the 'disconnect-rcon' message event from the messaging service.
  * 
  * When triggered, this handler invokes the ServerInstanceService to disconnect from the RCON interface of a server instance.

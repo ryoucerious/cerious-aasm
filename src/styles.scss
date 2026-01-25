@@ -2796,6 +2796,146 @@ p {
   }
 }
 
+// Player table containers extend the base
+.player-table-container {
+  @extend .data-table-container;
+}
+
+.player-list {
+  @extend .data-table-list;
+}
+
+.player-table {
+  @extend .data-table;
+  
+  // Player-specific column styles
+  .player-name {
+    width: 40%;
+    font-weight: 500;
+    color: #ffffff;
+  }
+  
+  .player-id {
+    width: 40%;
+    font-family: monospace;
+    font-size: 0.9rem;
+    color: #a7b3c1;
+  }
+  
+  .player-actions {
+    @extend .table-actions;
+    width: 20%;
+    min-width: 80px;
+    text-align: right;
+  }
+}
+
+@include mobile-only {
+  .player-table {
+    th, td {
+      padding: 0.5rem 0.75rem;
+    }
+    
+    .player-name {
+      width: 45%;
+    }
+    
+    .player-id {
+      width: 40%;
+      font-size: 0.8rem;
+    }
+    
+    .player-actions {
+      width: 15%;
+      min-width: 60px;
+    }
+  }
+}
+
+// Broadcast table containers extend the base
+.broadcast-table-container {
+  @extend .data-table-container;
+}
+
+.broadcast-list {
+  @extend .data-table-list;
+}
+
+.broadcast-table {
+  @extend .data-table;
+  
+  // Broadcast-specific column styles
+  .broadcast-status {
+    width: 15%;
+    
+    .toggle-label {
+      margin: 0;
+      
+      .toggle-text {
+        font-size: 0.9rem;
+      }
+    }
+  }
+  
+  .broadcast-message {
+    width: 45%;
+    
+    .broadcast-textarea {
+      min-height: 60px;
+      resize: vertical;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+  }
+  
+  .broadcast-interval {
+    width: 20%;
+    text-align: center;
+  }
+  
+  .broadcast-actions {
+    @extend .table-actions;
+    width: 20%;
+    text-align: right;
+  }
+}
+
+@include mobile-only {
+  .broadcast-table {
+    th, td {
+      padding: 0.5rem 0.75rem;
+    }
+    
+    .broadcast-status {
+      width: 20%;
+      
+      .toggle-label {
+        .toggle-text {
+          font-size: 0.8rem;
+        }
+      }
+    }
+    
+    .broadcast-message {
+      width: 40%;
+      
+      .broadcast-textarea {
+        min-height: 50px;
+        font-size: 0.8rem;
+      }
+    }
+    
+    .broadcast-interval {
+      width: 25%;
+    }
+    
+    .broadcast-actions {
+      width: 15%;
+      min-width: 60px;
+    }
+  }
+}
+
 // Automation tab styles
 .automation-status-header {
   background: #23272f;

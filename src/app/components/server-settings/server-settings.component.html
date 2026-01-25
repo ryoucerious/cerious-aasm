@@ -39,6 +39,15 @@
       <button class="tab" [class.active]="activeTab === 'automation'" (click)="onTabChange('automation')">
         <i class="material-icons">schedule</i> Automation
       </button>
+      <button class="tab" [class.active]="activeTab === 'discord'" (click)="onTabChange('discord')">
+        <i class="material-icons">chat</i> Discord
+      </button>
+      <button class="tab" [class.active]="activeTab === 'broadcasts'" (click)="onTabChange('broadcasts')">
+        <i class="material-icons">campaign</i> Broadcasts
+      </button>
+      <button class="tab" [class.active]="activeTab === 'players'" (click)="onTabChange('players')">
+        <i class="material-icons">people_outline</i> Players
+      </button>
       <button class="tab" [class.active]="activeTab === 'firewall'" (click)="onTabChange('firewall')"
               *ngIf="isLinux">
         <i class="material-icons">security</i> Firewall
@@ -180,5 +189,26 @@
       *ngIf="activeTab === 'firewall'"
       [serverInstance]="serverInstance">
     </app-firewall-tab>
+
+    <!-- Discord Tab Content -->
+    <app-discord-tab
+      *ngIf="activeTab === 'discord'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      (saveSettings)="onSaveSettings()">
+    </app-discord-tab>
+
+    <!-- Broadcasts Tab Content -->
+    <app-broadcasts-tab
+      *ngIf="activeTab === 'broadcasts'"
+      [serverInstance]="serverInstance"
+      [isLocked]="isLocked"
+      (saveSettings)="onSaveSettings()">
+    </app-broadcasts-tab>
+
+    <!-- Player List Content -->
+    <div *ngIf="activeTab === 'players'" class="h-[600px]">
+        <app-player-list [serverInstance]="serverInstance"></app-player-list>
+    </div>
   </div>
 </div>

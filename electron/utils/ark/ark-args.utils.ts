@@ -91,9 +91,6 @@ export function buildArkServerArgs(config: any): string[] {
   const launchParams = getArkLaunchParameters(config);
   args.push(...launchParams);
 
-  // Helper to safely check boolean values (handles boolean and string 'true'/'false')
-  const isTrue = (val: any) => val === true || val === 'true';
-
   // Cluster flags (legacy support - these might be better handled in INI)
   if (isTrue(config.noTransferFromFiltering)) args.push('-NoTransferFromFiltering');
   if (isTrue(config.preventDownloadSurvivors)) args.push('-PreventDownloadSurvivors');

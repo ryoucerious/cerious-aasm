@@ -90,6 +90,10 @@ export class ServerProcessService {
     // Start the server process
     const serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
 
+    // Notify Discord
+    const { discordService } = require('../discord.service');
+    discordService.sendNotification(instanceId, 'start', 'Server is starting up...');
+
     // Store the process reference
     this.arkServerProcesses[instanceId] = serverProcess;
 
@@ -115,6 +119,10 @@ export class ServerProcessService {
       this.setInstanceState(instanceId, 'stopped');
       onState?.('stopped');
       
+      // Notify Discord
+      const { discordService } = require('../discord.service');
+      discordService.sendNotification(instanceId, 'stop', 'Server has stopped');
+
       // Disconnect RCON connection since server has exited
       try {
         const rconService = require('../rcon.service').rconService;
@@ -132,6 +140,10 @@ export class ServerProcessService {
       console.error('[server-process-service] ARK server process error:', err);
       this.setInstanceState(instanceId, 'error');
       onState?.('error');
+
+      // Notify Discord
+      const { discordService } = require('../discord.service');
+      discordService.sendNotification(instanceId, 'crash', `Server Process Error: ${err.message || err}`);
       
       // Disconnect RCON connection since server has errored
       try {

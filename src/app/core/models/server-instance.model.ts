@@ -167,4 +167,29 @@ export interface ServerInstance {
   players?: number; // Current player count
   memory?: number; // Memory usage in MB (runtime only)
   message?: string; // Status message (runtime only)
+
+  // Discord Integration
+  discordConfig?: {
+    enabled: boolean;
+    webhookUrl: string;
+    notifications?: {
+      serverStart?: boolean;
+      serverStop?: boolean;
+      serverCrash?: boolean;
+      serverUpdate?: boolean;
+      serverJoin?: boolean;
+      serverLeave?: boolean;
+    };
+  };
+
+  // Broadcasts
+  broadcastConfig?: {
+    enabled?: boolean;
+    messages?: Array<{
+      id: string;
+      message: string;
+      interval: number;
+      enabled: boolean;
+    }>;
+  };
 }

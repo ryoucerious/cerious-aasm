@@ -70,6 +70,60 @@ messagingService.on('configure-crash-detection', async (payload, sender) => {
 });
 
 /**
+ * Configure Discord Webhook Integration
+ */
+messagingService.on('configure-discord-webhook', async (payload, sender) => {
+  const { serverId, config, requestId } = payload || {};
+  try {
+    const { instanceUtils } = require('../utils/ark/instance.utils');
+    const instance = await instanceUtils.getInstance(serverId);
+    if (!instance) throw new Error('Instance not found');
+
+    instance.discordConfig = config;
+    await instanceUtils.saveInstance(instance);
+
+    messagingService.sendToOriginator('configure-discord-webhook', { success: true, requestId }, sender);
+  } catch (error) {
+    console.error('[automation-handler] Error configuring discord:', error);
+    messagingService.sendToOriginator('configure-discord-webhook', { 
+      success: false, 
+      error: (error as Error).message, 
+      requestId 
+    }, sender);
+  }
+});
+
+/**
+ * Configure Scheduled Broadcasts
+ */
+messagingService.on('configure-broadcasts', async (payload, sender) => {
+  const { serverId, broadcasts, requestId } = payload || {};
+  try {
+    const { instanceUtils } = require('../utils/ark/instance.utils');
+    const { schedulerService } = require('../services/scheduler.service');
+    
+    const instance = await instanceUtils.getInstance(serverId);
+    if (!instance) throw new Error('Instance not found');
+
+    instance.broadcasts = broadcasts;
+    await instanceUtils.saveInstance(instance);
+    
+    // Update live scheduler
+    schedulerService.updateBroadcasts(serverId, broadcasts);
+    schedulerService.initSchedule(serverId);
+
+    messagingService.sendToOriginator('configure-broadcasts', { success: true, requestId }, sender);
+  } catch (error) {
+    console.error('[automation-handler] Error configuring broadcasts:', error);
+    messagingService.sendToOriginator('configure-broadcasts', { 
+      success: false, 
+      error: (error as Error).message, 
+      requestId 
+    }, sender);
+  }
+});
+
+/**
  * Handles the 'configure-scheduled-restart' message event from the messaging service.
  * 
  * When triggered, this handler invokes the AutomationService to configure scheduled restart settings.

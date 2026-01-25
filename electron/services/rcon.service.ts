@@ -162,6 +162,32 @@ export class RconService {
   }
 
   /**
+   * Get list of online players
+   */
+  async getOnlinePlayers(instanceId: string): Promise<{name: string, steamId: string}[]> {
+    const result = await this.executeRconCommand(instanceId, 'ListPlayers');
+    if (!result.success || !result.response) return [];
+
+    // Parse ARK Check format: "No Players Connected" or "0. Name, SteamID"
+    if (result.response.includes('No Players Connected')) return [];
+
+    const lines = result.response.split('\n');
+    const players: {name: string, steamId: string}[] = [];
+
+    for (const line of lines) {
+      // Regex for "0. PlayerName, 12345678"
+      const match = line.match(/\d+\.\s+(.+),\s+(\d+)/);
+      if (match) {
+        players.push({
+          name: match[1],
+          steamId: match[2]
+        });
+      }
+    }
+    return players;
+  }
+
+  /**
    * Auto-connect RCON with callback for status updates
    * @param instanceId - The unique identifier of the server instance
    * @param onStatusChange - Optional callback to receive connection status updates

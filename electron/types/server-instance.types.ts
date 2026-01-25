@@ -6,6 +6,27 @@ export interface ServerInstanceResult {
   shouldNotifyAutomation?: boolean;
 }
 
+export interface DiscordWebhookConfig {
+  enabled: boolean;
+  webhookUrl: string;
+  notifications?: {
+    serverStart?: boolean;
+    serverStop?: boolean;
+    serverCrash?: boolean;
+    serverUpdate?: boolean;
+    serverJoin?: boolean;
+    serverLeave?: boolean;
+  };
+}
+
+export interface ScheduledBroadcast {
+  id: string;
+  message: string;
+  intervalMinutes: number;
+  enabled: boolean;
+  nextRun?: number;
+}
+
 export interface ServerStateResult {
   state: string;
   instanceId: string;

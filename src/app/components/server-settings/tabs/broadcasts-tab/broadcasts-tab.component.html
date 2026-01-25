@@ -1,0 +1,97 @@
+<!-- Broadcasts Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Auto Broadcasts Management</h4>
+    <p class="form-control-label desc">Automatically broadcast messages to the server via RCON on a schedule. Configure custom messages and intervals.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Broadcast Configuration</h5>
+    <p class="section-desc">Enable automatic message broadcasting and configure global settings.</p>
+
+    <div class="form-group">
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" 
+               class="toggle-switch" 
+               [(ngModel)]="enabled" 
+               (change)="onSaveSettings()" 
+               [disabled]="isLocked" 
+               tabindex="0" />
+        <span class="slider"></span>
+        <span class="toggle-text">Enable Automatic Broadcasts</span>
+      </label>
+      <div class="form-control-label desc">When enabled, messages will be broadcast according to their individual schedules.</div>
+    </div>
+  </div>
+
+  <div class="settings-section" *ngIf="enabled">
+    <h5>Message Management</h5>
+    <p class="section-desc">Add and configure automatic broadcast messages with custom intervals.</p>
+
+    <!-- Add Message Section -->
+    <div class="form-group" style="grid-column: 1 / -1;">
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="btn btn-ghost" (click)="addMessage()" [disabled]="isLocked" style="white-space: nowrap;">
+          <i class="material-icons">add</i> Add Message
+        </button>
+      </div>
+    </div>
+
+    <!-- Message List Section -->
+    <div class="form-group broadcast-table-container" style="grid-column: 1 / -1;">
+      <label class="form-control-label">Broadcast Messages ({{ messages.length }})</label>
+      <div class="broadcast-list">
+        <table class="broadcast-table">
+        <thead>
+          <tr>
+            <th>Enabled</th>
+            <th>Message Content</th>
+            <th>Interval (Min)</th>
+            <th style="text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="messages.length === 0" class="no-data-row">
+            <td colspan="4" class="no-data">No broadcast messages configured</td>
+          </tr>
+          <tr *ngFor="let msg of messages; let i = index" class="table-row">
+            <td class="broadcast-status">
+              <div class="form-control-label toggle-label">
+                <input type="checkbox" class="toggle-switch" [(ngModel)]="msg.enabled" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+                <span class="toggle-text">{{ msg.enabled ? 'On' : 'Off' }}</span>
+              </div>
+            </td>
+            <td class="broadcast-message">
+              <textarea 
+                class="form-control input broadcast-textarea" 
+                [(ngModel)]="msg.message" 
+                (blur)="onSaveSettings()"
+                [disabled]="isLocked"
+                rows="2"
+                placeholder="Enter broadcast message..."
+              ></textarea>
+            </td>
+            <td class="broadcast-interval">
+              <input 
+                type="number" 
+                class="form-control input" 
+                [(ngModel)]="msg.interval"
+                (blur)="onSaveSettings()" 
+                [disabled]="isLocked" 
+                min="1"
+                style="text-align: center; width: 80px;"
+              />
+            </td>
+            <td class="broadcast-actions">
+              <button class="btn btn-sm btn-ghost" (click)="removeMessage(i)" [disabled]="isLocked" title="Remove Message">
+                <i class="material-icons">delete_outline</i>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="form-control-label desc">Messages are broadcast at their specified intervals. Set longer intervals to reduce server chat spam.</div>
+  </div>
+
+</div>

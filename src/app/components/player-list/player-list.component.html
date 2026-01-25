@@ -1,0 +1,69 @@
+<!-- Players Tab Content -->
+<div class="tab-content">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <h4>Online Player Management</h4>
+    <p class="form-control-label desc">View currently connected players and manage their access. Players must be online and the server running for data to display.</p>
+  </div>
+
+  <div class="settings-section">
+    <h5>Player List</h5>
+    <p class="section-desc">Monitor active connections and player activity.</p>
+
+    <!-- Refresh Section -->
+    <div class="form-group" style="grid-column: 1 / -1;">
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="btn btn-ghost" (click)="refreshPlayers()" [disabled]="loading || serverInstance?.status !== 'running'" style="white-space: nowrap;">
+          <i class="material-icons" [class.spin]="loading">refresh</i> Refresh Players
+        </button>
+        <span class="form-control-label desc" style="margin: 0;" *ngIf="lastUpdated">
+          Last updated: {{ lastUpdated | date:'mediumTime' }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Player List Section -->
+    <div class="form-group player-table-container" style="grid-column: 1 / -1;">
+      <label class="form-control-label">Online Players ({{ players.length }})</label>
+      <div class="player-list">
+        <table class="player-table">
+        <thead>
+          <tr>
+            <th>Player Name</th>
+            <th>Steam ID</th>
+            <th style="text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Loading State -->
+          <tr *ngIf="loading && players.length === 0" class="no-data-row">
+            <td colspan="3" class="no-data">
+              <i class="material-icons spin">refresh</i> Loading players...
+            </td>
+          </tr>
+          <!-- Error State -->
+          <tr *ngIf="error && !loading" class="no-data-row">
+            <td colspan="3" class="no-data">
+              <i class="material-icons">error_outline</i> {{ error }}
+            </td>
+          </tr>
+          <!-- Empty State -->
+          <tr *ngIf="!loading && !error && players.length === 0" class="no-data-row">
+            <td colspan="3" class="no-data">No players online</td>
+          </tr>
+          <!-- Player Rows -->
+          <tr *ngFor="let player of players" class="table-row">
+            <td class="player-name">{{ player.name }}</td>
+            <td class="player-id">{{ player.steamId }}</td>
+            <td class="player-actions">
+              <button class="btn btn-sm btn-ghost" (click)="copySteamId(player.steamId)" title="Copy Steam ID">
+                <i class="material-icons">content_copy</i>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="form-control-label desc">Player data refreshes automatically when the tab is opened. Use the refresh button for manual updates.</div>
+  </div>
+  </div>
+</div>

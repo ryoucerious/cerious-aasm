@@ -55,6 +55,14 @@ export class CrashDetectionService {
         automation.restartAttempts++;
         automation.lastCrashTime = new Date();
 
+        // Notify Discord about the crash and restart attempt
+        const { discordService } = require('../discord.service');
+        discordService.sendNotification(
+          serverId, 
+          'crash', 
+          `Server Crash Detected! Attempting automatic restart (${automation.restartAttempts}/${automation.settings.maxRestartAttempts}).`
+        );
+
         try {
           const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(serverId);
           await serverInstanceService.startServerInstance(serverId, onLog, onState);
