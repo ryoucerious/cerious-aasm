@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.0.0-beta.6.1",
+  "version": "1.0.0-beta.6.2",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -34,7 +34,7 @@
     "check-platform": "node scripts/check-platform.js",
     "setup-linux": "./scripts/setup-linux-deps.sh",
     "preinstall": "node scripts/check-platform.js",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "node scripts/safe-postinstall.js"
   },
   "private": true,
   "dependencies": {

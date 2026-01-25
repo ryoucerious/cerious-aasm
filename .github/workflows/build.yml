@@ -41,6 +41,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install Python setuptools
+        run: python -m pip install setuptools
+      - name: Update npm to latest
+        run: npm install -g npm@latest
+      - name: Clear npm cache
+        run: npm cache clean --force
       - name: Install dependencies
         run: npm install
       - name: Build for Linux
