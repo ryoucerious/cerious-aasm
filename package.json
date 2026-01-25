@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.0.0-beta.6.2",
+  "version": "1.0.0-beta.6.3",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -105,6 +105,8 @@
     "appId": "com.cerious.aasm",
     "productName": "Cerious AASM",
     "publish": null,
+    "buildDependenciesFromSource": false,
+    "nodeGypRebuild": false,
     "directories": {
       "output": "dist-electron",
       "buildResources": "."
