@@ -34,7 +34,7 @@ export class PlayerListComponent implements OnInit, OnDestroy {
     
     // Auto refresh every 30 seconds
     this.autoRefreshSub = interval(30000).subscribe(() => {
-        if (this.serverInstance?.status === 'running') {
+        if (this.serverInstance?.state === 'Running') {
             this.refreshPlayers();
         }
     });
@@ -47,7 +47,7 @@ export class PlayerListComponent implements OnInit, OnDestroy {
   }
 
   async refreshPlayers() {
-    if (!this.serverInstance || this.serverInstance.status !== 'running') {
+    if (!this.serverInstance || this.serverInstance.state !== 'Running') {
         this.players = [];
         this.error = 'Server is not running.';
         return;
@@ -58,7 +58,7 @@ export class PlayerListComponent implements OnInit, OnDestroy {
 
     try {
       const response = await this.ipcService.invoke('get-online-players', {
-        serverId: this.serverInstance.id
+        id: this.serverInstance.id
       });
 
       if (response.success) {

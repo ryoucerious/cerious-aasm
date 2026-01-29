@@ -12,7 +12,7 @@
     <!-- Refresh Section -->
     <div class="form-group" style="grid-column: 1 / -1;">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <button class="btn btn-ghost" (click)="refreshPlayers()" [disabled]="loading || serverInstance?.status !== 'running'" style="white-space: nowrap;">
+        <button class="btn btn-ghost" (click)="refreshPlayers()" [disabled]="loading || serverInstance?.state !== 'Running'" style="white-space: nowrap;">
           <i class="material-icons" [class.spin]="loading">refresh</i> Refresh Players
         </button>
         <span class="form-control-label desc" style="margin: 0;" *ngIf="lastUpdated">
