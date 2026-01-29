@@ -4,6 +4,7 @@ import { MessagingService } from '../../../../core/services/messaging/messaging.
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ServerInstanceService } from '../../../../core/services/server-instance.service';
 import { GlobalConfigService } from '../../../../core/services/global-config.service';
+import { StatMultiplierService } from '../../../../core/services/stat-multiplier.service';
 import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
 import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
@@ -20,7 +21,8 @@ describe('StatMultipliersTabComponent', () => {
         { provide: MessagingService, useClass: MockMessagingService },
         { provide: NotificationService, useClass: MockNotificationService },
         { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
+        { provide: GlobalConfigService, useClass: MockGlobalConfigService },
+        StatMultiplierService
       ]
     }).compileComponents();
     fixture = TestBed.createComponent(StatMultipliersTabComponent);

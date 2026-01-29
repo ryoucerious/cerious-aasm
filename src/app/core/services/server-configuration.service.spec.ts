@@ -1,6 +1,7 @@
 import { ServerConfigurationService } from './server-configuration.service';
 import { MessagingService } from './messaging/messaging.service';
 import { ServerInstanceService } from './server-instance.service';
+import { StatMultiplierService } from './stat-multiplier.service';
 import { ArkServerValidationService } from './ark-server-validation.service';
 import { of } from 'rxjs';
 
@@ -8,17 +9,19 @@ describe('ServerConfigurationService', () => {
   let service: ServerConfigurationService;
   let messagingMock: jasmine.SpyObj<MessagingService>;
   let instanceMock: jasmine.SpyObj<ServerInstanceService>;
+  let statMultiplierMock: jasmine.SpyObj<StatMultiplierService>;
   let validationMock: jasmine.SpyObj<ArkServerValidationService>;
 
   beforeEach(() => {
     messagingMock = jasmine.createSpyObj('MessagingService', ['sendMessage']);
     instanceMock = jasmine.createSpyObj('ServerInstanceService', ['save']);
+    statMultiplierMock = jasmine.createSpyObj('StatMultiplierService', ['initializeStatMultipliers']);
     validationMock = jasmine.createSpyObj('ArkServerValidationService', ['validateServerConfiguration', 'validateField']);
     messagingMock.sendMessage.and.returnValue(of({}));
     instanceMock.save.and.returnValue(of({}));
     validationMock.validateServerConfiguration.and.returnValue({ isValid: true, errors: [], warnings: [] });
   validationMock.validateField.and.returnValue({ isValid: true, error: '', field: 'field' });
-    service = new ServerConfigurationService(messagingMock, instanceMock, validationMock);
+    service = new ServerConfigurationService(messagingMock, instanceMock, statMultiplierMock, validationMock);
   });
 
   it('should be created', () => {
@@ -32,6 +35,7 @@ describe('ServerConfigurationService', () => {
     expect(result.crossplay).toEqual([]);
     expect(result.mods).toEqual([]);
     expect(result.mapName).toBeDefined();
+    expect(statMultiplierMock.initializeStatMultipliers).toHaveBeenCalledWith(result);
   });
 
   it('should request server state', () => {

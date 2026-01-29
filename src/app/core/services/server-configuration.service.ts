@@ -3,6 +3,7 @@ import { Observable } from 'rxjs';
 import { take } from 'rxjs/operators';
 import { MessagingService } from './messaging/messaging.service';
 import { ServerInstanceService } from './server-instance.service';
+import { StatMultiplierService } from './stat-multiplier.service';
 import { ArkServerValidationService, ValidationResult } from './ark-server-validation.service';
 
 @Injectable({
@@ -20,6 +21,7 @@ export class ServerConfigurationService {
   constructor(
     private messaging: MessagingService,
     private serverInstanceService: ServerInstanceService,
+    private statMultiplierService: StatMultiplierService,
     private validationService: ArkServerValidationService
   ) {}
 
@@ -46,6 +48,9 @@ export class ServerConfigurationService {
     if (!Array.isArray(activeServerInstance.mods)) {
       activeServerInstance.mods = [];
     }
+
+    // Initialize stat multiplier arrays to ensure they exist
+    this.statMultiplierService.initializeStatMultipliers(activeServerInstance);
 
     return activeServerInstance;
   }

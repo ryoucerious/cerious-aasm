@@ -1,6 +1,7 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { StatMultiplierService } from '../../../../core/services/stat-multiplier.service';
 
 @Component({
   selector: 'app-stat-multipliers-tab',
@@ -21,6 +22,8 @@ export class StatMultipliersTabComponent {
   @Output() toggleStatSelectorDropdown = new EventEmitter<void>();
   @Output() statSelectorSelect = new EventEmitter<number>();
 
+  constructor(private statMultiplierService: StatMultiplierService) {}
+
   getStatSelectorDisplayName(index: number | null): string {
     if (index === null || !this.statList[index]) {
       return 'Select Stat...';
@@ -37,8 +40,10 @@ export class StatMultipliersTabComponent {
   }
 
   getStatMultiplier(type: string, statIndex: number): number {
-    // This should be implemented based on your stat multiplier logic
-    return 1.0;
+    if (!this.serverInstance || statIndex === null || statIndex < 0) {
+      return 1.0;
+    }
+    return this.statMultiplierService.getStatMultiplier(this.serverInstance, type, statIndex);
   }
 
   onStatMultiplierChange(type: string, statIndex: number, value: number): void {
