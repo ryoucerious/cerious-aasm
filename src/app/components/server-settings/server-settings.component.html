@@ -45,9 +45,9 @@
       <button class="tab" [class.active]="activeTab === 'broadcasts'" (click)="onTabChange('broadcasts')">
         <i class="material-icons">campaign</i> Broadcasts
       </button>
-      <button class="tab" [class.active]="activeTab === 'players'" (click)="onTabChange('players')">
+      <!-- <button class="tab" [class.active]="activeTab === 'players'" (click)="onTabChange('players')">
         <i class="material-icons">people_outline</i> Players
-      </button>
+      </button> -->
       <button class="tab" [class.active]="activeTab === 'firewall'" (click)="onTabChange('firewall')"
               *ngIf="isLinux">
         <i class="material-icons">security</i> Firewall
@@ -207,8 +207,8 @@
     </app-broadcasts-tab>
 
     <!-- Player List Content -->
-    <div *ngIf="activeTab === 'players'" class="h-[600px]">
+    <!-- <div *ngIf="activeTab === 'players'" class="h-[600px]">
         <app-player-list [serverInstance]="serverInstance"></app-player-list>
-    </div>
+    </div> -->
   </div>
 </div>

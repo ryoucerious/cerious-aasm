@@ -589,3 +589,5 @@ messagingService.on('import-server-from-backup', async (payload, sender) => {
     }, sender);
   }
 });
+
+console.log('[server-instance-handler] Server instance message handlers registered');
