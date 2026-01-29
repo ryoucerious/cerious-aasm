@@ -7,6 +7,7 @@ import { MessagingService } from '../../core/services/messaging/messaging.servic
 import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ModalComponent } from '../../components/modal/modal.component';
 import { Subscription } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-settings-page',
@@ -282,7 +283,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return '1.0.0-beta';
+    return environment.version || '1.0.0-beta.6.4';
   }
 
   getPlatform() {
