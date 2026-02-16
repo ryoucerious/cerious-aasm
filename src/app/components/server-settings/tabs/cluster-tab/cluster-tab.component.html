@@ -16,8 +16,8 @@
       type="text"
       class="form-control input"
       [(ngModel)]="serverInstance.clusterDirOverride"
-      (blur)="onValidateField('clusterDirOverride', serverInstance.clusterDirOverride)"
-      placeholder="e.g., /mnt/cluster-data or Z:\Shared\Cluster"
+      (blur)="onValidateField('clusterDirOverride', serverInstance.clusterDirOverride); onSaveSettings()"
+      placeholder="e.g., /mnt/cluster-data or C:\Shared\Cluster"
       [disabled]="isLocked">
     <div class="form-control-label desc">
       Absolute path to shared cluster directory (recommended for multi-machine clusters). Can be relative to installation directory for single-machine setups. All servers in the cluster must use the same directory path. This directory stores character and item transfer data.
@@ -33,7 +33,7 @@
       type="text"
       class="form-control input"
       [(ngModel)]="serverInstance.clusterId"
-      (blur)="onValidateField('clusterId', serverInstance.clusterId)"
+      (blur)="onValidateField('clusterId', serverInstance.clusterId); onSaveSettings()"
       placeholder="e.g., MyCluster01"
       [disabled]="isLocked">
     <div class="form-control-label desc">
@@ -50,7 +50,7 @@
       type="text"
       class="form-control input"
       [(ngModel)]="serverInstance.clusterName"
-      (blur)="onValidateField('clusterName', serverInstance.clusterName)"
+      (blur)="onValidateField('clusterName', serverInstance.clusterName); onSaveSettings()"
       placeholder="e.g., My PvP Cluster"
       [disabled]="isLocked">
     <div class="form-control-label desc">
@@ -87,7 +87,7 @@
   <!-- No Transfer Filtering -->
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.noTransferFromFiltering" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.noTransferFromFiltering" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Allow All Transfers</span>
     </label>
@@ -99,7 +99,7 @@
   <!-- Download Restrictions -->
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadSurvivors" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadSurvivors" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Character Downloads</span>
     </label>
@@ -110,7 +110,7 @@
 
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadItems" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadItems" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Item Downloads</span>
     </label>
@@ -121,7 +121,7 @@
 
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadDinos" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventDownloadDinos" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Dino Downloads</span>
     </label>
@@ -133,7 +133,7 @@
   <!-- Upload Restrictions -->
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadSurvivors" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadSurvivors" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Character Uploads</span>
     </label>
@@ -144,7 +144,7 @@
 
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadItems" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadItems" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Item Uploads</span>
     </label>
@@ -155,7 +155,7 @@
 
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadDinos" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.preventUploadDinos" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Prevent Dino Uploads</span>
     </label>
@@ -167,7 +167,7 @@
   <!-- Additional Transfer Settings -->
   <div class="form-group">
     <label class="form-control-label toggle-label">
-      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.crossArkAllowForeignDinoDownloads" [disabled]="isLocked" />
+      <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance.crossArkAllowForeignDinoDownloads" (change)="onSaveSettings()" [disabled]="isLocked" />
       <span class="slider"></span>
       <span class="toggle-text">Allow Foreign Dino Downloads</span>
     </label>

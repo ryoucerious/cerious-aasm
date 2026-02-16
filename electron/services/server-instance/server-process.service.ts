@@ -3,6 +3,7 @@ import * as path from 'path';
 import { validateInstanceId } from '../../utils/validation.utils';
 import { ArkPathUtils, buildArkServerArgs } from '../../utils/ark.utils';
 import { ServerInstanceResult } from '../../types/server-instance.types';
+import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile } from '../../utils/ark/ark-server/ark-server-logging.utils';
 
 /**
  * Server Process Service - Handles low-level process management and state tracking
@@ -87,8 +88,15 @@ export class ServerProcessService {
       windowsHide: true
     };
 
+    // Snapshot log files BEFORE starting so we can detect which new file belongs to this instance
+    const logSnapshot = snapshotLogFiles();
+
     // Start the server process
     const serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
+
+    // Detect and register the log file for this instance (async, retries internally)
+    const sessionName = instance.sessionName || instance.serverName || 'My Server';
+    detectAndRegisterLogFile(instanceId, sessionName, logSnapshot);
 
     // Notify Discord
     const { discordService } = require('../discord.service');
@@ -117,6 +125,7 @@ export class ServerProcessService {
     // Set up process event handlers
     serverProcess.on('exit', async (code) => {
       this.setInstanceState(instanceId, 'stopped');
+      unregisterLogFile(instanceId);
       onState?.('stopped');
       
       // Notify Discord
@@ -139,6 +148,7 @@ export class ServerProcessService {
     serverProcess.on('error', async (err) => {
       console.error('[server-process-service] ARK server process error:', err);
       this.setInstanceState(instanceId, 'error');
+      unregisterLogFile(instanceId);
       onState?.('error');
 
       // Notify Discord

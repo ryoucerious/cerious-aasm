@@ -61,6 +61,7 @@ import './handlers/linux-deps-handler';
 import './handlers/firewall-handler';
 import './handlers/system-info-handler';
 import './handlers/whitelist-handler';
+import './handlers/config-import-export-handler';
 
 // =========================
 // Service Initialization

@@ -2,6 +2,13 @@
   <div class="card-header button-header collapsible-header" (click)="onToggleVisibility()">
     <h2>SERVER SETTINGS</h2>
     <div class="button-header-actions">
+      <input type="file" #configFileInput hidden accept=".ini" (change)="onFileSelected($event)">
+      <button class="btn" (click)="onImportConfig($event)" title="Import settings from an INI file">
+        <i class="material-icons">file_upload</i> Import
+      </button>
+      <button class="btn" (click)="onExportConfig($event)" title="Export server configuration as ZIP">
+        <i class="material-icons">file_download</i> Export
+      </button>
       <button *ngIf="isElectron" class="btn" (click)="onOpenDirectory($event)">
         <i class="material-icons">folder_open</i> Open Directory
       </button>
@@ -120,6 +127,7 @@
       *ngIf="activeTab === 'cluster'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
+      (saveSettings)="onSaveSettings()"
       (validateField)="validateField($event.key, $event.value)">
     </app-cluster-tab>
     

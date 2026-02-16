@@ -288,7 +288,13 @@ export class ArkServerValidationService {
       'babyMaxIntervalMultiplier',
       'fuelConsumptionIntervalMultiplier',
       'autoDestroyOldStructuresMultiplier',
-      'oviraptorEggConsumptionMultiplier'
+      'oviraptorEggConsumptionMultiplier',
+      'supplyCrateLootQualityMultiplier',
+      'fishingLootQualityMultiplier',
+      'layEggIntervalMultiplier',
+      'tamedDinoCharacterFoodDrainMultiplier',
+      'tamedDinoTorporDrainMultiplier',
+      'dinoCountMultiplier'
     ];
 
     for (const field of multiplierFields) {
@@ -446,9 +452,14 @@ export class ArkServerValidationService {
       if (server.clusterDirOverride.length > 255) {
         return { field: 'clusterDirOverride', isValid: false, error: 'Cluster directory path cannot exceed 255 characters' };
       }
-      // Check for invalid path characters
+      // Check for invalid path characters (allow : after drive letter for Windows paths like C:\ARK)
+      // Strip the drive letter prefix (e.g., "C:") before checking for invalid chars
+      let pathToCheck = server.clusterDirOverride;
+      if (/^[a-zA-Z]:/.test(pathToCheck)) {
+        pathToCheck = pathToCheck.substring(2);
+      }
       const invalidPathChars = /[<>:"|?*]/;
-      if (invalidPathChars.test(server.clusterDirOverride)) {
+      if (invalidPathChars.test(pathToCheck)) {
         return { field: 'clusterDirOverride', isValid: false, error: 'Cluster directory contains invalid characters' };
       }
     }

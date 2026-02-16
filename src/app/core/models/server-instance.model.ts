@@ -129,6 +129,19 @@ export interface ServerInstance {
   bUseCorpseLocator?: boolean;
   bUseSingleplayerSettings?: boolean;
   bXPMultiplier?: number;
+
+  // Missing ARK Ascended settings
+  showFloatingDamageText?: boolean;
+  supplyCrateLootQualityMultiplier?: number;
+  fishingLootQualityMultiplier?: number;
+  layEggIntervalMultiplier?: number;
+  forceAllowCaveFlyers?: boolean;
+  bDisableDinoRiding?: boolean;
+  bAllowFlyerSpeedLeveling?: boolean;
+  bAllowSpeedLeveling?: boolean;
+  tamedDinoCharacterFoodDrainMultiplier?: number;
+  tamedDinoTorporDrainMultiplier?: number;
+
   customGameIni?: string;
   customGameUserSettingsIni?: string;
 

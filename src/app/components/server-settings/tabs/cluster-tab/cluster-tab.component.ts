@@ -13,6 +13,7 @@ export class ClusterTabComponent {
   @Input() isLocked = false;
 
   @Output() validateField = new EventEmitter<{key: string, value: any}>();
+  @Output() saveSettings = new EventEmitter<void>();
 
   // Multi-machine clustering properties
   clusterStorageTypes = [
@@ -42,6 +43,10 @@ export class ClusterTabComponent {
 
   onValidateField(key: string, value: any): void {
     this.validateField.emit({key, value});
+  }
+
+  onSaveSettings(): void {
+    this.saveSettings.emit();
   }
 
   // Multi-machine clustering helpers
