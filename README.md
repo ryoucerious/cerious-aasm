@@ -4,6 +4,9 @@
 ## Overview
 Cerious-AASM is a desktop application for managing ARK: Survival Ascended dedicated servers. It provides a user-friendly interface for installing, configuring, and controlling ARK servers on your machine. The application supports both desktop (GUI) and headless (web-based) modes.
 
+## Join on Discord
+- Cerious - AASM https://discord.gg/n5SxyDRPAa
+
 ## Features
 - Install and update ARK servers using SteamCMD
 - Manage multiple server instances
