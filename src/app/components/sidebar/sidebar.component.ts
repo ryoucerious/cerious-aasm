@@ -3,6 +3,7 @@ import { Subscription, take } from 'rxjs';
 import { NgFor, NgIf, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
@@ -15,7 +16,7 @@ import { GlobalConfigService } from '../../core/services/global-config.service';
 @Component({
   selector: 'app-sidebar',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, ModalComponent, FormsModule],
+  imports: [NgFor, NgIf, NgClass, ModalComponent, FormsModule, DragDropModule],
   templateUrl: './sidebar.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 
@@ -73,7 +74,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
   ngOnInit() {
     this.serversSub = this.serverInstanceService.getInstances().subscribe(instances => {
       this.zone.run(() => {
-        this.servers = Array.isArray(instances) ? instances : [];
+        const raw = Array.isArray(instances) ? instances : [];
+        // Sort by sortOrder if available, otherwise keep original order
+        this.servers = raw.sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
         // Auto-select the first server if none is selected
         if (this.servers.length > 0 && !this.selectedServerId) {
           const first = this.servers[0];
@@ -110,6 +113,14 @@ export class SidebarComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     this.serversSub?.unsubscribe();
     this.stateSub?.unsubscribe();
+  }
+
+  onDrop(event: CdkDragDrop<ServerInstance[]>) {
+    if (event.previousIndex === event.currentIndex) return;
+    moveItemInArray(this.servers, event.previousIndex, event.currentIndex);
+    const orderedIds = this.servers.map(s => s.id);
+    this.serverInstanceService.reorderServers(orderedIds).pipe(take(1)).subscribe();
+    this.cdr.markForCheck();
   }
 
   onServerClick(server: ServerInstance) {

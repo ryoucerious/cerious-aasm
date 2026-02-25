@@ -591,3 +591,52 @@ messagingService.on('import-server-from-backup', async (payload, sender) => {
 });
 
 console.log('[server-instance-handler] Server instance message handlers registered');
+
+// =====================================================
+// Reorder Server Instances Handler
+// =====================================================
+
+/**
+ * Handles the 'reorder-server-instances' message event.
+ * Updates the sortOrder property for each server instance based on the new order.
+ */
+messagingService.on('reorder-server-instances', async (payload, sender) => {
+  try {
+    const { orderedIds, requestId } = payload;
+    if (!Array.isArray(orderedIds)) {
+      messagingService.sendToOriginator('reorder-server-instances', {
+        success: false,
+        error: 'orderedIds must be an array',
+        requestId
+      }, sender);
+      return;
+    }
+
+    // Update sortOrder for each instance
+    const allInstances = await serverManagementService.getAllInstances();
+    const instances = allInstances.instances || [];
+
+    for (let i = 0; i < orderedIds.length; i++) {
+      const instance = instances.find((inst: any) => inst.id === orderedIds[i]);
+      if (instance) {
+        instance.sortOrder = i;
+        await serverManagementService.saveInstance(instance);
+      }
+    }
+
+    // Broadcast updated list to all clients
+    const updatedInstances = await serverManagementService.getAllInstances();
+    messagingService.sendToAll('server-instances', updatedInstances.instances);
+
+    messagingService.sendToOriginator('reorder-server-instances', {
+      success: true,
+      requestId
+    }, sender);
+  } catch (error) {
+    console.error('[server-instance-handler] Failed to reorder server instances:', error);
+    messagingService.sendToOriginator('reorder-server-instances', {
+      success: false,
+      error: (error as Error)?.message || 'Failed to reorder server instances'
+    }, sender);
+  }
+});

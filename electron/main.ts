@@ -42,6 +42,7 @@ import { LogService } from './services/log.service';
 // =========================
 import { cleanupAllRconConnections } from './utils/rcon.utils';
 import { ArkUpdateService } from './services/ark-update.service';
+import { setArkUpdateService } from './handlers/ark-update-handler';
 import { initializeBackupSystem } from './handlers/backup-handler';
 
 // =========================
@@ -67,6 +68,7 @@ import './handlers/config-import-export-handler';
 // Service Initialization
 // =========================
 const arkUpdateService = new ArkUpdateService(messagingService);
+setArkUpdateService(arkUpdateService);
 
 
 // =========================

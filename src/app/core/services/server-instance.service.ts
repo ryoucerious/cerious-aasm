@@ -271,6 +271,14 @@ export class ServerInstanceService {
   }
 
   /**
+   * Reorder servers by saving their sortOrder properties.
+   * @param orderedIds - Array of server IDs in new display order
+   */
+  reorderServers(orderedIds: string[]): Observable<any> {
+    return this.messaging.sendMessage('reorder-server-instances', { orderedIds });
+  }
+
+  /**
    * Import a server from backup file
    */
   importServerFromBackup(serverName: string, backupFilePath?: string, fileData?: string, fileName?: string): Observable<any> {

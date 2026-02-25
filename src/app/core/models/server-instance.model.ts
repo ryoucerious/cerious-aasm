@@ -145,6 +145,49 @@ export interface ServerInstance {
   customGameIni?: string;
   customGameUserSettingsIni?: string;
 
+  // Launch parameters - additional command-line arguments
+  launchParameters?: string; // Extra launch arguments like -MapModID=, -TotalConversionMod=, etc.
+
+  // Server ordering for sidebar display
+  sortOrder?: number; // Order of this server in the sidebar list
+
+  // Additional missing ARK Ascended config settings
+  perPlatformMaxStructuresMultiplier?: number;
+  platformSaddleBuildAreaBoundsMultiplier?: number;
+  maxPlatformSaddleStructureLimit?: number;
+  maxGateFrameOnSaddles?: number;
+  itemStackSizeMultiplier?: number;
+  maxStructuresInRange?: number;
+  autoSavePeriodMinutes?: number;
+  kickIdlePlayersPeriod?: number;
+  adminLogging?: boolean;
+  allowHitMarkers?: boolean;
+  allowCaveBuildingPvE?: boolean;
+  enablePVPGamma?: boolean;
+  disablePvEGamma?: boolean;
+  globalVoiceChat?: boolean;
+  proximityChat?: boolean;
+  serverHardcore?: boolean;
+  maxNumberOfPlayersInTribe?: number;
+  overrideMaxExperiencePointsPlayer?: number;
+  overrideMaxExperiencePointsDino?: number;
+  dinoTurretDamageMultiplier?: number;
+  allowCustomRecipes?: boolean;
+  customRecipeEffectivenessMultiplier?: number;
+  customRecipeSkillMultiplier?: number;
+  bAutoUnlockAllEngrams?: boolean;
+  bAllowUnlimitedRespecs?: boolean;
+  clampResourceHarvestDamage?: boolean;
+  autoDestroyDecayedDinos?: boolean;
+  preventMateBoost?: boolean;
+  pvePlatformStructureDamageRatio?: number;
+  maxDifficulty?: boolean;
+  useCorpseLifeSpanMultiplier?: number;
+  wildDinoCharacterFoodDrainMultiplier?: number;
+  wildDinoTorporDrainMultiplier?: number;
+  passiveDefensesDamageRiderlessDinos?: boolean;
+  disableImprinting?: boolean;
+
   // Cluster functionality
   clusterId?: string; // ID of the cluster this server belongs to
   clusterName?: string; // Name of the cluster (for display purposes)

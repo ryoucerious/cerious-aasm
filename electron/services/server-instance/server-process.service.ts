@@ -183,6 +183,48 @@ export class ServerProcessService {
         onState
       );
     }, 500); // Wait 500ms for log file to be created
+
+    // RCON-based fallback for running detection
+    // If log tailing fails to detect "running" state, periodically try RCON
+    // to confirm the server is actually operational
+    let rconFallbackAttempts = 0;
+    const maxRconFallbackAttempts = 60; // Try for up to 5 minutes (every 5 seconds)
+    const rconFallbackInterval = setInterval(async () => {
+      rconFallbackAttempts++;
+      try {
+        const currentState = this.getInstanceState(instanceId);
+        // Stop checking once server is no longer in 'starting' state or max attempts reached
+        if (currentState !== 'starting' || rconFallbackAttempts >= maxRconFallbackAttempts) {
+          clearInterval(rconFallbackInterval);
+          // If still starting after max attempts and process is alive, force to running
+          if (currentState === 'starting' && serverProcess && !serverProcess.killed && serverProcess.exitCode === null) {
+            console.log(`[server-process-service] RCON fallback: Server ${instanceId} still in 'starting' state after ${maxRconFallbackAttempts * 5}s, forcing to 'running'`);
+            this.setInstanceState(instanceId, 'running');
+            onState?.('running');
+          }
+          return;
+        }
+
+        // Try RCON to confirm server is responsive
+        const rconService = require('../rcon.service').rconService;
+        const instance_config = require('../../utils/ark/instance.utils').getInstance(instanceId);
+        if (instance_config && instance_config.rconPort) {
+          const result = await rconService.executeRconCommand(instanceId, 'GetChat');
+          if (result.success) {
+            console.log(`[server-process-service] RCON fallback: Server ${instanceId} responded to RCON — setting state to 'running'`);
+            this.setInstanceState(instanceId, 'running');
+            onState?.('running');
+            clearInterval(rconFallbackInterval);
+          }
+        }
+      } catch {
+        // Expected to fail while server is still starting
+      }
+    }, 5000); // Check every 5 seconds
+
+    // Clean up fallback interval if process exits
+    serverProcess.once('exit', () => clearInterval(rconFallbackInterval));
+    serverProcess.once('error', () => clearInterval(rconFallbackInterval));
   }
 
   /**

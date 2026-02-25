@@ -9,6 +9,9 @@
       <button class="btn" (click)="onExportConfig($event)" title="Export server configuration as ZIP">
         <i class="material-icons">file_download</i> Export
       </button>
+      <button class="btn" (click)="onOpenCopyConfig($event)" title="Copy settings from another server">
+        <i class="material-icons">content_copy</i> Copy From
+      </button>
       <button *ngIf="isElectron" class="btn" (click)="onOpenDirectory($event)">
         <i class="material-icons">folder_open</i> Open Directory
       </button>
@@ -220,3 +223,53 @@
     </div> -->
   </div>
 </div>
+
+<!-- Copy Config Modal -->
+<app-modal [title]="'Copy Config From Another Server'" [show]="showCopyConfigModal" [maxWidth]="'840px'" (close)="onCloseCopyConfig()">
+  <div class="copy-config-modal">
+    <div class="form-group">
+      <label>Source Server</label>
+      <div class="custom-dropdown" style="position: relative;">
+        <button type="button" class="form-control input" (click)="toggleCopyConfigDropdown()" style="width: 100%; text-align: left; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between;">
+          <span>{{ selectedSourceServer ? getSourceServerDisplayName() : 'Select a server...' }}</span>
+          <span class="material-icons" style="font-size: 1.1em;">{{ copyConfigDropdownOpen ? 'arrow_drop_up' : 'arrow_drop_down' }}</span>
+        </button>
+        <div *ngIf="copyConfigDropdownOpen" class="dropdown-menu show" style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem; max-height: 200px; overflow-y: auto;">
+          <div *ngFor="let server of allServers" (mousedown)="onSelectSourceServer(server)" style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" [ngClass]="{'selected': selectedSourceServer?.id === server.id}">
+            {{ server.sessionName || server.name }} ({{ server.mapName || 'Unknown Map' }})
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group" *ngIf="selectedSourceServer">
+      <label>Categories to Copy</label>
+      <div class="copy-categories-header">
+        <button class="btn btn-sm" (click)="toggleAllCategories(true)">Select All</button>
+        <button class="btn btn-sm" (click)="toggleAllCategories(false)">Deselect All</button>
+      </div>
+      <div class="copy-categories-grouped">
+        <div *ngFor="let group of configCategoryGroups" class="copy-category-group">
+          <div class="copy-category-group-label">{{ group.label }}</div>
+          <div class="copy-categories-grid">
+            <label *ngFor="let cat of group.categories" class="copy-category-item">
+              <div class="toggle-label">
+                <input type="checkbox" class="toggle-switch" [(ngModel)]="copyCategories[cat.key]">
+                <span class="toggle-text">{{ cat.label }}</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-group-modal">
+      <button class="btn" (click)="onCloseCopyConfig()">Cancel</button>
+      <button class="btn btn-primary" 
+              [disabled]="!selectedSourceServer || !hasAnyCategorySelected"
+              (click)="onApplyCopyConfig()">
+        <i class="material-icons">content_copy</i> Apply
+      </button>
+    </div>
+  </div>
+</app-modal>

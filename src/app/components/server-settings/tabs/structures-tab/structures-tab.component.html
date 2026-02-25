@@ -1,24 +1,62 @@
 ﻿<div class="tab-content">
   <div class="form-group" style="grid-column: 1 / -1;">
     <h4>Structure & Building Settings</h4>
-    <p class="form-control-label desc">Configure structure damage, decay timers, build restrictions, and other settings related to player-built structures and bases.</p>
+    <p class="form-control-label desc">Configure structure damage, decay timers, build restrictions, platform saddles, and other settings related to player-built structures and bases.</p>
   </div>
 
+  <!-- Damage & Decay -->
   <div class="settings-section">
-    <h5>Building & Structure Settings</h5>
-    <p class="section-desc">Control how structures behave, decay, and interact with damage.</p>
-    
-    <ng-container *ngFor="let field of structuresFields">
+    <h5>Damage & Decay</h5>
+    <p class="section-desc">Control how structures take damage, decay over time, and structure limits.</p>
+
+    <ng-container *ngFor="let field of getFieldsByCategory('damage')">
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
           <span class="toggle-text">{{ field.label }}</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label">
-          <span>{{ field.label }}</span>
-        </label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
-        <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+        <div class="form-control-label desc">{{ field.description }}</div>
+        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
+        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- Platform Saddles -->
+  <div class="settings-section">
+    <h5>Platform Saddles</h5>
+    <p class="section-desc">Configure platform saddle build limits, area sizes, and stacking rules.</p>
+
+    <ng-container *ngFor="let field of getFieldsByCategory('platform')">
+      <div class="form-group">
+        <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+          <span class="toggle-text">{{ field.label }}</span>
+        </div>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+        <div class="form-control-label desc">{{ field.description }}</div>
+        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
+        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- Building Rules -->
+  <div class="settings-section">
+    <h5>Building Rules</h5>
+    <p class="section-desc">Configure placement rules, pickup timers, resource prevention, and building restrictions.</p>
+
+    <ng-container *ngFor="let field of getFieldsByCategory('building')">
+      <div class="form-group">
+        <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+          <span class="toggle-text">{{ field.label }}</span>
+        </div>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
         <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>

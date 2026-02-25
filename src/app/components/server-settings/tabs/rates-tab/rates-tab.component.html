@@ -99,9 +99,32 @@
   <!-- World & Environment -->
   <div class="settings-section">
     <h5>World & Environment</h5>
-    <p class="section-desc">Configure world settings and environmental factors.</p>
+    <p class="section-desc">Configure world settings, day/night cycle, spoiling, and environmental factors.</p>
 
     <ng-container *ngFor="let field of getFieldsByCategory('world')">
+    <div class="form-group">
+      <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
+        <span class="toggle-text">{{ field.label }}</span>
+      </div>
+      <label *ngIf="field.type !== 'boolean'" class="form-control-label">
+        <span>{{ field.label }}</span>
+      </label>
+      <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min || null" [max]="field.max || null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+      <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
+      <div class="form-control-label desc">{{ field.description }}</div>
+      <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
+      <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+    </div>
+  </ng-container>
+  </div>
+
+  <!-- Loot Quality -->
+  <div class="settings-section">
+    <h5>Loot Quality</h5>
+    <p class="section-desc">Configure loot quality from supply crates and fishing.</p>
+
+    <ng-container *ngFor="let field of getFieldsByCategory('loot')">
     <div class="form-group">
       <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
         <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />

@@ -1,8 +1,12 @@
 import { messagingService } from '../services/messaging.service';
 import { ArkUpdateService } from '../services/ark-update.service';
 
-// Initialize service
-const arkUpdateService = new ArkUpdateService(messagingService);
+// Will be set by main.ts via setArkUpdateService()
+let arkUpdateService: ArkUpdateService | null = null;
+
+export function setArkUpdateService(service: ArkUpdateService): void {
+  arkUpdateService = service;
+}
 
 /**
  * Handles the 'check-ark-update' message event from the messaging service.
@@ -20,6 +24,16 @@ const arkUpdateService = new ArkUpdateService(messagingService);
 messagingService.on('check-ark-update', async (payload, sender) => {
   const { requestId } = payload || {};
   
+  if (!arkUpdateService) {
+    console.error('[ark-update-handler] ArkUpdateService not initialized');
+    messagingService.sendToOriginator('check-ark-update', {
+      success: false,
+      error: 'Update service not initialized',
+      requestId
+    }, sender);
+    return;
+  }
+
   try {
     const result = await arkUpdateService.checkForUpdate();
     

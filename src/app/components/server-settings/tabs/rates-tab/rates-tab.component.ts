@@ -40,22 +40,25 @@ export class RatesTabComponent {
         'eggHatchSpeedMultiplier',
         'babyMatureSpeedMultiplier',
         'matingIntervalMultiplier',
-        'LayEggIntervalMultiplier',
-        'MatingSpeedMultiplier',
+        'layEggIntervalMultiplier',
+        'matingSpeedMultiplier',
         'babyFoodConsumptionSpeedMultiplier',
         'babyCuddleIntervalMultiplier',
         'babyImprintingStatScaleMultiplier',
         'babyCuddleGracePeriodMultiplier',
         'babyCuddleLoseImprintQualitySpeedMultiplier',
         'babyImprintAmountMultiplier',
-        'babyMaxIntervalMultiplier'
+        'babyMaxIntervalMultiplier',
+        'passiveTameIntervalMultiplier',
+        'oviraptorEggConsumptionMultiplier'
       ],
       'harvesting': [
         'harvestAmountMultiplier',
         'dinoHarvestingDamageMultiplier',
         'playerHarvestingDamageMultiplier',
         'resourcesRespawnPeriodMultiplier',
-        'cropGrowthSpeedMultiplier'
+        'cropGrowthSpeedMultiplier',
+        'cropDecaySpeedMultiplier'
       ],
       'stats': [
         'playerCharacterFoodDrainMultiplier',
@@ -68,18 +71,30 @@ export class RatesTabComponent {
         'dinoCharacterStaminaDrainMultiplier',
         'dinoCharacterHealthRecoveryMultiplier',
         'dinoCharacterDamageMultiplier',
-        'dinoCharacterResistanceMultiplier'
+        'dinoCharacterResistanceMultiplier',
+        'tamedDinoCharacterFoodDrainMultiplier',
+        'tamedDinoTorporDrainMultiplier',
+        'dinoCountMultiplier'
       ],
       'world': [
         'dayCycleSpeedScale',
         'dayTimeSpeedScale',
         'nightTimeSpeedScale',
-        'fuelConsumptionIntervalMultiplier'
+        'fuelConsumptionIntervalMultiplier',
+        'globalSpoilingTimeMultiplier',
+        'globalItemDecompositionTimeMultiplier',
+        'globalCorpseDecompositionTimeMultiplier'
+      ],
+      'loot': [
+        'supplyCrateLootQualityMultiplier',
+        'fishingLootQualityMultiplier'
       ]
     };
 
     const categoryKeys = categories[category] || [];
-    return this.ratesFields.filter(field => categoryKeys.includes(field.key));
+    return categoryKeys
+      .map(key => this.ratesFields.find(field => field.key === key))
+      .filter((field): field is Field => field !== undefined);
   }
 
   hasFieldError(key: string): boolean {

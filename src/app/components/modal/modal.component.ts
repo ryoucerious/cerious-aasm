@@ -10,5 +10,6 @@ import { NgIf } from '@angular/common';
 export class ModalComponent {
   @Input() title: string = '';
   @Input() show = false;
+  @Input() maxWidth: string = '';
   @Output() close = new EventEmitter<void>();
 }

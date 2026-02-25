@@ -7,6 +7,9 @@ import { getCurrentInstalledVersion } from '../utils/ark/ark-server.utils';
 
 export class ArkUpdateService {
   private lastKnownBuildId: string | null = null;
+  private installedBuildId: string | null = null;
+  private updateAvailable = false;
+  private latestBuildId: string | null = null;
   
   constructor(private messagingService: MessagingService) {}
 
@@ -16,7 +19,9 @@ export class ArkUpdateService {
    */
   async initialize(): Promise<void> {
     try {
-      this.lastKnownBuildId = await getCurrentInstalledVersion();
+      this.installedBuildId = await getCurrentInstalledVersion();
+      this.lastKnownBuildId = this.installedBuildId;
+      console.log(`[ark-update-service] Installed build ID: ${this.installedBuildId}`);
 
       // Start background polling
       this.pollAndNotify().catch(() => {});
@@ -29,20 +34,36 @@ export class ArkUpdateService {
   }
   
   /**
-   * Check for ARK server updates
-   * @returns Result of the update check
-   * 
-   * Checks for ARK server updates and returns an object indicating whether an update is available,
+   * Check for ARK server updates (used by manual check requests)
+   * Always does a fresh comparison of installed vs latest from Steam.
    */
   async checkForUpdate(): Promise<ArkUpdateResult> {
     try {
-      const result = await this.pollArkServerUpdates();
+      // Re-read the installed version in case the server was updated
+      this.installedBuildId = await getCurrentInstalledVersion();
+      const latest = await this.getLatestServerVersion();
       
+      if (!latest) {
+        return {
+          success: false,
+          hasUpdate: false,
+          message: 'Could not retrieve latest version from Steam'
+        };
+      }
+
+      this.latestBuildId = latest;
+      const hasUpdate = !!this.installedBuildId && latest !== this.installedBuildId;
+      this.updateAvailable = hasUpdate;
+
+      console.log(`[ark-update-service] Check: installed=${this.installedBuildId}, latest=${latest}, hasUpdate=${hasUpdate}`);
+
       return {
         success: true,
-        hasUpdate: result !== null,
-        buildId: result,
-        message: result ? `New ARK server build available: ${result}` : 'No update available'
+        hasUpdate,
+        buildId: latest,
+        message: hasUpdate 
+          ? `New ARK server build available: ${latest} (installed: ${this.installedBuildId})` 
+          : 'ARK server is up to date'
       };
     } catch (error) {
       console.error('[ARK Update Service] Error checking for updates:', error);
@@ -57,22 +78,24 @@ export class ArkUpdateService {
   }
 
   /**
-   * Poll for ARK server updates
-   * @returns Latest build ID if updated, otherwise null
-   * 
-   * Polls SteamCMD to get the latest ARK server build ID. If the build ID has changed since the last check,
-   * it updates the internal state and returns the new build ID. If no update is found, it returns null.
-   * In case of errors during the process, it logs the error and returns null.
+   * Poll for ARK server updates (used by background polling)
+   * Compares installed build ID against latest from Steam.
+   * Returns the latest build ID if an update is available, null otherwise.
    */
   async pollArkServerUpdates(): Promise<string | null> {
     try {
       const buildId = await this.getLatestServerVersion();
-      if (buildId && buildId !== this.lastKnownBuildId) {
-        const prev = this.lastKnownBuildId;
-        this.lastKnownBuildId = buildId;
-        return prev !== null ? buildId : null;
+      if (!buildId || !this.installedBuildId) {
+        return null;
       }
-      return null;
+
+      this.latestBuildId = buildId;
+      const hasUpdate = buildId !== this.installedBuildId;
+      this.updateAvailable = hasUpdate;
+
+      console.log(`[ark-update-service] Poll: installed=${this.installedBuildId}, latest=${buildId}, hasUpdate=${hasUpdate}`);
+
+      return hasUpdate ? buildId : null;
     } catch (err) {
       console.error('[ark-update-service] Error during ARK update poll:', err);
       return null;

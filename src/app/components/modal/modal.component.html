@@ -1,5 +1,5 @@
 <div class="modal-backdrop" *ngIf="show">
-  <div class="modal">
+  <div class="modal" [style.max-width]="maxWidth || null" [style.width]="maxWidth ? '100%' : null">
     <div class="modal-header">
       <h2>{{ title }}</h2>
       <!-- <button class="close-btn" (click)="close.emit()">

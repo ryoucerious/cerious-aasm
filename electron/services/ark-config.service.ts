@@ -115,6 +115,13 @@ export class ArkConfigService {
     { key: "supplyCrateLootQualityMultiplier",         iniKey: "SupplyCrateLootQualityMultiplier",           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "fishingLootQualityMultiplier",             iniKey: "FishingLootQualityMultiplier",               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dinoCountMultiplier",                      iniKey: "DinoCountMultiplier",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "perPlatformMaxStructuresMultiplier",       iniKey: "PerPlatformMaxStructuresMultiplier",         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "platformSaddleBuildAreaBoundsMultiplier",   iniKey: "PlatformSaddleBuildAreaBoundsMultiplier",    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "maxPlatformSaddleStructureLimit",          iniKey: "MaxPlatformSaddleStructureLimit",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "maxGateFrameOnSaddles",                    iniKey: "MaxGateFrameOnSaddles",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "structurePreventResourceRadiusMultiplier",  iniKey: "StructurePreventResourceRadiusMultiplier",   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "itemStackSizeMultiplier",                  iniKey: "ItemStackSizeMultiplier",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "maxStructuresInRange",                     iniKey: "MaxStructuresInRange",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
 
     // =====================================================
     // GameUserSettings.ini - [SessionSettings]
@@ -141,6 +148,7 @@ export class ArkConfigService {
     { key: "disablePvEGamma",                          iniKey: "DisablePvEGamma",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "allowFlyerCarryPvE",                       iniKey: "AllowFlyerCarryPvE",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bPassiveDefensesDamageRiderlessDinos",     iniKey: "bPassiveDefensesDamageRiderlessDinos",       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "passiveDefensesDamageRiderlessDinos",      iniKey: "bPassiveDefensesDamageRiderlessDinos",       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "maxTamedDinos",                            iniKey: "MaxTamedDinos",                              destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "overrideMaxExperiencePointsPlayer",        iniKey: "OverrideMaxExperiencePointsPlayer",         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "overrideMaxExperiencePointsDino",          iniKey: "OverrideMaxExperiencePointsDino",            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },

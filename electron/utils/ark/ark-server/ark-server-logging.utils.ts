@@ -191,6 +191,7 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
 
 /**
  * Watches the Ark server log file for new lines and streams them to the callback.
+ * Uses position-based reading and a polling fallback alongside fs.watch for reliability.
  * Returns a watcher object with a close() method.
  */
 export function startArkLogTailing(instanceDir: string, onLog?: (data: string) => void, forceLogFile?: string | null) {
@@ -199,8 +200,10 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
   let logFile: string | null = null;
   let logFileWatcher: fs.FSWatcher | null = null;
   let logFilePosition = 0;
+  let pollInterval: NodeJS.Timeout | null = null;
   let attempts = 0;
   const maxAttempts = 60; // Wait up to 60 seconds
+  let closed = false;
 
   function findLogFileForSession(): string | null {
     if (forceLogFile && fs.existsSync(forceLogFile)) return forceLogFile;
@@ -219,7 +222,47 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
     return null;
   }
 
+  /**
+   * Read new content from the log file starting from the last known position.
+   * Uses byte-level position tracking to avoid deduplication issues.
+   */
+  function readNewContent() {
+    if (!logFile || !onLog || closed) return;
+    try {
+      if (!fs.existsSync(logFile)) return;
+      const stats = fs.statSync(logFile);
+      const currentSize = stats.size;
+
+      // If file was truncated/rotated, reset position
+      if (currentSize < logFilePosition) {
+        logFilePosition = 0;
+      }
+
+      // If no new content, skip
+      if (currentSize <= logFilePosition) return;
+
+      // Read only the new bytes
+      const fd = fs.openSync(logFile, 'r');
+      const buffer = Buffer.alloc(currentSize - logFilePosition);
+      fs.readSync(fd, buffer, 0, buffer.length, logFilePosition);
+      fs.closeSync(fd);
+
+      logFilePosition = currentSize;
+
+      // Parse and emit new lines
+      const newContent = buffer.toString('utf8');
+      const lines = newContent.split(/\r?\n/).filter(line => line.trim().length > 0);
+      for (const line of lines) {
+        onLog(line);
+      }
+    } catch (error) {
+      // Silently handle read errors (file may be locked momentarily)
+      console.debug('[ark-logging] Error reading log file:', error);
+    }
+  }
+
   function tryAttachWatcher() {
+    if (closed) return;
     attempts++;
     if (!fs.existsSync(logsDir)) {
       if (attempts < maxAttempts) setTimeout(tryAttachWatcher, 1000);
@@ -231,40 +274,37 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
       return;
     }
     if (onLog) {
+      // Start reading from current end of file (only tail new content)
       const stats = fs.statSync(logFile);
       logFilePosition = stats.size;
-      // Deduplication buffer: last 200 lines sent
-      let lastSentLines: string[] = [];
-      logFileWatcher = fs.watch(logFile, (eventType) => {
-        if (eventType === 'change') {
-          if (logFile) {
-            const content = fs.readFileSync(logFile, 'utf8');
-            const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0);
-            // Find the first line that is new compared to lastSentLines
-            let startIdx = 0;
-            while (
-              startIdx < lines.length &&
-              lastSentLines.length > 0 &&
-              lines[startIdx] === lastSentLines[startIdx]
-            ) {
-              startIdx++;
-            }
-            const newLines = lines.slice(startIdx);
-            if (newLines.length > 0) {
-              for (const line of newLines) {
-                onLog(line);
-              }
-              // Update deduplication buffer
-              lastSentLines = lines.slice(-200);
-            }
+
+      // Use fs.watch for immediate notification (when it works)
+      try {
+        logFileWatcher = fs.watch(logFile, (eventType) => {
+          if (eventType === 'change') {
+            readNewContent();
           }
-        }
-      });
+        });
+        logFileWatcher.on('error', () => {
+          // fs.watch failed — polling will still work as fallback
+          console.debug('[ark-logging] fs.watch error, relying on polling fallback');
+        });
+      } catch {
+        console.debug('[ark-logging] fs.watch unavailable, relying on polling fallback');
+      }
+
+      // Polling fallback: check for new content every 3 seconds
+      // This ensures we catch changes even if fs.watch is unreliable
+      pollInterval = setInterval(readNewContent, 3000);
     }
   }
   tryAttachWatcher();
   return {
-    close: () => { if (logFileWatcher) logFileWatcher.close(); }
+    close: () => {
+      closed = true;
+      if (logFileWatcher) logFileWatcher.close();
+      if (pollInterval) clearInterval(pollInterval);
+    }
   };
 }
 
@@ -307,14 +347,28 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
   let logTail: any = null;
   let hasAdvertised = false;
 
+  // Startup detection strings — ARK ASA may use different messages across versions
+  const startupIndicators = [
+    'Server has completed startup and is now advertising for join.',
+    'Server is now advertising for join',
+    'has completed startup',
+    'Full Startup:',
+    'Listening on port',
+    'StartPlay RPC completed',
+    'Initializing Game Engine Completed'
+  ];
+
   // Wrap the onLog callback to detect state transitions
   const wrappedOnLog = (line: string) => {
-    if (!hasAdvertised && line.includes('Server has completed startup and is now advertising for join.')) {
-      hasAdvertised = true;
-      setInstanceState(instanceId, 'running');
-      if (onState) onState('running');
+    if (!hasAdvertised) {
+      const isStartupLine = startupIndicators.some(indicator => line.includes(indicator));
+      if (isStartupLine) {
+        hasAdvertised = true;
+        setInstanceState(instanceId, 'running');
+        if (onState) onState('running');
+      }
     }
-    if (line.includes('Closing by request')) {
+    if (line.includes('Closing by request') || line.includes('Server shutting down')) {
       setInstanceState(instanceId, 'stopping');
       if (onState) onState('stopping');
     }

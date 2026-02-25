@@ -10,10 +10,10 @@
   </div>
   
   <div class="sidebar-content" *ngIf="showServers">
-    <div class="server-list">
+    <div class="server-list" cdkDropList (cdkDropListDropped)="onDrop($event)">
       <div 
         *ngFor="let server of servers; trackBy: trackByServerId" 
-        class="server-item"
+        class="server-item" cdkDrag
         [class.selected]="selectedServerId === server.id"
         (click)="onServerClick(server)">
         <span class="server-status-icon" [ngClass]="getServerStatusClass(server)">

@@ -104,7 +104,7 @@ Problem-solving resource featuring:
 ## 🔧 Technical Information
 
 ### Application Details
-- **Version**: 1.0.0-beta
+- **Version**: 1.0.0-beta.8
 - **Platform**: Electron-based desktop application
 - **Frontend**: Angular 20
 - **Backend**: Node.js with TypeScript
@@ -151,6 +151,6 @@ If you find areas where the documentation could be improved:
 
 ---
 
-**Last Updated**: December 2024  
+**Last Updated**: February 2026  
 **Documentation Version**: 1.0.0  
-**Application Version**: 1.0.0-beta
+**Application Version**: 1.0.0-beta.8

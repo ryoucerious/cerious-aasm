@@ -27,6 +27,45 @@ export class StructuresTabComponent {
   @Output() saveSettings = new EventEmitter<void>();
   @Output() validateField = new EventEmitter<{key: string, value: any}>();
 
+  getFieldsByCategory(category: string): Field[] {
+    const categories: { [key: string]: string[] } = {
+      'damage': [
+        'structureResistanceMultiplier',
+        'structureDamageMultiplier',
+        'pvePlatformStructureDamageRatio',
+        'autoDestroyOldStructuresMultiplier',
+        'maxStructuresInRange',
+        'bDisableStructureDecayPvE',
+        'pvpStructureDecay'
+      ],
+      'platform': [
+        'perPlatformMaxStructuresMultiplier',
+        'platformSaddleBuildAreaBoundsMultiplier',
+        'maxPlatformSaddleStructureLimit',
+        'maxGateFrameOnSaddles',
+        'bAllowPlatformSaddleStacking',
+        'bAllowPlatformSaddleMultiFloors',
+        'overrideStructurePlatformPrevention'
+      ],
+      'building': [
+        'structurePreventResourceRadiusMultiplier',
+        'structurePickupTimeAfterPlacement',
+        'structurePickupHoldDuration',
+        'allowIntegratedSPlusStructures',
+        'allowCaveBuildingPvE',
+        'bDisableStructurePlacementCollision',
+        'bEnableExtraStructurePreventionVolumes',
+        'forceAllStructureLocking',
+        'allowCrateSpawnsOnTopOfStructures'
+      ]
+    };
+
+    const categoryKeys = categories[category] || [];
+    return categoryKeys
+      .map(key => this.structuresFields.find(field => field.key === key))
+      .filter((field): field is Field => field !== undefined);
+  }
+
   hasFieldError(key: string): boolean {
     // This would be implemented based on your validation logic
     return false;
