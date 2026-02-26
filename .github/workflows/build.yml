@@ -41,7 +41,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-windows-installer
-          path: dist-electron/*.exe
+          path: |
+            dist-electron/*.exe
+            dist-electron/*.exe.blockmap
+            dist-electron/latest.yml
 
   build-linux:
     runs-on: ubuntu-latest
@@ -70,7 +73,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-linux-appimage
-          path: dist-electron/*.AppImage
+          path: |
+            dist-electron/*.AppImage
+            dist-electron/latest-linux.yml
       - name: Upload Linux DEB
         uses: actions/upload-artifact@v4
         with:
