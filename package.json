@@ -20,6 +20,7 @@
     "build-and-run": "npm run build && npm run electron",
     "electron": "npx tsc -p tsconfig.electron.json && electron electron/main.js",
     "electron:dev": "concurrently \"npm run start\" \"wait-on http://localhost:4200 && cross-env NODE_ENV=development npm run electron\"",
+    "electron:dev:test-update": "concurrently \"npm run start\" \"wait-on http://localhost:4200 && npx tsc -p tsconfig.electron.json && cross-env NODE_ENV=development electron electron/main.js --test-update\"",
     "electron:build": "npm run build && npx tsc -p tsconfig.electron.json",
     "electron:package": "npm run electron:build && electron-builder",
     "electron:package:linux": "npm run electron:build && electron-builder --linux",
@@ -54,6 +55,7 @@
     "bcrypt": "^6.0.0",
     "bootstrap": "^5.3.7",
     "cors": "^2.8.5",
+    "electron-updater": "^6.8.3",
     "express": "^5.1.0",
     "font-awesome": "^4.7.0",
     "fs-extra": "^11.2.0",
@@ -80,6 +82,7 @@
     "@types/jasmine": "~5.1.0",
     "@types/jest": "^30.0.0",
     "@types/node-fetch": "^2.6.12",
+    "@types/semver": "^7.7.1",
     "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.0.1",
@@ -106,7 +109,11 @@
   "build": {
     "appId": "com.cerious.aasm",
     "productName": "Cerious AASM",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "ryoucerious",
+      "repo": "cerious-aasm"
+    },
     "buildDependenciesFromSource": false,
     "nodeGypRebuild": false,
     "directories": {

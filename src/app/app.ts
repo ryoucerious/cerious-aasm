@@ -10,6 +10,7 @@ import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { ModalComponent } from './components/modal/modal.component';
 import { ServerInstance } from './core/models/server-instance.model';
 import { UtilityService } from './core/services/utility.service';
+import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
 
 declare global {
   interface Window {
@@ -20,7 +21,7 @@ declare global {
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, SidebarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent],
+  imports: [RouterOutlet, SidebarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, UpdateBannerComponent],
   templateUrl: './app.html'
 })
 

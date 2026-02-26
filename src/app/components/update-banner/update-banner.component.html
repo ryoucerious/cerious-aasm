@@ -1,0 +1,27 @@
+<!-- Downloading progress -->
+<div class="update-banner" *ngIf="!dismissed && updateStatus?.status === 'downloading'">
+  <div class="banner-accent"></div>
+  <div class="banner-content">
+    <span class="material-icons banner-icon">cloud_download</span>
+    <span class="banner-text">Downloading update… {{ downloadPercent }}%</span>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" [style.width.%]="downloadPercent"></div>
+    </div>
+    <button class="dismiss-btn" (click)="dismiss()" title="Dismiss">
+      <span class="material-icons">close</span>
+    </button>
+  </div>
+</div>
+
+<!-- Update downloaded – prompt to restart -->
+<div class="update-banner" *ngIf="!dismissed && updateStatus?.status === 'downloaded'">
+  <div class="banner-accent ready"></div>
+  <div class="banner-content">
+    <span class="material-icons banner-icon">update</span>
+    <span class="banner-text">A new version of Cerious AASM is available <strong>(v{{ updateStatus?.version }})</strong> &mdash; ready to install.</span>
+    <button class="action-btn" (click)="installUpdate()">Restart to Update</button>
+    <button class="dismiss-btn" (click)="dismiss()" title="Later">
+      <span class="material-icons">close</span>
+    </button>
+  </div>
+</div>

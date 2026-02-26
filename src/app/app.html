@@ -5,41 +5,46 @@
 
 <!-- Main app layout - with sidebar -->
 <ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
-  <div class="app-container">
-    <!-- Mobile Header -->
-    <div *ngIf="isMobile" class="mobile-header">
-      <button class="mobile-menu-btn" (click)="toggleMobileMenu()" [attr.aria-label]="isMobileMenuOpen ? 'Close menu' : 'Open menu'">
-        <span class="material-icons">{{ isMobileMenuOpen ? 'close' : 'menu' }}</span>
-      </button>
-      <div class="mobile-header-title">Cerious AASM</div>
-    </div>
+  <div class="app-root-wrapper">
+    <!-- App Update Banner - full width above everything -->
+    <app-update-banner *ngIf="isElectron"></app-update-banner>
 
-    <!-- Mobile Overlay -->
-    <div *ngIf="isMobile && isMobileMenuOpen" class="mobile-overlay" (click)="closeMobileMenu()"></div>
+    <div class="app-container">
+      <!-- Mobile Header -->
+      <div *ngIf="isMobile" class="mobile-header">
+        <button class="mobile-menu-btn" (click)="toggleMobileMenu()" [attr.aria-label]="isMobileMenuOpen ? 'Close menu' : 'Open menu'">
+          <span class="material-icons">{{ isMobileMenuOpen ? 'close' : 'menu' }}</span>
+        </button>
+        <div class="mobile-header-title">Cerious AASM</div>
+      </div>
 
-    <!-- Sidebar Container -->
-    <div class="sidebar-container" [class.mobile-open]="isMobile && isMobileMenuOpen">
-      <app-sidebar (selectServer)="onServerSelected($event)" (closeMobileMenu)="closeMobileMenu()"></app-sidebar>
-    </div>
+      <!-- Mobile Overlay -->
+      <div *ngIf="isMobile && isMobileMenuOpen" class="mobile-overlay" (click)="closeMobileMenu()"></div>
 
-    <!-- Main Content -->
-    <div class="main-content" [class.mobile-menu-open]="isMobile && isMobileMenuOpen">
-      <router-outlet></router-outlet>
+      <!-- Sidebar Container -->
+      <div class="sidebar-container" [class.mobile-open]="isMobile && isMobileMenuOpen">
+        <app-sidebar (selectServer)="onServerSelected($event)" (closeMobileMenu)="closeMobileMenu()"></app-sidebar>
+      </div>
 
-      <!-- Exit Confirmation Modal -->
-      <app-modal [show]="showExitModal" [title]="'Servers Running'" (close)="onExitModalClose('cancel')">
-        <div>
-          <p>There are running servers. What would you like to do?</p>
-          <ul *ngIf="runningServers && runningServers.length > 0">
-            <li *ngFor="let server of runningServers">{{ server.name }}</li>
-          </ul>
-          <div class="action-group-modal">
-            <button class="btn" (click)="onExitModalClose('cancel')">Cancel</button>
-            <button class="btn" (click)="onExitModalClose('exit')">Exit Anyway</button>
-            <button class="btn" (click)="onExitModalClose('shutdown')">Shut Down Servers &amp; Exit</button>
+      <!-- Main Content -->
+      <div class="main-content" [class.mobile-menu-open]="isMobile && isMobileMenuOpen">
+        <router-outlet></router-outlet>
+
+        <!-- Exit Confirmation Modal -->
+        <app-modal [show]="showExitModal" [title]="'Servers Running'" (close)="onExitModalClose('cancel')">
+          <div>
+            <p>There are running servers. What would you like to do?</p>
+            <ul *ngIf="runningServers && runningServers.length > 0">
+              <li *ngFor="let server of runningServers">{{ server.name }}</li>
+            </ul>
+            <div class="action-group-modal">
+              <button class="btn" (click)="onExitModalClose('cancel')">Cancel</button>
+              <button class="btn" (click)="onExitModalClose('exit')">Exit Anyway</button>
+              <button class="btn" (click)="onExitModalClose('shutdown')">Shut Down Servers &amp; Exit</button>
+            </div>
           </div>
-        </div>
-      </app-modal>
+        </app-modal>
+      </div>
     </div>
   </div>
 </ng-container>

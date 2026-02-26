@@ -44,6 +44,7 @@ import { cleanupAllRconConnections } from './utils/rcon.utils';
 import { ArkUpdateService } from './services/ark-update.service';
 import { setArkUpdateService } from './handlers/ark-update-handler';
 import { initializeBackupSystem } from './handlers/backup-handler';
+import { autoUpdateService } from './services/auto-update.service';
 
 // =========================
 // Handler Imports (side effects)
@@ -63,6 +64,7 @@ import './handlers/firewall-handler';
 import './handlers/system-info-handler';
 import './handlers/whitelist-handler';
 import './handlers/config-import-export-handler';
+import './handlers/auto-update-handler';
 
 // =========================
 // Service Initialization
@@ -208,6 +210,47 @@ app.on('ready', async () => {
     // Initialize with current installed version and start polling
     await arkUpdateService.initialize();
   } catch (e) {}
+
+  // Check for application updates (skip in dev mode unless --test-update flag is present)
+  if (process.env.NODE_ENV !== 'development') {
+    autoUpdateService.checkForUpdates().catch(console.error);
+  } else if (process.argv.includes('--test-update')) {
+    // Simulate an update lifecycle so the banner can be visually tested in dev mode
+    console.log('[main] Simulating update lifecycle for dev testing...');
+    setTimeout(() => {
+      messagingService.sendToAllRenderers('app-update-status', { status: 'checking' });
+    }, 2000);
+    setTimeout(() => {
+      messagingService.sendToAllRenderers('app-update-status', {
+        status: 'available',
+        version: '99.0.0',
+        releaseNotes: 'Test release notes for dev simulation.',
+        releaseDate: new Date().toISOString(),
+      });
+    }, 3000);
+    // Simulate download progress
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      setTimeout(() => {
+        messagingService.sendToAllRenderers('app-update-status', {
+          status: 'downloading',
+          percent: (i / steps) * 100,
+          bytesPerSecond: 1024 * 1024 * 2,
+          transferred: i * 5 * 1024 * 1024,
+          total: steps * 5 * 1024 * 1024,
+        });
+      }, 3000 + i * 500);
+    }
+    // Simulate download complete
+    setTimeout(() => {
+      messagingService.sendToAllRenderers('app-update-status', {
+        status: 'downloaded',
+        version: '99.0.0',
+        releaseNotes: 'Test release notes for dev simulation.',
+        releaseDate: new Date().toISOString(),
+      });
+    }, 3000 + (steps + 1) * 500);
+  }
 
 });
 

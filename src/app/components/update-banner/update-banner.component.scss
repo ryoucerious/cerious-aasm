@@ -1,0 +1,112 @@
+@use '../../../styles/variables' as *;
+
+// VS Code / GitHub Desktop style: slim dark bar with a colored left accent
+:host {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.update-banner {
+  display: flex;
+  width: 100%;
+  background: $background-darker;
+  border-bottom: 1px solid $border-darker;
+  z-index: 1000;
+}
+
+.banner-accent {
+  width: 3px;
+  flex-shrink: 0;
+  background: $primary;
+
+  &.ready {
+    background: $success;
+  }
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.banner-icon {
+  font-size: 1.1rem;
+  color: $text-secondary;
+  flex-shrink: 0;
+}
+
+.banner-text {
+  font-size: 0.82rem;
+  color: $text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  strong {
+    color: $text-white;
+    font-weight: 600;
+  }
+}
+
+.progress-bar-track {
+  width: 120px;
+  height: 3px;
+  background: $border-dark;
+  border-radius: $radius-pill;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: $primary;
+  border-radius: $radius-pill;
+  transition: width $transition-normal;
+}
+
+.action-btn {
+  background: $primary;
+  color: $text-white;
+  border: none;
+  border-radius: $radius-md;
+  padding: 3px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background $transition-fast;
+  flex-shrink: 0;
+
+  &:hover {
+    background: lighten($primary, 6%);
+  }
+}
+
+.dismiss-btn {
+  background: transparent;
+  border: none;
+  color: $text-secondary;
+  cursor: pointer;
+  padding: 2px;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: $radius-sm;
+  transition: color $transition-fast, background $transition-fast;
+  flex-shrink: 0;
+
+  &:hover {
+    color: $text-white;
+    background: $background-hover;
+  }
+
+  .material-icons {
+    font-size: 0.95rem;
+  }
+}
