@@ -2,6 +2,18 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.0.0] - 2026-02-26
+
+### New Features
+
+- **Auto-Updater**: The application now automatically checks for updates on startup via GitHub Releases and notifies the user when a new version is available.
+  - **Windows (NSIS .exe)**: Full auto-update — downloads silently in the background and prompts the user to restart.
+  - **Linux (AppImage)**: Full auto-update via electron-updater.
+  - **Linux (.deb/.rpm)**: Custom update path — downloads the correct package from GitHub Releases and installs via `pkexec` (native OS password prompt).
+  - **Update Banner**: A slim, VS Code-style notification bar appears at the top of the application showing download progress and a "Restart to Update" button when ready.
+  - Headless mode is excluded (no GUI to prompt).
+  - Includes a `--test-update` dev flag to simulate the update lifecycle for visual testing.
+
 ## [1.0.0-beta.8] - 2026-02-24
 
 ### Bug Fixes
