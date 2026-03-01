@@ -92,7 +92,14 @@ export interface InstallerOptions {
     let lastPercent = 0;
     const phaseSplit = options.phaseSplit ?? 50;
     onProgress({ percent: 0, step: 'download', message: 'Checking Ark Server...' });
-    const proc = pty.spawn(options.command, options.args, { cwd: options.cwd });
+    let proc: pty.IPty;
+    try {
+      proc = pty.spawn(options.command, options.args, { cwd: options.cwd });
+    } catch (spawnErr: any) {
+      const msg = spawnErr?.message || String(spawnErr);
+      onProgress({ percent: 0, step: 'error', message: `Failed to start process: ${msg}` });
+      return onDone(new Error(`Failed to start process "${options.command}": ${msg}`));
+    }
     procKilled = false;
     currentProc = proc;
     proc.onData((data) => {

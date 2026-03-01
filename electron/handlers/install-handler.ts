@@ -104,7 +104,15 @@ messagingService.on('install', async (payload, sender) => {
   } catch (error) {
     console.error('[install-handler] Unexpected error during installation:', error);
     const errorMsg = error instanceof Error ? error.message : String(error);
-    const errorData = { error: errorMsg, requestId };
+    const errorData = {
+      error: errorMsg,
+      message: errorMsg,
+      step: 'error',
+      phase: 'error',
+      overallPhase: 'Installation Failed',
+      phasePercent: 0,
+      requestId
+    };
     messagingService.sendToOriginator('install', { target: target || 'unknown', data: errorData, requestId }, sender);
   }
 });

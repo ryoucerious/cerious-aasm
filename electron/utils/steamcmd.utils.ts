@@ -70,7 +70,18 @@ export function installSteamCmd(callback: (err: Error | null, output?: string) =
         onData(progress);
       }
     },
-    (err, output) => callback(err, output)
+    (err, output) => {
+      // On Linux, ensure steamcmd.sh is executable after extraction
+      if (!err && process.platform !== 'win32') {
+        const steamcmdSh = path.join(dir, 'steamcmd.sh');
+        if (fs.existsSync(steamcmdSh)) {
+          try { fs.chmodSync(steamcmdSh, '755'); } catch (e) {
+            console.warn('[steamcmd] Could not chmod steamcmd.sh:', e);
+          }
+        }
+      }
+      callback(err, output);
+    }
   );
 }
 

@@ -1690,6 +1690,18 @@ html, body {
   transition: width 0.3s;
   min-width: 0;
   white-space: nowrap;
+
+  &.error {
+    background-color: #ef4444;
+  }
+}
+
+.text-error {
+  color: #ef4444 !important;
+}
+
+.text-success {
+  color: #22c55e !important;
 }
 
 /* Mobile responsiveness for installation progress */

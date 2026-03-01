@@ -286,17 +286,22 @@
   [show]="showInstallModal" 
   (close)="onCancelInstall()">
   <div class="install-phase">
-    <div class="install-phase-header">
+    <div class="install-phase-header"
+         [class.text-error]="installProgress?.failed"
+         [class.text-success]="installProgress?.success">
       {{installProgress?.step}}
     </div>
-    <div class="install-phase-desc">{{installProgress?.message}}</div>
+    <div class="install-phase-desc"
+         [class.text-error]="installProgress?.failed">{{installProgress?.message}}</div>
     <div class="install-progress-bar">
-      <div [style.width.%]="installProgress?.percent" class="install-progress-bar-inner"></div>
+      <div [style.width.%]="installProgress?.percent"
+           class="install-progress-bar-inner"
+           [class.error]="installProgress?.failed"></div>
     </div>
   </div>
   <div class="action-group-modal">
-    <button class="btn" (click)="onCancelInstall()" *ngIf="installProgress && !installProgress.blocked && !installProgress.success">Cancel Install</button>
-    <button class="btn" (click)="onCloseInstall()" *ngIf="installProgress?.blocked || installProgress?.success">Close</button>
+    <button class="btn" (click)="onCancelInstall()" *ngIf="installProgress && !installProgress.blocked && !installProgress.success && !installProgress.failed">Cancel Install</button>
+    <button class="btn" (click)="onCloseInstall()" *ngIf="installProgress?.blocked || installProgress?.success || installProgress?.failed">Close</button>
   </div>
 </app-modal>
 

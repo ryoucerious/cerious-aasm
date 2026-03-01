@@ -121,7 +121,7 @@ export class SettingsPageComponent {
 
   // Modal and progress state
   showInstallModal = false;
-  installProgress: { percent: number, step: string, message: string, phase?: string, success?: boolean, blocked?: boolean } | null = null;
+  installProgress: { percent: number, step: string, message: string, phase?: string, success?: boolean, failed?: boolean, blocked?: boolean } | null = null;
   private installSub?: Subscription;
   
   // Sudo password collection state
@@ -224,12 +224,30 @@ export class SettingsPageComponent {
     this.installProgress = { percent: 0, step: 'Starting', message: 'Initializing install...' };
     if (this.installSub) this.installSub.unsubscribe();
     this.installSub = this.messaging.receiveMessage('install').subscribe((msg: any) => {
-      var progress = msg?.data;
+      const progress = msg?.data;
+      if (!progress) return;
 
-      // Show toast for error/info messages
-      if (progress.message.includes('already in progress')) {
+      // Show toast for concurrent-install warning
+      if (progress.message?.includes('already in progress')) {
         this.notification.warning(progress.message, 'Install Warning');
         this.onCloseInstall();
+        return;
+      }
+
+      // Handle error state – show toast and update modal with failure details
+      if (progress.step === 'error' || progress.error) {
+        const errorMsg = progress.message || progress.error || 'Installation failed. Check server logs for details.';
+        this.notification.error(errorMsg, 'Installation Failed');
+        this.installProgress = {
+          percent: this.installProgress?.percent ?? 0,
+          step: 'Installation Failed',
+          message: errorMsg,
+          phase: progress.phase || 'error',
+          success: false,
+          failed: true
+        };
+        this.cdr.markForCheck();
+        return;
       }
 
       // Handle cancellation
