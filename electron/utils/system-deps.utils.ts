@@ -295,35 +295,55 @@ export async function installMissingDependencies(
   let currentStep = 0;
 
   try {
-    // Step 0: Fix any interrupted dpkg configurations (Ubuntu/Debian only)
+    // Step 0: apt-specific pre-flight
     if (pkgInfo.manager === 'apt') {
+      // Step 0a: Fix any interrupted dpkg configurations
       onProgress({
         step: 'dpkg-fix',
         message: 'Fixing any interrupted package configurations...',
         percent: Math.round((currentStep / totalSteps) * 100)
       });
-
       try {
         await runSudoCommand('dpkg --configure -a', sudoPassword);
-        currentStep++;
         results.push('✓ Fixed dpkg configurations');
       } catch (error) {
-        // If dpkg fix fails, log but continue - it might not be needed
         results.push(`⚠ dpkg fix warning: ${error}`);
-        currentStep++;
       }
+
+      // Step 0b: Enable i386 multi-arch if any dep uses an :i386 package.
+      // Without this, apt simply reports the package as "not found".
+      const needs32bit = missingDeps.some(d => {
+        const pkg = typeof d.packageName === 'string' ? d.packageName : (d.packageName['apt'] || '');
+        return pkg.includes(':i386') || pkg.includes(':i386');
+      });
+      if (needs32bit) {
+        onProgress({
+          step: 'enable-i386',
+          message: 'Enabling 32-bit (i386) architecture support...',
+          percent: Math.round((currentStep / totalSteps) * 100)
+        });
+        try {
+          await runSudoCommand('dpkg --add-architecture i386', sudoPassword);
+          results.push('✓ Enabled i386 architecture');
+        } catch (error) {
+          // May already be enabled — log and continue
+          results.push(`⚠ dpkg add-architecture i386: ${error}`);
+        }
+      }
+
+      currentStep++;
     } else {
-      currentStep++; // Skip dpkg fix for non-apt systems
+      currentStep++; // Skip apt pre-flight for non-apt systems
     }
 
-    // Step 1: Update package manager
+    // Step 1: Update package manager (always after any arch changes)
     onProgress({
       step: 'update',
       message: `Updating ${pkgInfo.manager} package list...`,
       percent: Math.round((currentStep / totalSteps) * 100)
     });
 
-  await runSudoCommand(pkgInfo.updateCmd, sudoPassword);
+    await runSudoCommand(pkgInfo.updateCmd, sudoPassword);
     currentStep++;
     results.push(`✓ Updated ${pkgInfo.manager} package list`);
 
@@ -347,7 +367,8 @@ export async function installMissingDependencies(
           await runSudoCommand(installCommand, sudoPassword);
           results.push(`✓ Installed ${dep.name}`);
         } catch (error) {
-          const errorMsg = `✗ Failed to install ${dep.name}: ${error}`;
+          const errDetail = error instanceof Error ? error.message : String(error);
+          const errorMsg = `✗ Failed to install ${dep.name} (${packageName}): ${errDetail}`;
           results.push(errorMsg);
 
           // If using dnf, attempt a safe retry with --allowerasing once (may allow resolving multilib conflicts)
@@ -366,7 +387,7 @@ export async function installMissingDependencies(
           if (dep.required) {
             return {
               success: false,
-              message: `Failed to install required dependency: ${dep.name}`,
+              message: `Failed to install ${dep.name} (${packageName}): ${errDetail}. See /tmp/cerious-aasm-deps-install.log for details.`,
               details: results
             };
           }

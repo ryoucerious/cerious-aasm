@@ -101,7 +101,8 @@ export class ServerInstallerService {
           
           if (!depsResult.success) {
             result.details.linuxDeps.message = depsResult.message;
-            throw new Error(`Failed to install Linux dependencies: ${depsResult.message}`);
+            const detailLines = depsResult.details.length > 0 ? '\n' + depsResult.details.join('\n') : '';
+            throw new Error(`Failed to install Linux dependencies: ${depsResult.message}${detailLines}`);
           }
           
           result.details.linuxDeps.installed = true;
