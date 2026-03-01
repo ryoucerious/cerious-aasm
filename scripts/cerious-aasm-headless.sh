@@ -29,7 +29,7 @@ npx tsc -p tsconfig.electron.json || { echo "[cerious-aasm] TypeScript compilati
 # If a real display is already available (DISPLAY is set), skip xvfb-run.
 if [ -z "$DISPLAY" ] && command -v xvfb-run &>/dev/null; then
   echo "[cerious-aasm] No display detected — launching via xvfb-run (virtual framebuffer)"
-  exec xvfb-run -a electron electron/main.js --headless "$@"
+  exec xvfb-run -a electron electron/main.js --headless --disable-audio-output "$@"
 elif [ -z "$DISPLAY" ]; then
   echo "[cerious-aasm] WARNING: No display and xvfb-run not found."
   echo "  Install xvfb:  sudo apt install xvfb  OR  sudo dnf install xorg-x11-server-Xvfb"
@@ -37,5 +37,5 @@ elif [ -z "$DISPLAY" ]; then
   exit 1
 else
   echo "[cerious-aasm] Display detected ($DISPLAY) — launching normally"
-  exec electron electron/main.js --headless "$@"
+  exec electron electron/main.js --headless --disable-audio-output "$@"
 fi

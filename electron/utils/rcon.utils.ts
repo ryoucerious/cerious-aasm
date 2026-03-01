@@ -39,11 +39,14 @@ export function connectRcon(instanceId: string, config: any, onStatus?: (connect
     });
     rcon.on('error', (err: any) => {
       if (!connected && attempt < maxAttempts) {
-        console.error(`[RCON] ERROR (will retry) for instanceId=${instanceId}:`, err);
+        // Only log first attempt and every 5th to avoid log spam while server is starting
+        if (attempt === 1 || attempt % 5 === 0) {
+          console.log(`[RCON] Waiting for server ${instanceId} (attempt ${attempt}/${maxAttempts}): ${err.code || err.message}`);
+        }
         setTimeout(tryConnect, 2000);
         return;
       }
-      console.error(`[RCON] ERROR for instanceId=${instanceId}:`, err);
+      console.error(`[RCON] All ${maxAttempts} connection attempts failed for ${instanceId}:`, err);
       delete rconClients[instanceId];
       if (onStatus) onStatus(false);
     });

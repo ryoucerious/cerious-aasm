@@ -51,7 +51,7 @@ echo "[cerious-aasm] Using binary: $APP_BIN"
 # --------------------------------------------------------------------------
 if [ -z "$DISPLAY" ] && command -v xvfb-run &>/dev/null; then
   echo "[cerious-aasm] No display detected — launching via xvfb-run (virtual framebuffer)"
-  exec xvfb-run -a "$APP_BIN" --no-sandbox --headless "$@"
+  exec xvfb-run -a "$APP_BIN" --no-sandbox --headless --disable-audio-output "$@"
 elif [ -z "$DISPLAY" ]; then
   echo "[cerious-aasm] WARNING: No display and xvfb-run not found."
   echo "  Install xvfb:  sudo apt install xvfb  OR  sudo dnf install xorg-x11-server-Xvfb"
@@ -59,5 +59,5 @@ elif [ -z "$DISPLAY" ]; then
   exit 1
 else
   echo "[cerious-aasm] Display detected ($DISPLAY) — launching normally"
-  exec "$APP_BIN" --no-sandbox --headless "$@"
+  exec "$APP_BIN" --no-sandbox --headless --disable-audio-output "$@"
 fi

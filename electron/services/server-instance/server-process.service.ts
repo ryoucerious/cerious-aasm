@@ -120,8 +120,6 @@ export class ServerProcessService {
     const serverProcess = this.arkServerProcesses[instanceId];
     if (!serverProcess) return;
 
-    let hasAdvertised = false;
-
     // Set up process event handlers
     serverProcess.on('exit', async (code) => {
       this.setInstanceState(instanceId, 'stopped');
@@ -168,6 +166,49 @@ export class ServerProcessService {
       }
     });
 
+    // ---- RCON: connect when server signals it is fully started ----
+    // Log tailing fires onState('running') the moment the startup-complete log line
+    // is seen.  We intercept that here and connect RCON immediately — no polling,
+    // no time-based delay.
+    //
+    // Safety net: if log tailing never finds/parses the startup line (e.g. Proton
+    // swallows all stdout) we attempt RCON once after 15 minutes — long enough to
+    // cover even the slowest first-boot Proton load, but still a single attempt
+    // rather than a wall of retries.
+    let rconTriggered = false;
+
+    const triggerRconConnect = () => {
+      rconTriggered = true;
+      const rconSvc = require('../rcon.service').rconService;
+      const instanceConfig = require('../../utils/ark/instance.utils').getInstance(instanceId);
+      if (!instanceConfig?.rconPort || !instanceConfig?.rconPassword) {
+        console.log(`[server-process-service] RCON not configured for ${instanceId} — skipping connect`);
+        return;
+      }
+      console.log(`[server-process-service] Server ${instanceId} is up — attempting RCON connection`);
+      rconSvc.connectRcon(instanceId).catch(() => {
+        // rcon.utils already logs failures
+      });
+    };
+
+    const wrappedOnState = (state: string) => {
+      onState?.(state);
+      if (state === 'running' && !rconTriggered) {
+        triggerRconConnect();
+      }
+    };
+
+    const safetyNetTimer = setTimeout(() => {
+      if (rconTriggered) return;
+      const currentState = this.getInstanceState(instanceId);
+      if (currentState === 'starting' && serverProcess && !serverProcess.killed && serverProcess.exitCode === null) {
+        console.log(`[server-process-service] Safety net: server ${instanceId} still 'starting' after 15 min — forcing 'running' and attempting RCON`);
+        this.setInstanceState(instanceId, 'running');
+        onState?.('running');
+        triggerRconConnect();
+      }
+    }, 15 * 60 * 1000);
+
     // Set up log monitoring after a brief delay
     setTimeout(() => {
       if (!serverProcess || serverProcess.killed) return;
@@ -179,73 +220,18 @@ export class ServerProcessService {
           const messagingService = require('../messaging.service').messagingService;
           messagingService.sendToAll('server-instance-log', { log: line, instanceId });
         },
-        // onState callback
-        onState
+        // onState callback — triggers RCON connect when 'running' is detected
+        wrappedOnState
       );
     }, 500); // Wait 500ms for log file to be created
 
-    // RCON-based fallback for running detection.
-    // If log tailing fails to detect 'running' state (more likely on Linux/Proton),
-    // proactively attempt RCON connection so state transitions correctly.
-    let rconFallbackAttempts = 0;
-    const maxRconFallbackAttempts = 60; // Try for up to 5 minutes (every 5 seconds)
-    let rconConnectTriggered = false;
-    const rconFallbackInterval = setInterval(async () => {
-      rconFallbackAttempts++;
-      try {
-        const currentState = this.getInstanceState(instanceId);
-        // Stop checking once server is no longer in 'starting' state or max attempts reached
-        if (currentState !== 'starting' || rconFallbackAttempts >= maxRconFallbackAttempts) {
-          clearInterval(rconFallbackInterval);
-          // If still starting after max attempts and process is alive, force to running
-          if (currentState === 'starting' && serverProcess && !serverProcess.killed && serverProcess.exitCode === null) {
-            console.log(`[server-process-service] RCON fallback: Server ${instanceId} still in 'starting' state after ${maxRconFallbackAttempts * 5}s, forcing to 'running'`);
-            this.setInstanceState(instanceId, 'running');
-            onState?.('running');
-          }
-          return;
-        }
-
-        const rconSvc = require('../rcon.service').rconService;
-        const instance_config = require('../../utils/ark/instance.utils').getInstance(instanceId);
-
-        if (instance_config?.rconPort && instance_config?.rconPassword) {
-          const isConnected = rconSvc.getRconStatus(instanceId).connected;
-
-          if (isConnected) {
-            // RCON is already connected (log tailing missed the transition) — fix state now
-            console.log(`[server-process-service] RCON fallback: RCON already connected for ${instanceId} — setting state to 'running'`);
-            this.setInstanceState(instanceId, 'running');
-            onState?.('running');
-            clearInterval(rconFallbackInterval);
-          } else if (!rconConnectTriggered) {
-            // Kick off a single connection attempt; connectRcon handles internal retries.
-            // Guard with rconConnectTriggered so we don't spawn overlapping retry chains.
-            rconConnectTriggered = true;
-            rconSvc.connectRcon(instanceId).then((result: any) => {
-              if (result?.connected) {
-                const stateNow = this.getInstanceState(instanceId);
-                if (stateNow === 'starting') {
-                  console.log(`[server-process-service] RCON fallback: connected for ${instanceId} — setting state to 'running'`);
-                  this.setInstanceState(instanceId, 'running');
-                  onState?.('running');
-                  clearInterval(rconFallbackInterval);
-                }
-              } else {
-                // Connection failed — reset flag so we can retry on the next interval
-                rconConnectTriggered = false;
-              }
-            }).catch(() => { rconConnectTriggered = false; });
-          }
-        }
-      } catch {
-        // Expected to fail while server is still starting
-      }
-    }, 5000); // Check every 5 seconds
-
-    // Clean up fallback interval if process exits
-    serverProcess.once('exit', () => clearInterval(rconFallbackInterval));
-    serverProcess.once('error', () => clearInterval(rconFallbackInterval));
+    // Clean up safety-net timer on process exit / error
+    serverProcess.once('exit', () => {
+      clearTimeout(safetyNetTimer);
+    });
+    serverProcess.once('error', () => {
+      clearTimeout(safetyNetTimer);
+    });
   }
 
   /**

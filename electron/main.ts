@@ -24,8 +24,10 @@ if (isHeadlessMode) {
   app.commandLine.appendSwitch('disable-gpu'); // No dash prefix for value key, but for switch it is fine
   app.commandLine.appendSwitch('disable-software-rasterizer');
   app.commandLine.appendSwitch('disable-dev-shm-usage');
+  // Prevent ALSA symbol lookup errors on headless Linux servers (no audio needed)
+  app.commandLine.appendSwitch('disable-audio-output');
   // Crucial for headless environments to prevent GTK faults
-  app.disableHardwareAcceleration(); 
+  app.disableHardwareAcceleration();
 }
 
 // =========================
