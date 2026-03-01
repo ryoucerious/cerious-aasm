@@ -90,7 +90,15 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
     // Verify the critical symbol exists — not just that the .so file is present.
     // On Ubuntu 24.04, a transitional libasound2 stub can satisfy ldconfig without
     // providing snd_device_name_get_hint, causing a symbol-lookup crash at startup.
-    checkCommand: 'LIB=$(ldconfig -p | grep "libasound\\.so\\.2 " | awk \'{print $NF}\' | head -1) && [ -n "$LIB" ] && nm -D "$LIB" 2>/dev/null | grep -q snd_device_name_get_hint',
+    //
+    // On apt systems: check directly whether libasound2t64 is fully installed via dpkg.
+    //   - Ubuntu 24.04: transitional libasound2 stub shows as 'ii' but libasound2t64
+    //     is the real package; if it's missing this check correctly fails and
+    //     aptAlternatives will install libasound2t64.
+    //   - Ubuntu 22.04: libasound2t64 doesn't exist, so this fails; aptAlternatives
+    //     falls back to libasound2, which apt reports as already installed (no-op).
+    // On non-apt systems: fall back to checking ldconfig for the .so presence.
+    checkCommand: 'if command -v dpkg >/dev/null 2>&1; then dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; else ldconfig -p | grep -q \'libasound\\.so\\.2\'; fi',
     description: 'ALSA audio library required by Electron (audio output is disabled at runtime)',
     required: true
   },
