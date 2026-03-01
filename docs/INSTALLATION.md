@@ -163,26 +163,64 @@
 
 ### Command Line Usage (Headless Mode)
 
-For the installed Linux package, headless mode requires the `--no-sandbox` flag:
+Cerious AASM can run as a headless background service, exposing a web REST API
+instead of launching a GUI window.  **On Linux, Electron requires a display
+connection (X11 or Wayland) at the native level even when running headless.**
+Use `xvfb-run` to provide a virtual framebuffer on servers with no physical display.
+
+#### 1. Install xvfb (first time only)
 
 ```bash
-# Basic headless mode
-cerious-aasm --no-sandbox --headless
+# Debian / Ubuntu
+sudo apt install xvfb
 
-# With custom port
-cerious-aasm --no-sandbox --headless --port=8080
-
-# With authentication
-cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
-
-# Full example with all options
-cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
-
-# Get help (use the GUI version for help)
-cerious-aasm --help
+# Fedora / RHEL / Rocky
+sudo dnf install xorg-x11-server-Xvfb
 ```
 
-**Note:** The `--no-sandbox` flag is required for headless mode on Linux due to Chrome sandbox restrictions. This is a security trade-off necessary for headless operation. For GUI mode, simply use `cerious-aasm` without any flags.
+#### 2. Run headless
+
+```bash
+# Basic headless mode (virtual framebuffer)
+xvfb-run -a cerious-aasm --no-sandbox --headless
+
+# With custom port
+xvfb-run -a cerious-aasm --no-sandbox --headless --port=8080
+
+# With authentication
+xvfb-run -a cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
+
+# Full example
+xvfb-run -a cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
+```
+
+Alternatively, use the bundled [cerious-aasm-headless-appimage.sh](../scripts/cerious-aasm-headless-appimage.sh)
+helper script which detects whether a display is already present and applies
+`xvfb-run -a` automatically.
+
+```bash
+# Put the script on your PATH, then run:
+cerious-aasm-headless-appimage.sh --auth-enabled --password=yourpassword --port=3000
+```
+
+#### 3. Run as a systemd service
+
+```ini
+[Unit]
+Description=Cerious AASM headless service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/xvfb-run -a /usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=yourpassword --port=3000
+Restart=on-failure
+Environment=ELECTRON_DISABLE_SANDBOX=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Note:** The `--no-sandbox` flag is required for headless mode on Linux due to Chrome sandbox restrictions. This is a security trade-off necessary for headless operation. For GUI mode simply run `cerious-aasm` without any flags (no `xvfb-run` needed if a desktop session is available).
+
 
 ## Uninstallation
 
