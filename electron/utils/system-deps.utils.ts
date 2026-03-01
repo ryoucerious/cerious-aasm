@@ -87,7 +87,10 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
     // Ubuntu 23.04+ renamed libasound2 → libasound2t64 (64-bit time_t transition).
     // Try libasound2t64 first; fall back to libasound2 for older distros.
     aptAlternatives: ['libasound2t64', 'libasound2'],
-    checkCommand: 'ldconfig -p | grep libasound\.so\.2',
+    // Verify the critical symbol exists — not just that the .so file is present.
+    // On Ubuntu 24.04, a transitional libasound2 stub can satisfy ldconfig without
+    // providing snd_device_name_get_hint, causing a symbol-lookup crash at startup.
+    checkCommand: 'LIB=$(ldconfig -p | grep "libasound\\.so\\.2 " | awk \'{print $NF}\' | head -1) && [ -n "$LIB" ] && nm -D "$LIB" 2>/dev/null | grep -q snd_device_name_get_hint',
     description: 'ALSA audio library required by Electron (audio output is disabled at runtime)',
     required: true
   },
