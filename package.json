@@ -173,7 +173,8 @@
       "category": "Game",
       "synopsis": "ARK: Survival Ascended Server Manager",
       "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
-      "maintainer": "r YOU cerious"
+      "maintainer": "r YOU cerious",
+      "executableArgs": ["--disable-audio-output"]
     },
     "deb": {
       "depends": [
@@ -181,7 +182,7 @@
         "libappindicator3-1",
         "libxtst6",
         "libnss3",
-        "libasound2",
+        "libasound2 | libasound2t64",
         "libxss1",
         "libgbm1",
         "xvfb"

@@ -6,6 +6,8 @@ import { getPlatform } from './platform.utils';
 export interface LinuxDependency {
   name: string;
   packageName: string | { [key: string]: string }; // Support per-distro package names
+  /** For apt: try these package names in order if the primary packageName fails to install */
+  aptAlternatives?: string[];
   checkCommand: string;
   description: string;
   required: boolean;
@@ -71,6 +73,22 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
     },
     checkCommand: 'ldconfig -p | grep -E "libc\\.so\\.6.*i[36]86|libc\\.so\\.6.*x32"',
     description: '32-bit C library support required for SteamCMD (downloads ARK server files)',
+    required: true
+  },
+  {
+    name: 'ALSA Audio Library',
+    packageName: {
+      'apt': 'libasound2',         // Ubuntu 22.04 and older
+      'dnf': 'alsa-lib',
+      'yum': 'alsa-lib',
+      'pacman': 'alsa-lib',
+      'zypper': 'alsa'
+    },
+    // Ubuntu 23.04+ renamed libasound2 → libasound2t64 (64-bit time_t transition).
+    // Try libasound2t64 first; fall back to libasound2 for older distros.
+    aptAlternatives: ['libasound2t64', 'libasound2'],
+    checkCommand: 'ldconfig -p | grep libasound\.so\.2',
+    description: 'ALSA audio library required by Electron (audio output is disabled at runtime)',
     required: true
   },
   {
@@ -352,46 +370,62 @@ export async function installMissingDependencies(
       currentStep++;
       const percent = Math.round((currentStep / totalSteps) * 100);
       const packageName = getPackageNameForDistribution(dep);
-      
+
+      // For apt, prefer aptAlternatives (tried in order) over the primary packageName.
+      // This handles Ubuntu version splits, e.g. libasound2 → libasound2t64 on 23.04+.
+      const aptCandidates: string[] =
+        pkgInfo.manager === 'apt' && dep.aptAlternatives?.length
+          ? dep.aptAlternatives
+          : [packageName];
+
       onProgress({
         step: 'install',
-        message: `Installing ${dep.name} (${packageName})...`,
+        message: `Installing ${dep.name} (${aptCandidates[0]})...`,
         percent,
         dependency: dep.name
       });
 
+      let installed = false;
+      let lastError: string = '';
+
+      for (const candidate of aptCandidates) {
         try {
-          // include any extra install flags (e.g. --allowerasing for dnf) if provided
           const extra = (pkgInfo as any).installExtra ? `${(pkgInfo as any).installExtra} ` : '';
-          const installCommand = `${pkgInfo.installCmd} ${extra}${packageName}`.trim();
+          const installCommand = `${pkgInfo.installCmd} ${extra}${candidate}`.trim();
           await runSudoCommand(installCommand, sudoPassword);
-          results.push(`✓ Installed ${dep.name}`);
+          results.push(`✓ Installed ${dep.name} (${candidate})`);
+          installed = true;
+          break;
         } catch (error) {
-          const errDetail = error instanceof Error ? error.message : String(error);
-          const errorMsg = `✗ Failed to install ${dep.name} (${packageName}): ${errDetail}`;
-          results.push(errorMsg);
+          lastError = error instanceof Error ? error.message : String(error);
+          results.push(`⚠ ${candidate} not available, trying next alternative...`);
+        }
+      }
 
-          // If using dnf, attempt a safe retry with --allowerasing once (may allow resolving multilib conflicts)
-          if (pkgInfo.manager === 'dnf') {
-            try {
-              const retryCmd = `${pkgInfo.installCmd} --allowerasing ${packageName}`.trim();
-              results.push(`! Retry with --allowerasing: ${retryCmd}`);
-              await runSudoCommand(retryCmd, sudoPassword);
-              results.push(`✓ Installed ${dep.name} (after retry with --allowerasing)`);
-              continue; // next dependency
-            } catch (retryError) {
-              results.push(`✗ Retry failed for ${dep.name}: ${retryError}`);
-            }
-          }
+      if (!installed) {
+        results.push(`✗ Failed to install ${dep.name}: ${lastError}`);
 
-          if (dep.required) {
-            return {
-              success: false,
-              message: `Failed to install ${dep.name} (${packageName}): ${errDetail}. See /tmp/cerious-aasm-deps-install.log for details.`,
-              details: results
-            };
+        // If using dnf, attempt a safe retry with --allowerasing once
+        if (pkgInfo.manager === 'dnf') {
+          try {
+            const retryCmd = `${pkgInfo.installCmd} --allowerasing ${packageName}`.trim();
+            results.push(`! Retry with --allowerasing: ${retryCmd}`);
+            await runSudoCommand(retryCmd, sudoPassword);
+            results.push(`✓ Installed ${dep.name} (after retry with --allowerasing)`);
+            installed = true;
+          } catch (retryError) {
+            results.push(`✗ Retry failed for ${dep.name}: ${retryError}`);
           }
         }
+
+        if (!installed && dep.required) {
+          return {
+            success: false,
+            message: `Failed to install required dependency: ${dep.name}. See /tmp/cerious-aasm-deps-install.log for details.`,
+            details: results
+          };
+        }
+      }
     }
 
     onProgress({
