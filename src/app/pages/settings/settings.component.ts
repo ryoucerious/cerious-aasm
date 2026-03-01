@@ -17,10 +17,7 @@ import { environment } from '../../../environments/environment';
 })
 export class SettingsPageComponent {
   public isElectron: boolean;
-  tabs = [
-    { id: 'server-installation', label: 'Server Installation', icon: 'dns', showUpdateBadge: false },
-    { id: 'about', label: 'About', icon: 'info' }
-  ];
+  tabs: any[] = [];
 
   arkUpdateAvailable = false;
   webServerRunning = false;
@@ -30,6 +27,10 @@ export class SettingsPageComponent {
   authenticationUsername = '';
   authenticationPassword = '';
   maxBackupDownloadSizeMB = 100;
+  serverDataDir = '';
+  autoUpdateArkServer = false;
+  updateWarningMinutes = 15;
+  curseForgeApiKey = '';
   // Backend-provided system info (populated when running in Electron)
   backendNodeVersion: string | null = null;
   backendElectronVersion: string | null = null;
@@ -38,17 +39,23 @@ export class SettingsPageComponent {
   subscriptions: Subscription[] = [];
   showSettings = true;
 
-  ngOnInit() {
+  async ngOnInit() {
     // Load config first
-    this.configService.loadConfig().then(cfg => {
+    const cfg: any = await this.configService.loadConfig();
+    if (cfg) {
       this.webServerPort = cfg.webServerPort;
       this.startWebServerOnLoad = cfg.startWebServerOnLoad;
       this.authenticationEnabled = cfg.authenticationEnabled;
       this.authenticationUsername = cfg.authenticationUsername;
       this.authenticationPassword = cfg.authenticationPassword;
       this.maxBackupDownloadSizeMB = cfg.maxBackupDownloadSizeMB;
+      this.serverDataDir = cfg.serverDataDir || '';
+      this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
+      this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
+      this.curseForgeApiKey = cfg.curseForgeApiKey || '';
       this.cdr.markForCheck();
-    });
+    }
+
     // Reactively update UI on any global-config broadcast
     this.subscriptions.push(this.messaging.receiveMessage('global-config').subscribe((cfg: any) => {
       this.webServerPort = cfg.webServerPort;
@@ -57,9 +64,14 @@ export class SettingsPageComponent {
       this.authenticationUsername = cfg.authenticationUsername;
       this.authenticationPassword = cfg.authenticationPassword;
       this.maxBackupDownloadSizeMB = cfg.maxBackupDownloadSizeMB;
+      this.serverDataDir = cfg.serverDataDir || '';
+      this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
+      this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
+      this.curseForgeApiKey = cfg.curseForgeApiKey || '';
       this.cdr.markForCheck();
-    }));
-    this.subscriptions.push(this.messaging.receiveMessage('ark-update-status').subscribe((msg: any) => {
+    })
+  );
+  this.subscriptions.push(this.messaging.receiveMessage('ark-update-status').subscribe((msg: any) => {
       if (msg?.hasUpdate) {
         this.updateArkUpdateBadge();
       } else {
@@ -127,6 +139,7 @@ export class SettingsPageComponent {
     this.isElectron = this.utility.getPlatform() === 'Electron';
     this.tabs = [
       { id: 'server-installation', label: 'Server Installation', icon: 'dns', showUpdateBadge: false },
+      { id: 'general', label: 'General', icon: 'settings' },
       ...(this.isElectron ? [{ id: 'web-server', label: 'Web Server', icon: 'cloud' }] : []),
       { id: 'about', label: 'About', icon: 'info' }
     ];
@@ -283,7 +296,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.0-beta.8';
+    return environment.version || '1.0.1';
   }
 
   getPlatform() {
@@ -437,4 +450,55 @@ export class SettingsPageComponent {
       }, 100);
     }
   }
+
+  onServerDataDir(path: string) {
+    this.serverDataDir = path;
+    this.configService.serverDataDir = path;
+    this.notification.success('Server Data Directory Updated', 'Settings');
+  }
+
+  onAutoUpdateArkServerChange(event: any) {
+    const val = (event && typeof event === 'object' && event.target) ? event.target.checked : event;
+    this.autoUpdateArkServer = val;
+    this.configService.autoUpdateArkServer = val;
+    this.notification.info(`Auto-Update Ark Server is now ${val ? 'Enabled' : 'Disabled'}`, 'Settings');
+  }
+
+  onCurseForgeApiKeyChange(val: string) {
+    this.curseForgeApiKey = val;
+    this.configService.curseForgeApiKey = val;
+  }
+
+  onUpdateWarningMinutesChange(val: string) {
+    const minutes = parseInt(val, 10);
+    if (!isNaN(minutes) && minutes >= 1 && minutes <= 60) {
+      this.updateWarningMinutes = minutes;
+      this.configService.updateWarningMinutes = minutes;
+      this.notification.success(`Update Warning set to ${minutes} minutes`, 'Settings');
+    } else {
+      this.notification.warning('Invalid warning time (1-60 minutes).', 'Settings');
+      setTimeout(() => {
+        this.updateWarningMinutes = this.configService.updateWarningMinutes || 15;
+      }, 100);
+    }
+  }
+
+  selectServerDataDir() {
+    if (!this.isElectron) return;
+    this.messaging.sendMessage('select-directory', { title: 'Select Server Data Directory' })
+      .subscribe({
+        next: (result: any) => {
+          if (result && result.path) {
+            this.onServerDataDir(result.path);
+          } else if (result && result.error) {
+            this.notification.error(result.error, 'Directory Selection Failed');
+          }
+        },
+        error: (err: any) => {
+          console.error('Failed to select directory:', err);
+          this.notification.error('Failed to select directory', 'Error');
+        }
+      });
+  }
+
 }

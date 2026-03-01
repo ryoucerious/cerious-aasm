@@ -421,11 +421,11 @@ describe('system-deps.utils', () => {
       });
 
       const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[3]]; // Xvfb (not required)
+      const missingDeps = [LINUX_DEPENDENCIES[5]]; // Font Configuration (not required)
 
       const result = await installMissingDependencies(missingDeps, 'password', onProgress);
 
-      expect(result.success).toBe(true); // Should succeed because Xvfb is not required
+      expect(result.success).toBe(true); // Should succeed because Font Configuration is not required
       expect(result.details.some(detail => detail.includes('Failed to install'))).toBe(true);
     });
 

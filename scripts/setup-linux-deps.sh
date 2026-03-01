@@ -24,19 +24,41 @@ install_packages() {
         ubuntu|debian)
             echo "Installing packages for Debian/Ubuntu..."
             sudo apt update
-            sudo apt install -y curl wget tar gzip unzip p7zip-full build-essential
+            # Core tools + Electron dependencies + SteamCMD dependencies (i386)
+            sudo dpkg --add-architecture i386
+            sudo apt update
+            sudo apt install -y curl wget tar gzip unzip p7zip-full build-essential \
+                libasound2 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+                libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 \
+                libc6:i386 libstdc++6:i386
             ;;
         fedora|rhel|centos)
             echo "Installing packages for Red Hat/Fedora..."
-            sudo dnf install -y curl wget tar gzip unzip p7zip build-essential
+            sudo dnf install -y curl wget tar gzip unzip p7zip build-essential \
+                alsa-lib nss atk at-spi2-atk cups-libs libdrm libxkbcommon \
+                libXcomposite libXdamage libXrandr mesa-libgbm pango \
+                glibc.i686 libstdc++.i686
             ;;
         arch|manjaro)
             echo "Installing packages for Arch Linux..."
-            sudo pacman -S --noconfirm curl wget tar gzip unzip p7zip base-devel
+            # Enable multilib for 32-bit support (SteamCMD)
+            if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+                echo "Enabling multilib repository..."
+                echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf
+                sudo pacman -Sy
+            fi
+            sudo pacman -S --noconfirm curl wget tar gzip unzip p7zip base-devel \
+                alsa-lib nss atk at-spi2-atk cups libdrm libxkbcommon \
+                libxcomposite libxdamage libxrandr mesa pango \
+                lib32-glibc lib32-gcc-libs
             ;;
         opensuse*)
             echo "Installing packages for openSUSE..."
-            sudo zypper install -y curl wget tar gzip unzip p7zip
+            sudo zypper install -y curl wget tar gzip unzip p7zip \
+                libasound2 mozilla-nss libatk-1_0-0 libatk-bridge-2_0-0 \
+                libcups2 libdrm2 libxkbcommon0 libXcomposite1 libXdamage1 \
+                libXrandr2 libgbm1 libpango-1_0-0 \
+                glibc-32bit libstdc++6-32bit
             ;;
         *)
             echo "Unsupported distribution: $DISTRO"

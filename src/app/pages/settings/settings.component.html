@@ -38,6 +38,66 @@
         </button>
       </div>
     </div>
+
+    <!-- General Settings Tab -->
+    <div *ngIf="activeTab === 'general'">
+      <div class="card sub-card">
+        <div class="card-header instance-card-header-normal">
+          <h2>GENERAL SETTINGS</h2>
+        </div>
+        <div class="card-body">
+
+          <!-- Server Data Directory -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Storage</h4>
+            <div class="form-group">
+              <label class="form-control-label">Server Data Directory</label>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" [ngModel]="serverDataDir" [disabled]="true" class="form-control input" style="flex: 1;" placeholder="Default path (managed by app)" />
+                <button class="btn btn-sm btn-secondary" (click)="selectServerDataDir()" [disabled]="!isElectron" title="Select Folder">
+                  <i class="material-icons">folder_open</i>
+                </button>
+              </div>
+              <label class="form-control-label desc">Directory where server data (Saved/ShooterGame/etc) is stored. Change requires restart.</label>
+            </div>
+          </div>
+
+          <!-- Auto Update -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Automation</h4>
+            <div class="form-group">
+              <div class="form-control-label toggle-label">
+                <input type="checkbox" class="toggle-switch" [checked]="autoUpdateArkServer" (change)="onAutoUpdateArkServerChange($event)" tabindex="0" />
+                <span class="slider"></span>
+                <span class="toggle-text">Auto-Update Ark Server</span>
+              </div>
+              <label class="form-control-label desc">Automatically update the Ark server when an update is available (checks periodically).</label>
+            </div>
+          </div>
+
+          <!-- Update Warning -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Update Warning</h4>
+            <div class="form-group">
+              <label class="form-control-label">Update Warning (Minutes)</label>
+              <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
+              <label class="form-control-label desc">How many minutes before an auto-update to broadcast warnings to players (via RCON).</label>
+            </div>
+          </div>
+
+          <!-- CurseForge API Key -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">CurseForge</h4>
+            <div class="form-group">
+              <label class="form-control-label">CurseForge API Key</label>
+              <input type="password" class="form-control input" [ngModel]="curseForgeApiKey" (change)="onCurseForgeApiKeyChange($any($event.target).value)" placeholder="Enter your CurseForge API key" autocomplete="off" />
+              <label class="form-control-label desc">Required for the mod browser. Get a free API key at <a href="https://console.curseforge.com/" target="_blank" style="color:#0ea5e9;">console.curseforge.com</a>.</label>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
     
     <!-- Web Server Tab -->
     <div *ngIf="activeTab === 'web-server'">

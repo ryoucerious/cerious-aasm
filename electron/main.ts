@@ -15,15 +15,17 @@ import * as fs from 'fs';
 
 // Apply sandbox fixes immediately after app import
 if (isLinux || isHeadlessMode) {
-  app.commandLine.appendSwitch('--no-sandbox');
-  app.commandLine.appendSwitch('--disable-setuid-sandbox');
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-setuid-sandbox');
 }
 
 // Additional stability switches for headless mode
 if (isHeadlessMode) {
-  app.commandLine.appendSwitch('--disable-gpu');
-  app.commandLine.appendSwitch('--disable-software-rasterizer');
-  app.commandLine.appendSwitch('--disable-dev-shm-usage');
+  app.commandLine.appendSwitch('disable-gpu'); // No dash prefix for value key, but for switch it is fine
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+  app.commandLine.appendSwitch('disable-dev-shm-usage');
+  // Crucial for headless environments to prevent GTK faults
+  app.disableHardwareAcceleration(); 
 }
 
 // =========================
@@ -65,6 +67,8 @@ import './handlers/system-info-handler';
 import './handlers/whitelist-handler';
 import './handlers/config-import-export-handler';
 import './handlers/auto-update-handler';
+import './handlers/ark-api-handler';
+import './handlers/curseforge-handler';
 
 // =========================
 // Service Initialization
@@ -142,7 +146,7 @@ function createWindow() {
     width: 1024,
     height: 768,
     autoHideMenuBar: true, // Hide the menu bar
-    icon: path.join(__dirname, '..', 'logo.png'), // Set app icon
+    icon: path.join(app.getAppPath(), isLinux ? 'logo-square-256.png' : 'logo.png'), // Set app icon
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,

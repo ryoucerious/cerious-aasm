@@ -2,6 +2,31 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.0.1] - 2026-02-28
+
+### New Features
+
+- **Expert Mode INI Editor**: New toggle in the server settings header switches to a raw INI file editor for `GameUserSettings.ini` and `Game.ini`. Changes saved in Expert Mode are synced back to the normal UI fields automatically.
+- **ArkApi Plugin Management**: New ArkApi tab in server settings supports installing plugins directly from a URL or a local ZIP file, listing installed plugins with version info, and removing them.
+- **Start All / Stop All Confirmation**: Clicking Start All or Stop All in the sidebar now shows a confirmation dialog before executing.
+- **"Preparing to start" State**: Servers queued in a staggered Start All now immediately show a "Preparing to start" status (with matching sidebar icon) instead of showing "Stopped" while waiting in the queue.
+
+### Bug Fixes
+
+- **Start All / Stop All — Status Icons**: Server status icons in the sidebar and the server detail page now update correctly when multiple servers start or stop around the same time. State was previously being set in the wrong order causing icons to cross-contaminate between instances.
+- **Start All / Stop All — UI Lag**: The frontend no longer blocks waiting for all staggered starts to complete before receiving a response. Status updates are broadcast immediately per-instance.
+- **Start All — Start Order**: Servers now start in the order they are listed in the sidebar (respecting user-defined drag-and-drop sort order) rather than arbitrary filesystem order.
+- **Start All — Already Running**: Servers that are already running, starting, or queued are correctly skipped when Start All is pressed a second time.
+- **Server Detail Page — Stale State on Navigation**: Navigating to a server that is queued but not yet started no longer shows "Stopped". The backend state is set to `queued` immediately so `get-server-instance-state` returns the correct status.
+- **Linux RCON — IPv6 Connection Failure**: RCON was connecting to `localhost` which resolves to `::1` (IPv6) on most Linux systems. ARK running under Proton only binds to IPv4, causing silent connection failures. Fixed by using `127.0.0.1` explicitly.
+- **Linux RCON — Fallback Never Connected**: The RCON running-state fallback was calling `executeRconCommand` which requires an existing connection. If log tailing missed the startup line (common on Linux/Proton), RCON was never connected and the fallback did nothing for 5 minutes. Now proactively calls `connectRcon` when not yet connected.
+- **Linux App Icon Not Showing**: The icon path used `__dirname` which resolves incorrectly inside a packaged ASAR. Fixed to use `app.getAppPath()`. Logo assets (`logo.png`, `logo-square-256.png`, `logo.ico`) were also missing from the electron-builder `files` array and are now included. Linux now uses `logo-square-256.png` as required by GTK/DE launchers.
+- **Browse CurseForge Button**: Removed the Browse CurseForge button from the Mods tab (functionality preserved in code for future use).
+
+### Improvements
+
+- **Start All / Stop All Wording**: Removed "Cluster" language from confirmation dialogs and notification titles.
+
 ## [1.0.0] - 2026-02-26
 
 ### New Features

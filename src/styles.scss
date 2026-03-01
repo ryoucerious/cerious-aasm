@@ -784,6 +784,12 @@
   gap: 0.5rem;
   flex-wrap: nowrap;
 }
+
+.expert-mode-active {
+  color: #f59e0b !important;
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 0 1px #f59e0b !important;
+}
 // =====================
 // CARDS & BADGES
 // =====================
@@ -2346,8 +2352,8 @@ p {
   cursor: default;
 }
 .toggle-switch {
-  width: 40px;
-  height: 22px;
+  width: 26px;
+  height: 14px;
   position: relative;
   appearance: none;
   background: #c6c6c6;
@@ -2367,16 +2373,16 @@ p {
 .toggle-switch::before {
   content: '';
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
   background: #fff;
   border-radius: 50%;
   transition: 0.3s;
 }
 .toggle-switch:checked::before {
-  left: 20px;
+  left: 13px;
 }
 
 /* Console log container for server state */
@@ -2734,6 +2740,72 @@ p {
       width: 15%;
     }
   }
+}
+
+// CurseForge mod browser styles
+.cf-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 0.75rem;
+}
+
+.cf-result-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #1a1d23;
+  border-radius: 6px;
+  border: 1px solid #2d3240;
+}
+
+.cf-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  &.cf-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #23272f;
+    color: #555;
+    i { font-size: 1.5rem; }
+  }
+}
+
+.cf-info {
+  flex: 1;
+  min-width: 0;
+  .cf-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cf-summary {
+    font-size: 0.82rem;
+    color: #8a96a8;
+    margin-top: 2px;
+  }
+  .cf-meta {
+    font-size: 0.78rem;
+    color: #555d6e;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+}
+
+.cf-add-btn {
+  flex-shrink: 0;
 }
 
 // Whitelist table containers extend the base

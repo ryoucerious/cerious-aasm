@@ -239,6 +239,72 @@ export class ServerLifecycleService {
       portError: result.error
     };
   }
+
+  // ====================================================================
+  // Feature #7: Cluster Control (Start/Stop All)
+  // ====================================================================
+
+  /**
+   * Start all server instances with staggered delay to prevent CPU overload
+   */
+  async startAllInstances(delayMs = 30000): Promise<{ started: string[], failed: string[] }> {
+    const managementService = require('./server-management.service').serverManagementService;
+    const processService = require('./server-process.service').serverProcessService;
+    
+    const instances = (await managementService.getAllInstances()).instances;
+    const started: string[] = [];
+    const failed: string[] = [];
+
+    for (const instance of instances) {
+        const state = processService.getNormalizedInstanceState(instance.id);
+        if (state !== 'running' && state !== 'starting') {
+            try {
+                console.log(`[Lifecycle] Starting instance ${instance.id} as part of Start All...`);
+                // Use standard callback hooks
+                const callbacks = require('./server-instance.service').serverInstanceService.getStandardEventCallbacks(instance.id);
+                
+                await this.startServerInstance(instance.id, instance, callbacks.onLog, callbacks.onState);
+                started.push(instance.id);
+                
+                // Stagger delay
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            } catch (e) {
+                console.error(`[Lifecycle] Failed to start ${instance.id}:`, e);
+                failed.push(instance.id);
+            }
+        }
+    }
+    return { started, failed };
+  }
+
+  /**
+   * Stop all running server instances in parallel
+   */
+  async stopAllInstances(): Promise<{ stopped: string[], failed: string[] }> {
+    const managementService = require('./server-management.service').serverManagementService;
+    const processService = require('./server-process.service').serverProcessService;
+    
+    const instances = (await managementService.getAllInstances()).instances;
+    const stopped: string[] = [];
+    const failed: string[] = [];
+
+    const stopPromises = instances.map(async (instance: any) => {
+        const state = processService.getNormalizedInstanceState(instance.id);
+        if (state === 'running' || state === 'starting') {
+            try {
+                console.log(`[Lifecycle] Stopping instance ${instance.id} as part of Stop All...`);
+                await this.stopServerInstance(instance.id);
+                stopped.push(instance.id);
+            } catch (e) {
+                console.error(`[Lifecycle] Failed to stop ${instance.id}:`, e);
+                failed.push(instance.id);
+            }
+        }
+    });
+
+    await Promise.all(stopPromises);
+    return { stopped, failed };
+  }
 }
 
 // Export singleton instance

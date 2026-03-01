@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -124,7 +124,10 @@
       "dist/**/*",
       "electron/**/*",
       "node_modules/**/*",
-      "!node_modules/.cache/**/*"
+      "!node_modules/.cache/**/*",
+      "logo.png",
+      "logo-square-256.png",
+      "logo.ico"
     ],
     "extraResources": [],
     "mac": {
@@ -145,7 +148,7 @@
       "requestedExecutionLevel": "asInvoker"
     },
     "linux": {
-      "icon": "./logo.png",
+      "icon": "./logo-square-256.png",
       "target": [
         {
           "target": "AppImage",
@@ -158,12 +161,30 @@
           "target": "deb",
           "arch": [
             "x64"
+          ],
+          "depends": [
+            "libnotify4",
+            "libappindicator3-1",
+            "libxtst6",
+            "libnss3",
+            "libasound2",
+            "libxss1",
+            "libgbm1"
           ]
         },
         {
           "target": "rpm",
           "arch": [
             "x64"
+          ],
+          "depends": [
+            "libnotify",
+            "libappindicator-gtk3",
+            "libXtst",
+            "nss",
+            "alsa-lib",
+            "libXScrnSaver",
+            "mesa-libgbm"
           ]
         }
       ],

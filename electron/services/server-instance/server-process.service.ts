@@ -184,11 +184,12 @@ export class ServerProcessService {
       );
     }, 500); // Wait 500ms for log file to be created
 
-    // RCON-based fallback for running detection
-    // If log tailing fails to detect "running" state, periodically try RCON
-    // to confirm the server is actually operational
+    // RCON-based fallback for running detection.
+    // If log tailing fails to detect 'running' state (more likely on Linux/Proton),
+    // proactively attempt RCON connection so state transitions correctly.
     let rconFallbackAttempts = 0;
     const maxRconFallbackAttempts = 60; // Try for up to 5 minutes (every 5 seconds)
+    let rconConnectTriggered = false;
     const rconFallbackInterval = setInterval(async () => {
       rconFallbackAttempts++;
       try {
@@ -205,16 +206,36 @@ export class ServerProcessService {
           return;
         }
 
-        // Try RCON to confirm server is responsive
-        const rconService = require('../rcon.service').rconService;
+        const rconSvc = require('../rcon.service').rconService;
         const instance_config = require('../../utils/ark/instance.utils').getInstance(instanceId);
-        if (instance_config && instance_config.rconPort) {
-          const result = await rconService.executeRconCommand(instanceId, 'GetChat');
-          if (result.success) {
-            console.log(`[server-process-service] RCON fallback: Server ${instanceId} responded to RCON — setting state to 'running'`);
+
+        if (instance_config?.rconPort && instance_config?.rconPassword) {
+          const isConnected = rconSvc.getRconStatus(instanceId).connected;
+
+          if (isConnected) {
+            // RCON is already connected (log tailing missed the transition) — fix state now
+            console.log(`[server-process-service] RCON fallback: RCON already connected for ${instanceId} — setting state to 'running'`);
             this.setInstanceState(instanceId, 'running');
             onState?.('running');
             clearInterval(rconFallbackInterval);
+          } else if (!rconConnectTriggered) {
+            // Kick off a single connection attempt; connectRcon handles internal retries.
+            // Guard with rconConnectTriggered so we don't spawn overlapping retry chains.
+            rconConnectTriggered = true;
+            rconSvc.connectRcon(instanceId).then((result: any) => {
+              if (result?.connected) {
+                const stateNow = this.getInstanceState(instanceId);
+                if (stateNow === 'starting') {
+                  console.log(`[server-process-service] RCON fallback: connected for ${instanceId} — setting state to 'running'`);
+                  this.setInstanceState(instanceId, 'running');
+                  onState?.('running');
+                  clearInterval(rconFallbackInterval);
+                }
+              } else {
+                // Connection failed — reset flag so we can retry on the next interval
+                rconConnectTriggered = false;
+              }
+            }).catch(() => { rconConnectTriggered = false; });
           }
         }
       } catch {
@@ -228,73 +249,91 @@ export class ServerProcessService {
   }
 
   /**
-   * Stop server process
+   * Stop server process with graceful shutdown
    */
   async stopServerProcess(instanceId: string): Promise<ServerInstanceResult> {
     if (!validateInstanceId(instanceId)) {
-      return {
-        success: false,
-        error: 'Invalid instance ID',
-        instanceId
-      };
+      return { success: false, error: 'Invalid instance ID', instanceId };
     }
 
     const process = this.arkServerProcesses[instanceId];
     if (!process) {
-      return {
-        success: false,
-        error: 'Server instance is not running',
-        instanceId
-      };
+      // Check if it's already stopped according to state
+      const state = this.getInstanceState(instanceId);
+      if (state === 'stopped' || state === 'error') {
+        return { success: true, instanceId };
+      }
+      return { success: false, error: 'Server process not found', instanceId };
     }
 
     // Set state to stopping
     this.setInstanceState(instanceId, 'stopping');
+    const rconService = require('../rcon.service').rconService;
 
-    // Try graceful shutdown via RCON first
+    // 1. Try graceful "SaveWorld" via RCON
     try {
-      const rconService = require('../rcon.service').rconService;
-      await rconService.executeRconCommand(instanceId, 'DoExit');
-      // Wait a bit for graceful shutdown
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      console.log(`[server-process-service] Stopping instance ${instanceId}: Sending SaveWorld...`);
+      await rconService.executeRconCommand(instanceId, 'SaveWorld');
+      
+      // Wait up to 60s for save to complete (simple delay for now, ideally watch logs)
+      // Most servers save within 5-10 seconds
+      await new Promise(resolve => setTimeout(resolve, 5000)); 
     } catch (error) {
-      console.warn(`[server-process-service] RCON shutdown failed for ${instanceId}, forcing kill:`, error);
+      console.warn(`[server-process-service] RCON SaveWorld failed for ${instanceId}:`, error);
     }
 
-    // Force kill if still running
-    if (!process.killed) {
-      process.kill('SIGTERM');
-      // Wait a bit more
-      await new Promise(resolve => setTimeout(resolve, 5000));
+    // 2. Try graceful "DoExit" via RCON
+    try {
+      console.log(`[server-process-service] Stopping instance ${instanceId}: Sending DoExit...`);
+      await rconService.executeRconCommand(instanceId, 'DoExit');
+    } catch (error) {
+      console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, error);
+    }
 
-      // Force kill if still not dead
-      if (!process.killed) {
-        process.kill('SIGKILL');
+    // 3. Wait for process exit (max 2 minutes)
+    const shutdownTimeoutMs = 120000; 
+    const checkIntervalMs = 1000;
+    const startTime = Date.now();
+
+    while (!process.killed && (Date.now() - startTime) < shutdownTimeoutMs) {
+      // Check if process is still running
+      try {
+        if (process.exitCode !== null) break;
+        // On Windows checking .killed property isn't always enough
+        // but the 'exit' handler above will clean up this.arkServerProcesses[instanceId]
+        if (!this.arkServerProcesses[instanceId]) break;
+      } catch (e) {
+        break; 
+      }
+      await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+    }
+
+    // 4. Force kill if still running
+    if (this.arkServerProcesses[instanceId]) {
+      console.warn(`[server-process-service] Instance ${instanceId} did not stop gracefully. Force killing...`);
+      try {
+        process.kill('SIGTERM');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        if (this.arkServerProcesses[instanceId]) {
+           process.kill('SIGKILL');
+        }
+      } catch (e) {
+        console.error(`[server-process-service] Error killing process for ${instanceId}:`, e);
       }
     }
 
-    // Clean up process reference
-    delete this.arkServerProcesses[instanceId];
-
-    // Set final state
-    this.setInstanceState(instanceId, 'stopped');
-
-    // Disconnect RCON connection since server is stopped
-    try {
-      const rconService = require('../rcon.service').rconService;
-      await rconService.disconnectRcon(instanceId);
-      
-      // Notify UI that RCON is now disconnected
-      const messagingService = require('../messaging.service').messagingService;
-      messagingService.sendToAll('rcon-status', { instanceId, connected: false });
-    } catch (error) {
-      console.warn(`[server-process-service] Failed to disconnect RCON for ${instanceId}:`, error);
+    // Process 'exit' handler (setupProcessMonitoring) will handle cleanup, state update, and RCON disconnect
+    // But we manually ensure cleanup here just in case the exit handler didn't fire (e.g. if we killed it aggressively)
+    if (this.arkServerProcesses[instanceId]) {
+       delete this.arkServerProcesses[instanceId];
+       this.setInstanceState(instanceId, 'stopped');
+       try {
+         await rconService.disconnectRcon(instanceId);
+       } catch (e) {}
     }
 
-    return {
-      success: true,
-      instanceId
-    };
+    return { success: true, instanceId };
   }
 
   /**

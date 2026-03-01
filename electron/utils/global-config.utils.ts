@@ -9,6 +9,10 @@ export interface GlobalConfig {
   authenticationUsername: string;
   authenticationPassword: string;
   maxBackupDownloadSizeMB: number;
+  serverDataDir?: string; // Optional custom directory for server files
+  autoUpdateArkServer?: boolean; // Automatically update ARK server when new version detected
+  updateWarningMinutes?: number; // Minutes to warn players before update
+  curseForgeApiKey?: string; // CurseForge API key for mod browser
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {
@@ -17,7 +21,11 @@ const DEFAULT_CONFIG: GlobalConfig = {
   authenticationEnabled: false,
   authenticationUsername: '',
   authenticationPassword: '',
-  maxBackupDownloadSizeMB: 100
+  maxBackupDownloadSizeMB: 100,
+  serverDataDir: '', // Empty string means use default
+  autoUpdateArkServer: false,
+  updateWarningMinutes: 15,
+  curseForgeApiKey: '',
 };
 
 function getConfigFilePath(): string {

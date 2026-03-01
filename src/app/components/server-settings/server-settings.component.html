@@ -3,17 +3,21 @@
     <h2>SERVER SETTINGS</h2>
     <div class="button-header-actions">
       <input type="file" #configFileInput hidden accept=".ini" (change)="onFileSelected($event)">
+      <div class="form-control-label toggle-label" style="margin:0 0.75rem 0 0;gap:0.5rem;align-items:center;" (click)="$event.stopPropagation()">
+        <input type="checkbox" class="toggle-switch" [checked]="expertMode" (change)="toggleExpertMode($event)" tabindex="0" style="flex-shrink:0;" />
+        <span class="toggle-text" style="font-size:0.95rem;color:#b0b6c1;white-space:nowrap;">Expert Mode</span>
+      </div>
       <button class="btn" (click)="onImportConfig($event)" title="Import settings from an INI file">
-        <i class="material-icons">file_upload</i> Import
+        <i class="material-icons">file_upload</i>
       </button>
       <button class="btn" (click)="onExportConfig($event)" title="Export server configuration as ZIP">
-        <i class="material-icons">file_download</i> Export
+        <i class="material-icons">file_download</i>
       </button>
       <button class="btn" (click)="onOpenCopyConfig($event)" title="Copy settings from another server">
-        <i class="material-icons">content_copy</i> Copy From
+        <i class="material-icons">content_copy</i>
       </button>
-      <button *ngIf="isElectron" class="btn" (click)="onOpenDirectory($event)">
-        <i class="material-icons">folder_open</i> Open Directory
+      <button *ngIf="isElectron" class="btn" (click)="onOpenDirectory($event)" title="Open server directory">
+        <i class="material-icons">folder_open</i>
       </button>
       <span class="material-icons">
         {{ isVisible ? 'expand_more' : 'expand_less' }}
@@ -22,26 +26,41 @@
   </div>
   <div class="card-body" *ngIf="isVisible">
     <div class="tabs">
-      <button class="tab" [class.active]="activeTab === 'general'" (click)="onTabChange('general')">
-        <i class="material-icons">tune</i> General
-      </button>
-      <button class="tab" [class.active]="activeTab === 'rates'" (click)="onTabChange('rates')">
-        <i class="material-icons">speed</i> Rates
-      </button>
-      <button class="tab" [class.active]="activeTab === 'structures'" (click)="onTabChange('structures')">
-        <i class="material-icons">home</i> Structures
-      </button>
-      <button class="tab" [class.active]="activeTab === 'stats'" (click)="onTabChange('stats')">
-        <i class="material-icons">bar_chart</i> Stat Multipliers
-      </button>
-      <button class="tab" [class.active]="activeTab === 'misc'" (click)="onTabChange('misc')">
-        <i class="material-icons">settings</i> Miscellaneous
-      </button>
-      <button class="tab" [class.active]="activeTab === 'cluster'" (click)="onTabChange('cluster')">
-        <i class="material-icons">group_work</i> Cluster
-      </button>
+      <!-- Config tabs: hidden in Expert Mode -->
+      <ng-container *ngIf="!expertMode">
+        <button class="tab" [class.active]="activeTab === 'general'" (click)="onTabChange('general')">
+          <i class="material-icons">tune</i> General
+        </button>
+        <button class="tab" [class.active]="activeTab === 'rates'" (click)="onTabChange('rates')">
+          <i class="material-icons">speed</i> Rates
+        </button>
+        <button class="tab" [class.active]="activeTab === 'structures'" (click)="onTabChange('structures')">
+          <i class="material-icons">home</i> Structures
+        </button>
+        <button class="tab" [class.active]="activeTab === 'stats'" (click)="onTabChange('stats')">
+          <i class="material-icons">bar_chart</i> Stat Multipliers
+        </button>
+        <button class="tab" [class.active]="activeTab === 'misc'" (click)="onTabChange('misc')">
+          <i class="material-icons">settings</i> Miscellaneous
+        </button>
+        <button class="tab" [class.active]="activeTab === 'cluster'" (click)="onTabChange('cluster')">
+          <i class="material-icons">group_work</i> Cluster
+        </button>
+      </ng-container>
+
+      <!-- INI file tabs: shown only in Expert Mode -->
+      <ng-container *ngIf="expertMode">
+        <button *ngFor="let t of iniTabs" class="tab" [class.active]="activeTab === t.id" (click)="onTabChange(t.id)">
+          <i class="material-icons">code</i> {{ t.label }}
+        </button>
+      </ng-container>
+
+      <!-- Non-config tabs: always visible -->
       <button class="tab" [class.active]="activeTab === 'mods'" (click)="onTabChange('mods')">
         <i class="material-icons">extension</i> Mods
+      </button>
+      <button class="tab" [class.active]="activeTab === 'arkapi'" (click)="onTabChange('arkapi')">
+        <i class="material-icons">extension</i> ArkApi
       </button>
       <button class="tab" [class.active]="activeTab === 'whitelist'" (click)="onTabChange('whitelist')">
         <i class="material-icons">people</i> Whitelist
@@ -49,17 +68,13 @@
       <button class="tab" [class.active]="activeTab === 'automation'" (click)="onTabChange('automation')">
         <i class="material-icons">schedule</i> Automation
       </button>
-      <button class="tab" [class.active]="activeTab === 'discord'" (click)="onTabChange('discord')">
-        <i class="material-icons">chat</i> Discord
-      </button>
       <button class="tab" [class.active]="activeTab === 'broadcasts'" (click)="onTabChange('broadcasts')">
         <i class="material-icons">campaign</i> Broadcasts
       </button>
-      <!-- <button class="tab" [class.active]="activeTab === 'players'" (click)="onTabChange('players')">
-        <i class="material-icons">people_outline</i> Players
-      </button> -->
-      <button class="tab" [class.active]="activeTab === 'firewall'" (click)="onTabChange('firewall')"
-              *ngIf="isLinux">
+      <button class="tab" [class.active]="activeTab === 'discord'" (click)="onTabChange('discord')">
+        <i class="material-icons">chat</i> Discord
+      </button>
+      <button class="tab" [class.active]="activeTab === 'firewall'" (click)="onTabChange('firewall')" *ngIf="isLinux">
         <i class="material-icons">security</i> Firewall
       </button>
       <button class="tab" [class.active]="activeTab === 'backup'" (click)="onBackupTabClick()">
@@ -67,7 +82,32 @@
       </button>
     </div>
     
-    <!-- General Tab Content -->
+    <!-- Expert Mode / INI Editor -->
+    <div *ngIf="isInIniTab" style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1rem;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;">
+        <button class="btn btn-sm" (click)="loadIniFile()" [disabled]="iniLoading" title="Reload from disk">
+          <i class="material-icons" style="font-size:16px;">refresh</i> Reload
+        </button>
+        <button class="btn btn-sm" (click)="saveIniFile()" [disabled]="iniSaving || iniLoading" title="Save to disk">
+          <i class="material-icons" style="font-size:16px;">save</i> {{ iniSaving ? 'Saving...' : 'Save' }}
+        </button>
+      </div>
+      <div *ngIf="iniLoading" style="color:#b0b6c1;padding:2rem;text-align:center;">
+        <i class="material-icons" style="font-size:32px;">hourglass_empty</i><br>Loading...
+      </div>
+      <textarea *ngIf="!iniLoading"
+                class="form-control input"
+                style="width:100%;min-height:480px;font-family:monospace;font-size:1rem;resize:vertical;box-sizing:border-box;"
+                [(ngModel)]="iniContent"
+                spellcheck="false"
+                placeholder="No content loaded. Select a file and click Reload."></textarea>
+      <p class="form-control-label desc" style="margin:0;color:#ef4444;">
+        <i class="material-icons" style="font-size:14px;vertical-align:middle;">warning</i>
+        Expert Mode - edits directly modify the raw INI file on disk. Managed settings fields above are not synced when using this view.
+      </p>
+    </div>
+
+  <!-- General Tab Content -->
     <app-general-tab
       *ngIf="activeTab === 'general'"
       [serverInstance]="serverInstance"
@@ -216,6 +256,12 @@
       [isLocked]="isLocked"
       (saveSettings)="onSaveSettings()">
     </app-broadcasts-tab>
+
+    <!-- ArkApi Tab Content -->
+    <app-ark-api-tab
+      *ngIf="activeTab === 'arkapi'"
+      [serverInstance]="serverInstance">
+    </app-ark-api-tab>
 
     <!-- Player List Content -->
     <!-- <div *ngIf="activeTab === 'players'" class="h-[600px]">

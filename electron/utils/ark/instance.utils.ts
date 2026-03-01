@@ -56,6 +56,17 @@ function validateInstanceId(id: string): boolean {
 
 
 export function getInstancesBaseDir() {
+  // Use config if available, otherwise default
+  try {
+     const { loadGlobalConfig } = require('../global-config.utils');
+     const config = loadGlobalConfig();
+     if (config.serverDataDir) {
+       return path.join(config.serverDataDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
+     }
+  } catch (e) {
+    // Ignore error loading config (circular dependency or file not found), fall back to default
+  }
+
   const installDir = getDefaultInstallDir();
   if (!installDir) {
     throw new Error('Could not determine install directory');
@@ -93,6 +104,9 @@ export async function getAllInstances() {
       }
     })
     .filter(Boolean);
+
+  // Sort by sortOrder so Start All / other bulk operations respect the user-defined order
+  instances = instances.sort((a: any, b: any) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
 
   // No default creation here; frontend is responsible for creating a default if needed
   return instances;

@@ -51,6 +51,22 @@ export class SettingsService {
         }
       }
 
+      // Validate server data directory (if provided and different from default)
+      if (config.serverDataDir && typeof config.serverDataDir === 'string') {
+        const resolvedPath = path.resolve(config.serverDataDir);
+        try {
+          if (!fs.existsSync(resolvedPath)) {
+            // Attempt to create it if it doesn't exist
+            fs.mkdirSync(resolvedPath, { recursive: true });
+          }
+          // Check writable
+          fs.accessSync(resolvedPath, fs.constants.W_OK);
+          config.serverDataDir = resolvedPath;
+        } catch (e) {
+           return { success: false, error: `Invalid Server Data Directory: ${e instanceof Error ? e.message : 'Path not writable'}` };
+        }
+      }
+
       // Sanitize string fields
       if (config.authenticationUsername !== undefined && typeof config.authenticationUsername === 'string') {
         config.authenticationUsername = sanitizeString(config.authenticationUsername);

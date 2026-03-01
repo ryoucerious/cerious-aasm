@@ -8,6 +8,13 @@ export class ArkPathUtils {
    * Gets the ARK server installation directory
    */
   static getArkServerDir(): string {
+      try {
+        const { loadGlobalConfig } = require('../global-config.utils');
+        const config = loadGlobalConfig();
+        if (config.serverDataDir) {
+            return path.join(config.serverDataDir, 'AASMServer');
+        }
+      } catch (e) {}
     return path.join(getDefaultInstallDir(), 'AASMServer');
   }
 

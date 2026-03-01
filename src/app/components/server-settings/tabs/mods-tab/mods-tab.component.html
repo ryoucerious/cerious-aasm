@@ -82,6 +82,54 @@
     </div>
   </app-modal>
 
+  <!-- CurseForge Browse Modal -->
+  <app-modal [title]="'Browse CurseForge Mods'" [show]="showBrowseModal" (close)="closeBrowseModal()">
+    <div class="modal-form" style="min-width: 520px;">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label class="form-control-label">Search Mods</label>
+        <div style="display: flex; gap: 0.5rem;">
+          <input class="form-control input" style="flex: 1;" type="text"
+            [(ngModel)]="cfSearchQuery"
+            (keydown.enter)="searchCurseForge()"
+            placeholder="e.g. Structures Plus" />
+          <button class="btn btn-primary" (click)="searchCurseForge()" [disabled]="cfSearching">
+            <i class="material-icons">{{ cfSearching ? 'hourglass_empty' : 'search' }}</i>
+          </button>
+        </div>
+        <div class="form-control-label desc">Search requires a CurseForge API key configured in Settings &rarr; General.</div>
+      </div>
+
+      <div *ngIf="cfSearchResults.length > 0" class="cf-results">
+        <div *ngFor="let mod of cfSearchResults" class="cf-result-row">
+          <img *ngIf="mod.thumbUrl" [src]="mod.thumbUrl" class="cf-thumb" alt="" />
+          <div *ngIf="!mod.thumbUrl" class="cf-thumb cf-thumb-placeholder"><i class="material-icons">extension</i></div>
+          <div class="cf-info">
+            <div class="cf-name">{{ mod.name }}</div>
+            <div class="cf-summary">{{ mod.summary | slice:0:120 }}{{ (mod.summary?.length ?? 0) > 120 ? '...' : '' }}</div>
+            <div class="cf-meta">
+              <span><i class="material-icons" style="font-size:0.9rem;">download</i> {{ mod.downloadCount | number }}</span>
+              <span *ngFor="let a of mod.authors | slice:0:2" style="margin-left:0.5rem;">{{ $any(a).name }}</span>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-primary cf-add-btn" (click)="addModFromCurseForge(mod)">
+            <i class="material-icons">add</i>
+          </button>
+        </div>
+        <div *ngIf="cfHasMore" style="text-align:center; margin-top:0.5rem;">
+          <button class="btn btn-ghost" (click)="cfLoadMore()" [disabled]="cfSearching">Load More</button>
+        </div>
+      </div>
+
+      <div *ngIf="!cfSearching && cfSearchResults.length === 0 && cfSearchQuery" class="no-data" style="padding: 1rem 0;">
+        No results found.
+      </div>
+
+      <div class="action-group-modal" style="margin-top: 1rem;">
+        <button class="btn btn-secondary" (click)="closeBrowseModal()">Close</button>
+      </div>
+    </div>
+  </app-modal>
+
   <!-- Mod Settings Modal -->
   <app-modal [title]="'Mod Settings - ' + (selectedMod?.name || 'Unknown Mod')" [show]="showSettingsModal" (close)="closeModal()">
     <div class="modal-form">

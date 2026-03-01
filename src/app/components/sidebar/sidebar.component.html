@@ -1,12 +1,17 @@
 <div class="sidebar" style="display:flex;flex-direction:column;">
-  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:4px 8px 8px 4px;box-sizing:border-box;">
-    <div class="sidebar-header" (click)="showServers = !showServers" style="cursor:pointer;display:flex;align-items:center;gap:8px;margin:0;">
-      <h3 style="margin:0;">Servers</h3>
-      <span class="material-icons" style="font-size:20px;user-select:none;">
-        {{ showServers ? 'expand_more' : 'chevron_right' }}
-      </span>
+  <div class="sidebar-header" (click)="showServers = !showServers">
+    <h3 style="margin:0;">Servers</h3>
+    <span class="material-icons" style="font-size:20px;user-select:none;">
+      {{ showServers ? 'expand_more' : 'chevron_right' }}
+    </span>
+    <div style="display:flex;gap:4px;margin-left:auto;" *ngIf="servers.length > 0" (click)="$event.stopPropagation()">
+      <button class="btn btn-ghost" title="Start All Servers" (click)="startAllServers()">
+        <i class="material-icons">play_arrow</i>
+      </button>
+      <button class="btn btn-ghost" title="Stop All Servers" (click)="stopAllServers()">
+        <i class="material-icons">stop</i>
+      </button>
     </div>
-
   </div>
   
   <div class="sidebar-content" *ngIf="showServers">
@@ -209,5 +214,31 @@
   <div class="action-group-modal">
     <button type="button" (click)="onCancelDelete()" class="btn">Cancel</button>
     <button type="button" (click)="onConfirmDelete()" class="btn btn-ghost">Delete</button>
+  </div>
+</app-modal>
+
+<app-modal
+  [title]="'Start All Servers'"
+  [show]="showConfirmStartAllModal"
+  (close)="showConfirmStartAllModal = false">
+  <div class="modal-confirmation">
+    Start all servers?
+  </div>
+  <div class="action-group-modal">
+    <button type="button" (click)="showConfirmStartAllModal = false" class="btn">Cancel</button>
+    <button type="button" (click)="onConfirmStartAll()" class="btn btn-ghost">Start All</button>
+  </div>
+</app-modal>
+
+<app-modal
+  [title]="'Stop All Servers'"
+  [show]="showConfirmStopAllModal"
+  (close)="showConfirmStopAllModal = false">
+  <div class="modal-confirmation">
+    Stop all running servers?
+  </div>
+  <div class="action-group-modal">
+    <button type="button" (click)="showConfirmStopAllModal = false" class="btn">Cancel</button>
+    <button type="button" (click)="onConfirmStopAll()" class="btn btn-ghost">Stop All</button>
   </div>
 </app-modal>

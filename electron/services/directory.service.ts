@@ -72,7 +72,10 @@ export class DirectoryService {
    * @returns The base directory where all server instances are stored
    */
   getServerInstancesBaseDirectory(): string {
-    return path.join(getDefaultInstallDir(), 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
+    const { loadGlobalConfig } = require('../utils/global-config.utils');
+    const config = loadGlobalConfig();
+    const baseDir = config.serverDataDir ? config.serverDataDir : getDefaultInstallDir();
+    return path.join(baseDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
   }
 
   /**
@@ -89,8 +92,10 @@ export class DirectoryService {
    * @returns The directory path for the server instance
    */
   private getInstanceDirectoryPath(instanceId: string): string {
-    const baseDir = path.join(getDefaultInstallDir(), 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
-    return path.join(baseDir, instanceId);
+    const { loadGlobalConfig } = require('../utils/global-config.utils');
+    const config = loadGlobalConfig();
+    const baseDir = config.serverDataDir ? config.serverDataDir : getDefaultInstallDir();
+    return path.join(baseDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers', instanceId);
   }
 
   /**

@@ -58,7 +58,7 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
     },
     checkCommand: 'xvfb-run --help',
     description: 'Virtual framebuffer for running ARK server headless',
-    required: false
+    required: true
   },
   {
     name: 'SteamCMD Dependencies (32-bit libraries)',

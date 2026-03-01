@@ -1,0 +1,137 @@
+<div class="settings-section vertical-section">
+
+  <!-- AsaApi Base Management -->
+  <div class="card sub-card" style="margin-bottom: 1.25rem;">
+    <div class="card-header instance-card-header-normal">
+      <h2>AsaApi Base</h2>
+    </div>
+    <div class="card-body">
+      <p class="form-control-label desc">
+        AsaApi is required to load server-side plugins. Check GitHub for the latest release and install it directly into this server instance's Win64 folder.
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:0.75rem;">
+        <button class="btn btn-ghost" (click)="checkLatestAsaApi()" [disabled]="checkingLatest">
+          <i class="material-icons">search</i>
+          {{ checkingLatest ? 'Checking...' : 'Check Latest Release' }}
+        </button>
+        <button class="btn" (click)="installAsaApi()" [disabled]="!latestDownloadUrl || installing">
+          <i class="material-icons">download</i>
+          {{ installing ? 'Installing...' : 'Install / Update AsaApi' }}
+        </button>
+        <span *ngIf="latestVersion" style="color:#94a3b8;font-size:0.85rem;">
+          Latest: <strong>{{ latestVersion }}</strong>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Install Plugin -->
+  <div class="card sub-card" style="margin-bottom: 1.25rem;">
+    <div class="card-header instance-card-header-normal">
+      <h2>Install Plugin</h2>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:1rem;">
+
+      <!-- From URL -->
+      <div>
+        <label class="form-control-label">Install from URL (direct link to a .zip)</label>
+        <div style="display:flex;gap:8px;margin-top:0.4rem;">
+          <input class="form-control input" type="text" [(ngModel)]="pluginInstallUrl"
+                 placeholder="https://example.com/MyPlugin.zip"
+                 style="flex:1;" [disabled]="installingFromUrl" />
+          <button class="btn" (click)="installPluginFromUrl()"
+                  [disabled]="!pluginInstallUrl.trim() || installingFromUrl">
+            <i class="material-icons">download</i>
+            {{ installingFromUrl ? 'Installing...' : 'Install' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Divider -->
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <div style="flex:1;height:1px;background:#2d3748;"></div>
+        <span style="color:#64748b;font-size:0.8rem;">OR</span>
+        <div style="flex:1;height:1px;background:#2d3748;"></div>
+      </div>
+
+      <!-- From ZIP file -->
+      <div>
+        <label class="form-control-label">Install from local ZIP file</label>
+        <div style="margin-top:0.4rem;">
+          <input #pluginZipInput type="file" accept=".zip" hidden (change)="onZipFileSelected($event)" />
+          <button class="btn btn-ghost" (click)="pluginZipInput.click()" [disabled]="installingFromZip">
+            <i class="material-icons">folder_open</i>
+            {{ installingFromZip ? 'Installing...' : 'Choose ZIP File...' }}
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Installed Plugins List -->
+  <div class="card sub-card">
+    <div class="card-header button-header">
+      <h2>INSTALLED PLUGINS</h2>
+      <div class="button-header-actions">
+        <button class="btn btn-ghost" (click)="loadPlugins()" [disabled]="loading" title="Refresh">
+          <i class="material-icons">refresh</i>
+        </button>
+      </div>
+    </div>
+    <div class="card-body">
+
+      <div *ngIf="loading" style="color:#b0b6c1;text-align:center;padding:2rem;">
+        <i class="material-icons" style="font-size:32px;">hourglass_empty</i><br>Loading...
+      </div>
+
+      <div *ngIf="!loading && plugins.length === 0" style="color:#6b7280;padding:1rem;">
+        No plugins found in the ArkApi/Plugins directory. Install AsaApi first, then place plugin folders inside <code>Win64/ArkApi/Plugins/</code>.
+      </div>
+
+      <div *ngIf="!loading && plugins.length > 0" class="plugin-list">
+        <div *ngFor="let plugin of plugins" class="plugin-item" style="
+          display:flex;align-items:flex-start;justify-content:space-between;
+          padding:0.75rem 0; border-bottom:1px solid #2d3748;">
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-weight:600;color:#e2e8f0;">{{ plugin.name }}</span>
+              <span *ngIf="plugin.version !== 'Unknown'" style="font-size:0.78rem;color:#64748b;
+                background:#1e293b;padding:1px 8px;border-radius:999px;">
+                v{{ plugin.version }}
+              </span>
+            </div>
+            <div *ngIf="plugin.author !== 'Unknown'" style="font-size:0.82rem;color:#94a3b8;margin-top:2px;">
+              by {{ plugin.author }}
+            </div>
+            <div *ngIf="plugin.description" style="font-size:0.82rem;color:#94a3b8;margin-top:2px;">
+              {{ plugin.description }}
+            </div>
+            <div *ngIf="!plugin.hasPluginJson" style="font-size:0.78rem;color:#f59e0b;margin-top:2px;">
+              <i class="material-icons" style="font-size:13px;vertical-align:middle;">warning</i>
+              No plugin.json — metadata unavailable
+            </div>
+          </div>
+          <button class="btn btn-sm btn-ghost" style="color:#ef4444;"
+                  (click)="confirmRemove(plugin)" title="Remove Plugin">
+            <i class="material-icons">delete</i>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Confirm Remove Modal -->
+<app-modal [show]="showConfirmRemove" [title]="'Remove Plugin'" (close)="cancelRemove()">
+  <div>
+    <p>Are you sure you want to remove <strong>{{ pluginToRemove?.name }}</strong>?</p>
+    <p style="color:#94a3b8;font-size:0.85rem;">This will permanently delete the folder: <code>{{ pluginToRemove?.folderName }}</code></p>
+    <div class="action-group-modal" style="margin-top:1rem;">
+      <button class="btn" (click)="cancelRemove()">Cancel</button>
+      <button class="btn" style="background:#ef4444;" (click)="doRemove()">Remove</button>
+    </div>
+  </div>
+</app-modal>

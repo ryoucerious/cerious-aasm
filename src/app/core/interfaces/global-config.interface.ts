@@ -5,4 +5,8 @@ export interface GlobalConfig {
   authenticationUsername: string;
   authenticationPassword: string;
   maxBackupDownloadSizeMB: number;
+  serverDataDir?: string;
+  autoUpdateArkServer?: boolean;
+  updateWarningMinutes?: number;
+  curseForgeApiKey?: string;
 }

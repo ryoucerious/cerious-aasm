@@ -54,6 +54,10 @@ export class SidebarComponent implements OnInit, OnDestroy {
   showConfirmDeleteModal = false;
   serverToDelete: ServerInstance | null = null;
 
+  // Confirm start/stop all modal state
+  showConfirmStartAllModal = false;
+  showConfirmStopAllModal = false;
+
   // Platform detection
   isWebMode = false;
   authenticationEnabled = false;
@@ -214,7 +218,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   isServerBusy(server: ServerInstance): boolean {
     const state = server.state?.toLowerCase();
-    return state === 'starting' || state === 'running' || state === 'stopping';
+    return state === 'queued' || state === 'starting' || state === 'running' || state === 'stopping';
   }
 
 
@@ -465,6 +469,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     switch ((server.state || '').toLowerCase()) {
       case 'running': return 'play_circle_filled';
       case 'stopped': return 'stop_circle';
+      case 'queued': return 'schedule';
       case 'starting': return 'hourglass_empty';
       case 'stopping': return 'pause_circle_filled';
       case 'error': return 'error';
@@ -479,6 +484,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     switch ((server.state || '').toLowerCase()) {
       case 'running': return 'status-running';
       case 'stopped': return 'status-stopped';
+      case 'queued': return 'status-starting';
       case 'starting': return 'status-starting';
       case 'stopping': return 'status-stopping';
       case 'error': return 'status-error';
@@ -546,5 +552,45 @@ export class SidebarComponent implements OnInit, OnDestroy {
    */
   onCancelAdd() {
     this.closeAdd();
+  }
+
+  startAllServers() {
+    this.showConfirmStartAllModal = true;
+    this.cdr.markForCheck();
+  }
+
+  onConfirmStartAll() {
+    this.showConfirmStartAllModal = false;
+    this.serverInstanceService.messaging.sendMessage('start-all-instances', {}).subscribe({
+      next: (res: any) => {
+        if (res?.success) {
+          this.notificationService.success('All servers are starting.', 'Server Control');
+        } else {
+          this.notificationService.error(res?.error || 'Failed to start all servers.', 'Server Control');
+        }
+        this.cdr.markForCheck();
+      },
+      error: () => this.notificationService.error('Failed to start all servers.', 'Server Control')
+    });
+  }
+
+  stopAllServers() {
+    this.showConfirmStopAllModal = true;
+    this.cdr.markForCheck();
+  }
+
+  onConfirmStopAll() {
+    this.showConfirmStopAllModal = false;
+    this.serverInstanceService.messaging.sendMessage('stop-all-instances', {}).subscribe({
+      next: (res: any) => {
+        if (res?.success) {
+          this.notificationService.success('All servers are stopping.', 'Server Control');
+        } else {
+          this.notificationService.error(res?.error || 'Failed to stop all servers.', 'Server Control');
+        }
+        this.cdr.markForCheck();
+      },
+      error: () => this.notificationService.error('Failed to stop all servers.', 'Server Control')
+    });
   }
 }

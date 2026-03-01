@@ -24,11 +24,11 @@ describe('ArkUpdateService', () => {
   });
 
   it('initialize sets lastKnownBuildId and starts polling', async () => {
-    const pollSpy = jest.spyOn(service, 'pollAndNotify').mockResolvedValue('12346');
+    (service as any).pollAndNotify = jest.fn().mockResolvedValue('12346');
     jest.useFakeTimers();
     await service.initialize();
     expect(service['lastKnownBuildId']).toBe('12345');
-    expect(pollSpy).toHaveBeenCalled();
+    expect((service as any).pollAndNotify).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
@@ -74,7 +74,7 @@ describe('ArkUpdateService', () => {
 
   it('pollAndNotify sends update status', async () => {
     jest.spyOn(service, 'pollArkServerUpdates').mockResolvedValue('12346');
-    await service.pollAndNotify();
+    await (service as any).pollAndNotify();
     expect(messagingService.sendToAll).toHaveBeenCalledWith('ark-update-status', { hasUpdate: true, buildId: '12346' });
   });
 

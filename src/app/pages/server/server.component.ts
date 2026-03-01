@@ -68,7 +68,7 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
   get crossplayPlatforms() {
     return this.serverConfigurationService.crossplayPlatforms;
   }
-  activeTab: 'general' | 'rates' | 'structures' | 'misc' | 'mods' | 'stats' | 'automation' | 'backup' | 'cluster' | 'firewall' | 'whitelist' | 'discord' | 'broadcasts' | 'players' = 'general';
+  activeTab: 'general' | 'rates' | 'structures' | 'misc' | 'mods' | 'stats' | 'automation' | 'backup' | 'cluster' | 'firewall' | 'whitelist' | 'discord' | 'broadcasts' | 'players' | 'arkapi' | 'ini-GameUserSettings' | 'ini-Game' | 'ini-Engine' = 'general';
   modsInput: string = '';
   modList: any[] = [];
   installProgress: { percent: number, step: string, message: string, phase?: string } | null = null;

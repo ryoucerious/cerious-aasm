@@ -1,5 +1,50 @@
 import { messagingService } from '../services/messaging.service';
 import { directoryService } from '../services/directory.service';
+import { dialog, BrowserWindow } from 'electron';
+
+/**
+ * Handles the 'select-directory' message event from the messaging service.
+ * Allows the user to select a directory via system dialog.
+ */
+messagingService.on('select-directory', async (payload, sender) => {
+  const { title, requestId } = payload || {};
+  const win = BrowserWindow.fromWebContents(sender);
+  
+  if (!win) {
+    messagingService.sendToOriginator('select-directory-response', { 
+      error: 'Could not determine window',
+      requestId 
+    }, sender);
+    return;
+  }
+
+  try {
+    const result = await dialog.showOpenDialog(win, {
+      title: title || 'Select Directory',
+      properties: ['openDirectory', 'createDirectory']
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      messagingService.sendToOriginator('select-directory', { 
+        path: result.filePaths[0],
+        requestId 
+      }, sender);
+    } else {
+      messagingService.sendToOriginator('select-directory', { 
+        canceled: true,
+        requestId 
+      }, sender);
+    }
+  } catch (error) {
+    console.error('[directory-handler] Error selecting directory:', error);
+    messagingService.sendToOriginator('select-directory', { 
+      error: String(error),
+      requestId 
+    }, sender);
+  }
+});
+
+
 
 /**
  * Handles the 'open-config-directory' message event from the messaging service.

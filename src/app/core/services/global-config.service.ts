@@ -100,6 +100,42 @@ export class GlobalConfigService {
   set maxBackupDownloadSizeMB(val: number) {
     if (!this.config) return;
     this.config.maxBackupDownloadSizeMB = val;
-    this.saveConfig(this.config);
+    this.saveConfig(this.config).catch(err => console.error(err));
+  }
+
+  get serverDataDir() {
+    return this.config?.serverDataDir ?? '';
+  }
+  set serverDataDir(val: string) {
+    if (!this.config) return;
+    this.config.serverDataDir = val;
+    this.saveConfig(this.config).catch(err => console.error(err));
+  }
+
+  get autoUpdateArkServer() {
+    return this.config?.autoUpdateArkServer ?? false;
+  }
+  set autoUpdateArkServer(val: boolean) {
+    if (!this.config) return;
+    this.config.autoUpdateArkServer = val;
+    this.saveConfig(this.config).catch(err => console.error(err));
+  }
+
+  get curseForgeApiKey() {
+    return this.config?.curseForgeApiKey ?? '';
+  }
+  set curseForgeApiKey(val: string) {
+    if (!this.config) return;
+    this.config.curseForgeApiKey = val;
+    this.saveConfig(this.config).catch(err => console.error(err));
+  }
+
+  get updateWarningMinutes() {
+    return this.config?.updateWarningMinutes ?? 15;
+  }
+  set updateWarningMinutes(val: number) {
+    if (!this.config) return;
+    this.config.updateWarningMinutes = val;
+    this.saveConfig(this.config).catch(err => console.error(err));
   }
 }

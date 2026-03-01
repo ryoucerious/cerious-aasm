@@ -71,7 +71,7 @@ export class ServerStateComponent implements OnChanges {
     return {
       'status-running': state === 'Running',
       'status-stopped': state === 'Stopped',
-      'status-starting': state === 'Starting',
+      'status-starting': state === 'Starting' || state === 'Preparing to start',
       'status-stopping': state === 'Stopping',
       'status-error': state === 'Error',
       'status-unknown': !this.serverInstance?.state
@@ -109,8 +109,8 @@ export class ServerStateComponent implements OnChanges {
 
   get canForceStop(): boolean {
     const state = this.mapServerState(this.serverInstance?.state);
-    // Keep Force button available during Running, Starting, and Stopping states
-    return state === 'Running' || state === 'Starting' || state === 'Stopping';
+    // Keep Force button available during Running, Starting, Stopping, and Queued states
+    return state === 'Running' || state === 'Starting' || state === 'Stopping' || state === 'Preparing to start';
   }
 
   // Event handlers
@@ -139,6 +139,7 @@ export class ServerStateComponent implements OnChanges {
     if (!state) return 'Unknown';
     
     const stateMap: Record<string, string> = {
+      'queued': 'Preparing to start',
       'starting': 'Starting',
       'running': 'Running',
       'stopping': 'Stopping',

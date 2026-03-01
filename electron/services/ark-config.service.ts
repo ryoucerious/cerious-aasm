@@ -366,9 +366,130 @@ export class ArkConfigService {
    * Note: Always uses WindowsServer since we're running Windows binaries via Proton on Linux
    */
   private getArkConfigDir(): string {
+      try {
+        const { loadGlobalConfig } = require('../utils/global-config.utils');
+        const config = loadGlobalConfig();
+        if (config.serverDataDir) {
+           return path.join(config.serverDataDir, 'AASMServer', 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
+        }
+      } catch (e) {}
+
     const arkServerDir = ArkPathUtils.getArkServerDir();
     // Always use WindowsServer since we're running Windows binaries via Proton on Linux
     return path.join(arkServerDir, 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
+  }
+
+  // ====================================================================
+  // Raw INI Editing Support (Feature #3)
+  // ====================================================================
+
+  /**
+   * Read raw content of an INI file for a specific instance
+   */
+  readIniFile(instanceId: string, filename: string): string {
+      const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
+      const instanceDir = path.join(getInstancesBaseDir(), instanceId);
+      const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
+      const filePath = path.join(configDir, filename);
+
+      // Security check: ensure filename is just a filename, not a path
+      if (filename.includes('/') || filename.includes('\\')) {
+          throw new Error('Invalid filename');
+      }
+
+      if (fs.existsSync(filePath)) {
+          return fs.readFileSync(filePath, 'utf8');
+      }
+      return '';
+  }
+
+  /**
+   * Parse raw INI content back into a partial camelCase config object.
+   * Uses asaSettingsMapping and statMultiplierMapping to reverse-map iniKey → key.
+   * Handles typed coercion (number, boolean, string) automatically.
+   */
+  parseIniToConfig(filename: string, content: string): Record<string, any> {
+    // Build reverse lookup: lowercase(iniKey) → camelCase key
+    const iniKeyToConfig = new Map<string, string>();
+    for (const m of this.asaSettingsMapping) {
+      if (m.destination === filename) {
+        iniKeyToConfig.set(m.iniKey.toLowerCase(), m.key);
+      }
+    }
+
+    // Build reverse stat multiplier lookup: lowercase(iniKeyPrefix) → camelCase key
+    const statPrefixToKey = new Map<string, string>();
+    if (filename === 'Game.ini') {
+      for (const m of this.statMultiplierMapping) {
+        statPrefixToKey.set(m.iniKeyPrefix.toLowerCase(), m.key);
+      }
+    }
+
+    const result: Record<string, any> = {};
+
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      // Skip blank lines and section headers
+      if (!line || line.startsWith('[') || line.startsWith(';') || line.startsWith('#')) continue;
+
+      const eqIdx = line.indexOf('=');
+      if (eqIdx === -1) continue;
+
+      const rawKey = line.substring(0, eqIdx).trim();
+      const rawVal = line.substring(eqIdx + 1).trim();
+
+      // Check for stat multiplier array pattern:  SomePrefix[N]=value
+      const bracketIdx = rawKey.indexOf('[');
+      if (bracketIdx !== -1 && rawKey.endsWith(']')) {
+        const prefix = rawKey.substring(0, bracketIdx).toLowerCase();
+        const idx = parseInt(rawKey.substring(bracketIdx + 1, rawKey.length - 1), 10);
+        const configKey = statPrefixToKey.get(prefix);
+        if (configKey !== undefined && !isNaN(idx)) {
+          if (!result[configKey]) result[configKey] = [];
+          result[configKey][idx] = this.coerceIniValue(rawVal);
+          continue;
+        }
+      }
+
+      // Regular mapping
+      const configKey = iniKeyToConfig.get(rawKey.toLowerCase());
+      if (configKey !== undefined) {
+        result[configKey] = this.coerceIniValue(rawVal);
+      }
+    }
+
+    return result;
+  }
+
+  /** Coerce an INI string value to the most appropriate JS type. */
+  private coerceIniValue(val: string): any {
+    if (val.toLowerCase() === 'true') return true;
+    if (val.toLowerCase() === 'false') return false;
+    const num = Number(val);
+    if (!isNaN(num) && val !== '') return num;
+    return val;
+  }
+
+  /**
+   * Write raw content to an INI file for a specific instance
+   */
+  writeIniFile(instanceId: string, filename: string, content: string): void {
+      const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
+      const instanceDir = path.join(getInstancesBaseDir(), instanceId);
+      const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
+      
+      if (!fs.existsSync(configDir)) {
+          fs.mkdirSync(configDir, { recursive: true });
+      }
+
+      const filePath = path.join(configDir, filename);
+      
+      // Security check
+      if (filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith('.ini')) {
+          throw new Error('Invalid filename. Must be a .ini file.');
+      }
+
+      fs.writeFileSync(filePath, content, 'utf8');
   }
 }
 

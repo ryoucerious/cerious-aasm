@@ -7,6 +7,115 @@ import { serverOperationsService } from '../services/server-instance/server-oper
 import { serverManagementService } from '../services/server-instance/server-management.service';
 import { automationService } from '../services/automation/automation.service';
 
+const { arkConfigService } = require('../services/ark-config.service');
+
+// feature: ini editor //
+/**
+ * Handle 'get-ini-file' requests from renderer
+ */
+messagingService.on('get-ini-file', (payload: any, sender: any) => {
+    const { instanceId, filename, requestId } = payload;
+    try {
+        const content = arkConfigService.readIniFile(instanceId, filename);
+        messagingService.sendToOriginator('get-ini-file', { success: true, content, instanceId, filename, requestId }, sender);
+    } catch (error) {
+        messagingService.sendToOriginator('get-ini-file', { success: false, error: (error as Error).message, requestId }, sender);
+    }
+});
+
+/**
+ * Handle 'save-ini-file' requests from renderer
+ */
+messagingService.on('save-ini-file', (payload: any, sender: any) => {
+    const { instanceId, filename, content, requestId } = payload;
+    try {
+        arkConfigService.writeIniFile(instanceId, filename, content);
+
+        // Parse INI back to config keys and merge into config.json
+        try {
+            const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
+            const fs = require('fs');
+            const path = require('path');
+            const configPath = path.join(getInstancesBaseDir(), instanceId, 'config.json');
+            if (fs.existsSync(configPath)) {
+                const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                const parsed = arkConfigService.parseIniToConfig(filename, content);
+                const merged = { ...existing, ...parsed };
+                fs.writeFileSync(configPath, JSON.stringify(merged, null, 2));
+                // Notify renderer of the updated instance
+                messagingService.sendToAll('server-instance-updated', merged);
+            }
+        } catch (mergeErr) {
+            console.warn('[save-ini-file] Could not merge INI back to config.json:', mergeErr);
+        }
+
+        messagingService.sendToOriginator('save-ini-file', { success: true, instanceId, filename, requestId }, sender);
+    } catch (error) {
+        messagingService.sendToOriginator('save-ini-file', { success: false, error: (error as Error).message, requestId }, sender);
+    }
+});
+
+// Feature #7: Cluster Control
+messagingService.on('start-all-instances', async (payload: any, sender: any) => {
+    const { requestId } = payload || {};
+    try {
+        const { serverProcessService } = require('../services/server-instance/server-process.service');
+        const allInstances = (await serverManagementService.getAllInstances()).instances;
+
+        // Determine which instances are eligible to start (skip already-running, starting, or queued)
+        const eligible = allInstances.filter((inst: any) => {
+            const state = serverProcessService.getNormalizedInstanceState(inst.id);
+            return state !== 'running' && state !== 'starting' && state !== 'queued';
+        });
+
+        // Immediately set backend state to 'queued' and broadcast so the UI updates right away.
+        // This ensures get-server-instance-state returns 'queued' even before the staggered start begins.
+        for (const inst of eligible) {
+            serverProcessService.setInstanceState(inst.id, 'queued');
+            messagingService.sendToAll('server-instance-state', { instanceId: inst.id, state: 'queued' });
+        }
+
+        // Acknowledge the request immediately — don't make the frontend wait for staggered starts
+        messagingService.sendToOriginator('start-all-instances', { success: true, requestId, starting: eligible.map((i: any) => i.id) }, sender);
+
+        // Start instances in the background; getStandardEventCallbacks handles all further state transitions
+        serverLifecycleService.startAllInstances().catch((err: Error) => {
+            console.error('[start-all-instances] Background start error:', err);
+        });
+    } catch (error) {
+        messagingService.sendToOriginator('start-all-instances', { success: false, requestId, error: (error as Error).message }, sender);
+    }
+});
+
+messagingService.on('stop-all-instances', async (payload: any, sender: any) => {
+    const { requestId } = payload || {};
+    try {
+        const { serverProcessService } = require('../services/server-instance/server-process.service');
+        const allInstances = (await serverManagementService.getAllInstances()).instances;
+
+        // Determine which instances are eligible to stop
+        const eligible = allInstances.filter((inst: any) => {
+            const state = serverProcessService.getNormalizedInstanceState(inst.id);
+            return state === 'running' || state === 'starting';
+        });
+
+        // Immediately broadcast 'stopping' for each eligible instance so the UI updates right away
+        for (const inst of eligible) {
+            messagingService.sendToAll('server-instance-state', { instanceId: inst.id, state: 'stopping' });
+        }
+
+        // Acknowledge the request immediately
+        messagingService.sendToOriginator('stop-all-instances', { success: true, requestId, stopping: eligible.map((i: any) => i.id) }, sender);
+
+        // Stop instances in the background; lifecycle callbacks handle further state transitions
+        serverLifecycleService.stopAllInstances().catch((err: Error) => {
+            console.error('[stop-all-instances] Background stop error:', err);
+        });
+    } catch (error) {
+        messagingService.sendToOriginator('stop-all-instances', { success: false, requestId, error: (error as Error).message }, sender);
+    }
+});
+
 /** Handles the 'force-stop-server-instance' message event from the messaging service. 
  * 
  * When triggered, this handler invokes the ServerInstanceService to force stop a server instance.

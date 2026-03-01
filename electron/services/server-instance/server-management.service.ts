@@ -283,11 +283,90 @@ export class ServerManagementService {
   async prepareInstanceConfiguration(instanceId: string, instance: any): Promise<void> {
     const path = require('path');
     const fs = require('fs');
+    // Using fs-extra for easier copy/symlink operations (make sure it's installed or use basic fs)
+    const fsExtra = require('fs-extra'); 
     const { getInstancesBaseDir } = require('../../utils/ark/instance.utils');
+    const { ArkPathUtils } = require('../../utils/ark/ark-path.utils');
     const { arkConfigService } = require('../ark-config.service');
     const { whitelistService } = require('../whitelist.service');
     
     const instanceDir = path.join(getInstancesBaseDir(), instanceId);
+    const sourceDir = ArkPathUtils.getArkServerDir();
+
+    // ==================================================================================
+    // 1. Structure Isolation (Junctions & Binary Copies) 
+    // This ensures plugins work per-server but bulk data is shared
+    // ==================================================================================
+    try {
+      if (!fs.existsSync(sourceDir)) {
+          console.warn(`[server-management] Source directory ${sourceDir} does not exist. Skipping file structure setup.`);
+      } else {
+          const shooterGameDir = path.join(instanceDir, 'ShooterGame');
+          const engineDir = path.join(instanceDir, 'Engine');
+          
+          await fsExtra.ensureDir(shooterGameDir);
+          
+          // Junction: Content (Heavy ~70GB)
+          const sourceContent = path.join(sourceDir, 'ShooterGame', 'Content');
+          const destContent = path.join(shooterGameDir, 'Content');
+          if (await fsExtra.pathExists(sourceContent)) {
+             // Remove existing symlink/junction if it exists to ensure freshness or if it was a folder
+             if (await fsExtra.pathExists(destContent)) {
+                 const stat = await fsExtra.lstat(destContent);
+                 if (stat.isSymbolicLink()) await fsExtra.unlink(destContent);
+             }
+             // Create Junction (Windows) or Symlink (Linux)
+             // fs-extra's ensureSymlink acts like `ln -sf` but ensureDir checks parent
+             if (!(await fsExtra.pathExists(destContent))) {
+                 await fsExtra.ensureSymlink(sourceContent, destContent, 'junction'); 
+             }
+          }
+
+          // Junction: Engine (Medium ~3GB)
+          const sourceEngine = path.join(sourceDir, 'Engine');
+          if (await fsExtra.pathExists(sourceEngine)) {
+             if (await fsExtra.pathExists(engineDir)) {
+                 const stat = await fsExtra.lstat(engineDir);
+                 if (stat.isSymbolicLink()) await fsExtra.unlink(engineDir);
+             }
+             if (!(await fsExtra.pathExists(engineDir))) {
+                 await fsExtra.ensureSymlink(sourceEngine, engineDir, 'junction');
+             }
+          }
+
+          // Copy: Binaries (Small ~200MB, but vital for ArkApi isolation)
+          // We copy Win64 so we can inject individual ArkApi plugins
+          const sourceBinaries = path.join(sourceDir, 'ShooterGame', 'Binaries', 'Win64');
+          const destBinaries = path.join(shooterGameDir, 'Binaries', 'Win64');
+          
+          if (await fsExtra.pathExists(sourceBinaries)) {
+              await fsExtra.ensureDir(destBinaries);
+              // Copy only files from source to dest (exe, dlls)
+              // We do NOT want to overwrite the entire folder because 'ArkApi' subfolder lives in dest
+              const binaryFiles = await fsExtra.readdir(sourceBinaries);
+              for (const file of binaryFiles) {
+                  const srcFile = path.join(sourceBinaries, file);
+                  const destFile = path.join(destBinaries, file);
+                  const stat = await fsExtra.stat(srcFile);
+                  
+                  // If it's a file (dll/exe), copy/update it
+                  if (stat.isFile()) {
+                      await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
+                  }
+                  // Specialized logic: We generally ignore subfolders (like ArkApi in source if any)
+                  // EXCEPT if the base game has vital subfolders. Usually ArkApi is user-installed.
+                  // For now, we only copy files to keep the instance clean.
+                  // IF ArkApi exists in destination, we preserve it naturally by not deleting it.
+              }
+          }
+      }
+    } catch (error) {
+        console.error(`[server-management] Failed to setup isolated file structure:`, error);
+        // Do not throw, try to proceed, maybe it's already set up
+    }
+
+    
+    const instanceDirVerified = fs.existsSync(instanceDir); // Should exist now
     
     // Generate a random RCON password if missing
     if (!instance.rconPassword) {

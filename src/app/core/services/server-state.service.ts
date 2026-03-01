@@ -144,6 +144,7 @@ export class ServerStateService {
   mapServerState(state: string | null | undefined): string {
     if (!state || state.toLowerCase() === 'unknown') return 'Stopped';
     switch (state.toLowerCase()) {
+      case 'queued': return 'Preparing to start';
       case 'starting': return 'Starting';
       case 'running': return 'Running';
       case 'stopping': return 'Stopping';
@@ -169,7 +170,7 @@ export class ServerStateService {
    */
   areSettingsLocked(state: string | null | undefined): boolean {
     const mappedState = this.mapServerState(state);
-    return mappedState === 'Starting' || mappedState === 'Stopping' || mappedState === 'Running';
+    return mappedState === 'Preparing to start' || mappedState === 'Starting' || mappedState === 'Stopping' || mappedState === 'Running';
   }
 
   /**

@@ -4,12 +4,14 @@ import { getSteamCmdDir, isSteamCmdInstalled } from '../utils/steamcmd.utils';
 import { ARK_APP_ID } from '../utils/ark.utils';
 import { MessagingService } from './messaging.service';
 import { getCurrentInstalledVersion } from '../utils/ark/ark-server.utils';
+import { loadGlobalConfig } from '../utils/global-config.utils';
 
 export class ArkUpdateService {
   private lastKnownBuildId: string | null = null;
   private installedBuildId: string | null = null;
   private updateAvailable = false;
   private latestBuildId: string | null = null;
+  private updateScheduled = false;
   
   constructor(private messagingService: MessagingService) {}
 
@@ -27,10 +29,127 @@ export class ArkUpdateService {
       this.pollAndNotify().catch(() => {});
       setInterval(() => {
         this.pollAndNotify().catch(() => {});
-      }, 5 * 60 * 1000); // 5 minutes
+      }, 15 * 60 * 1000); // 15 minutes (SteamCMD call can be heavy)
     } catch (error) {
       console.error('[ark-update-service] Failed to initialize installed version:', error);
     }
+  }
+
+
+
+  /**
+   * Schedule the cluster update sequence
+   */
+  private async scheduleClusterUpdate(minutes: number): Promise<void> {
+      this.updateScheduled = true;
+      const { rconService } = require('./rcon.service');
+      const { serverManagementService } = require('./server-instance/server-management.service');
+      const instances = (await serverManagementService.getAllInstances()).instances;
+      const runningInstances = instances.filter((i: any) => 
+          require('./server-instance/server-process.service').serverProcessService.getNormalizedInstanceState(i.id) === 'running'
+      );
+
+      // Warning Loop
+      let remaining = minutes;
+      const warningInterval = setInterval(async () => {
+         if (remaining <= 0) {
+             clearInterval(warningInterval);
+             await this.performClusterUpdate(runningInstances);
+             this.updateScheduled = false;
+             return;
+         }
+
+         const msg = `Server will restart for update in ${remaining} minute(s).`;
+         console.log(`[ark-update-service] Broadcast: ${msg}`);
+         
+         // Broadcast to all running servers
+         for (const instance of runningInstances) {
+             try {
+                // Check if still running before broadcasting
+                const state = require('./server-instance/server-process.service').serverProcessService.getNormalizedInstanceState(instance.id);
+                if (state === 'running') {
+                    await rconService.executeRconCommand(instance.id, `Broadcast ${msg}`);
+                }
+             } catch (e) {}
+         }
+         
+         // Logarithmic warning schedule: 60, 30, 15, 10, 5, 4, 3, 2, 1
+         if (remaining > 5 && remaining % 5 !== 0) { 
+             // skip unless divisible by 5
+         }
+         remaining--;
+      }, 60000); 
+  }
+
+  /**
+   * Executive logic to update the entire cluster
+   */
+  async performClusterUpdate(preRunningInstances?: any[]): Promise<void> {
+      console.log('[ark-update-service] Starting cluster update sequence...');
+      const { serverLifecycleService } = require('./server-instance/server-lifecycle.service');
+      const { serverManagementService } = require('./server-instance/server-management.service');
+      const { serverProcessService } = require('./server-instance/server-process.service');
+      
+      // 1. Identify running servers if not provided
+      if (!preRunningInstances) {
+          const instances = (await serverManagementService.getAllInstances()).instances;
+          preRunningInstances = instances.filter((i: any) => 
+            serverProcessService.getNormalizedInstanceState(i.id) === 'running'
+          );
+      }
+
+      this.messagingService.sendToAll('cluster-update-status', { status: 'stopping', message: 'Stopping all servers...' });
+
+      // 2. Stop ALL servers (parallel)
+      await Promise.all(preRunningInstances!.map((inst: any) => serverLifecycleService.stopServerInstance(inst.id)));
+      
+      this.messagingService.sendToAll('cluster-update-status', { status: 'updating', message: 'Updating ARK server files (via SteamCMD)...' });
+
+      // 3. Update Base Install
+      try {
+        // Use the install service/handler to trigger update
+        // We reuse the update logic from install-handler or similar
+        // Since we are in backend service, we can call ArkInstallUtils directly if accessible, or invoke the steamcmd command
+        const { installArkServer } = require('../utils/ark/ark-install.utils');
+        await installArkServer((progress: any) => {
+            this.messagingService.sendToAll('cluster-update-progress', progress);
+        });
+        
+        this.installedBuildId = await getCurrentInstalledVersion(); // Refresh version
+      } catch (e) {
+         console.error('[ark-update-service] Update failed:', e);
+         this.messagingService.sendToAll('cluster-update-status', { status: 'error', message: 'SteamCMD Update Failed' });
+         return; // Abort start
+      }
+
+      this.messagingService.sendToAll('cluster-update-status', { status: 'configuring', message: 'Updating instance binaries...' });
+
+      // 4. Update Binaries for ALL instances (not just running ones)
+      const allInstances = (await serverManagementService.getAllInstances()).instances;
+      for (const instance of allInstances) {
+          // Re-junction/Re-copy binaries to ensure they match the new version
+          await serverManagementService.prepareInstanceConfiguration(instance.id, instance);
+      }
+
+      this.messagingService.sendToAll('cluster-update-status', { status: 'starting', message: 'Restarting servers...' });
+
+      // 5. Start servers that were running
+      // Stagger start to avoid CPU spike?
+      for (const instance of preRunningInstances!) {
+          try {
+             // 30s delay between starts
+             await serverLifecycleService.startServerInstance(instance.id, instance, 
+                (log: string) => {}, 
+                (state: string) => {}
+             );
+             await new Promise(resolve => setTimeout(resolve, 30000));
+          } catch (e) {
+              console.error(`[ark-update-service] Failed to restart ${instance.id}:`, e);
+          }
+      }
+      
+      this.messagingService.sendToAll('cluster-update-status', { status: 'complete', message: 'Cluster update complete' });
+      this.updateScheduled = false;
   }
   
   /**
@@ -103,12 +222,28 @@ export class ArkUpdateService {
   }
 
   /**
-   * Poll for ARK server updates and notify status
-   * @returns Latest build ID if updated, otherwise null
+   * Poll for ARK server updates, notify status, and handle auto-update logic if enabled.
+   * @returns Latest build ID if a new update was found, otherwise null
    */
   async pollAndNotify(): Promise<string | null> {
     const result = await this.pollArkServerUpdates();
     this.messagingService.sendToAll('ark-update-status', { hasUpdate: !!result, buildId: result });
+
+    if (result) {
+      const config = loadGlobalConfig();
+      if (!this.updateScheduled) {
+        this.messagingService.sendToAll('ark-update-available', {
+          current: this.installedBuildId,
+          latest: result,
+          autoUpdate: !!config.autoUpdateArkServer
+        });
+        if (config.autoUpdateArkServer) {
+          console.log('[ark-update-service] Auto-update enabled. Scheduling cluster update...');
+          this.scheduleClusterUpdate(config.updateWarningMinutes || 15);
+        }
+      }
+    }
+
     return result;
   }
 

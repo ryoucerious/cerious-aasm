@@ -1,7 +1,10 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ModalComponent } from '../../../modal/modal.component';
+import { MessagingService } from '../../../../core/services/messaging/messaging.service';
+import { GlobalConfigService } from '../../../../core/services/global-config.service';
+import { NotificationService } from '../../../../core/services/notification.service';
 
 @Component({
   selector: 'app-mods-tab',
@@ -18,7 +21,7 @@ export class ModsTabComponent {
   @Output() toggleMod = new EventEmitter<any>();
   @Output() updateModSettings = new EventEmitter<{mod: any, settings: any}>();
 
-  // Modal state
+  // Manual add modal
   showAddModModal = false;
   showSettingsModal = false;
   newModId = '';
@@ -27,6 +30,22 @@ export class ModsTabComponent {
   modSettings: any = {};
   editingKey: string | null = null;
   tempKeyValue: string = '';
+
+  // CurseForge browser
+  showBrowseModal = false;
+  cfSearchQuery = '';
+  cfSearchResults: any[] = [];
+  cfSearching = false;
+  cfPage = 0;
+  cfPageSize = 20;
+  cfHasMore = false;
+
+  constructor(
+    private messaging: MessagingService,
+    private globalConfig: GlobalConfigService,
+    private notification: NotificationService,
+    private cdr: ChangeDetectorRef
+  ) {}
 
   onAddMod(): void {
     if (this.newModId && this.newModId.trim() && this.newModName && this.newModName.trim()) {
@@ -42,6 +61,75 @@ export class ModsTabComponent {
     this.newModId = '';
     this.newModName = '';
     this.showAddModModal = true;
+  }
+
+  openBrowseModal(): void {
+    this.showBrowseModal = true;
+    this.cfSearchQuery = '';
+    this.cfSearchResults = [];
+    this.cfPage = 0;
+    this.cdr.markForCheck();
+  }
+
+  closeBrowseModal(): void {
+    this.showBrowseModal = false;
+    this.cdr.markForCheck();
+  }
+
+  searchCurseForge(reset = true): void {
+    const apiKey = this.globalConfig.curseForgeApiKey;
+    if (!apiKey) {
+      this.notification.warning('CurseForge API key not set. Add it in Settings → General.', 'Mod Browser');
+      return;
+    }
+    if (reset) {
+      this.cfPage = 0;
+      this.cfSearchResults = [];
+    }
+    this.cfSearching = true;
+    this.cdr.markForCheck();
+    this.messaging.sendMessage('curseforge-search-mods', {
+      query: this.cfSearchQuery,
+      apiKey,
+      pageSize: this.cfPageSize,
+      index: this.cfPage * this.cfPageSize,
+    }).subscribe({
+      next: (res: any) => {
+        if (res?.success) {
+          if (reset) {
+            this.cfSearchResults = res.mods || [];
+          } else {
+            this.cfSearchResults = [...this.cfSearchResults, ...(res.mods || [])];
+          }
+          this.cfHasMore = (res.pagination?.totalCount ?? 0) > (this.cfPage + 1) * this.cfPageSize;
+        } else {
+          this.notification.error(res?.error || 'Search failed.', 'CurseForge');
+        }
+        this.cfSearching = false;
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.cfSearching = false;
+        this.notification.error('Failed to search CurseForge.', 'CurseForge');
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  cfLoadMore(): void {
+    this.cfPage++;
+    this.searchCurseForge(false);
+  }
+
+  addModFromCurseForge(mod: any): void {
+    const existing = (this.modList || []).find((m: any) => String(m.id) === String(mod.id));
+    if (existing) {
+      this.notification.warning(`Mod "${mod.name}" is already in the list.`, 'Mod Browser');
+      return;
+    }
+    this.addMod.emit({ id: String(mod.id), name: mod.name });
+    this.notification.success(`Added "${mod.name}" (${mod.id}).`, 'Mod Browser');
+    this.cdr.markForCheck();
   }
 
   openSettingsModal(mod: any): void {
