@@ -183,7 +183,8 @@
         "libnss3",
         "libasound2",
         "libxss1",
-        "libgbm1"
+        "libgbm1",
+        "xvfb"
       ]
     },
     "rpm": {
@@ -194,7 +195,8 @@
         "nss",
         "alsa-lib",
         "libXScrnSaver",
-        "mesa-libgbm"
+        "mesa-libgbm",
+        "xorg-x11-server-Xvfb"
       ]
     },
     "nsis": {
