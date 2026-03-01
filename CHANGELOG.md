@@ -2,6 +2,19 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.0.2] - 2026-03-01
+
+### Bug Fixes
+
+- **Linux: ALSA Symbol Error on Headless Servers**: Fixed `cerious-aasm: undefined symbol: snd_device_name_get_hint` crash when launching on headless systems that have no audio stack. Electron no longer attempts to initialize ALSA in `--headless` mode (`--disable-audio-output` switch added in `main.ts` and both headless launcher scripts).
+- **Linux: RCON Connection Flood During Startup**: RCON connections were attempted every 2 seconds starting from t=0, producing hundreds of `ECONNREFUSED` log entries before ARK even finished loading. RCON is now event-driven — a single connection attempt fires the instant log tailing detects the server's startup-complete log line. No polling, no arbitrary delay. A 15-minute safety-net fires one attempt if the log file is never parsed (e.g. Proton swallows stdout).
+- **Linux: 32-bit Library Install Failure**: Installing ARK server dependencies failed with `Unable to locate package libc6:i386` because `dpkg --add-architecture i386` had not been run. `system-deps.utils.ts` now detects when an `:i386` package is needed and enables the i386 architecture before running `apt-get update`.
+- **Install / Update ARK Server — Silent Failure**: The "Install/Update ARK Server" button silently froze or crashed the UI on Linux. Four issues fixed: (1) catch block in `install-handler.ts` was missing `message`/`step`/`phase` fields causing a null-crash in the frontend; (2) `pty.spawn()` in `installer.utils.ts` was not wrapped in try/catch; (3) `steamcmd.sh` was not `chmod 755` after extraction; (4) `settings.component.ts` called `progress.message.includes()` without a null guard. The install modal now shows a red error state with an error toast when installation fails.
+
+### Improvements
+
+- **Linux Headless Launcher Scripts**: Both `cerious-aasm-headless.sh` and `cerious-aasm-headless-appimage.sh` now pass `--disable-audio-output` to prevent ALSA crashes regardless of how the binary is invoked.
+
 ## [1.0.1] - 2026-02-28
 
 ### New Features
