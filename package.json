@@ -161,30 +161,12 @@
           "target": "deb",
           "arch": [
             "x64"
-          ],
-          "depends": [
-            "libnotify4",
-            "libappindicator3-1",
-            "libxtst6",
-            "libnss3",
-            "libasound2",
-            "libxss1",
-            "libgbm1"
           ]
         },
         {
           "target": "rpm",
           "arch": [
             "x64"
-          ],
-          "depends": [
-            "libnotify",
-            "libappindicator-gtk3",
-            "libXtst",
-            "nss",
-            "alsa-lib",
-            "libXScrnSaver",
-            "mesa-libgbm"
           ]
         }
       ],
@@ -192,6 +174,28 @@
       "synopsis": "ARK: Survival Ascended Server Manager",
       "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
       "maintainer": "r YOU cerious"
+    },
+    "deb": {
+      "depends": [
+        "libnotify4",
+        "libappindicator3-1",
+        "libxtst6",
+        "libnss3",
+        "libasound2",
+        "libxss1",
+        "libgbm1"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "libnotify",
+        "libappindicator-gtk3",
+        "libXtst",
+        "nss",
+        "alsa-lib",
+        "libXScrnSaver",
+        "mesa-libgbm"
+      ]
     },
     "nsis": {
       "oneClick": false,
