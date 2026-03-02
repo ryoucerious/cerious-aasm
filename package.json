@@ -177,6 +177,7 @@
       "executableArgs": ["--disable-audio-output"]
     },
     "deb": {
+      "afterInstall": "scripts/deb-postinstall.sh",
       "depends": [
         "libnotify4",
         "libappindicator3-1",
