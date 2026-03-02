@@ -147,6 +147,9 @@ export interface ServerInstance {
 
   // Launch parameters - additional command-line arguments
   launchParameters?: string; // Extra launch arguments like -MapModID=, -TotalConversionMod=, etc.
+  
+  // Wine/Proton compatibility (Linux only)
+  disableWineCompatFlags?: boolean; // Disable Wine/Proton compatibility flags (advanced users only)
 
   // Server ordering for sidebar display
   sortOrder?: number; // Order of this server in the sidebar list

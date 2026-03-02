@@ -2,6 +2,12 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Linux: ARK Server Freeze at Startup (Wine/Proton)**: Fixed critical issue where ARK Server v83.21+ would freeze during Sentry SDK initialization when running under Wine/Proton on Linux. Added Wine-specific DLL overrides for networking/crypto libraries (`winhttp`, `bcrypt`, `crypt32`) and Unreal Engine compatibility flags (`-NoHangDetection`, `-NOSTEAM`, `-norhithread`) to prevent hang detection and Steam API conflicts. This issue affected all versions of Cerious AASM after ARK Server updated to v83.21.
+
 ## [1.0.2] - 2026-03-01
 
 ### Bug Fixes

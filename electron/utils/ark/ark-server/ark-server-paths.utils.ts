@@ -51,13 +51,16 @@ export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[]
   ensureProtonPrefixExists();
   const protonBinary = getProtonBinaryPath();
 
-  // Set up Proton environment
+  // Set up Proton environment with Wine/Proton compatibility fixes
   const protonEnv = {
     WINEPREFIX: path.join(getDefaultInstallDir(), '.wine-ark'),
     STEAM_COMPAT_DATA_PATH: path.join(getDefaultInstallDir(), '.steam-compat'),
     STEAM_COMPAT_CLIENT_INSTALL_PATH: path.join(getDefaultInstallDir(), '.steam'),
-    // Disable GUI components
-    WINEDLLOVERRIDES: 'mshtml=d'
+    // Wine DLL overrides for compatibility:
+    // - mshtml=d: Disable IE/HTML rendering components (not needed for dedicated server)
+    // - winhttp/bcrypt/crypt32=n,b: Use native Wine implementations for networking/crypto
+    //   (fixes hang during Sentry SDK initialization in ARK Server v83.21+)
+    WINEDLLOVERRIDES: 'mshtml=d;winhttp=n,b;bcrypt=n,b;crypt32=n,b'
   };
 
   return {

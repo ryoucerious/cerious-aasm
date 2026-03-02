@@ -1,6 +1,6 @@
 // --- Imports ---
 import * as path from 'path';
-import { getDefaultInstallDir } from '../platform.utils';
+import { getDefaultInstallDir, getPlatform } from '../platform.utils';
 
 // --- ARK Server Argument Building ---
 
@@ -64,6 +64,18 @@ export function buildArkServerArgs(config: any): string[] {
   // Add standard flags
   if (isFalse(config.battleEye)) args.push('-NoBattlEye');
   if (isTrue(config.useExclusiveList)) args.push('-exclusivejoin');
+  
+  // Wine/Proton compatibility flags (required for ARK Server v83.21+ on Linux)
+  // These Unreal Engine flags prevent crashes and hangs when running under Wine:
+  // - NoHangDetection: Disables UE hang detection that freezes during Sentry SDK init
+  // - NOSTEAM: Disables Steam API integration (unnecessary for dedicated servers)
+  // - norhithread: Disables RHI rendering thread (prevents Wine threading issues)
+  // Can be disabled via disableWineCompatFlags config option if issues arise
+  if (getPlatform() === 'linux' && !isTrue(config.disableWineCompatFlags)) {
+    args.push('-NoHangDetection');
+    args.push('-NOSTEAM');
+    args.push('-norhithread');
+  }
 
   // Server platform - convert crossplay array if serverPlatform not set
   if (config.serverPlatform) {
