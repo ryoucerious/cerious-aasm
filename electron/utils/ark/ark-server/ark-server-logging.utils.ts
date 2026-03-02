@@ -12,6 +12,11 @@ import { getInstanceState, setInstanceState } from './ark-server-state.utils';
 // when multiple servers run from the same ARK installation (shared Logs directory).
 const instanceLogFileMap: Record<string, string> = {};
 
+// ---- Per-instance pre-start snapshots ----
+// Stores path→mtime at the moment just before server start so we can detect
+// which log file (new OR overwritten) belongs to this instance.
+const instanceSnapshotMap: Record<string, Map<string, number>> = {};
+
 /**
  * Get the shared ARK server Logs directory path.
  */
@@ -35,13 +40,15 @@ function listLogFiles(logsDir: string): { file: string; path: string; mtime: num
 }
 
 /**
- * Snapshot the current set of log file paths.
- * Call this BEFORE starting a server process.
+ * Snapshot the current log files (path → mtime) BEFORE starting a server process.
+ * Capturing mtime lets us detect files that are overwritten rather than newly created.
  */
-export function snapshotLogFiles(): Set<string> {
+export function snapshotLogFiles(): Map<string, number> {
   const logsDir = getLogsDir();
   const files = listLogFiles(logsDir);
-  return new Set(files.map(f => f.path));
+  const snapshot = new Map<string, number>();
+  for (const f of files) snapshot.set(f.path, f.mtime);
+  return snapshot;
 }
 
 /**
@@ -56,50 +63,45 @@ export function snapshotLogFiles(): Set<string> {
 export function detectAndRegisterLogFile(
   instanceId: string,
   sessionName: string,
-  preStartSnapshot: Set<string>,
+  preStartSnapshot: Map<string, number>,
   maxAttempts = 30
 ): void {
+  // Store snapshot so setupLogTailing can use the same detection strategy
+  instanceSnapshotMap[instanceId] = preStartSnapshot;
+
   const logsDir = getLogsDir();
   let attempts = 0;
 
   function tryDetect() {
     attempts++;
     const currentFiles = listLogFiles(logsDir);
+    const claimedPaths = new Set(
+      Object.entries(instanceLogFileMap)
+        .filter(([id]) => id !== instanceId)
+        .map(([, p]) => p)
+    );
 
-    // Strategy 1: Find a NEW file that wasn't in the pre-start snapshot
-    const newFiles = currentFiles.filter(f => !preStartSnapshot.has(f.path));
-    if (newFiles.length === 1) {
-      // Exactly one new file — this is our server's log
-      instanceLogFileMap[instanceId] = newFiles[0].path;
-      console.log(`[ark-logging] Registered log file for ${instanceId}: ${newFiles[0].file} (new file)`);
+    // Strategy 1: find a file that is either brand-new OR was overwritten since the
+    // snapshot (same path but mtime is newer). On Windows ARK usually creates a new
+    // numbered file; on Linux/Proton it typically overwrites ShooterGame.log in place.
+    const changedFiles = currentFiles.filter(f => {
+      const snapshotMtime = preStartSnapshot.get(f.path);
+      return snapshotMtime === undefined   // brand-new path
+          || f.mtime > snapshotMtime;      // overwritten in place
+    }).filter(f => !claimedPaths.has(f.path));
+
+    if (changedFiles.length === 1) {
+      instanceLogFileMap[instanceId] = changedFiles[0].path;
+      console.log(`[ark-logging] Registered log file for ${instanceId}: ${changedFiles[0].file}`);
       return;
     }
 
-    // Strategy 2: If multiple new files or none, search by session name
-    for (const logInfo of currentFiles) {
-      try {
-        const content = fs.readFileSync(logInfo.path, 'utf8');
-        if (content.includes(`SessionName=${sessionName}`) || content.includes(sessionName)) {
-          // Make sure this file isn't already claimed by another instance
-          const claimedBy = Object.entries(instanceLogFileMap).find(([id, p]) => p === logInfo.path && id !== instanceId);
-          if (!claimedBy) {
-            instanceLogFileMap[instanceId] = logInfo.path;
-            console.log(`[ark-logging] Registered log file for ${instanceId}: ${logInfo.file} (session name match)`);
-            return;
-          }
-        }
-      } catch {}
-    }
-
-    // Strategy 3: If multiple new files, pick the one not claimed by another instance
-    if (newFiles.length > 1) {
-      const claimedPaths = new Set(Object.values(instanceLogFileMap));
-      const unclaimed = newFiles.filter(f => !claimedPaths.has(f.path));
-      if (unclaimed.length > 0) {
-        instanceLogFileMap[instanceId] = unclaimed[0].path;
-        console.log(`[ark-logging] Registered log file for ${instanceId}: ${unclaimed[0].file} (unclaimed new file)`);
-        return;
-      }
+    if (changedFiles.length > 1) {
+      // Multiple candidates — prefer the most recently modified one
+      const best = changedFiles[0]; // already sorted newest-first by listLogFiles
+      instanceLogFileMap[instanceId] = best.path;
+      console.log(`[ark-logging] Registered log file for ${instanceId}: ${best.file} (most recent of ${changedFiles.length} candidates)`);
+      return;
     }
 
     // Retry if we haven't found it yet
@@ -126,6 +128,7 @@ export function getRegisteredLogFile(instanceId: string): string | null {
  */
 export function unregisterLogFile(instanceId: string): void {
   delete instanceLogFileMap[instanceId];
+  delete instanceSnapshotMap[instanceId];
 }
 
 /**
@@ -202,7 +205,7 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
   let logFilePosition = 0;
   let pollInterval: NodeJS.Timeout | null = null;
   let attempts = 0;
-  const maxAttempts = 60; // Wait up to 60 seconds
+  const maxAttempts = 60;
   let closed = false;
 
   function findLogFileForSession(): string | null {
@@ -376,39 +379,37 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
   };
 
   let attempts = 0;
-  const maxAttempts = 60; // Retry for up to 60 seconds
+  const maxAttempts = 60;
 
   function trySetupTailing() {
     attempts++;
     const logsDir = getLogsDir();
-    const sessionName = config.sessionName || '';
 
-    // Priority 1: Use registered log file
+    // Priority 1: Use the log file already registered by detectAndRegisterLogFile
     let foundLogFile: string | null = getRegisteredLogFile(instanceId);
 
-    // Priority 2: Search by session name (avoid files claimed by other instances)
-    if (!foundLogFile && sessionName && fs.existsSync(logsDir)) {
-      const logFiles = listLogFiles(logsDir);
-      const claimedPaths = new Set(Object.values(instanceLogFileMap));
-
-      for (const logInfo of logFiles) {
-        try {
-          const content = fs.readFileSync(logInfo.path, 'utf8');
-          if (content.includes(sessionName) || content.includes(`SessionName=${sessionName}`)) {
-            // Only claim if not already registered to another instance
-            if (!claimedPaths.has(logInfo.path)) {
-              foundLogFile = logInfo.path;
-              instanceLogFileMap[instanceId] = logInfo.path;
-              console.log(`[ark-logging] setupLogTailing registered ${logInfo.file} for ${instanceId}`);
-              break;
-            }
-            const claimer = Object.entries(instanceLogFileMap).find(([, p]) => p === logInfo.path);
-            if (claimer && claimer[0] === instanceId) {
-              foundLogFile = logInfo.path;
-              break;
-            }
-          }
-        } catch {}
+    // Priority 2: Use the pre-start snapshot (same logic as detectAndRegisterLogFile)
+    // This handles the case where setupLogTailing runs before detectAndRegisterLogFile
+    // finishes, and also covers Linux/Proton which overwrites the existing log in-place.
+    if (!foundLogFile && fs.existsSync(logsDir)) {
+      const snapshot = instanceSnapshotMap[instanceId];
+      if (snapshot) {
+        const currentFiles = listLogFiles(logsDir);
+        const claimedPaths = new Set(
+          Object.entries(instanceLogFileMap)
+            .filter(([id]) => id !== instanceId)
+            .map(([, p]) => p)
+        );
+        const changedFiles = currentFiles.filter(f => {
+          const snapshotMtime = snapshot.get(f.path);
+          return (snapshotMtime === undefined || f.mtime > snapshotMtime)
+              && !claimedPaths.has(f.path);
+        });
+        if (changedFiles.length >= 1) {
+          foundLogFile = changedFiles[0].path;
+          instanceLogFileMap[instanceId] = foundLogFile;
+          console.log(`[ark-logging] setupLogTailing registered ${changedFiles[0].file} for ${instanceId} (snapshot delta)`);
+        }
       }
     }
 
