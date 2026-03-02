@@ -76,7 +76,12 @@ export class ServerProcessService {
     const { getPlatform } = require('../../utils/platform.utils');
     const spawnOptions: any = {
       cwd: getPlatform() === 'windows' ? instanceDir : ArkPathUtils.getArkServerDir(),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // Use 'ignore' for stdout/stderr — we tail the log file directly and never
+      // read from these pipes.  On Linux, xvfb-run + Proton + Wine are extremely
+      // verbose on stderr; if the 64 KB pipe buffer fills up and the parent never
+      // drains it, the child process blocks on its next write() call, which freezes
+      // ARK and causes it to stop writing to ShooterGame.log.
+      stdio: 'ignore',
       env: {
         ...process.env,
         ...(commandInfo.env || {}), // Add Proton env vars on Linux
