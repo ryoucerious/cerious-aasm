@@ -4,6 +4,20 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-03-02
+
+### New Features
+
+- **CurseForge Mod Browser**: Browse and search ARK: Survival Ascended mods directly within the app from the Mods tab. Features a card grid layout with mod thumbnails, category tags, download counts, author names, and per-card "Add to server" and "View on CurseForge" buttons. Sort options include Popular, Most Downloaded, Recently Updated, A–Z Name, and Featured. An installed badge highlights mods already on the server. Because ARK:SA is a restricted game on the CurseForge API (third-party keys receive a 403), a clear inline error banner explains the restriction and provides a one-click link to browse the full mod catalogue on CurseForge.com.
+- **Professional Application Logging**: Integrated `electron-log` for structured, timestamped, level-aware logging in the Electron main process. All existing `console.*` output is automatically captured and written to `%APPDATA%\Cerious-AASM\logs\cerious-aasm.log` on Windows (`~/.config/Cerious-AASM/logs/cerious-aasm.log` on Linux) with 10 MB auto-rotation. Log level is `debug` in development and `info` in production. A startup banner logs the active log file path.
+
+### Improvements
+
+- **External URL Handling**: All "View on CurseForge" and "Browse on CurseForge.com" links now open in the OS default browser in both Electron and headless web mode. In Electron, `shell.openExternal()` is used; in web mode, `window.open()` is used.
+- **CurseForge Browser UI Consistency**: Buttons in the CurseForge browse modal now use the app's standard `btn-ghost` style. The sort dropdown matches the custom dropdown design used by the Map selector on the General tab (styled panel, `arrow_drop_down` icon, highlighted active option) rather than a native `<select>` element.
+
+## [1.0.3] - 2026-03-02
+
 ### Bug Fixes
 
 - **Linux: ARK Server Freeze at Startup (Wine/Proton)**: Fixed critical issue where ARK Server v83.21+ would freeze during Sentry SDK initialization when running under Wine/Proton on Linux. Added Wine-specific DLL overrides for networking/crypto libraries (`winhttp`, `bcrypt`, `crypt32`) and Unreal Engine compatibility flags (`-NoHangDetection`, `-NOSTEAM`, `-norhithread`) to prevent hang detection and Steam API conflicts. This issue affected all versions of Cerious AASM after ARK Server updated to v83.21.

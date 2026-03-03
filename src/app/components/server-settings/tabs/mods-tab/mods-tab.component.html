@@ -15,6 +15,9 @@
         <button class="btn btn-ghost" (click)="openAddModModal()" [disabled]="isLocked" style="white-space: nowrap;">
           <i class="material-icons">add</i> Add Mod
         </button>
+        <button class="btn btn-ghost" (click)="openBrowseModal()" style="white-space: nowrap;">
+          <i class="material-icons">travel_explore</i> Browse CurseForge
+        </button>
       </div>
     </div>
 
@@ -83,49 +86,114 @@
   </app-modal>
 
   <!-- CurseForge Browse Modal -->
-  <app-modal [title]="'Browse CurseForge Mods'" [show]="showBrowseModal" (close)="closeBrowseModal()">
-    <div class="modal-form" style="min-width: 520px;">
-      <div class="form-group" style="grid-column: 1 / -1;">
-        <label class="form-control-label">Search Mods</label>
-        <div style="display: flex; gap: 0.5rem;">
-          <input class="form-control input" style="flex: 1;" type="text"
+  <app-modal [title]="'Browse CurseForge Mods'" [show]="showBrowseModal" (close)="closeBrowseModal()" [maxWidth]="'1000px'">
+    <div class="cf-browser">
+
+      <!-- Search & Sort Bar -->
+      <div class="cf-browser-header">
+        <div class="cf-search-bar">
+          <input class="form-control input" type="text"
             [(ngModel)]="cfSearchQuery"
             (keydown.enter)="searchCurseForge()"
-            placeholder="e.g. Structures Plus" />
-          <button class="btn btn-primary" (click)="searchCurseForge()" [disabled]="cfSearching">
+            placeholder="Search mods (e.g. Structures Plus)…" />
+          <!-- Sort custom dropdown matching map selector style -->
+          <div class="custom-dropdown" style="position: relative; flex-shrink: 0;">
+            <button type="button" class="form-control input" (click)="cfSortDropdownOpen = !cfSortDropdownOpen"
+              style="width: 160px; text-align: left; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between; white-space: nowrap;">
+              <span>{{ cfSortLabel }}</span>
+              <span class="material-icons" style="font-size: 1.1em;">arrow_drop_down</span>
+            </button>
+            <div *ngIf="cfSortDropdownOpen" class="dropdown-menu show"
+              style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem;">
+              <div *ngFor="let opt of cfSortOptions" (mousedown)="selectCfSort(opt.value)"
+                style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em;"
+                [ngClass]="{'selected': cfSortField === opt.value}">{{ opt.label }}</div>
+            </div>
+          </div>
+          <button class="btn btn-ghost" (click)="searchCurseForge()" [disabled]="cfSearching">
             <i class="material-icons">{{ cfSearching ? 'hourglass_empty' : 'search' }}</i>
           </button>
         </div>
-        <div class="form-control-label desc">Search requires a CurseForge API key configured in Settings &rarr; General.</div>
+        <div class="form-control-label desc" style="margin-top: 0.4rem;">Results filtered to ARK: Survival Ascended.</div>
       </div>
 
-      <div *ngIf="cfSearchResults.length > 0" class="cf-results">
-        <div *ngFor="let mod of cfSearchResults" class="cf-result-row">
-          <img *ngIf="mod.thumbUrl" [src]="mod.thumbUrl" class="cf-thumb" alt="" />
-          <div *ngIf="!mod.thumbUrl" class="cf-thumb cf-thumb-placeholder"><i class="material-icons">extension</i></div>
-          <div class="cf-info">
-            <div class="cf-name">{{ mod.name }}</div>
-            <div class="cf-summary">{{ mod.summary | slice:0:120 }}{{ (mod.summary?.length ?? 0) > 120 ? '...' : '' }}</div>
-            <div class="cf-meta">
-              <span><i class="material-icons" style="font-size:0.9rem;">download</i> {{ mod.downloadCount | number }}</span>
-              <span *ngFor="let a of mod.authors | slice:0:2" style="margin-left:0.5rem;">{{ $any(a).name }}</span>
+      <!-- API Access Error Banner -->
+      <div *ngIf="cfError" class="cf-error-banner" [class.cf-error-banner--access]="cfIsAccessError">
+        <i class="material-icons">{{ cfIsAccessError ? 'lock' : 'error_outline' }}</i>
+        <div class="cf-error-text">
+          <span>{{ cfError }}</span>
+          <a *ngIf="cfIsAccessError" class="cf-website-link" (click)="openUrl('https://www.curseforge.com/ark-survival-ascended')">
+            <i class="material-icons" style="font-size:1rem;vertical-align:middle;">open_in_new</i>
+            Browse mods on CurseForge.com
+          </a>
+        </div>
+      </div>
+
+      <!-- Loading spinner -->
+      <div *ngIf="cfSearching && cfSearchResults.length === 0" class="cf-loading">
+        <i class="material-icons cf-spin">autorenew</i>
+        <span>Loading mods…</span>
+      </div>
+
+      <!-- Empty state -->
+      <div *ngIf="!cfSearching && cfSearchResults.length === 0 && cfSearchQuery" class="cf-empty">
+        <i class="material-icons">search_off</i>
+        <span>No mods found for "{{ cfSearchQuery }}"</span>
+      </div>
+
+      <!-- Card Grid -->
+      <div *ngIf="cfSearchResults.length > 0" class="cf-grid">
+        <div *ngFor="let mod of cfSearchResults" class="cf-card" [class.cf-card--installed]="isModInstalled(mod.id)">
+
+          <!-- Thumbnail / Screenshot -->
+          <div class="cf-card-img-wrap">
+            <img *ngIf="mod.screenshotUrl || mod.thumbUrl" [src]="mod.screenshotUrl || mod.thumbUrl" class="cf-card-img" alt="" loading="lazy" />
+            <div *ngIf="!mod.screenshotUrl && !mod.thumbUrl" class="cf-card-img cf-card-img--placeholder">
+              <i class="material-icons">extension</i>
+            </div>
+            <span *ngIf="isModInstalled(mod.id)" class="cf-installed-badge">
+              <i class="material-icons">check</i> Installed
+            </span>
+          </div>
+
+          <!-- Body -->
+          <div class="cf-card-body">
+            <div class="cf-card-name" [title]="mod.name">{{ mod.name }}</div>
+            <div class="cf-card-cats">
+              <span *ngFor="let cat of mod.categories" class="cf-cat-tag">{{ cat }}</span>
+            </div>
+            <div class="cf-card-summary">{{ mod.summary | slice:0:100 }}{{ (mod.summary?.length ?? 0) > 100 ? '…' : '' }}</div>
+          </div>
+
+          <!-- Footer -->
+          <div class="cf-card-footer">
+            <span class="cf-card-downloads">
+              <i class="material-icons">download</i>
+              {{ mod.downloadCount | number }}
+            </span>
+            <span class="cf-card-author" [title]="mod.authors">{{ mod.authors }}</span>
+            <div class="cf-card-actions">
+              <button *ngIf="mod.websiteUrl" class="btn btn-sm btn-ghost" (click)="openUrl(mod.websiteUrl)" title="View on CurseForge">
+                <i class="material-icons">open_in_new</i>
+              </button>
+              <button *ngIf="!isModInstalled(mod.id)" class="btn btn-sm btn-ghost" (click)="addModFromCurseForge(mod)" title="Add to server">
+                <i class="material-icons">add</i>
+              </button>
+              <span *ngIf="isModInstalled(mod.id)" class="cf-added-check" title="Already added">
+                <i class="material-icons">check_circle</i>
+              </span>
             </div>
           </div>
-          <button class="btn btn-sm btn-primary cf-add-btn" (click)="addModFromCurseForge(mod)">
-            <i class="material-icons">add</i>
-          </button>
-        </div>
-        <div *ngIf="cfHasMore" style="text-align:center; margin-top:0.5rem;">
-          <button class="btn btn-ghost" (click)="cfLoadMore()" [disabled]="cfSearching">Load More</button>
+
         </div>
       </div>
 
-      <div *ngIf="!cfSearching && cfSearchResults.length === 0 && cfSearchQuery" class="no-data" style="padding: 1rem 0;">
-        No results found.
-      </div>
-
+      <!-- Footer actions -->
       <div class="action-group-modal" style="margin-top: 1rem;">
-        <button class="btn btn-secondary" (click)="closeBrowseModal()">Close</button>
+        <button *ngIf="cfHasMore" class="btn btn-ghost" (click)="cfLoadMore()" [disabled]="cfSearching">
+          {{ cfSearching ? 'Loading\u2026' : 'Load More' }}
+        </button>
+        <button class="btn btn-ghost" (click)="closeBrowseModal()">Close</button>
       </div>
     </div>
   </app-modal>

@@ -5,6 +5,7 @@ import { ModalComponent } from '../../../modal/modal.component';
 import { MessagingService } from '../../../../core/services/messaging/messaging.service';
 import { GlobalConfigService } from '../../../../core/services/global-config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
+import { UtilityService } from '../../../../core/services/utility.service';
 
 @Component({
   selector: 'app-mods-tab',
@@ -39,11 +40,34 @@ export class ModsTabComponent {
   cfPage = 0;
   cfPageSize = 20;
   cfHasMore = false;
+  cfSortField = 2; // 1=Featured, 2=Popularity, 3=LastUpdated, 4=Name, 6=TotalDownloads
+  cfError: string | null = null;
+  cfIsAccessError = false; // true when ARK:SA private-game 403 is hit
+  cfSortDropdownOpen = false;
+
+  readonly cfSortOptions = [
+    { value: 2, label: 'Popular' },
+    { value: 6, label: 'Most Downloaded' },
+    { value: 3, label: 'Recently Updated' },
+    { value: 4, label: 'A–Z Name' },
+    { value: 1, label: 'Featured' },
+  ];
+
+  get cfSortLabel(): string {
+    return this.cfSortOptions.find(o => o.value === this.cfSortField)?.label ?? 'Sort';
+  }
+
+  selectCfSort(value: number): void {
+    this.cfSortField = value;
+    this.cfSortDropdownOpen = false;
+    this.searchCurseForge();
+  }
 
   constructor(
     private messaging: MessagingService,
     private globalConfig: GlobalConfigService,
     private notification: NotificationService,
+    private utility: UtilityService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -68,7 +92,17 @@ export class ModsTabComponent {
     this.cfSearchQuery = '';
     this.cfSearchResults = [];
     this.cfPage = 0;
+    this.cfSortField = 2;
+    this.cfError = null;
+    this.cfIsAccessError = false;
+    this.cfSortDropdownOpen = false;
     this.cdr.markForCheck();
+    // Auto-load popular mods immediately
+    setTimeout(() => this.searchCurseForge(), 0);
+  }
+
+  isModInstalled(modId: any): boolean {
+    return (this.modList || []).some((m: any) => String(m.id) === String(modId));
   }
 
   closeBrowseModal(): void {
@@ -76,15 +110,22 @@ export class ModsTabComponent {
     this.cdr.markForCheck();
   }
 
-  searchCurseForge(reset = true): void {
-    const apiKey = this.globalConfig.curseForgeApiKey;
-    if (!apiKey) {
-      this.notification.warning('CurseForge API key not set. Add it in Settings → General.', 'Mod Browser');
-      return;
+  openUrl(url: string): void {
+    if (!url) return;
+    if (this.utility.getPlatform() === 'Electron') {
+      this.messaging.sendMessage('curseforge-open-website', { url }).subscribe();
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
     }
+  }
+
+  searchCurseForge(reset = true): void {
+    const apiKey = this.globalConfig.curseForgeApiKey ?? '';
     if (reset) {
       this.cfPage = 0;
       this.cfSearchResults = [];
+      this.cfError = null;
+      this.cfIsAccessError = false;
     }
     this.cfSearching = true;
     this.cdr.markForCheck();
@@ -93,6 +134,7 @@ export class ModsTabComponent {
       apiKey,
       pageSize: this.cfPageSize,
       index: this.cfPage * this.cfPageSize,
+      sortField: this.cfSortField,
     }).subscribe({
       next: (res: any) => {
         if (res?.success) {
@@ -103,14 +145,18 @@ export class ModsTabComponent {
           }
           this.cfHasMore = (res.pagination?.totalCount ?? 0) > (this.cfPage + 1) * this.cfPageSize;
         } else {
-          this.notification.error(res?.error || 'Search failed.', 'CurseForge');
+          const msg = res?.error || 'Search failed.';
+          this.cfError = msg;
+          this.cfIsAccessError = msg.includes('403') || msg.toLowerCase().includes('restricted');
         }
         this.cfSearching = false;
         this.cdr.markForCheck();
       },
-      error: () => {
+      error: (err: any) => {
         this.cfSearching = false;
-        this.notification.error('Failed to search CurseForge.', 'CurseForge');
+        const msg = err?.message || 'Failed to search CurseForge.';
+        this.cfError = msg;
+        this.cfIsAccessError = msg.includes('403') || msg.toLowerCase().includes('restricted');
         this.cdr.markForCheck();
       },
     });

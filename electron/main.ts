@@ -31,6 +31,13 @@ if (isHeadlessMode) {
 }
 
 // =========================
+// Logging
+// Must be initialised before all other imports so console.* is overridden
+// for every subsequent module load.
+// =========================
+import { getLogFilePath } from './utils/logger';
+
+// =========================
 // Services
 // =========================
 import { automationService } from './services/automation/automation.service';
@@ -199,11 +206,18 @@ function createWindow() {
 // Application Event Handlers
 // =========================
 app.on('ready', async () => {
+  console.info(`[main] ====== Cerious AASM starting — log: ${getLogFilePath()} ======`);
+
   // Clear ARK log files before starting servers
   LogService.clearArkLogFiles();
 
   // Initialize application (handles headless mode and web server startup)
   await applicationService.initializeApplication();
+
+  // Expose log file path to renderer / web clients
+  messagingService.on('get-log-file-path', (_payload: any, sender: any) => {
+    messagingService.sendToOriginator('get-log-file-path', { path: getLogFilePath() }, sender);
+  });
 
   createWindow();
   // Initialize backup system

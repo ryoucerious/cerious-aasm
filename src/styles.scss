@@ -2754,70 +2754,254 @@ p {
   }
 }
 
-// CurseForge mod browser styles
-.cf-results {
+// CurseForge mod browser - card grid layout
+.cf-browser {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  max-height: 400px;
-  overflow-y: auto;
-  margin-top: 0.75rem;
+  min-width: 600px;
 }
 
-.cf-result-row {
+.cf-browser-header {
+  margin-bottom: 0.75rem;
+}
+
+.cf-search-bar {
   display: flex;
+  gap: 0.5rem;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  background: #1a1d23;
-  border-radius: 6px;
-  border: 1px solid #2d3240;
+
+  input {
+    flex: 1;
+    min-width: 0;
+  }
 }
 
-.cf-thumb {
-  width: 48px;
-  height: 48px;
-  border-radius: 4px;
-  object-fit: cover;
+// API error banner
+.cf-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  font-size: 0.82rem;
+  line-height: 1.45;
+
+  > .material-icons {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+    color: #f87171;
+  }
+
+  .cf-error-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  &.cf-error-banner--access {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #fcd34d;
+
+    > .material-icons {
+      color: #fbbf24;
+    }
+  }
+}
+
+.cf-website-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #93c5fd;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 500;
+
+  &:hover {
+    color: #bfdbfe;
+  }
+}
+
+// Loading / empty states
+.cf-loading,
+.cf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1rem;
+  color: #555d6e;
+  font-size: 0.9rem;
+  i { font-size: 2rem; }
+}
+
+@keyframes cf-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.cf-spin { animation: cf-spin 1s linear infinite; }
+
+// Card grid
+.cf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.85rem;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+  margin-top: 0.5rem;
+}
+
+.cf-card {
+  background: #1a1d23;
+  border-radius: 8px;
+  border: 1px solid #2d3240;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: default;
+
+  &:hover {
+    border-color: #4a90e2;
+    box-shadow: 0 2px 14px rgba(74, 144, 226, 0.15);
+  }
+
+  &.cf-card--installed {
+    border-color: rgba(34, 197, 94, 0.4);
+  }
+}
+
+// 16:9 image wrapper
+.cf-card-img-wrap {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%;
+  background: #23272f;
+  overflow: hidden;
   flex-shrink: 0;
-  &.cf-thumb-placeholder {
+}
+
+.cf-card-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+
+  &--placeholder {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #23272f;
-    color: #555;
-    i { font-size: 1.5rem; }
+    color: #404550;
+    i { font-size: 2.5rem; }
   }
 }
 
-.cf-info {
+.cf-installed-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #16a34a;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  letter-spacing: 0.02em;
+  i { font-size: 0.75rem; }
+}
+
+.cf-card-body {
+  padding: 0.6rem 0.75rem;
   flex: 1;
   min-width: 0;
-  .cf-name {
-    font-weight: 600;
-    font-size: 0.95rem;
-    color: #e2e8f0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .cf-summary {
-    font-size: 0.82rem;
-    color: #8a96a8;
-    margin-top: 2px;
-  }
-  .cf-meta {
-    font-size: 0.78rem;
-    color: #555d6e;
-    margin-top: 2px;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
 }
 
-.cf-add-btn {
+.cf-card-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.3rem;
+}
+
+.cf-card-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.4rem;
+}
+
+.cf-cat-tag {
+  background: #252a36;
+  color: #7c8898;
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid #3a4060;
+  white-space: nowrap;
+}
+
+.cf-card-summary {
+  font-size: 0.76rem;
+  color: #8a96a8;
+  line-height: 1.45;
+}
+
+.cf-card-footer {
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid #252a36;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cf-card-downloads {
+  font-size: 0.72rem;
+  color: #555d6e;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  i { font-size: 0.8rem; }
+}
+
+.cf-card-author {
+  font-size: 0.72rem;
+  color: #555d6e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70px;
+}
+
+.cf-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: auto;
   flex-shrink: 0;
+}
+
+.cf-added-check {
+  color: #22c55e;
+  display: flex;
+  align-items: center;
+  i { font-size: 1.2rem; }
 }
 
 // Whitelist table containers extend the base
