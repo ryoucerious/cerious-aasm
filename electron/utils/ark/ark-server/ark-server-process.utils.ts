@@ -14,7 +14,14 @@ import { setInstanceState, arkServerProcesses } from './ark-server-state.utils';
  * Spawns the ARK server process
  */
 export function spawnServerProcess(instanceId: string, instanceDir: string, config: any): { proc: any, commandInfo: any } {
-  const arkExecutable = getArkExecutablePath();
+  // Prefer the instance's own exe copy so Windows DLL search loads AsaApi/plugins
+  // from the instance-specific Win64 folder rather than the shared install.
+  const instanceWin64 = path.join(instanceDir, 'ShooterGame', 'Binaries', 'Win64');
+  const instanceExe = path.join(instanceWin64, 'ArkAscendedServer.exe');
+  const sharedExe = getArkExecutablePath();
+  const useInstanceExe = getPlatform() === 'windows' && fs.existsSync(instanceExe);
+  const arkExecutable = useInstanceExe ? instanceExe : sharedExe;
+
   if (!fs.existsSync(arkExecutable)) {
     throw new Error('Ark server not installed');
   }
@@ -31,8 +38,10 @@ export function spawnServerProcess(instanceId: string, instanceDir: string, conf
   const formattedLogDir = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs').replace(/\\/g, '/');
 
   // Use detailed spawn options for best compatibility
+  // On Windows: run from instance Win64 dir so DLL search order finds per-instance AsaApi/plugins first.
+  // On Linux/Proton: run from shared ARK install dir (Proton handles library loading differently).
   let spawnOptions: any = {
-    cwd: getPlatform() === 'windows' ? instanceDir : getArkServerDir(), // Use instance dir on Windows, ARK install dir on Linux/Proton
+    cwd: useInstanceExe ? instanceWin64 : (getPlatform() === 'windows' ? instanceDir : getArkServerDir()),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
