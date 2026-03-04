@@ -110,9 +110,11 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
+  // Log but do NOT exit — some third-party libraries (e.g. electron-updater)
+  // can emit unhandled rejections in edge cases that are benign.
+  // Calling process.exit(1) here would kill all running ARK servers and crash
+  // the app whenever any library has an uncaught async error.
   console.error('[main] Unhandled promise rejection at:', promise, 'reason:', reason);
-  cleanup();
-  process.exit(1);
 });
 
 // =========================

@@ -122,7 +122,14 @@ export class AutoUpdateService {
     }
 
     try {
-      await autoUpdater.checkForUpdates();
+      const result = await autoUpdater.checkForUpdates();
+      // Attach a catch handler to the download promise so that a failed download
+      // does not become an unhandled rejection and crash the process.
+      // The 'error' event on autoUpdater also fires, so we just need to suppress
+      // the unhandled rejection here.
+      result?.downloadPromise?.catch((err: any) => {
+        console.error('[AutoUpdateService] Download failed (caught from downloadPromise):', err?.message ?? err);
+      });
     } catch (err: any) {
       console.error('[AutoUpdateService] Failed to check for updates:', err.message);
     }
