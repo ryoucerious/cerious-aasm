@@ -74,7 +74,7 @@ messagingService.on('curseforge-search-mods', async (payload: any, sender: any) 
       success: false,
       error: 'No CurseForge API key configured. This build may not have been packaged with the required key.',
       requestId,
-    });
+    }, sender);
     return;
   }
 
