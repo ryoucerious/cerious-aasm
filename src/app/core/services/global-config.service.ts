@@ -121,15 +121,6 @@ export class GlobalConfigService {
     this.saveConfig(this.config).catch(err => console.error(err));
   }
 
-  get curseForgeApiKey() {
-    return this.config?.curseForgeApiKey ?? '';
-  }
-  set curseForgeApiKey(val: string) {
-    if (!this.config) return;
-    this.config.curseForgeApiKey = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
-  }
-
   get updateWarningMinutes() {
     return this.config?.updateWarningMinutes ?? 15;
   }

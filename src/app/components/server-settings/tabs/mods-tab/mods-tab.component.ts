@@ -6,6 +6,7 @@ import { MessagingService } from '../../../../core/services/messaging/messaging.
 import { GlobalConfigService } from '../../../../core/services/global-config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { UtilityService } from '../../../../core/services/utility.service';
+import { environment } from '../../../../../environments/environment';
 
 @Component({
   selector: 'app-mods-tab',
@@ -120,7 +121,7 @@ export class ModsTabComponent {
   }
 
   searchCurseForge(reset = true): void {
-    const apiKey = this.globalConfig.curseForgeApiKey ?? '';
+    const apiKey = environment.curseForgeApiKey || '';
     if (reset) {
       this.cfPage = 0;
       this.cfSearchResults = [];

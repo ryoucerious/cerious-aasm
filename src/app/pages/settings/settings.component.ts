@@ -30,7 +30,6 @@ export class SettingsPageComponent {
   serverDataDir = '';
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
-  curseForgeApiKey = '';
   // Backend-provided system info (populated when running in Electron)
   backendNodeVersion: string | null = null;
   backendElectronVersion: string | null = null;
@@ -52,7 +51,6 @@ export class SettingsPageComponent {
       this.serverDataDir = cfg.serverDataDir || '';
       this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
       this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
-      this.curseForgeApiKey = cfg.curseForgeApiKey || '';
       this.cdr.markForCheck();
     }
 
@@ -67,7 +65,6 @@ export class SettingsPageComponent {
       this.serverDataDir = cfg.serverDataDir || '';
       this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
       this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
-      this.curseForgeApiKey = cfg.curseForgeApiKey || '';
       this.cdr.markForCheck();
     })
   );
@@ -314,7 +311,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.4';
+    return environment.version || '1.0.5';
   }
 
   getPlatform() {
@@ -480,11 +477,6 @@ export class SettingsPageComponent {
     this.autoUpdateArkServer = val;
     this.configService.autoUpdateArkServer = val;
     this.notification.info(`Auto-Update Ark Server is now ${val ? 'Enabled' : 'Disabled'}`, 'Settings');
-  }
-
-  onCurseForgeApiKeyChange(val: string) {
-    this.curseForgeApiKey = val;
-    this.configService.curseForgeApiKey = val;
   }
 
   onUpdateWarningMinutesChange(val: string) {

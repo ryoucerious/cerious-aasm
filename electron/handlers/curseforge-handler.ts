@@ -67,14 +67,14 @@ function cfGet(apiKey: string, urlPath: string): Promise<any> {
  * Payload: { query, apiKey, pageSize?, index?, requestId }
  */
 messagingService.on('curseforge-search-mods', async (payload: any, sender: any) => {
-  const { query, apiKey, pageSize = 20, index = 0, sortField = 2, categoryId, requestId } = payload || {};
+  const { query, apiKey = '', pageSize = 20, index = 0, sortField = 2, categoryId, requestId } = payload || {};
 
   if (!apiKey) {
     messagingService.sendToOriginator('curseforge-search-mods', {
       success: false,
-      error: 'CurseForge API key is not configured. Add it in Settings.',
+      error: 'No CurseForge API key configured. This build may not have been packaged with the required key.',
       requestId,
-    }, sender);
+    });
     return;
   }
 

@@ -35,6 +35,8 @@ jobs:
         run: npm cache clean --force
       - name: Install dependencies
         run: npm install
+      - name: Inject CurseForge API Key
+        run: (Get-Content src/environments/environment.prod.ts) -replace 'CURSEFORGE_KEY_PLACEHOLDER', '${{ secrets.CURSEFORGE_API_KEY }}' | Set-Content src/environments/environment.prod.ts
       - name: Build for Windows
         run: npm run electron:package:windows
       - name: Upload Windows Installer
@@ -67,6 +69,8 @@ jobs:
         run: npm cache clean --force
       - name: Install dependencies
         run: npm install
+      - name: Inject CurseForge API Key
+        run: sed -i "s/CURSEFORGE_KEY_PLACEHOLDER/${{ secrets.CURSEFORGE_API_KEY }}/g" src/environments/environment.prod.ts
       - name: Build for Linux
         run: npm run electron:package:linux
       - name: Upload Linux AppImage

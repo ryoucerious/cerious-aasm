@@ -4,6 +4,12 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-03-03
+
+### Improvements
+
+- **CurseForge Mod Browser — No API Key Required**: The CurseForge API key is now embedded at build time via a CI secret, so the mod browser works out of the box for all installs with no user configuration. The API key field has been removed from the Settings page.
+
 ## [1.0.4] - 2026-03-02
 
 ### New Features
