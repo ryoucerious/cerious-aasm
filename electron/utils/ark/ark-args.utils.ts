@@ -37,15 +37,14 @@ export function buildArkServerArgs(config: any): string[] {
 
   // Passwords - these will also be in INI files
   if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
-  if (config.serverAdminPassword) paramParts.push(`RCONPassword=${config.serverAdminPassword}`);
+  // ServerAdminPassword controls both in-game admin commands and RCON authentication.
+  // Always use the user-configured serverAdminPassword so in-game and RCON use the same password.
+  if (config.serverAdminPassword) paramParts.push(`ServerAdminPassword=${config.serverAdminPassword}`);
 
   // Always enable RCON if we have a port
   if (config.rconPort) {
     paramParts.push('RCONEnabled=True');
     paramParts.push(`RCONPort=${config.rconPort}`);
-    if (config.rconPassword) {
-      paramParts.push(`ServerAdminPassword=${config.rconPassword}`);
-    }
   }
 
   // Compose the main command string
