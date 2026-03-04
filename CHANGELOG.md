@@ -4,6 +4,12 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-03-04
+
+### Bug Fixes
+
+- **Admin Password / RCON Password Mixup**: Fixed a critical bug where the server admin password was being written as `RCONPassword=` (not a real ARK parameter, ignored entirely) and the auto-generated internal RCON password was overwriting `ServerAdminPassword=` in the launch arguments. This caused in-game admin commands to fail with the user's configured password, while RCON appeared to work. ARK now receives `ServerAdminPassword` correctly from the user-configured value, used for both in-game admin access and RCON authentication.
+
 ## [1.0.5] - 2026-03-03
 
 ### Improvements
