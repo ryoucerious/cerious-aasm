@@ -1,5 +1,6 @@
 import { getProcessMemoryUsage } from '../../utils/platform.utils';
 import { rconService } from '../rcon.service';
+import { isRconConnected, isRconConnecting } from '../../utils/rcon.utils';
 import { ServerStateResult, ServerLogsResult, PlayerCountResult } from '../../types/server-instance.types';
 import { setupLogTailing } from '../../utils/ark/ark-server/ark-server-logging.utils';
 import { getInstance } from '../../utils/ark/instance.utils';
@@ -100,6 +101,19 @@ export class ServerMonitoringService {
     // Start polling every 30 seconds
     this.playerPollingIntervals[instanceId] = setInterval(async () => {
       try {
+        // If RCON dropped or never connected, try to reconnect before polling.
+        // This turns every poll cycle into a passive persistent reconnect probe
+        // so a missed initial connection window (e.g. slow Proton boot) self-heals.
+        // Skip if a retry loop is already running to prevent stacking concurrent chains.
+        if (!isRconConnected(instanceId)) {
+          const state = this.getInstanceState(instanceId).state.toLowerCase();
+          if (state === 'running' && !isRconConnecting(instanceId)) {
+            rconService.connectRcon(instanceId).catch(() => {
+              // connectRcon already logs; suppress unhandled rejection
+            });
+          }
+          return; // skip this poll tick — playerCount stays at last known value
+        }
         const playerCount = await this.getPlayerCountFromRcon(instanceId);
         if (playerCount !== null && playerCount !== this.latestPlayerCounts[instanceId]) {
           this.latestPlayerCounts[instanceId] = playerCount;

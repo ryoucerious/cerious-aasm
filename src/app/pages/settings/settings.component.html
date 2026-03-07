@@ -57,6 +57,9 @@
                 <button class="btn btn-sm btn-secondary" (click)="selectServerDataDir()" [disabled]="!isElectron" title="Select Folder">
                   <i class="material-icons">folder_open</i>
                 </button>
+                <button class="btn btn-sm btn-danger" (click)="clearServerDataDir()" [disabled]="!isElectron || !serverDataDir" title="Reset to Default">
+                  <i class="material-icons">clear</i>
+                </button>
               </div>
               <label class="form-control-label desc">Directory where server data (Saved/ShooterGame/etc) is stored. Change requires restart.</label>
             </div>

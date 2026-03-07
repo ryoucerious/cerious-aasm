@@ -73,13 +73,15 @@ export class ModsTabComponent {
   ) {}
 
   onAddMod(): void {
-    if (this.newModId && this.newModId.trim() && this.newModName && this.newModName.trim()) {
-      this.addMod.emit({
-        id: this.newModId.trim(),
-        name: this.newModName.trim()
-      });
-      this.closeModal();
+    const id = this.newModId?.trim();
+    const name = this.newModName?.trim();
+    if (!id || !name) return;
+    if (!/^\d+$/.test(id)) {
+      this.notification.error('Mod ID must be a numeric CurseForge ID (e.g. 731604991). Copy it from the CurseForge website.');
+      return;
     }
+    this.addMod.emit({ id, name });
+    this.closeModal();
   }
 
   openAddModModal(): void {

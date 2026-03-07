@@ -187,8 +187,18 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
   if (!foundLogFile) return [];
 
   if (!fs.existsSync(foundLogFile)) return [];
-  const content = fs.readFileSync(foundLogFile, 'utf8');
-  const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0);
+  // Read only the last 64 KB instead of the entire file.
+  // ARK log files can grow to several GB; loading the full file into the Node.js heap
+  // on every call causes the Electron process to balloon to 10+ GB RSS on Linux.
+  // Per-instance isolation is unchanged — which file to read is decided above.
+  const TAIL_BYTES = 64 * 1024;
+  const fileStat = fs.statSync(foundLogFile);
+  const offset = Math.max(0, fileStat.size - TAIL_BYTES);
+  const fd = fs.openSync(foundLogFile, 'r');
+  const buf = Buffer.alloc(Math.min(TAIL_BYTES, fileStat.size));
+  fs.readSync(fd, buf, 0, buf.length, offset);
+  fs.closeSync(fd);
+  const lines = buf.toString('utf8').split(/\r?\n/).filter(line => line.trim().length > 0);
   return lines.slice(-maxLines);
 }
 
@@ -350,15 +360,16 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
   let logTail: any = null;
   let hasAdvertised = false;
 
-  // Startup detection strings — ARK ASA may use different messages across versions
+  // Startup detection strings — only lines that indicate the server is truly ready
+  // for player connections AND has bound its RCON port.
+  // NOTE: 'Full Startup:', 'Listening on port', 'StartPlay RPC completed', and
+  // 'Initializing Game Engine Completed' all fire 30-60s BEFORE RCON is ready;
+  // triggering RCON on those lines wastes the entire retry window on a port that
+  // isn't open yet.  Use only the definitive advertising-for-join messages.
   const startupIndicators = [
     'Server has completed startup and is now advertising for join.',
     'Server is now advertising for join',
-    'has completed startup',
-    'Full Startup:',
-    'Listening on port',
-    'StartPlay RPC completed',
-    'Initializing Game Engine Completed'
+    'has completed startup and is now advertising'
   ];
 
   // Wrap the onLog callback to detect state transitions

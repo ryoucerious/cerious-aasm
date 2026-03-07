@@ -311,7 +311,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.6';
+    return environment.version || '1.0.7';
   }
 
   getPlatform() {
@@ -470,6 +470,12 @@ export class SettingsPageComponent {
     this.serverDataDir = path;
     this.configService.serverDataDir = path;
     this.notification.success('Server Data Directory Updated', 'Settings');
+  }
+
+  clearServerDataDir() {
+    this.serverDataDir = '';
+    this.configService.serverDataDir = '';
+    this.notification.info('Server Data Directory reset to default. Restart required.', 'Settings');
   }
 
   onAutoUpdateArkServerChange(event: any) {

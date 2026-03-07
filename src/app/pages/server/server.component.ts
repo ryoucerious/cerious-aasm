@@ -277,6 +277,11 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
+    if (!/^\d+$/.test(modData.id.trim())) {
+      this.notificationService.error('Mod ID must be a numeric CurseForge ID (e.g. 731604991). Copy it from the CurseForge website.');
+      return;
+    }
+
     // Check if mod already exists
     const existingMod = this.modList.find(mod => mod.id === modData.id);
     if (existingMod) {

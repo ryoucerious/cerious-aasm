@@ -38,8 +38,11 @@ export function buildArkServerArgs(config: any): string[] {
   // Passwords - these will also be in INI files
   if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
   // ServerAdminPassword controls both in-game admin commands and RCON authentication.
-  // Always use the user-configured serverAdminPassword so in-game and RCON use the same password.
-  if (config.serverAdminPassword) paramParts.push(`ServerAdminPassword=${config.serverAdminPassword}`);
+  // Prefer the user-configured serverAdminPassword; fall back to the auto-generated
+  // rconPassword so ARK always receives a password and therefore opens the RCON port.
+  // Without any ServerAdminPassword ARK silently refuses to bind the RCON listener.
+  const adminPassword = config.serverAdminPassword || config.rconPassword;
+  if (adminPassword) paramParts.push(`ServerAdminPassword=${adminPassword}`);
 
   // Always enable RCON if we have a port
   if (config.rconPort) {
@@ -159,7 +162,9 @@ export function getArkLaunchParameters(config: any): string[] {
 
   if (modIds) {
     params.push(`-mods=${modIds}`);
-    params.push('-automanagedmods');
+    // Do NOT pass -automanagedmods: it tells ARK to download mods from CurseForge at
+    // startup, which fails (serverUnreachable) and prevents the server from starting.
+    // Mods are pre-installed via SteamCMD; -mods= alone is sufficient to load them.
   }
 
   // Add any additional launch parameters from config

@@ -349,9 +349,20 @@ export class ServerManagementService {
                   const destFile = path.join(destBinaries, file);
                   const stat = await fsExtra.stat(srcFile);
                   
-                  // If it's a file (dll/exe), copy/update it
+                  // If it's a file (dll/exe), copy/update it — skip if dest is already current.
+                  // Comparing size + mtime avoids a full ~200MB binary copy on every server
+                  // start when using a custom directory on a slow disk (mirrors rsync --update).
                   if (stat.isFile()) {
-                      await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
+                      let needsCopy = true;
+                      if (await fsExtra.pathExists(destFile)) {
+                          const destStat = await fsExtra.stat(destFile);
+                          if (destStat.size === stat.size && destStat.mtimeMs >= stat.mtimeMs) {
+                              needsCopy = false;
+                          }
+                      }
+                      if (needsCopy) {
+                          await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
+                      }
                   }
                   // Specialized logic: We generally ignore subfolders (like ArkApi in source if any)
                   // EXCEPT if the base game has vital subfolders. Usually ArkApi is user-installed.

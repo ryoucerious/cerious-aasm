@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { runInstaller } from '../../installer.utils';
 import { getDefaultInstallDir } from '../../platform.utils';
 import { getSteamCmdDir, isSteamCmdInstalled } from '../../steamcmd.utils';
+import { ArkPathUtils } from '../ark-path.utils';
 
 // --- Constants ---
 const ARK_APP_ID = '2430930';
@@ -11,8 +12,11 @@ const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 let lastKnownBuildId: string | null = null;
 
 // --- Utility Functions ---
+// Delegates to ArkPathUtils so the custom Server Data Directory setting is respected.
+// Using the hardcoded default here would cause the update checker to always report an
+// update when a custom install directory is in use (manifest not found → null ≠ latest).
 export function getArkServerDir(): string {
-  return path.join(getDefaultInstallDir(), 'AASMServer');
+  return ArkPathUtils.getArkServerDir();
 }
 
 export function isArkServerInstalled(): boolean {

@@ -4,6 +4,26 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-03-06
+
+### Bug Fixes
+
+- **RCON Never Connecting — Missing ServerAdminPassword**: ARK only opens the RCON listener when `ServerAdminPassword` is present in the launch arguments. The parameter was conditionally omitted when the user had not explicitly set an admin password, meaning the RCON port was never bound and every connection attempt received `ECONNREFUSED`. The auto-generated `rconPassword` is now used as a fallback so ARK always receives a password and the RCON port is reliably opened.
+- **RCON Triggered Too Early by Premature Startup Indicators**: Startup indicators such as `Full Startup:`, `Listening on port`, `StartPlay RPC completed`, and `Initializing Game Engine Completed` were firing 30–60 seconds before ARK actually binds the RCON port. The entire 90-second retry window was consumed on a port that had not yet opened. RCON connection is now only triggered by the definitive `"Server has completed startup and is now advertising for join"` log line.
+- **RCON Concurrent Retry Loop Stacking**: Multiple independent RCON retry chains were spawning simultaneously — the initial startup connect, the player-poll passive reconnect every 30 s, and potentially service-level calls all launched separate 30-attempt loops. Their log entries appeared milliseconds apart and all failed. A `rconConnecting` guard set now ensures only one active retry chain exists per instance at any time. Exported `isRconConnecting()` for monitoring-service checks.
+- **Update Checker Always Reporting Update with Custom Data Directory**: `ark-server-install.utils.ts` had its own local `getArkServerDir()` that always returned the default install path, ignoring any custom Server Data Directory. `getCurrentInstalledVersion()` and `isArkServerInstalled()` both called through this function, so the manifest was never found in the custom directory and every poll reported an update. The local function now delegates to `ArkPathUtils.getArkServerDir()` which correctly respects the configured custom path.
+- **Log Watcher Polling Wrong Directory with Custom Data Directory**: `getLogsDir()` in `ark-server-logging.utils.ts` called `getArkServerDir()` from `ark-server-install.utils.ts`, which (before the fix above) always returned the default path. Log tailing and startup detection were watching the wrong directory, causing servers using a custom location to appear permanently stuck in "Starting". Fixed as a side-effect of the `ark-server-install.utils.ts` delegation fix.
+- **Slow Server Start on First Run with Custom Data Directory**: Win64 binaries (~200 MB) were unconditionally copied on every server start. A size + mtime check now skips copying files that are already current, mirroring `rsync --update` behaviour. Only the initial run or after a game update performs the full copy.
+- **Mods Preventing Server Start (CurseForge Unreachable)**: `-automanagedmods` instructed ARK to download mods from CurseForge at startup. When CurseForge was unreachable (`LogCFCore: serverUnreachable`), ARK exited without starting. The flag has been removed; mods configured in the UI are passed via `-mods=` IDs only.
+- **Mod IDs Validated as Numeric**: Non-numeric strings (e.g. mod names or URLs) could be added to the mod list. Both the Mods tab and server page now validate that a mod ID matches `/^\d+$/` before adding, with a clear error notification directing users to CurseForge for the numeric ID.
+- **High RAM Usage on Linux (13+ GB RSS)**: `getInstanceLogs()` used `fs.readFileSync` to load the entire ARK log file into memory on every call. ARK logs grow to multiple gigabytes over time, causing the Electron process to balloon to 13–14 GB RSS on Linux. The function now reads only the last 64 KB of the file using byte-range reads, capping memory impact regardless of log file size. Per-instance log isolation is unchanged.
+- **RCON Passive Reconnect Guard**: The player-polling passive reconnect now also checks `isRconConnecting()` before launching a new attempt, preventing redundant chains from being queued when the previous chain is still running.
+- **CurseForge API Key Injection Failing on Linux (403 Errors)**: The `sed` command in the GitHub Actions Linux build step used `/` as the delimiter (`s/PLACEHOLDER/KEY/g`). CurseForge API keys contain `/` characters, which silently broke the substitution and left the placeholder in the bundle, producing 403 responses for all mod API calls. The delimiter is now `|` (`s|PLACEHOLDER|KEY|g`).
+
+### New Features
+
+- **Clear Custom Server Data Directory**: A red × button next to the Server Data Directory field in Settings resets the path back to the default install location. The button is disabled when no custom path is set.
+
 ## [1.0.6] - 2026-03-04
 
 ### Bug Fixes
