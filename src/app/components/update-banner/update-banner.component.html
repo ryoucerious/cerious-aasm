@@ -1,3 +1,16 @@
+<!-- Update available – prompt user to download -->
+<div class="update-banner" *ngIf="!dismissed && updateStatus?.status === 'available'">
+  <div class="banner-accent"></div>
+  <div class="banner-content">
+    <span class="material-icons banner-icon">new_releases</span>
+    <span class="banner-text">Update available: <strong>v{{ updateStatus?.version }}</strong></span>
+    <button class="action-btn" (click)="downloadUpdate()">Download Update</button>
+    <button class="dismiss-btn" (click)="dismiss()" title="Later">
+      <span class="material-icons">close</span>
+    </button>
+  </div>
+</div>
+
 <!-- Downloading progress -->
 <div class="update-banner" *ngIf="!dismissed && updateStatus?.status === 'downloading'">
   <div class="banner-accent"></div>
@@ -18,7 +31,7 @@
   <div class="banner-accent ready"></div>
   <div class="banner-content">
     <span class="material-icons banner-icon">update</span>
-    <span class="banner-text">A new version of Cerious AASM is available <strong>(v{{ updateStatus?.version }})</strong> &mdash; ready to install.</span>
+    <span class="banner-text">Update <strong>v{{ updateStatus?.version }}</strong> downloaded &mdash; ready to install.</span>
     <button class="action-btn" (click)="installUpdate()">Restart to Update</button>
     <button class="dismiss-btn" (click)="dismiss()" title="Later">
       <span class="material-icons">close</span>

@@ -74,27 +74,45 @@ export class BackupOperationsService {
   }
 
   /**
-   * Recursively add files to zip, excluding backup directories
+   * Recursively add files to zip, excluding backup directories and junctions/symlinks.
+   * Uses lstat() (not stat()) so junction points to the shared Content (~70 GB) and
+   * Engine (~3 GB) directories are detected as symlinks and skipped rather than
+   * traversed, which would otherwise read the entire game installation into memory.
    */
   private async addToZip(zip: any, sourcePath: string, relativePath: string, instanceId: string): Promise<void> {
     try {
       const items = await readdir(sourcePath);
 
+      // Files directly inside Binaries/Win64 are exe/dlls that are always re-copied
+      // from the shared install on server start — skip them to avoid bloating the backup
+      // with ~200 MB of deterministic binaries. Subdirectories (e.g. ArkApi/) are still
+      // recursed so user-installed plugins are preserved.
+      const isWin64Dir = /[/\\]ShooterGame[/\\]Binaries[/\\]Win64$/i.test(sourcePath);
+
       for (const item of items) {
         const itemPath = path.join(sourcePath, item);
         const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
-        const stats = await stat(itemPath);
 
-        // Skip backup-related directories
+        // Use lstat so junction/symlink entries are not followed
+        const lstats = await fs.promises.lstat(itemPath);
+
+        // Skip backup directories
         if (item.toLowerCase().includes('backup')) {
           continue;
         }
 
-        if (stats.isDirectory()) {
-          // Recursively add directory contents
+        // Skip symlinks and junctions — these point to the shared game installation
+        // (Content ~70 GB, Engine ~3 GB) and must never be archived
+        if (lstats.isSymbolicLink()) {
+          continue;
+        }
+
+        if (lstats.isDirectory()) {
+          // Recursively add real directory contents
           await this.addToZip(zip, itemPath, itemRelativePath, instanceId);
-        } else {
-          // Add file
+        } else if (lstats.isFile()) {
+          // Skip raw exe/dll files in Win64 root — they are recoverable from the shared install
+          if (isWin64Dir) continue;
           const fileBuffer = await fs.promises.readFile(itemPath);
           zip.addFile(itemRelativePath, fileBuffer);
         }

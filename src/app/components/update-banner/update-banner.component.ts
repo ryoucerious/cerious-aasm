@@ -37,12 +37,16 @@ export class UpdateBannerComponent implements OnInit, OnDestroy {
     this.sub = this.messaging.receiveMessage<AppUpdateStatus>('app-update-status').subscribe(status => {
       if (!status) return;
       this.updateStatus = status;
-      // Un-dismiss when going from downloading → downloaded so the user sees the prompt
-      if (status.status === 'downloaded') {
+      // Un-dismiss when a new actionable state arrives so the user sees the prompt
+      if (status.status === 'available' || status.status === 'downloaded') {
         this.dismissed = false;
       }
       this.cdr.markForCheck();
     });
+
+    // Request last known status from the main process — covers the race where
+    // update-available / update-downloaded fired before Angular subscribed above.
+    this.messaging.sendNotification('get-app-update-status', {});
   }
 
   ngOnDestroy(): void {
@@ -56,6 +60,10 @@ export class UpdateBannerComponent implements OnInit, OnDestroy {
   dismiss(): void {
     this.dismissed = true;
     this.cdr.markForCheck();
+  }
+
+  downloadUpdate(): void {
+    this.messaging.sendNotification('download-app-update', {});
   }
 
   installUpdate(): void {

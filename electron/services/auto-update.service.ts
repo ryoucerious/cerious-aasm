@@ -22,6 +22,8 @@ export class AutoUpdateService {
   private supported = true;
   /** When true, delegate to LinuxPackageUpdaterService instead of electron-updater */
   private useLinuxPackageUpdater = false;
+  /** Last status payload — replayed to renderers that connect after the event fired */
+  private lastStatus: Record<string, any> | null = null;
 
   constructor() {
     // Skip auto-update in headless mode — no GUI to show prompts
@@ -44,9 +46,10 @@ export class AutoUpdateService {
       return;
     }
 
-    // Disable auto-install so the user can choose when to restart
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Do NOT auto-download — the user decides when to download and install.
+    // autoInstallOnAppQuit is also disabled for the same reason.
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
 
     this.setupEventHandlers();
   }
@@ -55,14 +58,19 @@ export class AutoUpdateService {
    * Wire up electron-updater events to broadcast status via the messaging service.
    */
   private setupEventHandlers(): void {
+    const broadcast = (payload: Record<string, any>) => {
+      this.lastStatus = payload;
+      messagingService.sendToAllRenderers('app-update-status', payload);
+    };
+
     autoUpdater.on('checking-for-update', () => {
       console.log('[AutoUpdateService] Checking for application update...');
-      messagingService.sendToAllRenderers('app-update-status', { status: 'checking' });
+      broadcast({ status: 'checking' });
     });
 
     autoUpdater.on('update-available', (info: UpdateInfo) => {
       console.log(`[AutoUpdateService] Update available: v${info.version}`);
-      messagingService.sendToAllRenderers('app-update-status', {
+      broadcast({
         status: 'available',
         version: info.version,
         releaseNotes: info.releaseNotes,
@@ -72,7 +80,7 @@ export class AutoUpdateService {
 
     autoUpdater.on('update-not-available', (info: UpdateInfo) => {
       console.log(`[AutoUpdateService] App is up to date (v${info.version})`);
-      messagingService.sendToAllRenderers('app-update-status', {
+      broadcast({
         status: 'up-to-date',
         version: info.version,
       });
@@ -80,7 +88,7 @@ export class AutoUpdateService {
 
     autoUpdater.on('download-progress', (progress: ProgressInfo) => {
       console.log(`[AutoUpdateService] Download progress: ${progress.percent.toFixed(1)}%`);
-      messagingService.sendToAllRenderers('app-update-status', {
+      broadcast({
         status: 'downloading',
         percent: progress.percent,
         bytesPerSecond: progress.bytesPerSecond,
@@ -92,7 +100,7 @@ export class AutoUpdateService {
     autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
       console.log(`[AutoUpdateService] Update downloaded: v${info.version}`);
       this.updateDownloaded = true;
-      messagingService.sendToAllRenderers('app-update-status', {
+      broadcast({
         status: 'downloaded',
         version: info.version,
         releaseNotes: info.releaseNotes,
@@ -102,7 +110,7 @@ export class AutoUpdateService {
 
     autoUpdater.on('error', (err: Error) => {
       console.error('[AutoUpdateService] Update error:', err.message);
-      messagingService.sendToAllRenderers('app-update-status', {
+      broadcast({
         status: 'error',
         error: err.message,
       });
@@ -122,17 +130,35 @@ export class AutoUpdateService {
     }
 
     try {
-      const result = await autoUpdater.checkForUpdates();
-      // Attach a catch handler to the download promise so that a failed download
-      // does not become an unhandled rejection and crash the process.
-      // The 'error' event on autoUpdater also fires, so we just need to suppress
-      // the unhandled rejection here.
-      result?.downloadPromise?.catch((err: any) => {
-        console.error('[AutoUpdateService] Download failed (caught from downloadPromise):', err?.message ?? err);
-      });
+      // checkForUpdates() only checks — it does NOT download because autoDownload=false.
+      await autoUpdater.checkForUpdates();
     } catch (err: any) {
       console.error('[AutoUpdateService] Failed to check for updates:', err.message);
     }
+  }
+
+  /**
+   * Trigger the actual download of an available update.
+   * Only call this after the user has explicitly opted in.
+   */
+  async downloadUpdate(): Promise<void> {
+    if (!this.supported || this.useLinuxPackageUpdater) return;
+    try {
+      await autoUpdater.downloadUpdate();
+    } catch (err: any) {
+      console.error('[AutoUpdateService] Failed to download update:', err.message);
+    }
+  }
+
+  /**
+   * Start a periodic update check every `intervalMs` milliseconds (default 4 hours).
+   * Call once from main.ts after the app is ready.
+   */
+  startPeriodicUpdateCheck(intervalMs = 4 * 60 * 60 * 1000): void {
+    if (!this.supported) return;
+    setInterval(() => {
+      this.checkForUpdates().catch(console.error);
+    }, intervalMs);
   }
 
   /**
@@ -151,6 +177,13 @@ export class AutoUpdateService {
     } else {
       console.warn('[AutoUpdateService] No update downloaded yet.');
     }
+  }
+
+  /**
+   * Returns the last broadcast status so late-connecting renderers can replay it.
+   */
+  getLastStatus(): Record<string, any> | null {
+    return this.lastStatus;
   }
 
   /**

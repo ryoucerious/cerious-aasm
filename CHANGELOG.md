@@ -4,6 +4,19 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-03-08
+
+### Bug Fixes
+
+- **Backup Failing with "Array buffer allocation failed"**: The backup zip builder used `stat()` which follows Windows junction points. Instance directories contain junctions to `ShooterGame/Content` (~70 GB) and `Engine` (~3 GB) for game file isolation. The backup attempted to read all those bytes into memory, exhausting Node's V8 heap. Switched to `lstat()` and skip any `isSymbolicLink()` entry so junctions are never traversed.
+- **Backup Including ~200 MB of Redundant Binaries**: Even after junction-skipping, the actual `ShooterGame/Binaries/Win64` exe/dll files (~200 MB) were copied into every backup unnecessarily — they are always re-copied from the shared install on server start and are never unique per instance. Files directly inside the `Win64` root are now skipped; subdirectories (e.g. `ArkApi/` plugins) are still archived so user-installed plugins are preserved.
+- **App Update Banner Never Showing**: The `update-available` and `update-downloaded` events from `electron-updater` fired during the first few seconds after app ready, before Angular had finished booting and subscribing to `app-update-status`. The events were broadcast and discarded silently. `AutoUpdateService` now caches `lastStatus`; a new `get-app-update-status` IPC handler lets the renderer request a replay on init; `UpdateBannerComponent` sends this request immediately after subscribing so it always receives the current state regardless of timing.
+
+### Improvements
+
+- **App Updates Are Now User-Initiated**: `autoDownload` and `autoInstallOnAppQuit` are now `false`. The app checks for updates but never downloads without user consent. The update banner now shows a "Download Update" button when a new version is available; a progress bar appears during download; "Restart to Update" appears only after the download completes.
+- **Periodic Update Checks**: The app now re-checks for updates every 4 hours while running, in addition to the check on startup. Previously the app only checked once at launch.
+
 ## [1.0.7] - 2026-03-06
 
 ### Bug Fixes

@@ -236,6 +236,8 @@ app.on('ready', async () => {
   // Check for application updates (skip in dev mode unless --test-update flag is present)
   if (process.env.NODE_ENV !== 'development') {
     autoUpdateService.checkForUpdates().catch(console.error);
+    // Re-check every 4 hours while the app is running
+    autoUpdateService.startPeriodicUpdateCheck();
   } else if (process.argv.includes('--test-update')) {
     // Simulate an update lifecycle so the banner can be visually tested in dev mode
     console.log('[main] Simulating update lifecycle for dev testing...');
