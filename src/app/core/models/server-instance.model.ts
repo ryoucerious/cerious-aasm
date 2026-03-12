@@ -16,6 +16,7 @@ export interface ServerInstance {
   rconPort?: number;
   rconPassword?: string;
   bPvE?: boolean;
+  serverPVE?: boolean;
   difficultyOffset?: number;
   allowThirdPersonPlayer?: boolean;
   crossplay?: string[]; // e.g., ['Steam', 'Epic', 'Xbox', 'PlayStation']

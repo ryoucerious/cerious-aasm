@@ -79,7 +79,8 @@
   { "tab": "structures", "label": "Max Structures In Range", "key": "maxStructuresInRange", "type": "number", "min": 0, "default": 10500, "description": "Maximum number of structures allowed within a certain range. Prevents excessive structure spam." },
   { "tab": "structures", "label": "PvE Platform Structure Damage Ratio", "key": "pvePlatformStructureDamageRatio", "type": "number", "step": 0.01, "default": 1.0, "description": "Multiplier for damage to structures built on platforms in PvE mode." },
   
-  { "tab": "misc", "label": "PvE Mode", "key": "bPvE", "type": "boolean", "default": false, "description": "Enable Player vs Environment mode (no PvP combat)." },
+  { "tab": "misc", "label": "PvE Mode", "key": "bPvE", "type": "boolean", "default": false, "description": "Enable PvE mode in GameUserSettings.ini (companion to Server PvE)." },
+  { "tab": "misc", "label": "Server PvE (Game.ini)", "key": "serverPVE", "type": "boolean", "default": false, "description": "The primary PvE switch for ASA. Writes ServerPVE=True to Game.ini. Enable this (alongside PvE Mode) to make your server fully PvE." },
   { "tab": "misc", "label": "Show Floating Damage Text", "key": "showFloatingDamageText", "type": "boolean", "default": false, "description": "Shows floating damage numbers when dealing or receiving damage." },
   { "tab": "misc", "label": "Allow Third Person", "key": "allowThirdPersonPlayer", "type": "boolean", "default": false, "description": "Allow players to toggle third-person camera view." },
   { "tab": "misc", "label": "Disable Imprint Dino Buff", "key": "disableImprintDinoBuff", "type": "boolean", "default": false, "description": "Disables the stat buff from imprinting on dinos." },

@@ -20,6 +20,7 @@ export class MiscTabComponent {
     const categories: { [key: string]: string[] } = {
       'gamemode': [
         'bPvE',
+        'serverPVE',
         'serverHardcore',
         'bShowCreativeMode',
         'bUseSingleplayerSettings'
