@@ -38,3 +38,16 @@
     </button>
   </div>
 </div>
+
+<!-- Download error -->
+<div class="update-banner error" *ngIf="!dismissed && updateStatus?.status === 'error'">
+  <div class="banner-accent error"></div>
+  <div class="banner-content">
+    <span class="material-icons banner-icon">error_outline</span>
+    <span class="banner-text">Update failed: {{ updateStatus?.error || 'Unknown error' }}</span>
+    <button class="action-btn" (click)="retryDownload()">Retry</button>
+    <button class="dismiss-btn" (click)="dismiss()" title="Dismiss">
+      <span class="material-icons">close</span>
+    </button>
+  </div>
+</div>

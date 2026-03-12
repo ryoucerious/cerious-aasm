@@ -23,6 +23,10 @@
   &.ready {
     background: $success;
   }
+
+  &.error {
+    background: $danger;
+  }
 }
 
 .banner-content {

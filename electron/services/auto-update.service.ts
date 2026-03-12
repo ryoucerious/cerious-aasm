@@ -143,10 +143,16 @@ export class AutoUpdateService {
    */
   async downloadUpdate(): Promise<void> {
     if (!this.supported || this.useLinuxPackageUpdater) return;
+    // Immediately signal that download is starting so the UI transitions before
+    // the first download-progress event arrives (or before an error fires).
+    this.lastStatus = { status: 'downloading', percent: 0 };
+    messagingService.sendToAllRenderers('app-update-status', this.lastStatus);
     try {
       await autoUpdater.downloadUpdate();
     } catch (err: any) {
       console.error('[AutoUpdateService] Failed to download update:', err.message);
+      this.lastStatus = { status: 'error', error: err.message };
+      messagingService.sendToAllRenderers('app-update-status', this.lastStatus);
     }
   }
 

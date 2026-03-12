@@ -38,7 +38,8 @@ export class UpdateBannerComponent implements OnInit, OnDestroy {
       if (!status) return;
       this.updateStatus = status;
       // Un-dismiss when a new actionable state arrives so the user sees the prompt
-      if (status.status === 'available' || status.status === 'downloaded') {
+      if (status.status === 'available' || status.status === 'downloading' ||
+          status.status === 'downloaded' || status.status === 'error') {
         this.dismissed = false;
       }
       this.cdr.markForCheck();
@@ -63,6 +64,10 @@ export class UpdateBannerComponent implements OnInit, OnDestroy {
   }
 
   downloadUpdate(): void {
+    this.messaging.sendNotification('download-app-update', {});
+  }
+
+  retryDownload(): void {
     this.messaging.sendNotification('download-app-update', {});
   }
 
