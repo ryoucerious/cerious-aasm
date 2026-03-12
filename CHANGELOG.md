@@ -4,6 +4,17 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-03-11
+
+### Bug Fixes
+
+- **RCON Crash — Password Stored as Number**: The `rcon` library's `send()` method calls `Buffer.byteLength()` which requires a string. When `serverAdminPassword` was stored as a plain number in `config.json` (e.g. `123456`), passing it directly caused an uncaught `ERR_INVALID_ARG_TYPE` exception that crashed the main process. The password is now coerced with `String()` before being passed to the RCON constructor. The RCON port is similarly coerced with `parseInt()` for consistency.
+- **Servers Stuck in "Stopping" State After Auto ARK Update**: When `performClusterUpdate` restarted servers after a SteamCMD update, it passed empty no-op callbacks (`() => {}`) for log and state events. As a result, state transitions (`starting` → `running`) were never broadcast to the UI, leaving every restarted server permanently shown as "stopping". The cluster update sequence now retrieves proper `onLog`/`onState` callbacks via `serverInstanceService.getStandardEventCallbacks()` for each instance, ensuring server state and player polling are correctly broadcast to all connected windows after an auto-update restart.
+
+### New Features
+
+- **Cryopod Settings Added**: Three new `[ServerSettings]` options are now available in the Misc → Engrams & Crafting tab: **Disable Cryopod Fridge Requirement** (`DisableCryopodFridgeRequirement`), **Disable Cryopod Enemy Check** (`DisableCryopodEnemyCheck`), and **Allow Cryofridge On Saddle** (`AllowCryoFridgeOnSaddle`).
+
 ## [1.0.8] - 2026-03-08
 
 ### Bug Fixes

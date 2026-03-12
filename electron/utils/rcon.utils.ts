@@ -22,10 +22,11 @@ export function connectRcon(instanceId: string, config: any, onStatus?: (connect
   if (rconConnecting.has(instanceId)) {
     return;
   }
-  const port = config.rconPort || 27020;
+  const port = parseInt(String(config.rconPort || 27020), 10);
   // RCON authenticates with ServerAdminPassword — same as the in-game admin password.
   // Fall back to legacy rconPassword field for backward compatibility.
-  const password = config.serverAdminPassword || config.rconPassword || '';
+  // Coerce to string — passwords may be stored as numbers in config JSON.
+  const password = String(config.serverAdminPassword || config.rconPassword || '');
   // Use explicit IPv4 loopback — on Linux, 'localhost' may resolve to ::1 (IPv6)
   // which fails if ARK/Wine only binds to IPv4.
   const host = '127.0.0.1';

@@ -103,6 +103,9 @@ export interface ServerInstance {
   autoDestroyOldStructuresMultiplier?: number;
   maxTamedDinos?: number;
   enableCryoSicknessPVE?: boolean;
+  disableCryopodFridgeRequirement?: boolean;
+  disableCryopodEnemyCheck?: boolean;
+  allowCryoFridgeOnSaddle?: boolean;
   maxPersonalTamedDinos?: number;
   personalTamedDinosSaddleStructureCost?: number;
   useOptimizedHarvestingHealth?: boolean;

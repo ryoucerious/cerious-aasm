@@ -74,7 +74,10 @@ export class MiscTabComponent {
         'bAutoUnlockAllEngrams',
         'onlyAllowSpecifiedEngrams',
         'bAllowUnlimitedRespecs',
-        'allowCustomRecipes'
+        'allowCustomRecipes',
+        'disableCryopodFridgeRequirement',
+        'disableCryopodEnemyCheck',
+        'allowCryoFridgeOnSaddle'
       ],
       'admin': [
         'autoSavePeriodMinutes',

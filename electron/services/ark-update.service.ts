@@ -59,23 +59,21 @@ export class ArkUpdateService {
              return;
          }
 
-         const msg = `Server will restart for update in ${remaining} minute(s).`;
-         console.log(`[ark-update-service] Broadcast: ${msg}`);
-         
-         // Broadcast to all running servers
-         for (const instance of runningInstances) {
-             try {
-                // Check if still running before broadcasting
-                const state = require('./server-instance/server-process.service').serverProcessService.getNormalizedInstanceState(instance.id);
-                if (state === 'running') {
-                    await rconService.executeRconCommand(instance.id, `Broadcast ${msg}`);
-                }
-             } catch (e) {}
-         }
-         
-         // Logarithmic warning schedule: 60, 30, 15, 10, 5, 4, 3, 2, 1
-         if (remaining > 5 && remaining % 5 !== 0) { 
-             // skip unless divisible by 5
+         // Only warn at reduced intervals: every 5 min when >5 remain, every 1 min when <=5 remain
+         const shouldWarn = remaining <= 5 || remaining % 5 === 0;
+         if (shouldWarn) {
+             const msg = `Server will restart for update in ${remaining} minute(s).`;
+             console.log(`[ark-update-service] Broadcast: ${msg}`);
+             
+             // Broadcast to all running servers
+             for (const instance of runningInstances) {
+                 try {
+                    const state = require('./server-instance/server-process.service').serverProcessService.getNormalizedInstanceState(instance.id);
+                    if (state === 'running') {
+                        await rconService.executeRconCommand(instance.id, `Broadcast ${msg}`);
+                    }
+                 } catch (e) {}
+             }
          }
          remaining--;
       }, 60000); 
@@ -100,7 +98,10 @@ export class ArkUpdateService {
 
       this.messagingService.sendToAll('cluster-update-status', { status: 'stopping', message: 'Stopping all servers...' });
 
-      // 2. Stop ALL servers (parallel)
+      // 2. Stop ALL servers (parallel) — broadcast stopping state first so UI reflects the change
+      for (const inst of preRunningInstances!) {
+          this.messagingService.sendToAll('server-instance-state', { state: 'stopping', instanceId: inst.id });
+      }
       await Promise.all(preRunningInstances!.map((inst: any) => serverLifecycleService.stopServerInstance(inst.id)));
       
       this.messagingService.sendToAll('cluster-update-status', { status: 'updating', message: 'Updating ARK server files (via SteamCMD)...' });
@@ -133,15 +134,13 @@ export class ArkUpdateService {
 
       this.messagingService.sendToAll('cluster-update-status', { status: 'starting', message: 'Restarting servers...' });
 
-      // 5. Start servers that were running
-      // Stagger start to avoid CPU spike?
+      // 5. Start servers that were running, using standard event callbacks for proper UI state broadcasting
+      const { serverInstanceService } = require('./server-instance/server-instance.service');
       for (const instance of preRunningInstances!) {
           try {
-             // 30s delay between starts
-             await serverLifecycleService.startServerInstance(instance.id, instance, 
-                (log: string) => {}, 
-                (state: string) => {}
-             );
+             const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(instance.id);
+             await serverInstanceService.startServerInstance(instance.id, onLog, onState);
+             // 30s stagger between starts to avoid CPU spike
              await new Promise(resolve => setTimeout(resolve, 30000));
           } catch (e) {
               console.error(`[ark-update-service] Failed to restart ${instance.id}:`, e);

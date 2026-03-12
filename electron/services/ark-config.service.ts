@@ -122,6 +122,9 @@ export class ArkConfigService {
     { key: "structurePreventResourceRadiusMultiplier",  iniKey: "StructurePreventResourceRadiusMultiplier",   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "itemStackSizeMultiplier",                  iniKey: "ItemStackSizeMultiplier",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "maxStructuresInRange",                     iniKey: "MaxStructuresInRange",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "disableCryopodFridgeRequirement",          iniKey: "DisableCryopodFridgeRequirement",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "disableCryopodEnemyCheck",                 iniKey: "DisableCryopodEnemyCheck",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "allowCryoFridgeOnSaddle",                  iniKey: "AllowCryoFridgeOnSaddle",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
 
     // =====================================================
     // GameUserSettings.ini - [SessionSettings]
