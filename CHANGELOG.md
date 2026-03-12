@@ -8,6 +8,7 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ### Bug Fixes
 
+- **PvE Mode Not Working**: The "PvE Mode" toggle only wrote `bPvE=True` to `GameUserSettings.ini`, which is not sufficient to enable PvE in ASA. The actual PvE switch (`ServerPVE=True` in `Game.ini`) was mapped in the backend but never exposed in the UI. A new **Server PvE (Game.ini)** toggle is now available in Misc → Game Mode. Both toggles should be enabled together for a fully PvE server.
 - **Update Download Failure — Filename Mismatch**: The built installer was named `Cerious AASM Setup ${version}.exe` (spaces) while `latest.yml` referenced `Cerious-AASM-Setup-${version}.exe` (hyphens). electron-updater requested the hyphenated filename, received a 404 from GitHub Releases, and the download silently failed — the update banner would disappear with no feedback. An explicit `artifactName` is now set in the electron-builder config (`Cerious-AASM-Setup-${version}.${ext}`) so the built file matches the URL in `latest.yml` exactly.
 - **Update Banner Download Error Not Shown**: When the update download failed, the banner would silently close instead of showing an error. The banner now shows an error state with the failure message and a Retry button. Additionally, the banner immediately transitions to the downloading state when the button is clicked (rather than waiting for the first `download-progress` event).
 
