@@ -4,6 +4,13 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-03-11
+
+### Bug Fixes
+
+- **Update Download Failure — Filename Mismatch**: The built installer was named `Cerious AASM Setup ${version}.exe` (spaces) while `latest.yml` referenced `Cerious-AASM-Setup-${version}.exe` (hyphens). electron-updater requested the hyphenated filename, received a 404 from GitHub Releases, and the download silently failed — the update banner would disappear with no feedback. An explicit `artifactName` is now set in the electron-builder config (`Cerious-AASM-Setup-${version}.${ext}`) so the built file matches the URL in `latest.yml` exactly.
+- **Update Banner Download Error Not Shown**: When the update download failed, the banner would silently close instead of showing an error. The banner now shows an error state with the failure message and a Retry button. Additionally, the banner immediately transitions to the downloading state when the button is clicked (rather than waiting for the first `download-progress` event).
+
 ## [1.0.9] - 2026-03-11
 
 ### Bug Fixes
