@@ -33,7 +33,7 @@
             <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
           </div>
           <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
-            <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Server browser and status queries
+            <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Steam server discovery
           </div>
           <div class="port-item" *ngIf="serverInstance?.rconPort">
             <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
@@ -50,7 +50,7 @@
 
           <h5>UFW (Ubuntu/Debian):</h5>
           <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port</span>
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port (Steam discovery)</span>
 <span *ngIf="serverInstance?.rconPort">sudo ufw allow {{ serverInstance.rconPort }}/tcp  # RCON port</span></pre>
 
           <h5>Firewalld (CentOS/RHEL/Fedora):</h5>

@@ -102,8 +102,8 @@ export class ServerLifecycleService {
    */
   private async validateInstancePorts(instance: any, instanceId: string): Promise<ServerInstanceResult> {
     const gamePort = parseInt(instance.gamePort);
-    const queryPort = parseInt(instance.queryPort);
     const rconPort = parseInt(instance.rconPort);
+    const queryPort = parseInt(instance.queryPort || 27015);
 
     if (await isPortInUse(gamePort)) {
       return {
@@ -112,17 +112,17 @@ export class ServerLifecycleService {
         instanceId
       };
     }
-    if (await isPortInUse(queryPort)) {
-      return {
-        success: false,
-        error: `Query port ${queryPort} is already in use`,
-        instanceId
-      };
-    }
     if (await isPortInUse(rconPort)) {
       return {
         success: false,
         error: `RCON port ${rconPort} is already in use`,
+        instanceId
+      };
+    }
+    if (await isPortInUse(queryPort)) {
+      return {
+        success: false,
+        error: `Query port ${queryPort} (Steam discovery) is already in use`,
         instanceId
       };
     }

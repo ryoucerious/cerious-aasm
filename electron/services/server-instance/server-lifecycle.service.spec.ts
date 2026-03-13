@@ -165,7 +165,7 @@ describe('ServerLifecycleService', () => {
       });
     });
 
-    it('should handle query port in use', async () => {
+    it('should handle rcon port in use', async () => {
       const instanceId = 'test-instance';
       const instance = { gamePort: '7777', queryPort: '27015', rconPort: '32330' };
 
@@ -178,12 +178,12 @@ describe('ServerLifecycleService', () => {
 
       expect(result).toEqual({
         success: false,
-        error: 'Query port 27015 is already in use',
+        error: 'RCON port 32330 is already in use',
         instanceId
       });
     });
 
-    it('should handle rcon port in use', async () => {
+    it('should handle query port in use', async () => {
       const instanceId = 'test-instance';
       const instance = { gamePort: '7777', queryPort: '27015', rconPort: '32330' };
 
@@ -196,7 +196,7 @@ describe('ServerLifecycleService', () => {
 
       expect(result).toEqual({
         success: false,
-        error: 'RCON port 32330 is already in use',
+        error: 'Query port 27015 (Steam discovery) is already in use',
         instanceId
       });
     });

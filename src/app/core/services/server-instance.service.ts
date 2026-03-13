@@ -168,8 +168,8 @@ export class ServerInstanceService {
           
           // Add essential server configuration not in meta file
           defaults.gamePort = 7777;
-          defaults.queryPort = 27015;
           defaults.rconPort = 27020;
+          defaults.queryPort = 27015;
           defaults.rconPassword = '';
           defaults.battleEye = false; // Default to disabled for easier setup
           defaults.noTransferFromFiltering = false;
@@ -198,8 +198,8 @@ export class ServerInstanceService {
       maxPlayers: 70,
       mapName: 'TheIsland_WP',
       gamePort: 7777,
-      queryPort: 27015,
       rconPort: 27020,
+      queryPort: 27015,
       bPvE: false,
       difficultyOffset: 1.0,
       allowThirdPersonPlayer: false,

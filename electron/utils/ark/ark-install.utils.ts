@@ -143,15 +143,42 @@ export function installArkServer(
       cwd: steamcmdPath,
     })
   };
-  runInstaller(
-    installerOptions,
-    (progress) => {
+  const MAX_RETRIES = 2;
+  let attempts = 0;
+
+  function attemptInstall() {
+    attempts++;
+    // Reset progress state for retries so progress reporting works correctly
+    if (attempts > 1) {
+      arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };
+      console.log(`[ark-install] Retrying SteamCMD install (attempt ${attempts}/${MAX_RETRIES + 1})...`);
       if (onData) {
-        onData(progress);
+        onData({
+          percent: 0,
+          step: 'download',
+          message: `Retrying ARK server install (attempt ${attempts})...`
+        });
       }
-    },
-    (err, output) => {
-      callback(err, output);
     }
-  );
+
+    runInstaller(
+      installerOptions,
+      (progress) => {
+        if (onData) {
+          onData(progress);
+        }
+      },
+      (err, output) => {
+        if (err && attempts <= MAX_RETRIES) {
+          // SteamCMD may exit non-zero during self-update; retry automatically
+          console.warn(`[ark-install] Attempt ${attempts} failed: ${err.message}`);
+          attemptInstall();
+        } else {
+          callback(err ?? null, output);
+        }
+      }
+    );
+  }
+
+  attemptInstall();
 }

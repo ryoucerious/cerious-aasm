@@ -18,7 +18,7 @@ export class FirewallService {
   /**
    * Get Linux firewall instructions for ARK server ports
    * @param gamePort - The game port for the ARK server
-   * @param queryPort - The query port for the ARK server
+   * @param queryPort - The query port for the ARK server (Steam discovery)
    * @param rconPort - The RCON port for the ARK server
    * @returns An object containing the success status and firewall instructions
    */

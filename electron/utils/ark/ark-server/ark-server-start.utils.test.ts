@@ -76,7 +76,7 @@ describe('ark-server-start.utils', () => {
       expect(result.portError).toMatch(/Game port/);
     });
 
-    it('returns error if query port is in use', async () => {
+    it('returns error if rcon port is in use', async () => {
       jest.spyOn(instanceUtils, 'loadInstanceConfig').mockReturnValue({
         instanceDir: '/instance',
         config: { gamePort: 7777, queryPort: 27015, rconPort: 27020 }
@@ -84,10 +84,10 @@ describe('ark-server-start.utils', () => {
       jest.spyOn(networkUtils, 'isPortInUse').mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       const result = await startUtils.startArkServerInstance('id');
       expect(result.started).toBe(false);
-      expect(result.portError).toMatch(/Query port/);
+      expect(result.portError).toMatch(/RCON port/);
     });
 
-    it('returns error if rcon port is in use', async () => {
+    it('returns error if query port is in use', async () => {
       jest.spyOn(instanceUtils, 'loadInstanceConfig').mockReturnValue({
         instanceDir: '/instance',
         config: { gamePort: 7777, queryPort: 27015, rconPort: 27020 }
@@ -95,7 +95,7 @@ describe('ark-server-start.utils', () => {
       jest.spyOn(networkUtils, 'isPortInUse').mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       const result = await startUtils.startArkServerInstance('id');
       expect(result.started).toBe(false);
-      expect(result.portError).toMatch(/RCON port/);
+      expect(result.portError).toMatch(/Query port/);
     });
 
     it('handles errors thrown during startup', async () => {

@@ -22,8 +22,17 @@ export function buildArkServerArgs(config: any): string[] {
   // Session name - this can be in both command line and INI, command line takes precedence
   if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
   if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
-  if (config.queryPort) paramParts.push(`QueryPort=${config.queryPort}`);
+
   if (config.altSaveDirName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirName}`);
+  // QueryPort is the Steam server discovery/query port (UDP).
+  // Each instance MUST have a unique QueryPort or only the first server initialises Steam.
+  if (config.queryPort) paramParts.push(`QueryPort=${config.queryPort}`);
+  // PeerPort is the Steam Online Subsystem authentication port.
+  // Auto-calculated as gamePort + 1 (UE default) — not user-configurable.
+  const peerPort = config.gamePort ? parseInt(config.gamePort, 10) + 1 : null;
+  if (peerPort) paramParts.push(`PeerPort=${peerPort}`);
+  // MultiHome ensures each instance properly binds its own sockets
+  paramParts.push('MultiHome=0.0.0.0');
 
   // Cluster parameters
   if (config.clusterDirOverride) {
@@ -70,12 +79,10 @@ export function buildArkServerArgs(config: any): string[] {
   // Wine/Proton compatibility flags (required for ARK Server v83.21+ on Linux)
   // These Unreal Engine flags prevent crashes and hangs when running under Wine:
   // - NoHangDetection: Disables UE hang detection that freezes during Sentry SDK init
-  // - NOSTEAM: Disables Steam API integration (unnecessary for dedicated servers)
   // - norhithread: Disables RHI rendering thread (prevents Wine threading issues)
   // Can be disabled via disableWineCompatFlags config option if issues arise
   if (getPlatform() === 'linux' && !isTrue(config.disableWineCompatFlags)) {
     args.push('-NoHangDetection');
-    args.push('-NOSTEAM');
     args.push('-norhithread');
   }
 

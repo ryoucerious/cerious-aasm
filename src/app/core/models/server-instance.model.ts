@@ -12,8 +12,8 @@ export interface ServerInstance {
   maxPlayers?: number;
   mapName?: string;
   gamePort?: number;
-  queryPort?: number;
   rconPort?: number;
+  queryPort?: number;
   rconPassword?: string;
   bPvE?: boolean;
   serverPVE?: boolean;

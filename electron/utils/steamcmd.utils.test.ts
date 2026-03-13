@@ -5,6 +5,13 @@ jest.mock('fs');
 jest.mock('path');
 jest.mock('../utils/platform.utils');
 jest.mock('../utils/installer.utils');
+jest.mock('node-pty', () => ({
+  spawn: jest.fn(() => ({
+    onData: jest.fn(),
+    onExit: jest.fn((cb: Function) => { cb({ exitCode: 0 }); }),
+    kill: jest.fn(),
+  })),
+}));
 
 const mockedFs = fs as jest.Mocked<typeof fs>;
 const mockedPath = path as jest.Mocked<typeof path>;
@@ -222,6 +229,58 @@ describe('steamcmd.utils', () => {
       const { installSteamCmd } = require('../utils/steamcmd.utils');
       installSteamCmd(callback);
 
+      expect(callback).toHaveBeenCalledWith(null, 'Installation completed');
+    });
+
+    it('should initialize SteamCMD after extraction and retry on non-zero exit', () => {
+      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
+      const pty = require('node-pty');
+
+      // First spawn exits with code 7 (self-update), second spawn exits with 0
+      let spawnCount = 0;
+      (pty.spawn as jest.Mock).mockImplementation(() => {
+        spawnCount++;
+        return {
+          onData: jest.fn(),
+          onExit: jest.fn((cb: Function) => {
+            cb({ exitCode: spawnCount === 1 ? 7 : 0 });
+          }),
+          kill: jest.fn(),
+        };
+      });
+
+      mockedFs.existsSync.mockReturnValue(false);
+      (runInstaller as jest.Mock).mockImplementation((config, progressCallback, completionCallback) => {
+        completionCallback(null, 'Installation completed');
+      });
+
+      const { installSteamCmd } = require('../utils/steamcmd.utils');
+      installSteamCmd(callback, onData);
+
+      expect(pty.spawn).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenCalledWith(null, 'Installation completed');
+      expect(onData).toHaveBeenCalledWith(
+        expect.objectContaining({ step: 'init', message: expect.stringContaining('Initializing') })
+      );
+    });
+
+    it('should handle pty.spawn failure during initialization gracefully', () => {
+      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
+      const pty = require('node-pty');
+
+      (pty.spawn as jest.Mock).mockImplementation(() => {
+        throw new Error('pty spawn failed');
+      });
+
+      mockedFs.existsSync.mockReturnValue(false);
+      (runInstaller as jest.Mock).mockImplementation((config, progressCallback, completionCallback) => {
+        completionCallback(null, 'Installation completed');
+      });
+
+      const { installSteamCmd } = require('../utils/steamcmd.utils');
+      installSteamCmd(callback, onData);
+
+      // Should still succeed despite init failure
       expect(callback).toHaveBeenCalledWith(null, 'Installation completed');
     });
   });

@@ -149,7 +149,7 @@ export async function setupArkServerFirewall(gamePort: number, queryPort?: numbe
     errors.push(`Failed to create game port rule (UDP ${gamePort})`);
   }
 
-  // Query port (UDP)
+  // Query port (UDP) - Steam server discovery
   if (queryPort && queryPort !== gamePort) {
     if (await createFirewallRule(queryPort, 'UDP', `ARK Server Query Port ${queryPort}`)) {
       rulesCreated.push(`Query UDP ${queryPort}`);
@@ -263,7 +263,7 @@ export function getLinuxFirewallInstructions(ports: { game: number; query?: numb
   instructions += `# For UFW (Ubuntu/Debian):\n`;
   instructions += `sudo ufw allow ${game}/udp  # Game port\n`;
   if (query && query !== game) {
-    instructions += `sudo ufw allow ${query}/udp  # Query port\n`;
+    instructions += `sudo ufw allow ${query}/udp  # Query port (Steam discovery)\n`;
   }
   if (rcon) {
     instructions += `sudo ufw allow ${rcon}/tcp  # RCON port\n`;

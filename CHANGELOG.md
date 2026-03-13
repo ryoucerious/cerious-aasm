@@ -4,6 +4,24 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-03-13
+
+### Bug Fixes
+
+- **RCON Settings Concatenated onto ServerAdminPassword in INI**: `RCONEnabled` and `RCONPort` were not included in the INI settings mapping, so they were never written as separate lines in `GameUserSettings.ini`. They only appeared as `?`-delimited command-line parameters (`?ServerAdminPassword=X?RCONEnabled=True?RCONPort=Y`), and when ARK processed these it would concatenate them onto the `ServerAdminPassword` line in the INI file, breaking the password. `RCONPort` and `RCONEnabled=True` are now written as their own lines in the INI by the config service.
+- **Port Validation Order Swapped (Query vs RCON)**: The pre-start port-in-use checks tested the query port before the RCON port, but the RCON port is more critical for server management. The validation order is now RCON first, then query port, with clearer error messages noting query port is for Steam discovery.
+- **SteamCMD Failing on First Run (Self-Update Not Completed)**: SteamCMD requires a self-update on its very first run before it can process commands. The installer now runs SteamCMD once with `+quit` after extraction to complete the self-update, with automatic retry if the initial run exits non-zero.
+- **ARK Server Install Failing on Transient SteamCMD Errors**: SteamCMD can exit non-zero during self-update or due to transient network issues. The ARK server install now retries up to 2 additional attempts automatically before reporting failure.
+- **Second Server Instance Failing to Initialize Steam**: Each server instance needs a `steam_appid.txt` in its working directory for Steam subsystem initialization. The file is now written to the instance working directory before spawning, and `SteamAppId` is set in the process environment.
+
+### Improvements
+
+- **Install/Update Button Disabled While Servers Running**: The Install/Update ARK Server button on the Settings page is now disabled when any server instance is running or starting, preventing SteamCMD conflicts.
+- **PeerPort Auto-Calculated**: `PeerPort` (Steam Online Subsystem authentication port) is now automatically calculated as `gamePort + 1` and passed to the server, matching the Unreal Engine default.
+- **MultiHome Binding**: `MultiHome=0.0.0.0` is now always included in launch parameters to ensure each instance properly binds its own sockets.
+- **Removed -NOSTEAM Flag on Linux**: The `-NOSTEAM` Wine/Proton compatibility flag has been removed as it prevented Steam subsystem initialization needed for server discovery.
+- **Query Port Documentation Clarified**: Query port descriptions throughout the UI, firewall instructions, and system requirements have been updated to clarify it is used for Steam server discovery.
+
 ## [1.0.10] - 2026-03-11
 
 ### Bug Fixes

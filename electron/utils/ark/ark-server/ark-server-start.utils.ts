@@ -33,7 +33,6 @@ function getInstanceSaveDir(instanceDir: string): string {
  */
 async function validateServerPorts(config: any, onLog?: (data: string) => void): Promise<{ valid: boolean, error?: string }> {
   const gamePort = config.gamePort || 7777;
-  const queryPort = config.queryPort || 27015;
   const rconPort = config.rconPort || 27020;
 
   const gamePortInUse = await isPortInUse(gamePort);
@@ -43,19 +42,17 @@ async function validateServerPorts(config: any, onLog?: (data: string) => void):
     return { valid: false, error };
   }
 
-  // Only check query port if it's different from game port
-  if (queryPort !== gamePort) {
-    const queryPortInUse = await isPortInUse(queryPort);
-    if (queryPortInUse) {
-      const error = `Query port ${queryPort} is already in use.`;
-      if (onLog) onLog(`[ERROR] ${error}`);
-      return { valid: false, error };
-    }
-  }
-
   const rconPortInUse = await isPortInUse(rconPort);
   if (rconPortInUse) {
     const error = `RCON port ${rconPort} is already in use.`;
+    if (onLog) onLog(`[ERROR] ${error}`);
+    return { valid: false, error };
+  }
+
+  const queryPort = config.queryPort || 27015;
+  const queryPortInUse = await isPortInUse(queryPort);
+  if (queryPortInUse) {
+    const error = `Query port ${queryPort} (Steam discovery) is already in use.`;
     if (onLog) onLog(`[ERROR] ${error}`);
     return { valid: false, error };
   }

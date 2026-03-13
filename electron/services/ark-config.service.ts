@@ -31,6 +31,7 @@ export class ArkConfigService {
     { key: "altSaveDirectoryName",                     iniKey: "AltSaveDirectoryName",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverPassword",                           iniKey: "ServerPassword",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverAdminPassword",                      iniKey: "ServerAdminPassword",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "rconPort",                                 iniKey: "RCONPort",                                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "xpMultiplier",                             iniKey: "XPMultiplier",                               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "overrideOfficialDifficulty",               iniKey: "OverrideOfficialDifficulty",                 destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "difficultyOffset",                         iniKey: "DifficultyOffset",                           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -246,6 +247,19 @@ export class ArkConfigService {
           iniFiles[mapping.destination][mapping.section].push(`${mapping.iniKey}=${configValue}`);
         }
       });
+
+      // Write RCONEnabled=True when an RCON port is configured.
+      // Without this, ARK derives RCONEnabled from the command-line ?-params and
+      // concatenates it onto the ServerAdminPassword line in the INI file.
+      if (config.rconPort) {
+        if (!iniFiles['GameUserSettings.ini']) {
+          iniFiles['GameUserSettings.ini'] = {};
+        }
+        if (!iniFiles['GameUserSettings.ini']['[ServerSettings]']) {
+          iniFiles['GameUserSettings.ini']['[ServerSettings]'] = [];
+        }
+        iniFiles['GameUserSettings.ini']['[ServerSettings]'].push('RCONEnabled=True');
+      }
 
       // Write stat multiplier arrays to Game.ini [/script/shootergame.shootergamemode]
       const gameIniSection = '[/script/shootergame.shootergamemode]';

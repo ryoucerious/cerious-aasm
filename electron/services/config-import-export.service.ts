@@ -11,6 +11,7 @@ const INI_KEY_TO_CONFIG: { [iniKeyLower: string]: string } = {
   'altsavedirectoryname': 'altSaveDirectoryName',
   'serverpassword': 'serverPassword',
   'serveradminpassword': 'serverAdminPassword',
+  'rconport': 'rconPort',
   'xpmultiplier': 'xpMultiplier',
   'overrideofficaldifficulty': 'overrideOfficialDifficulty',
   'overrideofficialdifficulty': 'overrideOfficialDifficulty',

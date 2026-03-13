@@ -209,7 +209,7 @@ sudo yum install -y gtk3 nss alsa-lib
 ### Port Requirements
 **Required Ports (per server)**:
 - **Game Port**: 27015 (TCP) - Player connections
-- **Query Port**: 27016 (UDP) - Server browser queries
+- **Query Port**: 27015 (UDP) - Steam server discovery
 - **RCON Port**: 27020 (TCP) - Remote administration
 
 **Optional Ports**:

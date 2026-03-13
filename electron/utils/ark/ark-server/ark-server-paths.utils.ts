@@ -52,10 +52,12 @@ export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[]
   const protonBinary = getProtonBinaryPath();
 
   // Set up Proton environment with Wine/Proton compatibility fixes
+  const { ARK_APP_ID } = require('./ark-server-install.utils');
   const protonEnv = {
     WINEPREFIX: path.join(getDefaultInstallDir(), '.wine-ark'),
     STEAM_COMPAT_DATA_PATH: path.join(getDefaultInstallDir(), '.steam-compat'),
     STEAM_COMPAT_CLIENT_INSTALL_PATH: path.join(getDefaultInstallDir(), '.steam'),
+    SteamAppId: ARK_APP_ID,
     // Wine DLL overrides for compatibility:
     // - mshtml=d: Disable IE/HTML rendering components (not needed for dedicated server)
     // - winhttp/bcrypt/crypt32=n,b: Use native Wine implementations for networking/crypto

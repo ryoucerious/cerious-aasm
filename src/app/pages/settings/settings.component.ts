@@ -5,6 +5,7 @@ import { NgFor, NgIf, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
+import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { ModalComponent } from '../../components/modal/modal.component';
 import { Subscription } from 'rxjs';
 import { environment } from '../../../environments/environment';
@@ -39,6 +40,17 @@ export class SettingsPageComponent {
   showSettings = true;
 
   async ngOnInit() {
+    // Track whether any server instances are running/starting
+    this.subscriptions.push(
+      this.serverInstanceService.getInstances().subscribe(instances => {
+        this.hasRunningServers = instances.some(i => {
+          const state = (i.state || i.status || '').toLowerCase();
+          return state === 'running' || state === 'starting';
+        });
+        this.cdr.markForCheck();
+      })
+    );
+
     // Load config first
     const cfg: any = await this.configService.loadConfig();
     if (cfg) {
@@ -125,13 +137,15 @@ export class SettingsPageComponent {
   showSudoPasswordModal = false;
   sudoPassword = '';
   pendingInstallTarget = '';
+  hasRunningServers = false;
 
   constructor(
     private messaging: MessagingService,
     private cdr: ChangeDetectorRef,
     private utility: UtilityService,
-  private notification: NotificationService,
-    private configService: GlobalConfigService
+    private notification: NotificationService,
+    private configService: GlobalConfigService,
+    private serverInstanceService: ServerInstanceService
   ) {
     this.isElectron = this.utility.getPlatform() === 'Electron';
     this.tabs = [

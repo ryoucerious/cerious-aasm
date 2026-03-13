@@ -93,7 +93,7 @@
              [(ngModel)]="serverInstance.queryPort"
              (blur)="onSaveSettings(); onValidateField('queryPort', serverInstance.queryPort)"
              [disabled]="isLocked" />
-      <div class="form-control-label desc">UDP port for server queries and status information (default: 27015). Used by server browsers and monitoring tools.</div>
+      <div class="form-control-label desc">UDP port for Steam server discovery (default: 27015). Each server instance must use a unique query port.</div>
       <div *ngIf="hasFieldError('queryPort')" class="validation-error">{{ getFieldError('queryPort') }}</div>
       <div *ngIf="hasFieldWarning('queryPort')" class="validation-warning">{{ getFieldWarning('queryPort') }}</div>
     </div>

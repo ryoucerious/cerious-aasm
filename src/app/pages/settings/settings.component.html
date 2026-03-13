@@ -22,7 +22,7 @@
     <!-- Server Installation Tab -->
     <div *ngIf="activeTab === 'server-installation'">
       <div class="action-group-settings">
-        <button class="btn btn-ghost" (click)="onInstallServer()">
+        <button class="btn btn-ghost" (click)="onInstallServer()" [disabled]="hasRunningServers" [title]="hasRunningServers ? 'Stop all running servers before installing or updating' : ''">
           <i class="material-icons">download</i>
           Install/Update Ark Server
         </button>

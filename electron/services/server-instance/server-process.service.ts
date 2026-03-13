@@ -1,7 +1,8 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 import { validateInstanceId } from '../../utils/validation.utils';
-import { ArkPathUtils, buildArkServerArgs } from '../../utils/ark.utils';
+import { ArkPathUtils, buildArkServerArgs, ARK_APP_ID } from '../../utils/ark.utils';
 import { ServerInstanceResult } from '../../types/server-instance.types';
 import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile } from '../../utils/ark/ark-server/ark-server-logging.utils';
 
@@ -74,8 +75,19 @@ export class ServerProcessService {
 
     // Set up spawn options with proper environment and working directory
     const { getPlatform } = require('../../utils/platform.utils');
+    const cwd = getPlatform() === 'windows' ? instanceDir : ArkPathUtils.getArkServerDir();
+
+    // Ensure steam_appid.txt exists in the working directory so the Steam
+    // subsystem can initialize for every server instance, not just the first.
+    try {
+      fs.mkdirSync(cwd, { recursive: true });
+      fs.writeFileSync(path.join(cwd, 'steam_appid.txt'), ARK_APP_ID, 'utf8');
+    } catch (e) {
+      console.warn(`[server-process-service] Could not write steam_appid.txt to ${cwd}:`, e);
+    }
+
     const spawnOptions: any = {
-      cwd: getPlatform() === 'windows' ? instanceDir : ArkPathUtils.getArkServerDir(),
+      cwd,
       // Use 'ignore' for stdout/stderr — we tail the log file directly and never
       // read from these pipes.  On Linux, xvfb-run + Proton + Wine are extremely
       // verbose on stderr; if the 64 KB pipe buffer fills up and the parent never
@@ -85,6 +97,7 @@ export class ServerProcessService {
       env: {
         ...process.env,
         ...(commandInfo.env || {}), // Add Proton env vars on Linux
+        SteamAppId: ARK_APP_ID,
         ARK_SAVE_PATH: formattedSaveDir,
         ARK_CONFIG_PATH: formattedConfigDir,
         ARK_LOG_PATH: formattedLogDir
