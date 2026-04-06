@@ -170,6 +170,8 @@
       *ngIf="activeTab === 'cluster'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
+      [fieldErrors]="fieldErrors"
+      [fieldWarnings]="fieldWarnings"
       (saveSettings)="onSaveSettings()"
       (validateField)="validateField($event.key, $event.value)">
     </app-cluster-tab>

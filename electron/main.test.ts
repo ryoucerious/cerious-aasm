@@ -5,8 +5,12 @@ jest.mock('electron', () => ({
   app: {
     on: jest.fn(),
     getAppPath: jest.fn(() => '/app'),
+    getPath: jest.fn(() => '/tmp'),
+    isReady: jest.fn(() => false),
     quit: jest.fn(),
     exit: jest.fn(),
+    commandLine: { appendSwitch: jest.fn() },
+    disableHardwareAcceleration: jest.fn(),
   },
   BrowserWindow: jest.fn().mockImplementation(() => ({
     webContents: { send: jest.fn() },
@@ -19,6 +23,7 @@ jest.mock('electron', () => ({
     onClosed: jest.fn(),
   })),
   ipcMain: {
+    on: jest.fn(),
     once: jest.fn(),
     handle: jest.fn(),
   }
@@ -38,6 +43,27 @@ jest.mock('./utils/rcon.utils', () => ({ cleanupAllRconConnections: jest.fn() })
 jest.mock('./services/ark-update.service', () => ({ ArkUpdateService: jest.fn().mockImplementation(() => ({ initialize: jest.fn() })) }));
 jest.mock('./handlers/backup-handler', () => ({ initializeBackupSystem: jest.fn() }));
 jest.mock('./services/server-instance/server-process.service', () => ({ serverProcessService: { cleanupOrphanedProcesses: jest.fn() } }));
+jest.mock('./services/auto-update.service', () => ({ autoUpdateService: { checkForUpdates: jest.fn(), setupAutoUpdater: jest.fn() } }));
+jest.mock('./handlers/ark-update-handler', () => ({ setArkUpdateService: jest.fn() }));
+jest.mock('./utils/logger', () => ({ getLogFilePath: jest.fn(() => '/tmp/log.txt') }));
+
+// Mock side-effect handler imports
+jest.mock('./handlers/web-server-handler', () => ({}));
+jest.mock('./handlers/directory-handler', () => ({}));
+jest.mock('./handlers/message-handler', () => ({}));
+jest.mock('./handlers/install-handler', () => ({}));
+jest.mock('./handlers/automation-handler', () => ({}));
+jest.mock('./handlers/server-instance-handler', () => ({}));
+jest.mock('./handlers/settings-handler', () => ({}));
+jest.mock('./handlers/proton-handler', () => ({}));
+jest.mock('./handlers/linux-deps-handler', () => ({}));
+jest.mock('./handlers/firewall-handler', () => ({}));
+jest.mock('./handlers/system-info-handler', () => ({}));
+jest.mock('./handlers/whitelist-handler', () => ({}));
+jest.mock('./handlers/config-import-export-handler', () => ({}));
+jest.mock('./handlers/auto-update-handler', () => ({}));
+jest.mock('./handlers/ark-api-handler', () => ({}));
+jest.mock('./handlers/curseforge-handler', () => ({}));
 
 // Import after mocks
 import * as main from './main';

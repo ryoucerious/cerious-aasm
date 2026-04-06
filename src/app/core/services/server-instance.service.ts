@@ -205,6 +205,8 @@ export class ServerInstanceService {
       allowThirdPersonPlayer: false,
       crossplay: ['Steam (PC)'],
       mods: [],
+      clusterDirOverride: '',
+      clusterId: '',
       perLevelStatsMultiplier_Player: [...defaultStatArray],
       perLevelStatsMultiplier_DinoTamed: [...defaultStatArray],
       perLevelStatsMultiplier_DinoWild: [...defaultStatArray],

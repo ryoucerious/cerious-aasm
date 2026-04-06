@@ -4,6 +4,9 @@ import path from 'path';
 jest.mock('fs');
 jest.mock('path');
 jest.mock('../platform.utils');
+jest.mock('../global-config.utils', () => ({
+  loadGlobalConfig: jest.fn(() => ({ serverDataDir: '' }))
+}));
 
 // Add rmSync to the fs mock
 const fsModule = require('fs');

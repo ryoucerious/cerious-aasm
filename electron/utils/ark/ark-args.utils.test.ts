@@ -7,6 +7,82 @@ describe('ark-args.utils', () => {
       expect(args).toContain('-ServerPlatform=PC');
     });
 
+    it('should include session name with spaces unencoded', () => {
+      const args = buildArkServerArgs({ sessionName: 'My Test Server' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('SessionName=My Test Server');
+    });
+
+    it('should include session name with special characters unencoded', () => {
+      const args = buildArkServerArgs({ sessionName: 'Server Name' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('SessionName=Server Name');
+    });
+
+    it('should include server password unencoded', () => {
+      const args = buildArkServerArgs({ serverPassword: 'pass word' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('ServerPassword=pass word');
+    });
+
+    it('should include admin password unencoded', () => {
+      const args = buildArkServerArgs({ serverAdminPassword: 'adminpass' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('ServerAdminPassword=adminpass');
+    });
+
+    it('should include MaxPlayers on command line', () => {
+      const args = buildArkServerArgs({ maxPlayers: 20 });
+      const mainArg = args[0];
+      expect(mainArg).toContain('MaxPlayers=20');
+    });
+
+    it('should not include MaxPlayers when not set', () => {
+      const args = buildArkServerArgs({});
+      const mainArg = args[0];
+      expect(mainArg).not.toContain('MaxPlayers');
+    });
+
+    it('should include ServerPVE when bPvE is true', () => {
+      const args = buildArkServerArgs({ bPvE: true });
+      const mainArg = args[0];
+      expect(mainArg).toContain('ServerPVE');
+    });
+
+    it('should include ServerPVE when serverPVE is "true"', () => {
+      const args = buildArkServerArgs({ serverPVE: 'true' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('ServerPVE');
+    });
+
+    it('should not include ServerPVE when PvE is false', () => {
+      const args = buildArkServerArgs({ bPvE: false, serverPVE: false });
+      const mainArg = args[0];
+      expect(mainArg).not.toContain('ServerPVE');
+    });
+
+    it('should not include QueryPort when set to 0', () => {
+      const args = buildArkServerArgs({ queryPort: 0 });
+      const mainArg = args[0];
+      expect(mainArg).not.toContain('QueryPort');
+    });
+
+    it('should include QueryPort when set to a valid port', () => {
+      const args = buildArkServerArgs({ queryPort: 27015 });
+      const mainArg = args[0];
+      expect(mainArg).toContain('QueryPort=27015');
+    });
+
+    it('should add -NOSTEAM when disableSteamSubsystem is true', () => {
+      const args = buildArkServerArgs({ disableSteamSubsystem: true });
+      expect(args).toContain('-NOSTEAM');
+    });
+
+    it('should not add -NOSTEAM by default', () => {
+      const args = buildArkServerArgs({});
+      expect(args).not.toContain('-NOSTEAM');
+    });
+
     it('should use serverPlatform if set', () => {
       const args = buildArkServerArgs({ serverPlatform: 'XSX' });
       expect(args).toContain('-ServerPlatform=XSX');
@@ -52,19 +128,16 @@ describe('ark-args.utils', () => {
       const config = { mods: [], enabledMods: ['123', '456'] };
       const params = getArkLaunchParameters(config);
       expect(params).toContain('-mods=123,456');
-      expect(params).toContain('-automanagedmods');
     });
     it('should handle legacy mods array with objects', () => {
       const config = { mods: [{ id: '789', enabled: true }, { id: '101', enabled: false }] };
       const params = getArkLaunchParameters(config);
       expect(params).toContain('-mods=789');
-      expect(params).toContain('-automanagedmods');
     });
     it('should handle mods array with string IDs', () => {
       const config = { mods: ['202', '303'] };
       const params = getArkLaunchParameters(config);
       expect(params).toContain('-mods=202,303');
-      expect(params).toContain('-automanagedmods');
     });
     it('should add additional launchParameters from config', () => {
       const config = { launchParameters: '-foo -bar' };

@@ -187,12 +187,16 @@ export class ArkServerValidationService {
    */
   validatePorts(server: any): FieldValidation {
     const ports = [
-      { field: 'gamePort', value: server.gamePort, default: 7777 },
-      { field: 'queryPort', value: server.queryPort, default: 27015 },
-      { field: 'rconPort', value: server.rconPort, default: 27020 }
+      { field: 'gamePort', value: server.gamePort, default: 7777, required: true },
+      { field: 'queryPort', value: server.queryPort, default: 27015, required: false },
+      { field: 'rconPort', value: server.rconPort, default: 27020, required: true }
     ];
 
     for (const port of ports) {
+      // QueryPort is optional — ASA may not use it. Skip validation when 0 or unset.
+      if (!port.required && (port.value === 0 || port.value === null || port.value === undefined)) {
+        continue;
+      }
       const portValue = port.value !== undefined ? port.value : port.default;
       const fieldLabel = this.getFieldLabel(port.field) || port.field;
 
@@ -205,10 +209,13 @@ export class ArkServerValidationService {
       }
     }
 
-    // Check for port conflicts
+    // Check for port conflicts (only among ports with values)
     const usedPorts = new Set();
     for (const port of ports) {
       const portValue = port.value !== undefined ? port.value : port.default;
+      if (!port.required && (port.value === 0 || port.value === null || port.value === undefined)) {
+        continue;
+      }
       if (usedPorts.has(portValue)) {
         return { field: 'ports', isValid: false, error: 'Port numbers must be unique' };
       }

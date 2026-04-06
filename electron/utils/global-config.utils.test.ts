@@ -19,7 +19,11 @@ const mockDefaultConfig: GlobalConfig = {
   authenticationEnabled: false,
   authenticationUsername: '',
   authenticationPassword: '',
-  maxBackupDownloadSizeMB: 100
+  maxBackupDownloadSizeMB: 100,
+  serverDataDir: '',
+  autoUpdateArkServer: false,
+  updateWarningMinutes: 15,
+  curseForgeApiKey: '',
 };
 
 const mockCustomConfig: GlobalConfig = {
@@ -28,7 +32,11 @@ const mockCustomConfig: GlobalConfig = {
   authenticationEnabled: true,
   authenticationUsername: 'admin',
   authenticationPassword: 'password123',
-  maxBackupDownloadSizeMB: 200
+  maxBackupDownloadSizeMB: 200,
+  serverDataDir: '',
+  autoUpdateArkServer: false,
+  updateWarningMinutes: 15,
+  curseForgeApiKey: '',
 };
 
 describe('global-config.utils', () => {

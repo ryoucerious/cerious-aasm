@@ -4,6 +4,7 @@ import {
   disconnectRcon,
   sendRconCommand,
   isRconConnected,
+  isRconConnecting,
   cleanupAllRconConnections
 } from '../utils/rcon.utils';
 
@@ -33,10 +34,13 @@ describe('rcon.utils', () => {
     // Mock console.error to suppress expected errors from disconnect error handling tests
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    // Clear rconClients between tests
+    // Clear rconClients and rconConnecting between tests
     Object.keys(rconClients).forEach(key => {
-      delete rconClients[key];
+      disconnectRcon(key);
     });
+    // Also clear any connecting state for common test instance IDs
+    disconnectRcon('instance1');
+    disconnectRcon('instance2');
 
     // Setup mock RCON instance
     mockRconInstance = {
@@ -104,11 +108,11 @@ describe('rcon.utils', () => {
       const onStatus = jest.fn();
       connectRcon('instance1', mockConfig, onStatus);
 
-      // Simulate 15 failed attempts
-      for (let i = 0; i < 15; i++) {
+      // Simulate 30 failed attempts (max attempts = 30)
+      for (let i = 0; i < 30; i++) {
         const endCall = mockRconInstance.on.mock.calls.find((call: any[]) => call[0] === 'end');
         endCall[1]();
-        if (i < 14) {
+        if (i < 29) {
           jest.runOnlyPendingTimers(); // Advance to next retry
         }
       }
@@ -139,11 +143,11 @@ describe('rcon.utils', () => {
 
       connectRcon('instance1', mockConfig, onStatus);
 
-      // Simulate 15 errors
-      for (let i = 0; i < 15; i++) {
+      // Simulate 30 errors (max attempts = 30)
+      for (let i = 0; i < 30; i++) {
         const errorCall = mockRconInstance.on.mock.calls.find((call: any[]) => call[0] === 'error');
         errorCall[1](new Error('Connection failed'));
-        if (i < 14) {
+        if (i < 29) {
           jest.runOnlyPendingTimers();
         }
       }
@@ -158,14 +162,14 @@ describe('rcon.utils', () => {
       const configWithoutPort = { rconPassword: 'testpass' };
       connectRcon('instance1', configWithoutPort);
 
-      expect(mockRcon).toHaveBeenCalledWith('localhost', 27020, 'testpass');
+      expect(mockRcon).toHaveBeenCalledWith('127.0.0.1', 27020, 'testpass');
     });
 
     it('should use default password if not specified', () => {
       const configWithoutPassword = { rconPort: 27021 };
       connectRcon('instance1', configWithoutPassword);
 
-      expect(mockRcon).toHaveBeenCalledWith('localhost', 27021, '');
+      expect(mockRcon).toHaveBeenCalledWith('127.0.0.1', 27021, '');
     });
   });
 

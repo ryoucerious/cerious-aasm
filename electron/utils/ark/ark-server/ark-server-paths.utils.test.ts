@@ -76,7 +76,7 @@ describe('ark-server-paths.utils', () => {
   expect(result.command).toBe('xvfb-run');
   expect(result.args).toContain('/proton');
   expect(result.args).toContain('exe');
-  expect(result.env.WINEDLLOVERRIDES).toBe('mshtml=d');
+  expect(result.env.WINEDLLOVERRIDES).toBe('mshtml=d;winhttp=n,b;bcrypt=n,b;crypt32=n,b');
   expect(result.env.WINEPREFIX).toBe('/default/.wine-ark');
     });
   });

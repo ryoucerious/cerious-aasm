@@ -4,6 +4,27 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-04-05
+
+### Bug Fixes
+
+- **Session Name Spaces Breaking Port/RCON/MaxPlayers/PvE Settings (#10, #9)**: Travel URL parameter values were being URL-encoded (`encodeURIComponent`), causing spaces in session names to appear as `%20` in the ARK UI. Worse, ARK's UE command-line parser splits on spaces before interpreting `?`-delimited parameters, so all values after the first space in a session name (Port, QueryPort, MaxPlayers, RCON settings, PvE flags) were silently dropped. The `encodeTravelUrlValue` function has been removed entirely; all parameter values are now passed as raw strings.
+- **RCON Authentication Failure**: URL encoding was also transforming special characters in `ServerAdminPassword` (e.g., `@` → `%40`), but `rcon.utils.ts` authenticates with the raw config value, causing an auth mismatch and connection refusal. Passwords are now always passed unencoded.
+- **MaxPlayers Not Applied (#9)**: `MaxPlayers` was not included in the server launch command line, so ARK used its INI or hardcoded default instead of the value configured in the UI. MaxPlayers is now passed as `?MaxPlayers=N` in the travel URL.
+- **PvE Mode Not Applied at Runtime (#9)**: The `ServerPVE` flag was only written to `Game.ini` but not passed on the command line. ARK's command-line arguments override INI values at startup, so PvE mode was never activated. Both `serverPVE` and `bPvE` config flags are now passed as `?ServerPVE` in the travel URL.
+- **Cluster Path Not Saving (#3)**: New server instances were created without default values for `clusterDirOverride` and `clusterId`, causing them to be `undefined` and silently dropped on first save. Both fields are now initialised to empty strings. Additionally, `ClusterTabComponent` had stub implementations for `hasFieldError()`, `getFieldError()`, `hasFieldWarning()`, and `getFieldWarning()` that always returned empty/false — and neither `fieldErrors` nor `fieldWarnings` were being passed from the parent. All are now wired correctly.
+- **QueryPort Validation Blocking Servers Without Query Port (#3)**: Port validation required a non-zero QueryPort, triggering a validation error for users who set QueryPort to 0 or left it unset. QueryPort is now treated as optional; validation is skipped when the value is 0, null, or undefined.
+
+### New Features & Improvements
+
+- **Headless Linux: Auto-Launch via xvfb-run (#7)**: When running with `--headless` on Linux with no `DISPLAY` environment variable set, the app now automatically re-executes itself under `xvfb-run -a` (virtual framebuffer), so users do not need a separate wrapper script. If `xvfb-run` is not installed, a clear error message with distro-specific install instructions is printed before exiting.
+- **Auto-Update Hang Timeout (#8)**: A 5-minute overall timeout has been added to the cluster auto-update shutdown phase. If all `stopServerInstance` calls do not complete within 5 minutes, any remaining running instances are force-killed via `SIGKILL` and their state is set to `stopped` before the SteamCMD update proceeds.
+- **Improved Server Shutdown — Hard Timeout + Platform Fallback (#8)**: The server stop sequence now uses `Promise.race` with a hard 2-minute timeout. After a graceful SIGTERM + 5-second grace period, SIGKILL is attempted. On Windows, if `process.kill()` fails to terminate the process, `taskkill /F /PID` is used as a final fallback. On Linux, `kill -9 <pid>` is the fallback.
+- **Linux stderr Redirected to File (#6)**: On Linux, the ARK server process's stderr stream is now redirected to a per-instance `stderr.log` file (next to `ShooterGame.log`) instead of being discarded. This captures crash diagnostics without the pipe-buffer blocking risk that could freeze a running server.
+- **Staggered Server Starts on Automation (#6)**: When the automation service starts multiple servers on app launch, each start is now followed by a 30-second delay before the next server is started. This prevents Steam/Proton initialisation races on Linux and reduces peak CPU load on all platforms.
+- **Steam Subsystem Escape Hatch (#6)**: A new `disableSteamSubsystem` setting re-enables the `-NOSTEAM` flag for users experiencing Steam initialisation hangs on Linux. When enabled, ARK bypasses the Steam subsystem entirely, which resolves the hang at the cost of Steam-based server discovery.
+- **PvE Structure Decay Settings Added (#3)**: Two new PvE structure decay settings are now available in the Structures advanced tab: **PvE Structure Decay Period Multiplier** (`PvEStructureDecayPeriodMultiplier`) and **PvE Structure Decay Delay** (`PvEStructureDecayDelay`).
+
 ## [1.0.11] - 2026-03-13
 
 ### Bug Fixes

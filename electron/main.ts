@@ -7,6 +7,46 @@ const isHeadlessMode = process.argv.includes('--headless');
 const isLinux = process.platform === 'linux';
 
 // =========================
+// Headless Linux: ensure a display server is available
+// GTK initialises at the native level when Electron is imported — BEFORE any
+// JavaScript runs.  Without a DISPLAY connection (X11/Wayland) the process
+// crashes with:  Gtk-ERROR: Can't create a GtkStyleContext without a display
+//
+// If no DISPLAY is set we automatically re-exec via `xvfb-run` (virtual
+// framebuffer) so users don't need a wrapper script.
+// =========================
+if (isHeadlessMode && isLinux && !process.env.DISPLAY) {
+  const { execFileSync, execSync } = require('child_process');
+
+  // Check if xvfb-run is available
+  let hasXvfb = false;
+  try {
+    execSync('command -v xvfb-run', { stdio: 'ignore' });
+    hasXvfb = true;
+  } catch (_) {}
+
+  if (hasXvfb) {
+    // Re-exec ourselves under xvfb-run — this replaces the current process
+    console.log('[main] No DISPLAY detected in headless mode — re-launching via xvfb-run');
+    try {
+      const args = ['-a', process.argv[0], ...process.argv.slice(1)];
+      execFileSync('xvfb-run', args, { stdio: 'inherit' });
+      process.exit(0);
+    } catch (e: any) {
+      // execFileSync throws on non-zero exit; propagate the exit code
+      process.exit(e.status || 1);
+    }
+  } else {
+    console.error('[main] ERROR: No display server and xvfb-run not found.');
+    console.error('  Headless mode on Linux requires a virtual framebuffer.');
+    console.error('  Install xvfb:  sudo apt install xvfb   (Debian/Ubuntu)');
+    console.error('                 sudo dnf install xorg-x11-server-Xvfb  (Fedora/RHEL)');
+    console.error('  Or use the provided wrapper script: cerious-aasm-headless-appimage.sh');
+    process.exit(1);
+  }
+}
+
+// =========================
 // Core Dependencies
 // =========================
 import { app, BrowserWindow, ipcMain } from 'electron';

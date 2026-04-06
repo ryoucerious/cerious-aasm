@@ -90,6 +90,9 @@ export class AutomationService {
             try {
               const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(serverId);
               await serverInstanceService.startServerInstance(serverId, onLog, onState);
+              // Stagger between server starts to avoid Steam/Proton initialisation races
+              // on Linux (Issue #6) and reduce CPU spike on all platforms.
+              await new Promise(resolve => setTimeout(resolve, 30000));
             } catch (error) {
               console.error(`Failed to auto-start server ${serverId}:`, error);
             }

@@ -98,11 +98,43 @@ export class ArkUpdateService {
 
       this.messagingService.sendToAll('cluster-update-status', { status: 'stopping', message: 'Stopping all servers...' });
 
-      // 2. Stop ALL servers (parallel) — broadcast stopping state first so UI reflects the change
+      // 2. Stop ALL servers (parallel) with a 5-minute overall timeout.
+      // Individual stopServerInstance calls have their own 2-minute graceful + force-kill logic,
+      // but we add an overall safety net so the update is never permanently stuck.
       for (const inst of preRunningInstances!) {
           this.messagingService.sendToAll('server-instance-state', { state: 'stopping', instanceId: inst.id });
       }
-      await Promise.all(preRunningInstances!.map((inst: any) => serverLifecycleService.stopServerInstance(inst.id)));
+
+      const stopAllPromise = Promise.all(preRunningInstances!.map((inst: any) =>
+          serverLifecycleService.stopServerInstance(inst.id).catch((e: any) => {
+              console.error(`[ark-update-service] Error stopping ${inst.id}:`, e);
+          })
+      ));
+
+      const overallStopTimeout = 5 * 60 * 1000; // 5 minutes
+      const stopResult = await Promise.race([
+          stopAllPromise.then(() => 'completed' as const),
+          new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), overallStopTimeout))
+      ]);
+
+      if (stopResult === 'timeout') {
+          console.warn('[ark-update-service] Overall stop timeout reached (5 min). Force-killing remaining servers...');
+          for (const inst of preRunningInstances!) {
+              const state = serverProcessService.getNormalizedInstanceState(inst.id);
+              if (state !== 'stopped') {
+                  console.warn(`[ark-update-service] Instance ${inst.id} still in state '${state}' — force-killing`);
+                  try {
+                      const proc = serverProcessService.getServerProcess(inst.id);
+                      if (proc && proc.pid) {
+                          proc.kill('SIGKILL');
+                      }
+                  } catch (e) {}
+                  serverProcessService.setInstanceState(inst.id, 'stopped');
+              }
+          }
+          // Brief pause after force kills
+          await new Promise(resolve => setTimeout(resolve, 2000));
+      }
       
       this.messagingService.sendToAll('cluster-update-status', { status: 'updating', message: 'Updating ARK server files (via SteamCMD)...' });
 

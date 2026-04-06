@@ -19,7 +19,6 @@ export function buildArkServerArgs(config: any): string[] {
   let paramParts: string[] = [];
   paramParts.push('listen');
 
-  // Session name - this can be in both command line and INI, command line takes precedence
   if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
   if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
 
@@ -44,7 +43,9 @@ export function buildArkServerArgs(config: any): string[] {
   }
   if (config.clusterId) args.push(`-ClusterId=${config.clusterId}`);
 
-  // Passwords - these will also be in INI files
+  // Passwords — do NOT encode these. ARK uses the literal received string as its
+  // RCON / admin password, so encoding would cause RCON authentication to fail
+  // (rcon.utils connects with the raw value, not the encoded one).
   if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
   // ServerAdminPassword controls both in-game admin commands and RCON authentication.
   // Prefer the user-configured serverAdminPassword; fall back to the auto-generated
@@ -58,6 +59,14 @@ export function buildArkServerArgs(config: any): string[] {
     paramParts.push('RCONEnabled=True');
     paramParts.push(`RCONPort=${config.rconPort}`);
   }
+
+  // MaxPlayers - pass on command line so it overrides INI (avoids shared config dir race)
+  if (config.maxPlayers) paramParts.push(`MaxPlayers=${config.maxPlayers}`);
+
+  // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
+  // Must be checked before composing mainArg. We need isTrue helper inline here.
+  const toBool = (val: any) => val === true || val === 'true';
+  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE');
 
   // Compose the main command string
   let mainArg = mapArg;
@@ -84,6 +93,12 @@ export function buildArkServerArgs(config: any): string[] {
   if (getPlatform() === 'linux' && !isTrue(config.disableWineCompatFlags)) {
     args.push('-NoHangDetection');
     args.push('-norhithread');
+  }
+
+  // Escape hatch: re-enable -NOSTEAM for users experiencing Steam initialization hangs
+  // on Linux (Issue #6). This bypasses Steam subsystem entirely.
+  if (isTrue(config.disableSteamSubsystem)) {
+    args.push('-NOSTEAM');
   }
 
   // Server platform - convert crossplay array if serverPlatform not set

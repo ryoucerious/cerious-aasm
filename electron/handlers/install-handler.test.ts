@@ -303,7 +303,7 @@ describe('Install Handler', () => {
       expect(consoleSpy).toHaveBeenCalledWith('[install-handler] Unexpected error during installation:', error);
       expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('install', {
         target: 'proton',
-        data: { error: 'Network timeout', requestId: 'test-123' },
+        data: { error: 'Network timeout', message: 'Network timeout', step: 'error', phase: 'error', overallPhase: 'Installation Failed', phasePercent: 0, requestId: 'test-123' },
         requestId: 'test-123'
       }, mockSender);
 
@@ -330,7 +330,7 @@ describe('Install Handler', () => {
       expect(consoleSpy).toHaveBeenCalledWith('[install-handler] Unexpected error during installation:', 'String error');
       expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('install', {
         target: 'unknown',
-        data: { error: 'String error', requestId: undefined },
+        data: { error: 'String error', message: 'String error', step: 'error', phase: 'error', overallPhase: 'Installation Failed', phasePercent: 0, requestId: undefined },
         requestId: undefined
       }, mockSender);
       consoleSpy.mockRestore();

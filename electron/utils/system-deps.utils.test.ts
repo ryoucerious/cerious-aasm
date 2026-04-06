@@ -40,13 +40,14 @@ describe('system-deps.utils', () => {
 
   describe('LINUX_DEPENDENCIES', () => {
     it('should contain all required dependencies', () => {
-      expect(LINUX_DEPENDENCIES.length).toBe(6);
+      expect(LINUX_DEPENDENCIES.length).toBe(7);
       expect(LINUX_DEPENDENCIES[0].name).toBe('cURL');
       expect(LINUX_DEPENDENCIES[1].name).toBe('Unzip');
       expect(LINUX_DEPENDENCIES[2].name).toBe('Tar');
       expect(LINUX_DEPENDENCIES[3].name).toBe('Xvfb');
       expect(LINUX_DEPENDENCIES[4].name).toBe('SteamCMD Dependencies (32-bit libraries)');
-      expect(LINUX_DEPENDENCIES[5].name).toBe('Font Configuration');
+      expect(LINUX_DEPENDENCIES[5].name).toBe('ALSA Audio Library');
+      expect(LINUX_DEPENDENCIES[6].name).toBe('Font Configuration');
     });
 
     it('should have correct structure for each dependency', () => {
@@ -408,6 +409,7 @@ describe('system-deps.utils', () => {
 
     it('should continue with optional dependency failure', async () => {
       // Mock successful dpkg, update but failed install
+      mockedFs.existsSync.mockReturnValue(true); // Enables apt (existsSync('/usr/bin/apt') = true)
       let callCount = 0;
       mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
         if (event === 'close') {
@@ -421,7 +423,7 @@ describe('system-deps.utils', () => {
       });
 
       const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[5]]; // Font Configuration (not required)
+      const missingDeps = [LINUX_DEPENDENCIES[6]]; // Font Configuration (not required)
 
       const result = await installMissingDependencies(missingDeps, 'password', onProgress);
 

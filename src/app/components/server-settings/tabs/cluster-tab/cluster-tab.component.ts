@@ -11,6 +11,8 @@ import { FormsModule } from '@angular/forms';
 export class ClusterTabComponent {
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
+  @Input() fieldErrors: { [key: string]: string } = {};
+  @Input() fieldWarnings: { [key: string]: string } = {};
 
   @Output() validateField = new EventEmitter<{key: string, value: any}>();
   @Output() saveSettings = new EventEmitter<void>();
@@ -25,20 +27,19 @@ export class ClusterTabComponent {
   ];
 
   hasFieldError(key: string): boolean {
-    // This would be implemented based on your validation logic
-    return false;
+    return !!this.fieldErrors[key];
   }
 
   getFieldError(key: string): string {
-    return '';
+    return this.fieldErrors[key] || '';
   }
 
   hasFieldWarning(key: string): boolean {
-    return false;
+    return !!this.fieldWarnings[key];
   }
 
   getFieldWarning(key: string): string {
-    return '';
+    return this.fieldWarnings[key] || '';
   }
 
   onValidateField(key: string, value: any): void {

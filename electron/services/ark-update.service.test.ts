@@ -33,22 +33,24 @@ describe('ArkUpdateService', () => {
   });
 
   it('checkForUpdate returns update result if new build', async () => {
-    jest.spyOn(service, 'pollArkServerUpdates').mockResolvedValue('12346');
+    service['installedBuildId'] = '12345';
+    (service as any).getLatestServerVersion = jest.fn().mockResolvedValue('12346');
     const result: ArkUpdateResult = await service.checkForUpdate();
     expect(result.success).toBe(true);
     expect(result.hasUpdate).toBe(true);
     expect(result.buildId).toBe('12346');
   });
 
-  it('checkForUpdate returns no update if null', async () => {
-    jest.spyOn(service, 'pollArkServerUpdates').mockResolvedValue(null);
+  it('checkForUpdate returns no update if same build', async () => {
+    service['installedBuildId'] = '12345';
+    (service as any).getLatestServerVersion = jest.fn().mockResolvedValue('12345');
     const result: ArkUpdateResult = await service.checkForUpdate();
     expect(result.success).toBe(true);
     expect(result.hasUpdate).toBe(false);
   });
 
   it('checkForUpdate returns error on failure', async () => {
-    jest.spyOn(service, 'pollArkServerUpdates').mockRejectedValue(new Error('fail'));
+    (service as any).getLatestServerVersion = jest.fn().mockRejectedValue(new Error('fail'));
     const result: ArkUpdateResult = await service.checkForUpdate();
     expect(result.success).toBe(false);
     expect(result.hasUpdate).toBe(false);
@@ -57,12 +59,11 @@ describe('ArkUpdateService', () => {
 
   it('pollArkServerUpdates returns new buildId if changed', async () => {
     // Simulate the effect by patching the method
-    service['lastKnownBuildId'] = '12345';
+    service['installedBuildId'] = '12345';
     // Patch the method to simulate a new buildId
     (service as any).getLatestServerVersion = jest.fn().mockResolvedValue('12346');
     const result = await service.pollArkServerUpdates();
     expect(result).toBe('12346');
-    expect(service['lastKnownBuildId']).toBe('12346');
   });
 
   it('pollArkServerUpdates returns null if no change', async () => {

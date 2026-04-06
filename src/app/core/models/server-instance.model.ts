@@ -128,6 +128,13 @@ export interface ServerInstance {
   bPvEDisableFriendlyFire?: boolean;
   bPvEAllowTribeWar?: boolean;
   bPvEAllowTribeWarCancel?: boolean;
+
+  // Structure decay settings
+  pveStructureDecayPeriodMultiplier?: number;
+  pveStructureDecayDelay?: number;
+
+  // Steam subsystem escape hatch (Issue #6)
+  disableSteamSubsystem?: boolean;
   bServerGameLogEnabled?: boolean;
   bShowCreativeMode?: boolean;
   bUseCorpseLocator?: boolean;

@@ -109,6 +109,8 @@ export class ArkConfigService {
     { key: "preventLeaveEvents",                       iniKey: "PreventLeaveEvents",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "autoDestroyOldStructuresMultiplier",       iniKey: "AutoDestroyOldStructuresMultiplier",         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "bDisableStructureDecayPvE",                iniKey: "bDisableStructureDecayPvE",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "pveStructureDecayPeriodMultiplier",        iniKey: "PvEStructureDecayPeriodMultiplier",          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "pveStructureDecayDelay",                   iniKey: "PvEStructureDecayDelay",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "bDisableLootCrates",                       iniKey: "bDisableLootCrates",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "bDisableWeatherFog",                       iniKey: "bDisableWeatherFog",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "bEnableExtraStructurePreventionVolumes",   iniKey: "bEnableExtraStructurePreventionVolumes",     destination: "GameUserSettings.ini", section: "[ServerSettings]" },

@@ -3,6 +3,7 @@ import { serverMonitoringService } from './server-monitoring.service';
 // Mock all dependencies
 jest.mock('../../utils/platform.utils');
 jest.mock('../rcon.service');
+jest.mock('../../utils/rcon.utils');
 jest.mock('../../utils/ark/ark-server/ark-server-logging.utils');
 jest.mock('../../utils/ark/instance.utils');
 jest.mock('../../utils/ark/ark-server/ark-server-state.utils');
@@ -53,6 +54,10 @@ describe('ServerMonitoringService', () => {
       executeRconCommand: jest.fn()
     };
     jest.mocked(require('../rcon.service')).rconService = rconServiceMock;
+
+    // Mock RCON connection checks — assume connected so player polling proceeds
+    jest.mocked(require('../../utils/rcon.utils')).isRconConnected = jest.fn().mockReturnValue(true);
+    jest.mocked(require('../../utils/rcon.utils')).isRconConnecting = jest.fn().mockReturnValue(false);
 
     setupLogTailingMock = jest.fn();
     jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).setupLogTailing = setupLogTailingMock;

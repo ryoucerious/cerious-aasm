@@ -4,6 +4,7 @@ jest.mock('../services/ark-update.service');
 
 import { messagingService } from '../services/messaging.service';
 import { ArkUpdateService } from '../services/ark-update.service';
+import { setArkUpdateService } from './ark-update-handler';
 
 const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
 const mockArkUpdateService = ArkUpdateService as jest.MockedClass<typeof ArkUpdateService>;
@@ -25,6 +26,9 @@ describe('ARK Update Handler', () => {
 
     // Import handler to register events
     require('./ark-update-handler');
+
+    // Set the mock service instance so the handler doesn't bail on null check
+    setArkUpdateService(mockServiceInstance as any);
 
     // Capture the registered event handler
     const mockOn = mockMessagingService.on as jest.Mock;

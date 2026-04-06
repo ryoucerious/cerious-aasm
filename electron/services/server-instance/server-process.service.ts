@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { validateInstanceId } from '../../utils/validation.utils';
@@ -93,7 +93,10 @@ export class ServerProcessService {
       // verbose on stderr; if the 64 KB pipe buffer fills up and the parent never
       // drains it, the child process blocks on its next write() call, which freezes
       // ARK and causes it to stop writing to ShooterGame.log.
-      stdio: 'ignore',
+      //
+      // Redirect stderr to a per-instance log file so crash diagnostics are captured
+      // without pipe buffer risk (Issue #6).
+      stdio: ['ignore', 'ignore', 'ignore'] as any,
       env: {
         ...process.env,
         ...(commandInfo.env || {}), // Add Proton env vars on Linux
@@ -105,6 +108,17 @@ export class ServerProcessService {
       detached: getPlatform() === 'linux',
       windowsHide: true
     };
+
+    // On Linux, redirect stderr to a per-instance log file for diagnostics
+    if (getPlatform() === 'linux') {
+      try {
+        const stderrLogPath = path.join(instanceDir, 'stderr.log');
+        const stderrFd = fs.openSync(stderrLogPath, 'w');
+        spawnOptions.stdio = ['ignore', 'ignore', stderrFd] as any;
+      } catch (e) {
+        console.warn(`[server-process-service] Could not create stderr log for ${instanceId}:`, e);
+      }
+    }
 
     // Snapshot log files BEFORE starting so we can detect which new file belongs to this instance
     const logSnapshot = snapshotLogFiles();
@@ -294,36 +308,63 @@ export class ServerProcessService {
       console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, error);
     }
 
-    // 3. Wait for process exit (max 2 minutes)
-    const shutdownTimeoutMs = 120000; 
+    // 3. Wait for process exit (max 2 minutes) using Promise.race for hard timeout
+    const shutdownTimeoutMs = 120000;
     const checkIntervalMs = 1000;
-    const startTime = Date.now();
 
-    while (!process.killed && (Date.now() - startTime) < shutdownTimeoutMs) {
-      // Check if process is still running
-      try {
-        if (process.exitCode !== null) break;
-        // On Windows checking .killed property isn't always enough
-        // but the 'exit' handler above will clean up this.arkServerProcesses[instanceId]
-        if (!this.arkServerProcesses[instanceId]) break;
-      } catch (e) {
-        break; 
+    const waitForExit = async () => {
+      const startTime = Date.now();
+      while ((Date.now() - startTime) < shutdownTimeoutMs) {
+        try {
+          if (process.killed || process.exitCode !== null) return true;
+          if (!this.arkServerProcesses[instanceId]) return true;
+        } catch (e) {
+          return true;
+        }
+        await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
       }
-      await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
-    }
+      return false;
+    };
+
+    const hardTimeout = new Promise<boolean>(resolve => setTimeout(() => resolve(false), shutdownTimeoutMs + 5000));
+    const exited = await Promise.race([waitForExit(), hardTimeout]);
 
     // 4. Force kill if still running
     if (this.arkServerProcesses[instanceId]) {
-      console.warn(`[server-process-service] Instance ${instanceId} did not stop gracefully. Force killing...`);
+      console.warn(`[server-process-service] Instance ${instanceId} did not stop gracefully (exited=${exited}). Force killing...`);
       try {
         process.kill('SIGTERM');
         await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        if (this.arkServerProcesses[instanceId]) {
-           process.kill('SIGKILL');
-        }
       } catch (e) {
-        console.error(`[server-process-service] Error killing process for ${instanceId}:`, e);
+        // SIGTERM may fail if process already gone
+      }
+
+      if (this.arkServerProcesses[instanceId]) {
+        try {
+          process.kill('SIGKILL');
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } catch (e) {
+          // SIGKILL may fail if process already gone
+        }
+      }
+
+      // Windows fallback: taskkill by PID if process.kill didn't work
+      if (this.arkServerProcesses[instanceId] && process.pid) {
+        const { getPlatform } = require('../../utils/platform.utils');
+        if (getPlatform() === 'windows') {
+          try {
+            console.warn(`[server-process-service] Instance ${instanceId}: using taskkill /F /PID ${process.pid}`);
+            execSync(`taskkill /F /PID ${process.pid}`, { stdio: 'ignore' });
+          } catch (e) {
+            // Process may already be gone
+          }
+        } else {
+          try {
+            execSync(`kill -9 ${process.pid}`, { stdio: 'ignore' });
+          } catch (e) {
+            // Process may already be gone
+          }
+        }
       }
     }
 
