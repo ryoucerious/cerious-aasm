@@ -49,8 +49,8 @@ describe('DiscordService', () => {
     };
 
     it('should send notification on server start', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       await service.sendNotification('inst1', 'start', 'Server starting');
 
@@ -70,8 +70,8 @@ describe('DiscordService', () => {
     });
 
     it('should include details field when provided', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       await service.sendNotification('inst1', 'update', 'Server updated', 'Build ID: 12345');
 
@@ -88,7 +88,7 @@ describe('DiscordService', () => {
     });
 
     it('should not send when instance not found', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(null);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(null);
 
       await service.sendNotification('missing', 'start', 'Hello');
 
@@ -96,7 +96,7 @@ describe('DiscordService', () => {
     });
 
     it('should not send when discord is disabled', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
         ...baseInstance,
         discordConfig: { enabled: false, webhookUrl: 'https://webhook' },
       });
@@ -107,7 +107,7 @@ describe('DiscordService', () => {
     });
 
     it('should not send when webhookUrl is empty', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
         ...baseInstance,
         discordConfig: { enabled: true, webhookUrl: '' },
       });
@@ -118,7 +118,7 @@ describe('DiscordService', () => {
     });
 
     it('should not send when no discordConfig', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
         sessionName: 'Test',
       });
 
@@ -138,7 +138,7 @@ describe('DiscordService', () => {
           },
         },
       };
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(instance);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(instance);
 
       await service.sendNotification('inst1', 'start', 'Server starting');
 
@@ -146,8 +146,8 @@ describe('DiscordService', () => {
     });
 
     it('should handle axios errors gracefully', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-      (mockAxios.post as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+      (mockAxios.post as jest.Mock<any>).mockRejectedValue(new Error('Network error'));
 
       // Should not throw
       await service.sendNotification('inst1', 'start', 'Hello');
@@ -156,8 +156,8 @@ describe('DiscordService', () => {
     });
 
     it('should use correct colors for different event types', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       const colorMap: Record<string, number> = {
         start: 0x00FF00,
@@ -170,8 +170,8 @@ describe('DiscordService', () => {
 
       for (const [event, expectedColor] of Object.entries(colorMap)) {
         jest.clearAllMocks();
-        (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-        (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+        (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+        (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
         await service.sendNotification('inst1', event, `Event: ${event}`);
 
@@ -187,8 +187,8 @@ describe('DiscordService', () => {
     });
 
     it('should default to blurple for unknown event types', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(baseInstance);
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(baseInstance);
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       await service.sendNotification('inst1', 'unknown', 'Test');
 
@@ -211,8 +211,8 @@ describe('DiscordService', () => {
           // No notifications object
         },
       };
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(instance);
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(instance);
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       await service.sendNotification('inst1', 'start', 'Hello');
 
@@ -220,11 +220,11 @@ describe('DiscordService', () => {
     });
 
     it('should use instanceId as fallback server name', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
         discordConfig: baseInstance.discordConfig,
         // No sessionName or name
       });
-      (mockAxios.post as jest.Mock).mockResolvedValue({ status: 200 });
+      (mockAxios.post as jest.Mock<any>).mockResolvedValue({ status: 200 });
 
       await service.sendNotification('inst1', 'start', 'Hello');
 

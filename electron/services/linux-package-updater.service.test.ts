@@ -98,7 +98,7 @@ describe('LinuxPackageUpdaterService', () => {
           return;
         }
 
-        (mockAxios.get as jest.Mock).mockResolvedValue({
+        (mockAxios.get as jest.Mock<any>).mockResolvedValue({
           data: {
             tag_name: 'v1.0.12',
             assets: [],

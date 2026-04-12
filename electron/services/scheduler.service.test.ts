@@ -44,7 +44,7 @@ describe('SchedulerService', () => {
         { id: 'b1', message: 'Hello', intervalMinutes: 5, enabled: true },
         { id: 'b2', message: 'World', intervalMinutes: 10, enabled: false },
       ];
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
         broadcasts,
       });
 
@@ -55,7 +55,7 @@ describe('SchedulerService', () => {
     });
 
     it('should skip when instance not found', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue(null);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(null);
 
       await service.initSchedule('missing');
 
@@ -63,7 +63,7 @@ describe('SchedulerService', () => {
     });
 
     it('should skip when instance has no broadcasts', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockResolvedValue({ name: 'Server' });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({ name: 'Server' });
 
       await service.initSchedule('inst1');
 

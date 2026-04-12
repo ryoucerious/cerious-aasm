@@ -290,7 +290,7 @@ describe('ConfigImportExportService', () => {
       const { arkConfigService } = require('./ark-config.service');
 
       // Mock writeArkConfigFiles to create actual INI files
-      (arkConfigService.writeArkConfigFiles as jest.Mock).mockImplementation((dir: string) => {
+      (arkConfigService.writeArkConfigFiles as jest.Mock<any>).mockImplementation((dir: string) => {
         const configDir = path.join(dir, 'Config', 'WindowsServer');
         fs.mkdirSync(configDir, { recursive: true });
         fs.writeFileSync(path.join(configDir, 'GameUserSettings.ini'), '[ServerSettings]\nTest=1', 'utf-8');

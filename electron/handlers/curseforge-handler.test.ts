@@ -32,7 +32,7 @@ describe('curseforge-handler', () => {
     require('./curseforge-handler');
 
     handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock).mock.calls) {
+    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
       handlers[call[0] as string] = call[1] as any;
     }
   });
@@ -243,7 +243,7 @@ describe('curseforge-handler', () => {
   describe('curseforge-open-website', () => {
     it('should open default CurseForge URL', async () => {
       const { shell } = require('electron');
-      (shell.openExternal as jest.Mock).mockResolvedValue(undefined);
+      (shell.openExternal as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['curseforge-open-website']({}, mockSender);
 
@@ -257,7 +257,7 @@ describe('curseforge-handler', () => {
 
     it('should open custom URL when provided', async () => {
       const { shell } = require('electron');
-      (shell.openExternal as jest.Mock).mockResolvedValue(undefined);
+      (shell.openExternal as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['curseforge-open-website']({ url: 'https://custom.url' }, mockSender);
 
@@ -266,7 +266,7 @@ describe('curseforge-handler', () => {
 
     it('should handle open errors', async () => {
       const { shell } = require('electron');
-      (shell.openExternal as jest.Mock).mockRejectedValue(new Error('Cannot open'));
+      (shell.openExternal as jest.Mock<any>).mockRejectedValue(new Error('Cannot open'));
 
       await handlers['curseforge-open-website']({}, mockSender);
 

@@ -78,7 +78,7 @@ describe('AutoUpdateService', () => {
 
   describe('checkForUpdates', () => {
     it('should call electron-updater checkForUpdates', async () => {
-      mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
+      (mockAutoUpdater.checkForUpdates as jest.Mock<any>).mockResolvedValue(undefined);
 
       let serviceRef: any;
       jest.isolateModules(() => {
@@ -89,7 +89,7 @@ describe('AutoUpdateService', () => {
     });
 
     it('should handle check errors gracefully', async () => {
-      mockAutoUpdater.checkForUpdates.mockRejectedValue(new Error('Network down'));
+      (mockAutoUpdater.checkForUpdates as jest.Mock<any>).mockRejectedValue(new Error('Network down'));
 
       let serviceRef: any;
       jest.isolateModules(() => {
@@ -102,7 +102,7 @@ describe('AutoUpdateService', () => {
 
   describe('downloadUpdate', () => {
     it('should call autoUpdater.downloadUpdate and broadcast status', async () => {
-      mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
+      (mockAutoUpdater.downloadUpdate as jest.Mock<any>).mockResolvedValue(undefined);
 
       let serviceRef: any;
       let localMessaging: any;
@@ -169,7 +169,7 @@ describe('AutoUpdateService', () => {
         )?.[1];
 
         expect(updateAvailableHandler).toBeDefined();
-        updateAvailableHandler({ version: '2.0.0', releaseNotes: 'New stuff', releaseDate: '2024-01-01' });
+        (updateAvailableHandler as Function)({ version: '2.0.0', releaseNotes: 'New stuff', releaseDate: '2024-01-01' });
 
         expect(localMessaging.sendToAllRenderers).toHaveBeenCalledWith(
           'app-update-status',
@@ -186,7 +186,7 @@ describe('AutoUpdateService', () => {
           (call: any[]) => call[0] === 'update-not-available'
         )?.[1];
 
-        handler({ version: '1.0.12' });
+        (handler as Function)({ version: '1.0.12' });
 
         expect(localMessaging.sendToAllRenderers).toHaveBeenCalledWith(
           'app-update-status',
@@ -203,7 +203,7 @@ describe('AutoUpdateService', () => {
           (call: any[]) => call[0] === 'download-progress'
         )?.[1];
 
-        handler({ percent: 50.5, bytesPerSecond: 1024, transferred: 512, total: 1024 });
+        (handler as Function)({ percent: 50.5, bytesPerSecond: 1024, transferred: 512, total: 1024 });
 
         expect(localMessaging.sendToAllRenderers).toHaveBeenCalledWith(
           'app-update-status',
@@ -220,7 +220,7 @@ describe('AutoUpdateService', () => {
           (call: any[]) => call[0] === 'error'
         )?.[1];
 
-        handler(new Error('Update error'));
+        (handler as Function)(new Error('Update error'));
 
         expect(localMessaging.sendToAllRenderers).toHaveBeenCalledWith(
           'app-update-status',
@@ -237,7 +237,7 @@ describe('AutoUpdateService', () => {
         )?.[1];
 
         expect(autoUpdateService.isUpdateReady()).toBe(false);
-        handler({ version: '2.0.0' });
+        (handler as Function)({ version: '2.0.0' });
         expect(autoUpdateService.isUpdateReady()).toBe(true);
       });
     });
@@ -249,7 +249,7 @@ describe('AutoUpdateService', () => {
 
       jest.isolateModules(() => {
         const { autoUpdateService } = require('./auto-update.service');
-        mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
+        (mockAutoUpdater.checkForUpdates as jest.Mock<any>).mockResolvedValue(undefined);
 
         autoUpdateService.startPeriodicUpdateCheck(60000);
 

@@ -32,7 +32,7 @@ describe('auto-update-handler', () => {
     require('./auto-update-handler');
 
     handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock).mock.calls) {
+    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
       handlers[call[0] as string] = call[1] as any;
     }
   });
@@ -56,7 +56,7 @@ describe('auto-update-handler', () => {
 
   describe('check-for-app-update', () => {
     it('should check for updates successfully', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock).mockResolvedValue(undefined);
+      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['check-for-app-update']({}, mockSender);
 
@@ -69,7 +69,7 @@ describe('auto-update-handler', () => {
     });
 
     it('should handle check errors', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock).mockRejectedValue(new Error('Network unavailable'));
+      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockRejectedValue(new Error('Network unavailable'));
 
       await handlers['check-for-app-update']({}, mockSender);
 
@@ -81,7 +81,7 @@ describe('auto-update-handler', () => {
     });
 
     it('should handle non-Error rejections', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock).mockRejectedValue('string error');
+      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockRejectedValue('string error');
 
       await handlers['check-for-app-update']({}, mockSender);
 
@@ -96,7 +96,7 @@ describe('auto-update-handler', () => {
   describe('get-app-update-status', () => {
     it('should return last status when available', () => {
       const status = { status: 'available', version: '2.0.0' };
-      (mockAutoUpdate.getLastStatus as jest.Mock).mockReturnValue(status);
+      (mockAutoUpdate.getLastStatus as jest.Mock<any>).mockReturnValue(status);
 
       handlers['get-app-update-status']({}, mockSender);
 
@@ -108,7 +108,7 @@ describe('auto-update-handler', () => {
     });
 
     it('should return up-to-date when no last status', () => {
-      (mockAutoUpdate.getLastStatus as jest.Mock).mockReturnValue(null);
+      (mockAutoUpdate.getLastStatus as jest.Mock<any>).mockReturnValue(null);
 
       handlers['get-app-update-status']({}, mockSender);
 
@@ -122,7 +122,7 @@ describe('auto-update-handler', () => {
 
   describe('install-app-update', () => {
     it('should fail if no update is ready', async () => {
-      (mockAutoUpdate.isUpdateReady as jest.Mock).mockReturnValue(false);
+      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockReturnValue(false);
 
       await handlers['install-app-update']({}, mockSender);
 
@@ -136,7 +136,7 @@ describe('auto-update-handler', () => {
 
     it('should send success and schedule quit when update is ready', async () => {
       jest.useFakeTimers();
-      (mockAutoUpdate.isUpdateReady as jest.Mock).mockReturnValue(true);
+      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockReturnValue(true);
 
       await handlers['install-app-update']({}, mockSender);
 
@@ -154,7 +154,7 @@ describe('auto-update-handler', () => {
     });
 
     it('should handle errors during install', async () => {
-      (mockAutoUpdate.isUpdateReady as jest.Mock).mockImplementation(() => {
+      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockImplementation(() => {
         throw new Error('Internal error');
       });
 
@@ -170,7 +170,7 @@ describe('auto-update-handler', () => {
 
   describe('download-app-update', () => {
     it('should download update successfully', async () => {
-      (mockAutoUpdate.downloadUpdate as jest.Mock).mockResolvedValue(undefined);
+      (mockAutoUpdate.downloadUpdate as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['download-app-update']({}, mockSender);
 
@@ -183,7 +183,7 @@ describe('auto-update-handler', () => {
     });
 
     it('should handle download errors', async () => {
-      (mockAutoUpdate.downloadUpdate as jest.Mock).mockRejectedValue(new Error('Disk full'));
+      (mockAutoUpdate.downloadUpdate as jest.Mock<any>).mockRejectedValue(new Error('Disk full'));
 
       await handlers['download-app-update']({}, mockSender);
 

@@ -45,7 +45,7 @@ describe('config-import-export-handler', () => {
     require('./config-import-export-handler');
 
     handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock).mock.calls) {
+    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
       handlers[call[0] as string] = call[1] as any;
     }
   });
@@ -68,8 +68,8 @@ describe('config-import-export-handler', () => {
   describe('export-server-config', () => {
     it('should export config as zip successfully', async () => {
       const config = { id: 'inst1', name: 'TestServer', maxPlayers: 10 };
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue(config);
-      (mockConfigService.exportConfigAsZip as jest.Mock).mockReturnValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(config);
+      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({
         success: true,
         base64: 'dGVzdA==',
       });
@@ -101,7 +101,7 @@ describe('config-import-export-handler', () => {
     });
 
     it('should fail when instance not found', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue(null);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(null);
 
       await handlers['export-server-config']({ id: 'missing', requestId: 'r1' }, mockSender);
 
@@ -113,8 +113,8 @@ describe('config-import-export-handler', () => {
     });
 
     it('should fail when zip creation fails', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue({ id: 'inst1', name: 'Test' });
-      (mockConfigService.exportConfigAsZip as jest.Mock).mockReturnValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ id: 'inst1', name: 'Test' });
+      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({
         success: false,
         error: 'Zip error',
       });
@@ -129,8 +129,8 @@ describe('config-import-export-handler', () => {
     });
 
     it('should use fallback name when config has no name', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue({ id: 'inst1' });
-      (mockConfigService.exportConfigAsZip as jest.Mock).mockReturnValue({ success: true, base64: 'abc' });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ id: 'inst1' });
+      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({ success: true, base64: 'abc' });
 
       await handlers['export-server-config']({ id: 'inst1', requestId: 'r1' }, mockSender);
 
@@ -144,7 +144,7 @@ describe('config-import-export-handler', () => {
 
   describe('import-server-config', () => {
     it('should import config without target (preview mode)', async () => {
-      (mockConfigService.importFromIni as jest.Mock).mockReturnValue({
+      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
         success: true,
         config: { maxPlayers: 20 },
         warnings: [],
@@ -167,17 +167,17 @@ describe('config-import-export-handler', () => {
 
     it('should import and merge into existing instance', async () => {
       const existing = { id: 'inst1', name: 'Server1', maxPlayers: 10 };
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue(existing);
-      (mockConfigService.importFromIni as jest.Mock).mockReturnValue({
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(existing);
+      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
         success: true,
         config: { maxPlayers: 30 },
         warnings: [],
       });
-      (mockServerMgmt.saveInstance as jest.Mock).mockResolvedValue({
+      (mockServerMgmt.saveInstance as jest.Mock<any>).mockResolvedValue({
         success: true,
         instance: { id: 'inst1', name: 'Server1', maxPlayers: 30 },
       });
-      (mockServerMgmt.getAllInstances as jest.Mock).mockResolvedValue({ instances: [] });
+      (mockServerMgmt.getAllInstances as jest.Mock<any>).mockResolvedValue({ instances: [] });
 
       await handlers['import-server-config'](
         { targetId: 'inst1', content: 'data', requestId: 'r2' },
@@ -205,12 +205,12 @@ describe('config-import-export-handler', () => {
     });
 
     it('should fail when target instance not found', async () => {
-      (mockConfigService.importFromIni as jest.Mock).mockReturnValue({
+      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
         success: true,
         config: {},
         warnings: [],
       });
-      (mockInstanceUtils.getInstance as jest.Mock).mockReturnValue(null);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(null);
 
       await handlers['import-server-config'](
         { targetId: 'missing', content: 'data', requestId: 'r2' },
@@ -225,7 +225,7 @@ describe('config-import-export-handler', () => {
     });
 
     it('should fail when import parsing fails', async () => {
-      (mockConfigService.importFromIni as jest.Mock).mockReturnValue({
+      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
         success: false,
         error: 'Malformed INI',
       });
@@ -243,7 +243,7 @@ describe('config-import-export-handler', () => {
     });
 
     it('should use default filename when not provided', async () => {
-      (mockConfigService.importFromIni as jest.Mock).mockReturnValue({
+      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
         success: true,
         config: {},
         warnings: [],

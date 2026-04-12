@@ -33,7 +33,7 @@ describe('ark-api-handler', () => {
     require('./ark-api-handler');
 
     handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock).mock.calls) {
+    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
       handlers[call[0] as string] = call[1] as any;
     }
   });
@@ -60,7 +60,7 @@ describe('ark-api-handler', () => {
   describe('list-ark-api-plugins', () => {
     it('should list plugins successfully', async () => {
       const plugins = [{ name: 'TestPlugin', version: '1.0' }];
-      (mockPluginService.listPlugins as jest.Mock).mockReturnValue(plugins);
+      (mockPluginService.listPlugins as jest.Mock<any>).mockReturnValue(plugins);
 
       await handlers['list-ark-api-plugins']({ instanceId: 'inst1', requestId: 'r1' }, mockSender);
 
@@ -73,7 +73,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle errors', async () => {
-      (mockPluginService.listPlugins as jest.Mock).mockImplementation(() => {
+      (mockPluginService.listPlugins as jest.Mock<any>).mockImplementation(() => {
         throw new Error('Not found');
       });
 
@@ -87,7 +87,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle undefined payload', async () => {
-      (mockPluginService.listPlugins as jest.Mock).mockReturnValue([]);
+      (mockPluginService.listPlugins as jest.Mock<any>).mockReturnValue([]);
 
       await handlers['list-ark-api-plugins'](undefined, mockSender);
 
@@ -108,7 +108,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle removal errors', async () => {
-      (mockPluginService.removePlugin as jest.Mock).mockImplementation(() => {
+      (mockPluginService.removePlugin as jest.Mock<any>).mockImplementation(() => {
         throw new Error('Plugin not found');
       });
 
@@ -125,7 +125,7 @@ describe('ark-api-handler', () => {
   describe('get-asaapi-latest', () => {
     it('should fetch latest release successfully', async () => {
       const release = { version: 'v1.2.0', downloadUrl: 'https://example.com/dl.zip', name: 'AsaApi' };
-      (mockPluginService.getLatestAsaApiRelease as jest.Mock).mockResolvedValue(release);
+      (mockPluginService.getLatestAsaApiRelease as jest.Mock<any>).mockResolvedValue(release);
 
       await handlers['get-asaapi-latest']({ requestId: 'r3' }, mockSender);
 
@@ -137,7 +137,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle fetch errors', async () => {
-      (mockPluginService.getLatestAsaApiRelease as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (mockPluginService.getLatestAsaApiRelease as jest.Mock<any>).mockRejectedValue(new Error('Network error'));
 
       await handlers['get-asaapi-latest']({ requestId: 'r3' }, mockSender);
 
@@ -151,7 +151,7 @@ describe('ark-api-handler', () => {
 
   describe('download-asaapi', () => {
     it('should download AsaApi successfully', async () => {
-      (mockPluginService.downloadAsaApi as jest.Mock).mockResolvedValue(undefined);
+      (mockPluginService.downloadAsaApi as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['download-asaapi']({ instanceId: 'inst1', downloadUrl: 'https://dl.zip', requestId: 'r4' }, mockSender);
 
@@ -169,7 +169,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle download errors', async () => {
-      (mockPluginService.downloadAsaApi as jest.Mock).mockRejectedValue(new Error('Download failed'));
+      (mockPluginService.downloadAsaApi as jest.Mock<any>).mockRejectedValue(new Error('Download failed'));
 
       await handlers['download-asaapi']({ instanceId: 'inst1', downloadUrl: 'https://dl.zip', requestId: 'r4' }, mockSender);
 
@@ -194,7 +194,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle install errors', async () => {
-      (mockPluginService.installPluginFromZipPath as jest.Mock).mockImplementation(() => {
+      (mockPluginService.installPluginFromZipPath as jest.Mock<any>).mockImplementation(() => {
         throw new Error('ZIP not found');
       });
 
@@ -210,7 +210,7 @@ describe('ark-api-handler', () => {
 
   describe('install-plugin-from-url', () => {
     it('should install from URL successfully', async () => {
-      (mockPluginService.installPluginFromUrl as jest.Mock).mockResolvedValue(undefined);
+      (mockPluginService.installPluginFromUrl as jest.Mock<any>).mockResolvedValue(undefined);
 
       await handlers['install-plugin-from-url']({ instanceId: 'inst1', url: 'https://dl.zip', requestId: 'r6' }, mockSender);
 
@@ -223,7 +223,7 @@ describe('ark-api-handler', () => {
     });
 
     it('should handle URL install errors', async () => {
-      (mockPluginService.installPluginFromUrl as jest.Mock).mockRejectedValue(new Error('Timeout'));
+      (mockPluginService.installPluginFromUrl as jest.Mock<any>).mockRejectedValue(new Error('Timeout'));
 
       await handlers['install-plugin-from-url']({ instanceId: 'inst1', url: 'https://dl.zip', requestId: 'r6' }, mockSender);
 
