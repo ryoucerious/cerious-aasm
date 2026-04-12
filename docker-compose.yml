@@ -1,0 +1,87 @@
+# =============================================================================
+# Cerious AASM — Docker Compose for Linux Development & Testing
+# =============================================================================
+# Usage:
+#   docker compose run test              # Run electron jest tests in Linux
+#   docker compose up headless           # Start headless app on port 3000
+#   docker compose run --rm shell        # Interactive Linux shell for debugging
+#   docker compose up headless-dev       # Headless with source mounted (live reload)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # test — Run electron-side jest tests in a Linux environment
+  # ---------------------------------------------------------------------------
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      - NODE_ENV=test
+    # Override to run specific tests:
+    #   docker compose run test npx jest --testPathPatterns="proton"
+    profiles: ["test"]
+
+  # ---------------------------------------------------------------------------
+  # headless — Full headless Electron app with web UI
+  # ---------------------------------------------------------------------------
+  headless:
+    build:
+      context: .
+      target: headless
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist server data and config between container restarts
+      - aasm-data:/home/aasm/.local/share/cerious-aasm
+      - aasm-config:/home/aasm/.config/Cerious AASM
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # headless-dev — Development mode with source code mounted
+  # ---------------------------------------------------------------------------
+  headless-dev:
+    build:
+      context: .
+      target: headless
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount source for live changes (rebuild TS manually or via watch)
+      - .:/app
+      - /app/node_modules  # Preserve Linux node_modules, don't use Windows ones
+      - aasm-data-dev:/home/aasm/.local/share/cerious-aasm
+      - aasm-config-dev:/home/aasm/.config/Cerious AASM
+    environment:
+      - NODE_ENV=development
+    # Recompile TS then launch
+    command: >
+      sh -c "npx tsc -p tsconfig.electron.json &&
+             Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+             sleep 1 &&
+             npx electron electron/main.js --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --port=3000"
+
+  # ---------------------------------------------------------------------------
+  # shell — Interactive shell for debugging Linux environment
+  # ---------------------------------------------------------------------------
+  shell:
+    build:
+      context: .
+      target: base
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - DISPLAY=:99
+    entrypoint: /bin/bash
+    stdin_open: true
+    tty: true
+    profiles: ["debug"]
+
+volumes:
+  aasm-data:
+  aasm-config:
+  aasm-data-dev:
+  aasm-config-dev:

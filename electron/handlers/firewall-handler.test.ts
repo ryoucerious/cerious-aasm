@@ -604,6 +604,7 @@ describe('Firewall Handler', () => {
   });
   describe('check-firewall-enabled event', () => {
     it('should handle undefined payload (payload || {})', async () => {
+      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
       await checkFirewallEnabledHandler(undefined, mockSender);
       expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
         success: true,
@@ -614,6 +615,7 @@ describe('Firewall Handler', () => {
       }, mockSender);
     });
     it('should handle null payload (payload || {})', async () => {
+      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
       await checkFirewallEnabledHandler(null, mockSender);
       expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
         success: true,

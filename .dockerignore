@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-electron
+.angular
+coverage
+coverage-electron
+.git
+*.log

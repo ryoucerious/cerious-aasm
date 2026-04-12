@@ -37,6 +37,7 @@ const mockLinuxUpdater = linuxPackageUpdaterService as jest.Mocked<typeof linuxP
 
 describe('AutoUpdateService', () => {
   let AutoUpdateService: any;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -44,11 +45,20 @@ describe('AutoUpdateService', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
 
+    // Force non-Linux platform so the constructor always takes the autoUpdater path.
+    // On Linux (e.g. Docker) without APPIMAGE, the constructor would route to the
+    // Linux package updater and skip autoUpdater setup entirely.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
     // Reset module cache so each test gets a fresh class
     jest.resetModules();
   });
 
   afterEach(() => {
+    // Restore original platform
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
     jest.restoreAllMocks();
   });
 

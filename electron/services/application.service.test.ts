@@ -1,3 +1,9 @@
+jest.mock('electron', () => ({
+  app: { getPath: jest.fn(() => '/tmp'), getVersion: jest.fn(() => '1.0.0'), on: jest.fn() },
+  BrowserWindow: jest.fn(),
+  shell: { openPath: jest.fn() },
+}));
+
 import { ApplicationService } from './application.service';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import * as webServerServiceModule from './web-server.service';

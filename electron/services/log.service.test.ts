@@ -1,3 +1,7 @@
+jest.mock('node-pty', () => ({
+  spawn: jest.fn(),
+}));
+
 import * as fs from 'fs';
 import * as path from 'path';
 import { LogService } from '../services/log.service';

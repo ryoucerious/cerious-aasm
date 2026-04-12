@@ -1,3 +1,7 @@
+jest.mock('node-pty', () => ({
+  spawn: jest.fn(),
+}));
+
 import { ArkConfigService } from './ark-config.service';
 import * as fs from 'fs';
 

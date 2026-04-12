@@ -11,6 +11,10 @@ import {
   installArkServer
 } from './ark-install.utils';
 
+jest.mock('node-pty', () => ({
+  spawn: jest.fn(),
+}));
+
 jest.mock('fs', () => ({
   ...jest.requireActual('fs'),
   existsSync: jest.fn(),
@@ -21,6 +25,8 @@ jest.mock('path', () => ({
   ...jest.requireActual('path'),
   join: jest.fn((...args: string[]) => args.join('/')),
 }));
+
+const steamcmdExe = process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh';
 
 describe('ark-install.utils', () => {
   beforeEach(() => {
@@ -76,7 +82,7 @@ describe('ark-install.utils', () => {
     });
     it('should call runInstaller with correct options if steamcmd exists', () => {
       jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === '/steamcmd/steamcmd.exe' || file === '/ark/server');
+      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === `/steamcmd/${steamcmdExe}` || file === '/ark/server');
       jest.spyOn(installerUtils, 'runInstaller').mockImplementation((opts, onProgress, onDone) => {
         onProgress({ percent: 50, step: 'downloading', message: 'Mock progress' });
         onDone(null, 'done');

@@ -1,5 +1,11 @@
 import { jest } from '@jest/globals';
 
+jest.mock('electron', () => ({
+  dialog: { showOpenDialog: jest.fn() },
+  BrowserWindow: { fromWebContents: jest.fn() },
+  shell: { openPath: jest.fn() },
+}));
+
 // Mock the services
 const mockMessagingService = {
   on: jest.fn() as any,
