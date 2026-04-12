@@ -340,6 +340,27 @@ describe('instance.utils', () => {
       expect(mockedFs.rmSync).not.toHaveBeenCalled();
       expect(result).toBe(false);
     });
+
+    it('should return false for empty string id', () => {
+      const result = deleteInstance('');
+      expect(result).toBe(false);
+      expect(mockedFs.existsSync).not.toHaveBeenCalled();
+      expect(mockedFs.rmSync).not.toHaveBeenCalled();
+    });
+
+    it('should return false for directory traversal id', () => {
+      const result = deleteInstance('../etc');
+      expect(result).toBe(false);
+      expect(mockedFs.existsSync).not.toHaveBeenCalled();
+      expect(mockedFs.rmSync).not.toHaveBeenCalled();
+    });
+
+    it('should return false for id with special characters', () => {
+      const result = deleteInstance('bad id with spaces');
+      expect(result).toBe(false);
+      expect(mockedFs.existsSync).not.toHaveBeenCalled();
+      expect(mockedFs.rmSync).not.toHaveBeenCalled();
+    });
   });
 
   describe('error handling', () => {

@@ -29,6 +29,9 @@ export class ServerInstanceService {
       this.latestInstances = list;
       this.instances$.next(list);
       // If no servers exist, create a default (only on first load)
+      if (list.length > 0) {
+        this._shouldCreateDefault = false;
+      }
       if (this._shouldCreateDefault && list.length === 0) {
         this._shouldCreateDefault = false;
         this.getDefaultInstanceFromMeta().subscribe(instance => {

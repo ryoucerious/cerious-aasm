@@ -31,11 +31,19 @@ export class ServerInstanceService {
       onLog: (log: string) => messagingService.sendToAll('server-instance-log', { log, instanceId }),
       onState: async (state: string) => {
         messagingService.sendToAll('server-instance-state', { state, instanceId });
-        // Small delay to ensure state is properly set before broadcasting all instances
-        setTimeout(async () => {
-          const allInstances = await serverManagementService.getAllInstances();
-          messagingService.sendToAll('server-instances', allInstances.instances);
-        }, 100);
+        // Only broadcast full instance list for meaningful state changes, not during deletion
+        if (state === 'running' || state === 'stopped' || state === 'crashed') {
+          setTimeout(async () => {
+            try {
+              const allInstances = await serverManagementService.getAllInstances();
+              if (allInstances.instances.length > 0) {
+                messagingService.sendToAll('server-instances', allInstances.instances);
+              }
+            } catch (err) {
+              console.error('[server-instance-service] Error broadcasting instances after state change:', err);
+            }
+          }, 100);
+        }
         // Handle state change for polling
         if (state === 'running') {
           serverMonitoringService.startMemoryPolling(instanceId, (instanceId: string, memory: number) => {

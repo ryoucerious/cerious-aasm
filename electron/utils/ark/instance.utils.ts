@@ -94,7 +94,10 @@ export async function getAllInstances() {
     justCreated = true;
   }
   let instances = fs.readdirSync(baseDir)
-    .filter(id => fs.existsSync(getInstanceConfigPath(id)))
+    .filter(id => {
+      if (!validateInstanceId(id)) return false;
+      return fs.existsSync(path.join(baseDir, id, 'config.json'));
+    })
     .map(id => {
       try {
         const config = JSON.parse(fs.readFileSync(getInstanceConfigPath(id), 'utf8'));
@@ -142,7 +145,12 @@ export async function saveInstance(instance: any) {
 }
 
 export function deleteInstance(id: string) {
-  const dir = path.join(getInstancesBaseDir(), id);
+  if (!validateInstanceId(id)) {
+    console.error('[instance-utils] deleteInstance called with invalid id:', id);
+    return false;
+  }
+  const baseDir = getInstancesBaseDir();
+  const dir = path.join(baseDir, id);
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
     return true;
