@@ -8,6 +8,9 @@ export class WebSocketService {
   private isConnected: boolean = false;
   private myCid: string | null = null;
   private connectionState$ = new BehaviorSubject<boolean>(false);
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 20;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Emits true when connected, false when disconnected. Subscribe to this in web mode to know when to send messages.
@@ -47,13 +50,30 @@ export class WebSocketService {
     };
     this.ws.onopen = () => {
       this.isConnected = true;
+      this.reconnectAttempts = 0;
       this.connectionState$.next(true);
     };
     this.ws.onclose = () => {
       this.isConnected = false;
       this.connectionState$.next(false);
       this.ws = null;
+      this.scheduleReconnect();
     };
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      return;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   sendMessage(channel: string, payload: any) {

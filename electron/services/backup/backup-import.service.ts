@@ -45,8 +45,29 @@ export class BackupImportService {
       await fs.promises.mkdir(tempDir, { recursive: true });
 
       try {
-        // Extract backup
+        // Extract backup with safety checks
         const zip = new AdmZip(backupFilePath);
+        const entries = zip.getEntries();
+
+        // ZIP bomb protection: limit entry count and total decompressed size
+        const MAX_ENTRIES = 10000;
+        const MAX_DECOMPRESSED_SIZE = 50 * 1024 * 1024 * 1024; // 50 GB
+        if (entries.length > MAX_ENTRIES) {
+          throw new Error(`Backup archive contains too many entries (${entries.length}). Maximum allowed: ${MAX_ENTRIES}`);
+        }
+        let totalSize = 0;
+        for (const entry of entries) {
+          totalSize += entry.header.size;
+          if (totalSize > MAX_DECOMPRESSED_SIZE) {
+            throw new Error('Backup archive decompressed size exceeds the 50 GB limit');
+          }
+          // Path traversal protection: reject entries with '..' in the name
+          const entryName = entry.entryName.replace(/\\/g, '/');
+          if (entryName.includes('..') || path.isAbsolute(entryName)) {
+            throw new Error(`Unsafe entry detected in backup archive: ${entry.entryName}`);
+          }
+        }
+
         zip.extractAllTo(tempDir, true);
 
         // Try to find and read the original server configuration

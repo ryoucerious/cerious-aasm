@@ -44,6 +44,13 @@ export class ServerProcessService {
   }
 
   /**
+   * Get the number of active (tracked) server processes
+   */
+  getActiveProcessCount(): number {
+    return Object.keys(this.arkServerProcesses).length;
+  }
+
+  /**
    * Start the actual server process
    */
   async startServerProcess(instanceId: string, instance: any): Promise<ServerInstanceResult> {

@@ -37,7 +37,7 @@ describe('App', () => {
   it('should clean up intervals and listeners in ngOnDestroy', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance;
-  app['wsCheckInterval'] = setInterval(() => {}, 1000);
+  app['wsCheckInterval'] = { unsubscribe: () => {} } as any;
   app['wsTimeout'] = setTimeout(() => {}, 1000);
   spyOn(window, 'removeEventListener');
   app.ngOnDestroy();

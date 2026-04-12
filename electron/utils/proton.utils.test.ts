@@ -2,19 +2,22 @@ import { jest } from '@jest/globals';
 
 // Mock dependencies
 jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
   existsSync: jest.fn(),
   mkdirSync: jest.fn(),
   chmodSync: jest.fn(),
   accessSync: jest.fn(),
-  constants: {
-    W_OK: 2,
-    R_OK: 4,
-  },
 }));
-jest.mock('path');
+jest.mock('path', () => ({
+  ...jest.requireActual('path'),
+  join: jest.fn((...args: string[]) => args.join('/')),
+  dirname: jest.fn((p: string) => p.split('/').slice(0, -1).join('/')),
+}));
 jest.mock('os');
 jest.mock('./platform.utils');
-jest.mock('./installer.utils');
+jest.mock('./installer.utils', () => ({
+  runInstaller: jest.fn(),
+}));
 
 import * as fs from 'fs';
 import * as path from 'path';

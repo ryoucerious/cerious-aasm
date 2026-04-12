@@ -139,6 +139,10 @@ beforeAll(() => {
 
 describe('Server Instance Handler', () => {
 
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   describe('start-server-instance handler', () => {
     it('should not send notification if result.started is false and result.portError is set but sender has no send function', async () => {
       const payload = { id: 'instance-1', requestId: 'req-else' };
@@ -237,7 +241,6 @@ describe('Server Instance Handler', () => {
     });
 
   });
-});
 
   describe('get-server-instance-state handler', () => {
     it('should get server instance state successfully', async () => {
@@ -758,9 +761,7 @@ describe('Server Instance Handler', () => {
     });
 
     it('should send notification with Unknown fallback if name and id are missing', async () => {
-      const oldInstance = undefined;
       const newInstance = {}; // no name, no id
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(oldInstance);
       mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
       mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
       await saveInstanceHandler({ instance: newInstance }, mockSender);
@@ -894,9 +895,7 @@ describe('Server Instance Handler', () => {
     });
 
     it('should send correct notification for server add with missing name and id (save-server-instance)', async () => {
-      const oldInstance = {}; // name and id missing
       const newInstance = {}; // name and id missing
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(oldInstance);
       mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
       mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
       await saveInstanceHandler({ instance: newInstance }, mockSender);
@@ -917,7 +916,6 @@ describe('Server Instance Handler', () => {
       expect(call[1].message).not.toContain('Unknown');
     });
     it('should send correct notification for server add with missing name and id (save-server-instance)', async () => {
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(null);
       const newInstance = {};
       mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
       mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
@@ -1179,3 +1177,4 @@ describe('Server Instance Handler', () => {
       expect(originCall[1].error).toBe('fail');
     });
   });
+});

@@ -161,14 +161,23 @@ process.on('unhandledRejection', (reason, promise) => {
 // Process Cleanup
 // =========================
 const cleanup = () => {
-  // Cleanup RCON connections first
-  cleanupAllRconConnections();
+  try {
+    cleanupAllRconConnections();
+  } catch (e) {
+    console.error('[main] Error cleaning up RCON connections:', e);
+  }
 
-  // Cleanup web server
-  webServerService.cleanup();
+  try {
+    webServerService.cleanup();
+  } catch (e) {
+    console.error('[main] Error cleaning up web server:', e);
+  }
 
-  // Then cleanup ARK server processes
-  require('./services/server-instance/server-process.service').serverProcessService.cleanupOrphanedProcesses();
+  try {
+    require('./services/server-instance/server-process.service').serverProcessService.cleanupOrphanedProcesses();
+  } catch (e) {
+    console.error('[main] Error cleaning up orphaned processes:', e);
+  }
 };
 
 process.on('SIGINT', () => {
@@ -230,8 +239,28 @@ function createWindow() {
           if (mainWindow) {
             mainWindow.webContents.send('shutdown-all-servers');
           }
-          setTimeout(() => app.exit(0), 1500);
+          // The frontend already initiated shutdownAllServers() before sending this response.
+          // Allow time for servers to gracefully stop, then force exit.
+          const maxWaitMs = 15000;
+          const checkInterval = 1000;
+          let elapsed = 0;
+          const checkAndExit = () => {
+            elapsed += checkInterval;
+            const serverProcessService = require('./services/server-instance/server-process.service').serverProcessService;
+            const activeCount = serverProcessService.getActiveProcessCount?.() ?? 0;
+            if (activeCount === 0 || elapsed >= maxWaitMs) {
+              if (elapsed >= maxWaitMs) {
+                console.warn(`[main] Shutdown timeout (${maxWaitMs}ms) reached with ${activeCount} servers still active — forcing exit`);
+              }
+              cleanup();
+              app.exit(0);
+            } else {
+              setTimeout(checkAndExit, checkInterval);
+            }
+          };
+          setTimeout(checkAndExit, checkInterval);
         } else if (data && data.action === 'exit') {
+          cleanup();
           app.exit(0);
         }
         // else (cancel) do nothing

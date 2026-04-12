@@ -7,7 +7,10 @@ jest.mock('fs-extra', () => ({
   removeSync: jest.fn(),
 }));
 jest.mock('os');
-jest.mock('path');
+jest.mock('path', () => ({
+  ...jest.requireActual('path'),
+  join: jest.fn((...args: string[]) => args.join('/')),
+}));
 jest.mock('./platform.utils', () => ({
   getDefaultInstallDir: jest.fn(() => '/mock/install/dir'),
 }));
@@ -38,9 +41,6 @@ describe('installer.utils', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Setup default mocks
-    mockedPath.join.mockReturnValue(mockLockFile);
 
     // Mock pty processes
     let extractExitCallback: any;

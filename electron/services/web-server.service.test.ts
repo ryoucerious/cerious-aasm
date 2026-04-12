@@ -2,16 +2,25 @@ import { WebServerService } from './web-server.service';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import * as networkUtils from '../utils/network.utils';
 import { messagingService } from './messaging.service';
-import * as path from 'path';
-import { app } from 'electron';
+
+jest.mock('electron', () => ({
+  app: { getAppPath: jest.fn().mockReturnValue('/app') }
+}));
+
+jest.mock('path', () => ({
+  ...jest.requireActual('path'),
+  join: jest.fn((...args: string[]) => args.join('/')),
+}));
+
+jest.mock('child_process', () => ({
+  fork: jest.fn()
+}));
 
 describe('WebServerService', () => {
   let service: WebServerService;
 
   beforeEach(() => {
     service = new WebServerService();
-    jest.spyOn(path, 'join').mockImplementation((...args) => args.join('/'));
-    jest.spyOn(app, 'getAppPath').mockReturnValue('/app');
     jest.spyOn(globalConfigUtils, 'loadGlobalConfig').mockReturnValue({
       authenticationEnabled: true,
       authenticationUsername: 'user',

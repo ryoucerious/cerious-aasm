@@ -11,6 +11,17 @@ import {
   installArkServer
 } from './ark-install.utils';
 
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  existsSync: jest.fn(),
+  readFileSync: jest.fn(),
+}));
+
+jest.mock('path', () => ({
+  ...jest.requireActual('path'),
+  join: jest.fn((...args: string[]) => args.join('/')),
+}));
+
 describe('ark-install.utils', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -26,12 +37,12 @@ describe('ark-install.utils', () => {
   describe('isArkServerInstalled', () => {
     it('should return true if executable exists', () => {
       jest.spyOn(ArkPathUtils, 'getArkExecutablePath').mockReturnValue('/ark/server/ark.exe');
-      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
       expect(isArkServerInstalled()).toBe(true);
     });
     it('should return false if executable does not exist', () => {
       jest.spyOn(ArkPathUtils, 'getArkExecutablePath').mockReturnValue('/ark/server/ark.exe');
-      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
       expect(isArkServerInstalled()).toBe(false);
     });
   });
@@ -39,14 +50,14 @@ describe('ark-install.utils', () => {
   describe('getCurrentInstalledVersion', () => {
     it('should return version from version.txt', async () => {
       jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      jest.spyOn(fs, 'existsSync').mockImplementation((file) => file === '/ark/server/version.txt');
-      jest.spyOn(fs, 'readFileSync').mockReturnValue('1.2.3\n');
+      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === '/ark/server/version.txt');
+      (fs.readFileSync as jest.Mock).mockReturnValue('1.2.3\n');
       await expect(getCurrentInstalledVersion()).resolves.toBe('1.2.3');
     });
     
     it('should return null if no version found', async () => {
       jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
       await expect(getCurrentInstalledVersion()).resolves.toBeNull();
     });
     it('should return null on error', async () => {
@@ -58,15 +69,14 @@ describe('ark-install.utils', () => {
   describe('installArkServer', () => {
     it('should callback error if steamcmd not found', () => {
       jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
       const cb = jest.fn();
       installArkServer(cb);
       expect(cb).toHaveBeenCalledWith(expect.any(Error));
     });
     it('should call runInstaller with correct options if steamcmd exists', () => {
       jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      jest.spyOn(fs, 'existsSync').mockImplementation((file) => file === '/steamcmd/steamcmd.exe' || file === '/ark/server');
-      jest.spyOn(path, 'join').mockImplementation((...args) => args.join('/'));
+      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === '/steamcmd/steamcmd.exe' || file === '/ark/server');
       jest.spyOn(installerUtils, 'runInstaller').mockImplementation((opts, onProgress, onDone) => {
         onProgress({ percent: 50, step: 'downloading', message: 'Mock progress' });
         onDone(null, 'done');

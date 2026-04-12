@@ -10,6 +10,20 @@ jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('hashed')
 }));
 
+jest.mock('path', () => ({
+  ...jest.requireActual('path'),
+  join: jest.fn((...args: string[]) => args.join('/')),
+  resolve: jest.fn((p: string) => p),
+}));
+
+jest.mock('fs', () => ({
+  mkdirSync: jest.fn(),
+  writeFileSync: jest.fn(),
+  existsSync: jest.fn().mockReturnValue(false),
+  accessSync: jest.fn(),
+  constants: { W_OK: 2 },
+}));
+
 describe('SettingsService', () => {
   let service: SettingsService;
 
@@ -26,9 +40,6 @@ describe('SettingsService', () => {
     jest.spyOn(globalConfigUtils, 'saveGlobalConfig').mockReturnValue(true);
     jest.spyOn(validationUtils, 'validatePort').mockReturnValue(true);
     jest.spyOn(validationUtils, 'sanitizeString').mockImplementation((s) => s);
-    jest.spyOn(path, 'join').mockImplementation((...args) => args.join('/'));
-    jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
-    jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
     jest.spyOn(platformUtils, 'getDefaultInstallDir').mockReturnValue('/install');
     // bcrypt.hash is already mocked above
   });

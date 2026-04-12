@@ -1,4 +1,7 @@
+import { of } from 'rxjs';
+
 export class MockMessagingService {
-  receiveMessage = () => ({ subscribe: () => {} });
-  sendMessage = () => ({ subscribe: () => {} });
+  receiveMessage = () => of(null);
+  sendMessage = () => of(null);
+  sendNotification = () => {};
 }

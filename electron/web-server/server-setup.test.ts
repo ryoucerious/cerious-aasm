@@ -1,3 +1,9 @@
+// Mock bcrypt FIRST to prevent native module loading
+jest.mock('bcrypt', () => ({
+  hash: jest.fn(),
+  compare: jest.fn(),
+}));
+
 import { createApp, getServerPort, startServer } from '../web-server/server-setup';
 
 // Mock dependencies

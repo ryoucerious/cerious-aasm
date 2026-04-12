@@ -1,10 +1,40 @@
 import { BackupImportService } from './backup-import.service';
+
 jest.mock('adm-zip', () => {
   return jest.fn().mockImplementation(() => ({ extractAllTo: jest.fn() }));
 });
+
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
+  mkdir: jest.fn((_path: string, _opts: any, cb: Function) => cb(null)),
+  readdir: jest.fn((_path: string, cb: Function) => cb(null, [])),
+  stat: jest.fn((_path: string, cb: Function) => cb(null, { isDirectory: () => false })),
+  copyFile: jest.fn((_src: string, _dst: string, cb: Function) => cb(null)),
+  readFile: jest.fn((_path: string, _enc: any, cb: Function) => cb(null, '{}')),
+  writeFile: jest.fn((_path: string, _data: any, _enc: any, cb: Function) => cb(null)),
+  unlink: jest.fn((_path: string, cb: Function) => cb(null)),
+  rmdirSync: jest.fn(),
+  promises: {
+    mkdir: jest.fn().mockResolvedValue(undefined),
+    readFile: jest.fn().mockResolvedValue('{"id":"oldid","name":"oldname"}'),
+    readdir: jest.fn().mockResolvedValue(['config.json', 'file.txt']),
+    stat: jest.fn().mockResolvedValue({ isDirectory: () => false }),
+    copyFile: jest.fn().mockResolvedValue(undefined),
+    unlink: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+jest.mock('../../utils/ark/instance.utils', () => ({
+  getInstancesBaseDir: jest.fn().mockReturnValue('baseDir'),
+  saveInstance: jest.fn().mockResolvedValue(true),
+}));
+
+const fs = require('fs');
+
 describe('BackupImportService', () => {
   let service: BackupImportService;
   beforeEach(() => {
+    jest.clearAllMocks();
     service = new BackupImportService();
   });
 
@@ -13,38 +43,13 @@ describe('BackupImportService', () => {
   });
 
   describe('importBackupAsNewServer', () => {
-    let fsExistsSyncSpy: any;
-    let fsPromisesSpy: any;
-    let AdmZipMock: any;
-    let instanceUtilsMock: any;
-    let uuidImportMock: any;
-
     beforeEach(() => {
-      fsExistsSyncSpy = jest.spyOn(require('fs'), 'existsSync').mockImplementation((...args: any[]) => {
+      fs.existsSync.mockImplementation((...args: any[]) => {
         const file = args[0];
         return file === 'backup.zip' || (typeof file === 'string' && file.includes('instanceDir'));
       });
-      fsPromisesSpy = {
-        mkdir: jest.fn().mockResolvedValue(undefined),
-        readFile: jest.fn().mockResolvedValue('{"id":"oldid","name":"oldname"}'),
-        readdir: jest.fn().mockResolvedValue(['config.json', 'file.txt']),
-        stat: jest.fn().mockResolvedValue({ isDirectory: () => false }),
-        copyFile: jest.fn().mockResolvedValue(undefined),
-        unlink: jest.fn().mockResolvedValue(undefined)
-      };
-  require('fs').promises = fsPromisesSpy;
-      AdmZipMock = function(this: any) {
-        this.extractAllTo = jest.fn();
-      };
       jest.spyOn(service as any, 'removeDirectory').mockResolvedValue(undefined);
       jest.spyOn(service as any, 'copyDirectory').mockResolvedValue(undefined);
-      instanceUtilsMock = {
-        getInstancesBaseDir: () => 'baseDir',
-        saveInstance: jest.fn().mockResolvedValue(true)
-      };
-      jest.spyOn(require('../../utils/ark/instance.utils'), 'getInstancesBaseDir').mockImplementation(instanceUtilsMock.getInstancesBaseDir);
-      jest.spyOn(require('../../utils/ark/instance.utils'), 'saveInstance').mockImplementation(instanceUtilsMock.saveInstance);
-      uuidImportMock = { v4: () => 'uuid' };
       jest.spyOn(service, 'importBackupAsNewServer').mockImplementation(async (serverName: string, backupFilePath: string) => {
         if (backupFilePath !== 'backup.zip') throw new Error('Backup file not found');
         return { id: 'uuid', name: serverName };
@@ -64,10 +69,8 @@ describe('BackupImportService', () => {
     });
 
     it('should handle error and cleanup on failure', async () => {
-  jest.spyOn(require('fs'), 'existsSync').mockReturnValue(true);
-  jest.spyOn(service as any, 'removeDirectory').mockResolvedValue(undefined);
-  jest.spyOn(require('../../utils/ark/instance.utils'), 'getInstancesBaseDir').mockReturnValue('baseDir');
-  jest.spyOn(require('../../utils/ark/instance.utils'), 'saveInstance').mockResolvedValue(false);
+      fs.existsSync.mockReturnValue(true);
+      jest.spyOn(service as any, 'removeDirectory').mockResolvedValue(undefined);
       await service.importBackupAsNewServer('newServer', 'backup.zip')
         .catch(e => expect(e).toBeDefined());
     });

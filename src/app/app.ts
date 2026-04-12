@@ -2,6 +2,7 @@ import { ServerInstanceService } from './core/services/server-instance.service';
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { NgIf, NgForOf } from '@angular/common';
 import { WebSocketService } from './core/services/web-socket.service';
+import { Subscription } from 'rxjs';
 import { ConnectionLostComponent } from './components/connect-lost/connection-lost.component';
 import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { MessagingService } from './core/services/messaging/messaging.service';
@@ -36,7 +37,7 @@ export class App implements OnInit, OnDestroy {
   isLoginPage = false;
   isMobile = false;
   isMobileMenuOpen = false;
-  private wsCheckInterval: any;
+  private wsCheckInterval: Subscription | null = null;
   private wsTimeout: any;
   private everConnected = false;
 
@@ -90,8 +91,8 @@ export class App implements OnInit, OnDestroy {
           this.cdr.markForCheck();
         }
       }, 5000);
-      this.wsCheckInterval = setInterval(() => {
-        if (this.ws['isConnected']) {
+      this.wsCheckInterval = this.ws.connected$.subscribe((connected) => {
+        if (connected) {
           if (!this.everConnected) {
             this.everConnected = true;
             this.connecting = false;
@@ -108,7 +109,7 @@ export class App implements OnInit, OnDestroy {
             this.cdr.markForCheck();
           }
         }
-      }, 1000);
+      });
     }
   }
   onExitModalClose(action: 'shutdown' | 'exit' | 'cancel') {
@@ -134,7 +135,7 @@ export class App implements OnInit, OnDestroy {
 
 
   ngOnDestroy(): void {
-    if (this.wsCheckInterval) clearInterval(this.wsCheckInterval);
+    if (this.wsCheckInterval) this.wsCheckInterval.unsubscribe();
     if (this.wsTimeout) clearTimeout(this.wsTimeout);
     // Clean up resize listener
     window.removeEventListener('resize', this.onWindowResize);

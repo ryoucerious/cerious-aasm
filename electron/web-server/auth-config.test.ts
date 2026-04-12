@@ -1,7 +1,12 @@
 // Mock dependencies BEFORE importing
 jest.mock('path');
 jest.mock('fs');
-jest.mock('bcrypt');
+jest.mock('bcrypt', () => ({
+  hash: jest.fn((password: string) => Promise.resolve(`hashed_${password}`)),
+  compare: jest.fn((password: string, hash: string) => Promise.resolve(hash === `hashed_${password}`)),
+  hashSync: jest.fn((password: string) => `hashed_${password}`),
+  compareSync: jest.fn((password: string, hash: string) => hash === `hashed_${password}`),
+}));
 jest.mock('../utils/platform.utils');
 
 const mockPath = require('path');

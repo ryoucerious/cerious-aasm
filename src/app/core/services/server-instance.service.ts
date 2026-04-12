@@ -218,7 +218,7 @@ export class ServerInstanceService {
   }
 
   ngOnDestroy() {
-    this.subs.forEach(sub => sub.unsubscribe());
+    this.subs.forEach(sub => sub?.unsubscribe());
   }
 
   /** Observable for components to subscribe to */

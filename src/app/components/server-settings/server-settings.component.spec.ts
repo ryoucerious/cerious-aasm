@@ -10,6 +10,7 @@ import { MessagingService } from '../../core/services/messaging/messaging.servic
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { ChangeDetectorRef } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
 import { of } from 'rxjs';
 
 describe('ServerSettingsComponent', () => {
@@ -28,6 +29,7 @@ describe('ServerSettingsComponent', () => {
     await TestBed.configureTestingModule({
       imports: [ServerSettingsComponent],
       providers: [
+        provideHttpClient(),
         { provide: FirewallService, useValue: mockFirewallService },
         { provide: NotificationService, useClass: MockNotificationService },
         { provide: UtilityService, useValue: mockUtilityService },

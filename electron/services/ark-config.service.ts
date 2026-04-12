@@ -317,13 +317,38 @@ export class ArkConfigService {
       // managed output, so we can identify custom/unmapped lines to preserve.
       const managedKeys = this.buildManagedKeySet(config);
 
+      // Collect the main ARK config dir path so we can also read custom lines
+      // that users may have edited directly in the ARK server directory.
+      const mainConfigDir = this.getArkConfigDir();
+
       // Write each INI file, preserving any unmapped lines from the existing file
       Object.keys(iniFiles).forEach(filename => {
         const filePath = path.join(configDir, filename);
 
-        // Collect unmapped lines from the existing file, keyed by lowercase section name.
-        // Each entry: { header: original section header string, lines: string[] }
+        // Collect unmapped lines from the instance config dir first.
         const customSections = this.collectUnmappedLines(filePath, managedKeys);
+
+        // Also collect unmapped lines from the main ARK config dir in case the
+        // user edited that file directly (outside of expert mode).  Merge any
+        // lines that aren't already captured from the instance file.
+        const mainFilePath = path.join(mainConfigDir, filename);
+        if (mainFilePath !== filePath) {
+          const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
+          for (const [sectionKey, mainEntry] of mainCustom) {
+            const existing = customSections.get(sectionKey);
+            if (!existing) {
+              customSections.set(sectionKey, mainEntry);
+            } else {
+              // Merge lines that don't already exist in the instance set
+              const existingSet = new Set(existing.lines.map(l => l.toLowerCase()));
+              for (const line of mainEntry.lines) {
+                if (!existingSet.has(line.toLowerCase())) {
+                  existing.lines.push(line);
+                }
+              }
+            }
+          }
+        }
 
         let content = '';
         const writtenSections = new Set<string>();
@@ -359,12 +384,50 @@ export class ArkConfigService {
         fs.writeFileSync(filePath, content, 'utf8');
       });
 
+      // Ensure both INI files are processed even if they have no managed entries.
+      // This preserves custom lines for files that only contain user-added content.
+      const configFiles = ['GameUserSettings.ini', 'Game.ini'];
+      for (const filename of configFiles) {
+        if (!iniFiles[filename]) {
+          const filePath = path.join(configDir, filename);
+          const customSections = this.collectUnmappedLines(filePath, managedKeys);
+          const mainFilePath = path.join(mainConfigDir, filename);
+          if (mainFilePath !== filePath) {
+            const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
+            for (const [sectionKey, mainEntry] of mainCustom) {
+              const existing = customSections.get(sectionKey);
+              if (!existing) {
+                customSections.set(sectionKey, mainEntry);
+              } else {
+                const existingSet = new Set(existing.lines.map(l => l.toLowerCase()));
+                for (const line of mainEntry.lines) {
+                  if (!existingSet.has(line.toLowerCase())) {
+                    existing.lines.push(line);
+                  }
+                }
+              }
+            }
+          }
+          if (customSections.size > 0) {
+            let content = '';
+            for (const [, custom] of customSections) {
+              if (custom.lines.length > 0) {
+                content += `${custom.header}\n`;
+                custom.lines.forEach(line => { content += `${line}\n`; });
+                content += '\n';
+              }
+            }
+            if (content) {
+              fs.writeFileSync(filePath, content, 'utf8');
+            }
+          }
+        }
+      }
+
       // Copy config files to main ARK config directory
-      const mainConfigDir = this.getArkConfigDir();
       if (!fs.existsSync(mainConfigDir)) {
         fs.mkdirSync(mainConfigDir, { recursive: true });
       }
-      const configFiles = ['GameUserSettings.ini', 'Game.ini'];
       for (const file of configFiles) {
         const src = path.join(configDir, file);
         const dest = path.join(mainConfigDir, file);
@@ -425,6 +488,10 @@ export class ArkConfigService {
     try {
       existingContent = fs.readFileSync(filePath, 'utf8');
     } catch {
+      return result;
+    }
+
+    if (!existingContent) {
       return result;
     }
 

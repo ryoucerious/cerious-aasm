@@ -4,6 +4,19 @@ import { jest } from "@jest/globals";
 jest.mock("fs");
 jest.mock("path");
 jest.mock("./platform.utils");
+jest.mock("crypto", () => ({
+  randomBytes: jest.fn(() => Buffer.alloc(32, 'a')),
+  createCipheriv: jest.fn(() => ({
+    update: jest.fn().mockReturnValue('encrypted'),
+    final: jest.fn().mockReturnValue(''),
+    getAuthTag: jest.fn().mockReturnValue(Buffer.from('authtag1234567890'))
+  })),
+  createDecipheriv: jest.fn(() => ({
+    setAuthTag: jest.fn(),
+    update: jest.fn().mockReturnValue('{}'),
+    final: jest.fn().mockReturnValue('')
+  }))
+}));
 
 import crypto from "crypto";
 import * as fs from "fs";
@@ -177,7 +190,8 @@ describe("session-store.utils", () => {
         .mockReturnValueOnce("corrupted-data"); // session file
 
       // Mock decryption to throw
-      (crypto.createDecipheriv as jest.Mock).mockReturnValue({
+      const crypto = require("crypto");
+      crypto.createDecipheriv.mockReturnValue({
         setAuthTag: jest.fn(),
         update: jest.fn().mockImplementation(() => { throw new Error("decrypt error"); }),
         final: jest.fn()
@@ -191,10 +205,9 @@ describe("session-store.utils", () => {
     it("should encrypt and decrypt data correctly", () => {
       const testData = "test data";
       const mockIv = Buffer.from("mock-iv-16-bytes");
-      const mockAuthTag = Buffer.from("mock-auth-tag");
 
-      (crypto.randomBytes as jest.Mock)
-        .mockReturnValueOnce(mockIv);
+      const crypto = require("crypto");
+      crypto.randomBytes.mockReturnValueOnce(mockIv);
 
       initializeSecureSessionStore();
 

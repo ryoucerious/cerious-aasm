@@ -18,15 +18,22 @@ export class GlobalConfigService {
   /** Loads config from backend (returns a promise) */
   loadConfig(): Promise<GlobalConfig> {
     return new Promise((resolve, reject) => {
-      // Listen for the next 'global-config' message after requesting
       let sub: any;
+      const timeout = setTimeout(() => {
+        if (sub) sub.unsubscribe();
+        reject(new Error('Timed out waiting for global-config response'));
+      }, 10000);
       sub = this.messaging.receiveMessage<GlobalConfig>('global-config').subscribe({
         next: (cfg: GlobalConfig) => {
+          clearTimeout(timeout);
           this.config = cfg;
           resolve(cfg);
           if (sub) sub.unsubscribe();
         },
-        error: reject
+        error: (err: any) => {
+          clearTimeout(timeout);
+          reject(err);
+        }
       });
       this.messaging.sendMessage('get-global-config', {}).subscribe();
     });

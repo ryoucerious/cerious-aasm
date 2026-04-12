@@ -1,4 +1,5 @@
 // Mock modules before importing
+jest.mock('fs');
 jest.mock('path');
 jest.mock('../utils/platform.utils');
 
@@ -23,6 +24,7 @@ const mockDefaultConfig: GlobalConfig = {
   serverDataDir: '',
   autoUpdateArkServer: false,
   updateWarningMinutes: 15,
+  serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
 };
 
@@ -36,6 +38,7 @@ const mockCustomConfig: GlobalConfig = {
   serverDataDir: '',
   autoUpdateArkServer: false,
   updateWarningMinutes: 15,
+  serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
 };
 

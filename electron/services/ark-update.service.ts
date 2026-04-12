@@ -12,6 +12,9 @@ export class ArkUpdateService {
   private updateAvailable = false;
   private latestBuildId: string | null = null;
   private updateScheduled = false;
+  /** Timestamp of the last update attempt — used as a cooldown to prevent rapid re-triggering */
+  private lastUpdateAttemptTime = 0;
+  private static readonly UPDATE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
   
   constructor(private messagingService: MessagingService) {}
 
@@ -142,16 +145,34 @@ export class ArkUpdateService {
       try {
         const { installArkServer } = require('../utils/ark/ark-install.utils');
         const priorBuildId = this.installedBuildId;
-        await installArkServer((progress: any) => {
-            this.messagingService.sendToAll('cluster-update-progress', progress);
+
+        // installArkServer is callback-based — wrap in a Promise so we actually
+        // wait for SteamCMD to finish before reading the manifest or restarting.
+        await new Promise<void>((resolve, reject) => {
+          installArkServer(
+            (err: Error | null) => {
+              if (err) reject(err);
+              else resolve();
+            },
+            (progress: any) => {
+              this.messagingService.sendToAll('cluster-update-progress', progress);
+            }
+          );
         });
         
         this.installedBuildId = await getCurrentInstalledVersion(); // Refresh version
+        this.lastUpdateAttemptTime = Date.now();
 
         // Verify the update actually changed the version
         if (priorBuildId && this.installedBuildId && priorBuildId === this.installedBuildId) {
           console.warn(`[ark-update-service] WARNING: Version unchanged after SteamCMD update (still ${priorBuildId}). SteamCMD may have failed silently.`);
           this.messagingService.sendToAll('cluster-update-status', { status: 'warning', message: `Update completed but version unchanged (${priorBuildId}). SteamCMD may have failed.` });
+          // SteamCMD validated the install and found nothing to change — we are
+          // up-to-date.  Align installedBuildId with what Steam reports so the
+          // next poll doesn't falsely trigger another update cycle.
+          if (this.latestBuildId) {
+            this.installedBuildId = this.latestBuildId;
+          }
         } else {
           console.log(`[ark-update-service] Update successful: ${priorBuildId} → ${this.installedBuildId}`);
         }
@@ -245,6 +266,10 @@ export class ArkUpdateService {
    */
   async pollArkServerUpdates(): Promise<string | null> {
     try {
+      // Always re-read the installed version from disk so we pick up changes
+      // from a completed SteamCMD run or manual update.
+      this.installedBuildId = await getCurrentInstalledVersion();
+
       const buildId = await this.getLatestServerVersion();
       if (!buildId || !this.installedBuildId) {
         return null;
@@ -273,15 +298,18 @@ export class ArkUpdateService {
 
     if (result) {
       const config = loadGlobalConfig();
+      const cooldownActive = (Date.now() - this.lastUpdateAttemptTime) < ArkUpdateService.UPDATE_COOLDOWN_MS;
       if (!this.updateScheduled) {
         this.messagingService.sendToAll('ark-update-available', {
           current: this.installedBuildId,
           latest: result,
           autoUpdate: !!config.autoUpdateArkServer
         });
-        if (config.autoUpdateArkServer) {
+        if (config.autoUpdateArkServer && !cooldownActive) {
           console.log('[ark-update-service] Auto-update enabled. Scheduling cluster update...');
           this.scheduleClusterUpdate(config.updateWarningMinutes || 15);
+        } else if (cooldownActive) {
+          console.log('[ark-update-service] Update detected but cooldown active — skipping auto-update until cooldown expires.');
         }
       }
     }
