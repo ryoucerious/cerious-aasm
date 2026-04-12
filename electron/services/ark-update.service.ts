@@ -140,15 +140,21 @@ export class ArkUpdateService {
 
       // 3. Update Base Install
       try {
-        // Use the install service/handler to trigger update
-        // We reuse the update logic from install-handler or similar
-        // Since we are in backend service, we can call ArkInstallUtils directly if accessible, or invoke the steamcmd command
         const { installArkServer } = require('../utils/ark/ark-install.utils');
+        const priorBuildId = this.installedBuildId;
         await installArkServer((progress: any) => {
             this.messagingService.sendToAll('cluster-update-progress', progress);
         });
         
         this.installedBuildId = await getCurrentInstalledVersion(); // Refresh version
+
+        // Verify the update actually changed the version
+        if (priorBuildId && this.installedBuildId && priorBuildId === this.installedBuildId) {
+          console.warn(`[ark-update-service] WARNING: Version unchanged after SteamCMD update (still ${priorBuildId}). SteamCMD may have failed silently.`);
+          this.messagingService.sendToAll('cluster-update-status', { status: 'warning', message: `Update completed but version unchanged (${priorBuildId}). SteamCMD may have failed.` });
+        } else {
+          console.log(`[ark-update-service] Update successful: ${priorBuildId} → ${this.installedBuildId}`);
+        }
       } catch (e) {
          console.error('[ark-update-service] Update failed:', e);
          this.messagingService.sendToAll('cluster-update-status', { status: 'error', message: 'SteamCMD Update Failed' });
@@ -168,12 +174,17 @@ export class ArkUpdateService {
 
       // 5. Start servers that were running, using standard event callbacks for proper UI state broadcasting
       const { serverInstanceService } = require('./server-instance/server-instance.service');
+      let startDelayMs = 60000;
+      try {
+        const globalCfg = loadGlobalConfig();
+        startDelayMs = (globalCfg.serverStartDelaySeconds ?? 60) * 1000;
+      } catch {}
       for (const instance of preRunningInstances!) {
           try {
              const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(instance.id);
              await serverInstanceService.startServerInstance(instance.id, onLog, onState);
-             // 30s stagger between starts to avoid CPU spike
-             await new Promise(resolve => setTimeout(resolve, 30000));
+             // Configurable stagger between starts
+             await new Promise(resolve => setTimeout(resolve, startDelayMs));
           } catch (e) {
               console.error(`[ark-update-service] Failed to restart ${instance.id}:`, e);
           }

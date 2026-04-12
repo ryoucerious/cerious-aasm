@@ -153,7 +153,6 @@ export class ArkConfigService {
     { key: "enablePVPGamma",                           iniKey: "EnablePVPGamma",                             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "disablePvEGamma",                          iniKey: "DisablePvEGamma",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "allowFlyerCarryPvE",                       iniKey: "AllowFlyerCarryPvE",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "bPassiveDefensesDamageRiderlessDinos",     iniKey: "bPassiveDefensesDamageRiderlessDinos",       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "passiveDefensesDamageRiderlessDinos",      iniKey: "bPassiveDefensesDamageRiderlessDinos",       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "maxTamedDinos",                            iniKey: "MaxTamedDinos",                              destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "overrideMaxExperiencePointsPlayer",        iniKey: "OverrideMaxExperiencePointsPlayer",         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
@@ -314,18 +313,48 @@ export class ArkConfigService {
         });
       }
 
-      // Write each INI file
+      // Build a set of all known INI keys (lowercase) that will be written by the
+      // managed output, so we can identify custom/unmapped lines to preserve.
+      const managedKeys = this.buildManagedKeySet(config);
+
+      // Write each INI file, preserving any unmapped lines from the existing file
       Object.keys(iniFiles).forEach(filename => {
         const filePath = path.join(configDir, filename);
+
+        // Collect unmapped lines from the existing file, keyed by lowercase section name.
+        // Each entry: { header: original section header string, lines: string[] }
+        const customSections = this.collectUnmappedLines(filePath, managedKeys);
+
         let content = '';
+        const writtenSections = new Set<string>();
 
         Object.keys(iniFiles[filename]).forEach(section => {
+          const sectionLower = section.toLowerCase();
+          writtenSections.add(sectionLower);
           content += `${section}\n`;
           iniFiles[filename][section].forEach(line => {
             content += `${line}\n`;
           });
+          // Append any custom/unmapped lines that belong to this section
+          const custom = customSections.get(sectionLower);
+          if (custom && custom.lines.length > 0) {
+            custom.lines.forEach(line => {
+              content += `${line}\n`;
+            });
+          }
           content += '\n';
         });
+
+        // Append entire custom sections that weren't in the managed output
+        for (const [sectionLower, custom] of customSections) {
+          if (!writtenSections.has(sectionLower) && custom.lines.length > 0) {
+            content += `${custom.header}\n`;
+            custom.lines.forEach(line => {
+              content += `${line}\n`;
+            });
+            content += '\n';
+          }
+        }
 
         fs.writeFileSync(filePath, content, 'utf8');
       });
@@ -347,6 +376,91 @@ export class ArkConfigService {
       console.error('[ark-config-service] Error writing ARK config files:', error);
       throw error;
     }
+  }
+
+  /**
+   * Build a set of all INI keys (lowercase, without array indices) that the app manages.
+   * Used to identify which lines in an existing INI file are "custom" and should be preserved.
+   */
+  private buildManagedKeySet(config: any): Set<string> {
+    const keys = new Set<string>();
+
+    // All keys from the settings mapping
+    for (const m of this.asaSettingsMapping) {
+      keys.add(m.iniKey.toLowerCase());
+    }
+
+    // Stat multiplier prefixes — match keys like PerLevelStatsMultiplier_Player[0]
+    for (const m of this.statMultiplierMapping) {
+      for (let i = 0; i < 12; i++) {
+        keys.add(`${m.iniKeyPrefix}[${i}]`.toLowerCase());
+      }
+    }
+
+    // RCONEnabled is always managed when rconPort is set
+    if (config.rconPort) {
+      keys.add('rconenabled');
+    }
+
+    // Mod settings sections are managed entirely
+    // (handled at the section level — mod sections are fully owned by the app)
+
+    return keys;
+  }
+
+  /**
+   * Read an existing INI file and collect lines whose keys are NOT in the managed set.
+   * Returns a Map keyed by lowercase section name → { header, lines } where:
+   *   - header: the original-cased section header string (e.g. "[MyCustomSection]")
+   *   - lines: array of raw "Key=Value" strings that are not managed by the app
+   */
+  private collectUnmappedLines(filePath: string, managedKeys: Set<string>): Map<string, { header: string; lines: string[] }> {
+    const result = new Map<string, { header: string; lines: string[] }>();
+
+    if (!fs.existsSync(filePath)) {
+      return result;
+    }
+
+    let existingContent: string;
+    try {
+      existingContent = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return result;
+    }
+
+    let currentSection = '';
+    let currentSectionHeader = '';
+
+    for (const rawLine of existingContent.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+
+      if (line.startsWith('[')) {
+        currentSection = line.toLowerCase();
+        currentSectionHeader = line;
+        continue;
+      }
+
+      if (!currentSection) continue;
+
+      // Skip lines in [Mod_*] sections — those are fully managed
+      if (currentSection.startsWith('[mod_')) continue;
+
+      const eqIdx = line.indexOf('=');
+      if (eqIdx === -1) continue;
+
+      const rawKey = line.substring(0, eqIdx).trim();
+
+      // Check if this key is managed
+      if (!managedKeys.has(rawKey.toLowerCase())) {
+        if (!result.has(currentSection)) {
+          result.set(currentSection, { header: currentSectionHeader, lines: [] });
+        }
+        result.get(currentSection)!.lines.push(line);
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -474,6 +588,23 @@ export class ArkConfigService {
       const configKey = iniKeyToConfig.get(rawKey.toLowerCase());
       if (configKey !== undefined) {
         result[configKey] = this.coerceIniValue(rawVal);
+      }
+    }
+
+    // Fill sparse stat multiplier arrays to a full 12 elements (default 1.0).
+    // writeArkConfigFiles() only writes non-1.0 values, so parsed arrays are sparse.
+    // Without this, the shallow merge in the save-ini-file handler would replace a
+    // full 12-element config array with a sparse one, later failing the length === 12 check.
+    for (const m of this.statMultiplierMapping) {
+      const arr = result[m.key];
+      if (Array.isArray(arr)) {
+        const filled = new Array(12).fill(1.0);
+        for (let i = 0; i < Math.min(arr.length, 12); i++) {
+          if (arr[i] !== undefined && arr[i] !== null) {
+            filled[i] = arr[i];
+          }
+        }
+        result[m.key] = filled;
       }
     }
 

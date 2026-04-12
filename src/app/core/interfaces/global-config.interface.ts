@@ -8,5 +8,6 @@ export interface GlobalConfig {
   serverDataDir?: string;
   autoUpdateArkServer?: boolean;
   updateWarningMinutes?: number;
+  serverStartDelaySeconds?: number;
   curseForgeApiKey?: string;
 }

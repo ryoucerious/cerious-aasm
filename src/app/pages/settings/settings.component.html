@@ -88,6 +88,16 @@
             </div>
           </div>
 
+          <!-- Server Start Stagger -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Server Start Delay</h4>
+            <div class="form-group">
+              <label class="form-control-label">Delay Between Server Starts (Seconds)</label>
+              <input type="number" [ngModel]="serverStartDelaySeconds" (change)="onServerStartDelaySecondsChange($event.target.value)" class="form-control input" min="10" max="300" />
+              <label class="form-control-label desc">Seconds to wait between starting each server. Applies to Start All, auto-update restarts, and auto-start on launch. Higher values prevent mod download conflicts on shared clusters.</label>
+            </div>
+          </div>
+
 
         </div>
       </div>

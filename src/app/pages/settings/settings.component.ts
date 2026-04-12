@@ -31,6 +31,7 @@ export class SettingsPageComponent {
   serverDataDir = '';
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
+  serverStartDelaySeconds = 60;
   // Backend-provided system info (populated when running in Electron)
   backendNodeVersion: string | null = null;
   backendElectronVersion: string | null = null;
@@ -63,6 +64,7 @@ export class SettingsPageComponent {
       this.serverDataDir = cfg.serverDataDir || '';
       this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
       this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
+      this.serverStartDelaySeconds = cfg.serverStartDelaySeconds || 60;
       this.cdr.markForCheck();
     }
 
@@ -77,6 +79,7 @@ export class SettingsPageComponent {
       this.serverDataDir = cfg.serverDataDir || '';
       this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
       this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
+      this.serverStartDelaySeconds = cfg.serverStartDelaySeconds || 60;
       this.cdr.markForCheck();
     })
   );
@@ -509,6 +512,20 @@ export class SettingsPageComponent {
       this.notification.warning('Invalid warning time (1-60 minutes).', 'Settings');
       setTimeout(() => {
         this.updateWarningMinutes = this.configService.updateWarningMinutes || 15;
+      }, 100);
+    }
+  }
+
+  onServerStartDelaySecondsChange(val: string) {
+    const seconds = parseInt(val, 10);
+    if (!isNaN(seconds) && seconds >= 10 && seconds <= 300) {
+      this.serverStartDelaySeconds = seconds;
+      this.configService.serverStartDelaySeconds = seconds;
+      this.notification.success(`Server Start Delay set to ${seconds} seconds`, 'Settings');
+    } else {
+      this.notification.warning('Invalid delay (10-300 seconds).', 'Settings');
+      setTimeout(() => {
+        this.serverStartDelaySeconds = this.configService.serverStartDelaySeconds || 60;
       }, 100);
     }
   }

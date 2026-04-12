@@ -12,6 +12,7 @@ export interface GlobalConfig {
   serverDataDir?: string; // Optional custom directory for server files
   autoUpdateArkServer?: boolean; // Automatically update ARK server when new version detected
   updateWarningMinutes?: number; // Minutes to warn players before update
+  serverStartDelaySeconds?: number; // Seconds to wait between starting each server (default: 60)
   curseForgeApiKey?: string; // CurseForge API key for mod browser
 }
 
@@ -25,6 +26,7 @@ const DEFAULT_CONFIG: GlobalConfig = {
   serverDataDir: '', // Empty string means use default
   autoUpdateArkServer: false,
   updateWarningMinutes: 15,
+  serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
 };
 

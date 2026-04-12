@@ -129,4 +129,13 @@ export class GlobalConfigService {
     this.config.updateWarningMinutes = val;
     this.saveConfig(this.config).catch(err => console.error(err));
   }
+
+  get serverStartDelaySeconds() {
+    return this.config?.serverStartDelaySeconds ?? 60;
+  }
+  set serverStartDelaySeconds(val: number) {
+    if (!this.config) return;
+    this.config.serverStartDelaySeconds = val;
+    this.saveConfig(this.config).catch(err => console.error(err));
+  }
 }

@@ -247,9 +247,20 @@ export class ServerLifecycleService {
   /**
    * Start all server instances with staggered delay to prevent CPU overload
    */
-  async startAllInstances(delayMs = 30000): Promise<{ started: string[], failed: string[] }> {
+  async startAllInstances(delayMs?: number): Promise<{ started: string[], failed: string[] }> {
     const managementService = require('./server-management.service').serverManagementService;
     const processService = require('./server-process.service').serverProcessService;
+
+    // Use configured delay from global config, fallback to parameter, then default 60s
+    if (delayMs === undefined) {
+      try {
+        const { loadGlobalConfig } = require('../../utils/global-config.utils');
+        const cfg = loadGlobalConfig();
+        delayMs = (cfg.serverStartDelaySeconds ?? 60) * 1000;
+      } catch {
+        delayMs = 60000;
+      }
+    }
     
     const instances = (await managementService.getAllInstances()).instances;
     const started: string[] = [];
