@@ -4,6 +4,28 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-04-15
+
+### Bug Fixes
+
+- **Server Passwords with Special Characters Breaking RCON / Launch**: Server passwords and admin passwords are now URL-encoded when passed on the ARK command line, so characters such as `@`, `#`, `&`, and `+` are handled correctly by the UE command-line parser. The RCON client still authenticates with the raw value from `config.json`, so RCON connections are unaffected.
+- **Server Stuck in "Starting" State After Rapid Crash**: If an ARK server process exited within 60 seconds of starting, the UI would remain showing "starting" indefinitely. Servers that exit that quickly are now transitioned to a `crashed` state. A notification and the last 50 lines of `stderr.log` are sent to the UI to aid diagnosis.
+- **App Hang on Shutdown When Servers Are Running**: The app previously waited a fixed 1.5 seconds before calling `app.exit()` when closing, which was insufficient for running servers to stop and could leave orphaned processes. The shutdown sequence now polls `getActiveProcessCount()` every second for up to 15 seconds, exiting as soon as all server processes have stopped (or forcing exit after the timeout). Each cleanup step is also wrapped in a try/catch so a failure in one step does not prevent the others from running.
+- **Custom INI Lines Overwritten on Save**: Any lines in `GameUserSettings.ini` or `Game.ini` that the user had added manually (or that are not mapped by the settings UI) were silently dropped every time the configuration was saved. The config service now reads the existing INI files before writing, identifies lines that are not part of its managed key set, and re-appends them to the appropriate sections.
+- **Duplicate `bPassiveDefensesDamageRiderlessDinos` INI Key**: The settings mapping contained two entries for `bPassiveDefensesDamageRiderlessDinos` — one via the legacy `bPassiveDefensesDamageRiderlessDinos` key and one via the correct `passiveDefensesDamageRiderlessDinos` key — causing the INI line to be written twice. The duplicate legacy entry has been removed.
+
+### New Features & Improvements
+
+- **Configurable Server Start Delay**: The stagger delay between starting multiple servers (auto-start on launch, auto-update restarts, and Start All) was previously hardcoded to 30 seconds. It is now configurable in Settings → General under "Delay Between Server Starts" (10–300 seconds, default 60 s). Useful for tuning mod-download races on large shared clusters.
+- **Auto-Update Cooldown**: After a successful SteamCMD update run, a 1-hour cooldown is applied before auto-update will trigger again. This prevents rapid re-triggering when Steam's build-ID API has not yet propagated the new version across all regions.
+- **SteamCMD Update Properly Awaited**: `installArkServer` was previously called in a fire-and-forget fashion, meaning the update service would read the manifest and attempt to restart servers before SteamCMD had finished writing files. It is now wrapped in a `Promise` and properly awaited.
+- **Silent SteamCMD Failure Detection**: After an update completes, if the installed build ID has not changed, a warning is logged and broadcast to the UI ("Update completed but version unchanged — SteamCMD may have failed"). The service aligns its cached ID with the latest Steam-reported ID so the next poll does not falsely trigger another update cycle.
+- **ARK Version Re-Read Before Each Poll**: The installed build ID is now refreshed from disk at the start of every update poll cycle, ensuring that manual updates or previously-completed SteamCMD runs are reflected without restarting the app.
+- **`-NOSTEAM` Now Default on Linux**: The `-NOSTEAM` flag (disables Steam API subsystem) has been promoted from an opt-in escape hatch (`disableSteamSubsystem` config) to a default Wine/Proton compatibility flag alongside `-NoHangDetection` and `-norhithread`. The server remains discoverable via `QueryPort` and the Steam server browser.
+- **RCON Debug Logging**: Additional log lines are now emitted when establishing an RCON connection (port, password source, password length, and an explicit warning when no password is configured), making authentication failures easier to diagnose from the Electron log.
+- **Docker Dev Container Support**: A `dev` Docker Compose service and `.devcontainer/devcontainer.json` have been added, allowing the full Linux Electron environment to be opened directly as a VS Code Dev Container for debugging Linux-specific behaviour without a dedicated Linux machine.
+- **Expanded Test Coverage**: Comprehensive Jest test suites have been added for `ark-api-handler`, `curseforge-handler`, `whitelist-handler`, `config-import-export-handler`, `discord.service`, `whitelist.service`, `backup-operations.service`, `config-import-export.service`, `auto-update.service`, `scheduler.service`, `message-routing.service`, `linux-package-updater.service`, `ark-api-plugin.service`, `server-process.service`, `ark-server.utils`, `ark.utils`, and several Angular components (`update-banner`, `player-list`, `ark-api-tab`, `broadcasts-tab`, `discord-tab`, `whitelist-tab`, `server`, `login`, guards), bringing overall code coverage significantly higher.
+
 ## [1.0.12] - 2026-04-05
 
 ### Bug Fixes
