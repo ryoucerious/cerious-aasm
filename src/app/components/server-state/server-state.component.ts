@@ -73,7 +73,7 @@ export class ServerStateComponent implements OnChanges {
       'status-stopped': state === 'Stopped',
       'status-starting': state === 'Starting' || state === 'Preparing to start',
       'status-stopping': state === 'Stopping',
-      'status-error': state === 'Error',
+      'status-error': state === 'Error' || state === 'Crashed',
       'status-unknown': !this.serverInstance?.state
     };
   }
@@ -98,7 +98,7 @@ export class ServerStateComponent implements OnChanges {
   get canStart(): boolean {
     const state = this.mapServerState(this.serverInstance?.state);
     // Only allow start when server is truly stopped or in error state
-    return state === 'Stopped' || state === 'Error' || state === 'Unknown';
+    return state === 'Stopped' || state === 'Error' || state === 'Crashed' || state === 'Unknown';
   }
 
   get canStop(): boolean {
@@ -144,6 +144,7 @@ export class ServerStateComponent implements OnChanges {
       'running': 'Running',
       'stopping': 'Stopping',
       'stopped': 'Stopped',
+      'crashed': 'Crashed',
       'error': 'Error'
     };
     

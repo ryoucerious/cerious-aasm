@@ -149,6 +149,7 @@ export class ServerStateService {
       case 'running': return 'Running';
       case 'stopping': return 'Stopping';
       case 'stopped': return 'Stopped';
+      case 'crashed': return 'Crashed';
       case 'error': return 'Error';
       case 'already-running': return 'Already Running';
       case 'instance-folder-missing': return 'Instance Folder Missing';
@@ -162,7 +163,7 @@ export class ServerStateService {
    */
   canStartInstance(state: string | null | undefined): boolean {
     const mappedState = this.mapServerState(state);
-    return mappedState === 'Stopped' || mappedState === 'Error' || mappedState === 'Unknown';
+    return mappedState === 'Stopped' || mappedState === 'Error' || mappedState === 'Crashed' || mappedState === 'Unknown';
   }
 
   /**

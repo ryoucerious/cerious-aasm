@@ -19,8 +19,15 @@ log.transports.file.maxSize = 10 * 1024 * 1024; // 10 MB → rotate
 log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}]{scope} {text}';
 
 // Resolved lazily so app.getPath() is available (called on first write, after app ready)
-log.transports.file.resolvePathFn = () =>
-  path.join(app.getPath('userData'), 'logs', 'cerious-aasm.log');
+log.transports.file.resolvePathFn = () => {
+  try {
+    return path.join(app.getPath('userData'), 'logs', 'cerious-aasm.log');
+  } catch {
+    // app not ready yet — fall back to a reasonable default
+    const home = process.env.HOME || process.env.USERPROFILE || '/tmp';
+    return path.join(home, '.config', 'Cerious AASM', 'logs', 'cerious-aasm.log');
+  }
+};
 
 // ── Console transport ───────────────────────────────────────────────────────────
 log.transports.console.level = process.env['NODE_ENV'] === 'development' ? 'debug' : 'info';

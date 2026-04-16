@@ -32,13 +32,9 @@ export class WebServerService {
    * Get the correct path for the API server in both dev and production
    */
   private getApiServerPath(): string {
-    const isDev = process.env.NODE_ENV === 'development';
-    if (isDev) {
-      return path.join(__dirname, '..', 'web-server', 'server.js');
-    } else {
-      // In production, use app.getAppPath() for reliable path resolution
-      return path.join(app.getAppPath(), 'electron', 'web-server', 'server.js');
-    }
+    // __dirname is always <project>/electron/services/ — resolve from there
+    // regardless of whether we're running in dev, Docker, or a packaged build.
+    return path.join(__dirname, '..', 'web-server', 'server.js');
   }
 
   /**

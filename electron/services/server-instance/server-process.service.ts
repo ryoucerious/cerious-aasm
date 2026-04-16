@@ -11,6 +11,7 @@ import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile } from '.
  */
 export class ServerProcessService {
   private arkServerProcesses: Record<string, ChildProcess> = {};
+  private processStartTimes: Record<string, number> = {};
 
   /**
    * Set instance state
@@ -54,8 +55,9 @@ export class ServerProcessService {
    * Start the actual server process
    */
   async startServerProcess(instanceId: string, instance: any): Promise<ServerInstanceResult> {
-    // Set state to starting
+    // Set state to starting and record timestamp for crash detection
     this.setInstanceState(instanceId, 'starting');
+    const startTimestamp = Date.now();
 
     // Write ARK config files and set up directories
     const baseDir = require('../../utils/ark/instance.utils').getInstancesBaseDir();
@@ -143,6 +145,7 @@ export class ServerProcessService {
 
     // Store the process reference
     this.arkServerProcesses[instanceId] = serverProcess;
+    this.processStartTimes[instanceId] = startTimestamp;
 
     return { success: true, instanceId };
   }
@@ -160,14 +163,69 @@ export class ServerProcessService {
     if (!serverProcess) return;
 
     // Set up process event handlers
-    serverProcess.on('exit', async (code) => {
-      this.setInstanceState(instanceId, 'stopped');
+    serverProcess.on('exit', async (code, signal) => {
+      const uptimeMs = this.processStartTimes[instanceId] ? Date.now() - this.processStartTimes[instanceId] : 0;
+      const uptimeSec = Math.round(uptimeMs / 1000);
+      const previousState = this.getInstanceState(instanceId);
+      const isRapidCrash = previousState === 'starting' && uptimeSec < 60;
+
+      // Log exit details for diagnostics
+      console.log(`[server-process-service] Server ${instanceId} exited — code=${code}, signal=${signal}, uptime=${uptimeSec}s, previousState=${previousState}`);
+
+      // Determine final state: crashed vs stopped
+      const finalState = (code !== 0 && code !== null && previousState === 'starting') ? 'crashed' : 'stopped';
+      this.setInstanceState(instanceId, finalState);
       unregisterLogFile(instanceId);
-      onState?.('stopped');
+      delete this.processStartTimes[instanceId];
+      delete this.arkServerProcesses[instanceId];
+      onState?.(finalState);
+
+      // On rapid crash, read stderr.log and send diagnostics to UI
+      if (isRapidCrash) {
+        const baseDir = require('../../utils/ark/instance.utils').getInstancesBaseDir();
+        const stderrLogPath = path.join(baseDir, instanceId, 'stderr.log');
+        let stderrContents = '';
+        try {
+          if (fs.existsSync(stderrLogPath)) {
+            const raw = fs.readFileSync(stderrLogPath, 'utf8');
+            // Send last ~50 lines to avoid flooding
+            const lines = raw.split('\n');
+            stderrContents = lines.slice(-50).join('\n').trim();
+          }
+        } catch (e) {
+          console.warn(`[server-process-service] Could not read stderr.log for ${instanceId}:`, e);
+        }
+
+        console.error(`[server-process-service] Rapid crash detected for ${instanceId} — process exited in ${uptimeSec}s with code ${code}`);
+        if (stderrContents) {
+          console.error(`[server-process-service] stderr.log tail:\n${stderrContents}`);
+        }
+
+        // Send crash notification and stderr log to the UI
+        const messagingService = require('../messaging.service').messagingService;
+        const instanceConfig = require('../../utils/ark/instance.utils').getInstance(instanceId);
+        const instanceName = instanceConfig?.name || instanceId;
+        messagingService.sendToAll('notification', {
+          type: 'error',
+          message: `Server "${instanceName}" crashed during startup (exit code ${code}). Check logs for details.`
+        });
+        if (stderrContents) {
+          messagingService.sendToAll('server-instance-log', {
+            log: `[CRASH] Process exited with code ${code} after ${uptimeSec}s. stderr output:\n${stderrContents}`,
+            instanceId
+          });
+        } else {
+          messagingService.sendToAll('server-instance-log', {
+            log: `[CRASH] Process exited with code ${code} after ${uptimeSec}s. No stderr output captured.`,
+            instanceId
+          });
+        }
+      }
       
       // Notify Discord
       const { discordService } = require('../discord.service');
-      discordService.sendNotification(instanceId, 'stop', 'Server has stopped');
+      discordService.sendNotification(instanceId, finalState === 'crashed' ? 'crash' : 'stop',
+        finalState === 'crashed' ? `Server crashed during startup (exit code ${code})` : 'Server has stopped');
 
       // Disconnect RCON connection since server has exited
       try {
@@ -285,7 +343,7 @@ export class ServerProcessService {
     if (!process) {
       // Check if it's already stopped according to state
       const state = this.getInstanceState(instanceId);
-      if (state === 'stopped' || state === 'error') {
+      if (state === 'stopped' || state === 'error' || state === 'crashed') {
         return { success: true, instanceId };
       }
       return { success: false, error: 'Server process not found', instanceId };
@@ -379,6 +437,7 @@ export class ServerProcessService {
     // But we manually ensure cleanup here just in case the exit handler didn't fire (e.g. if we killed it aggressively)
     if (this.arkServerProcesses[instanceId]) {
        delete this.arkServerProcesses[instanceId];
+       delete this.processStartTimes[instanceId];
        this.setInstanceState(instanceId, 'stopped');
        try {
          await rconService.disconnectRcon(instanceId);
