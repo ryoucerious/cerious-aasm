@@ -9,7 +9,7 @@
  * Import this module ONCE, as early as possible in main.ts, before any other imports.
  */
 
-import log from 'electron-log/main';
+import log from 'electron-log';
 import { app } from 'electron';
 import * as path from 'path';
 

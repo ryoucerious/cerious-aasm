@@ -43,16 +43,21 @@ export function buildArkServerArgs(config: any): string[] {
   }
   if (config.clusterId) args.push(`-ClusterId=${config.clusterId}`);
 
-  // Passwords — do NOT encode these. ARK uses the literal received string as its
-  // RCON / admin password, so encoding would cause RCON authentication to fail
-  // (rcon.utils connects with the raw value, not the encoded one).
-  if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
+  // Passwords — URL-encode to handle special characters in query strings.
+  // RCON client will use the unencoded value from config, but ARK receives the
+  // URL-encoded version in the command line and decodes it internally.
+  if (config.serverPassword) paramParts.push(`ServerPassword=${encodeURIComponent(config.serverPassword)}`);
   // ServerAdminPassword controls both in-game admin commands and RCON authentication.
   // Prefer the user-configured serverAdminPassword; fall back to the auto-generated
   // rconPassword so ARK always receives a password and therefore opens the RCON port.
   // Without any ServerAdminPassword ARK silently refuses to bind the RCON listener.
   const adminPassword = config.serverAdminPassword || config.rconPassword;
-  if (adminPassword) paramParts.push(`ServerAdminPassword=${adminPassword}`);
+  if (adminPassword) {
+    console.log(`[ark-args] Setting ServerAdminPassword for RCON (length: ${String(adminPassword).length})`);
+    paramParts.push(`ServerAdminPassword=${encodeURIComponent(adminPassword)}`);
+  } else {
+    console.warn(`[ark-args] No admin password configured - RCON will not work!`);
+  }
 
   // Always enable RCON if we have a port
   if (config.rconPort) {
@@ -88,17 +93,14 @@ export function buildArkServerArgs(config: any): string[] {
   // Wine/Proton compatibility flags (required for ARK Server v83.21+ on Linux)
   // These Unreal Engine flags prevent crashes and hangs when running under Wine:
   // - NoHangDetection: Disables UE hang detection that freezes during Sentry SDK init
+  // - NOSTEAM: Disables Steam API subsystem (prevents Sentry initialization hang)
   // - norhithread: Disables RHI rendering thread (prevents Wine threading issues)
+  // Note: Server will still be discoverable via QueryPort and show in Steam server browser
   // Can be disabled via disableWineCompatFlags config option if issues arise
   if (getPlatform() === 'linux' && !isTrue(config.disableWineCompatFlags)) {
     args.push('-NoHangDetection');
-    args.push('-norhithread');
-  }
-
-  // Escape hatch: re-enable -NOSTEAM for users experiencing Steam initialization hangs
-  // on Linux (Issue #6). This bypasses Steam subsystem entirely.
-  if (isTrue(config.disableSteamSubsystem)) {
     args.push('-NOSTEAM');
+    args.push('-norhithread');
   }
 
   // Server platform - convert crossplay array if serverPlatform not set
