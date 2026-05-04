@@ -4,6 +4,15 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-05-04
+
+### Bug Fixes
+
+- **Player Count Ignored by ARK:SA**: `MaxPlayers` was previously passed as a URL query param (`?MaxPlayers=N`) and also written to `Game.ini` under `[/script/engine.gamesession]`. ARK: Survival Ascended (UE5) ignores both of these. The player cap is now passed exclusively as `-WinLiveMaxPlayers=N`, which is the authoritative flag for dedicated servers in Ascended.
+- **Memory Polling Crash Every 60 Seconds**: The server monitoring service called `lifecycleService.getServerProcess()` which does not exist. It now correctly calls `serverProcessService.getServerProcess()`, eliminating the recurring `TypeError: lifecycleService.getServerProcess is not a function` error logged every minute per running instance.
+- **RCON EventEmitter Memory Leak**: Each RCON command added a `once('error')` and `once('response')` listener that was never cleaned up when the other event fired first, causing the `[Rcon]` EventEmitter to accumulate listeners until Node.js raised a `MaxListenersExceededWarning`. Both handlers now cross-remove each other before resolving or rejecting.
+- **Path Traversal in INI Read/Write**: `readIniFile` and `writeIniFile` now validate the `instanceId` against a strict alphanumeric pattern before constructing any file paths, preventing a malicious instance ID from escaping the instance directory.
+
 ## [1.0.13] - 2026-04-15
 
 ### Bug Fixes

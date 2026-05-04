@@ -250,7 +250,8 @@ export class LinuxPackageUpdaterService {
       timeout: 300000, // 5 min timeout for large files
     });
 
-    const totalBytes = parseInt(resp.headers['content-length'] ?? String(asset.size), 10);
+    const contentLength = resp.headers['content-length'];
+    const totalBytes = parseInt(String(contentLength ?? asset.size), 10);
     let receivedBytes = 0;
     const startTime = Date.now();
 

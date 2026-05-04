@@ -152,9 +152,9 @@ export class ServerMonitoringService {
     // Start polling every 60 seconds
     this.memoryPollingIntervals[instanceId] = setInterval(async () => {
       try {
-        // Get the process from lifecycle service (will be injected)
-        const lifecycleService = require('./server-lifecycle.service').serverLifecycleService;
-        const process = lifecycleService.getServerProcess(instanceId);
+        // Get the process from the process service
+        const { serverProcessService } = require('./server-process.service');
+        const process = serverProcessService.getServerProcess(instanceId);
 
         if (process && process.pid) {
           const memoryUsage = getProcessMemoryUsage(process.pid);

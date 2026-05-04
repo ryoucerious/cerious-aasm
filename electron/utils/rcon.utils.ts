@@ -112,12 +112,16 @@ export function sendRconCommand(instanceId: string, command: string): Promise<st
     const rcon = rconClients[instanceId];
     if (!rcon) return reject(new Error('RCON not connected'));
     rcon.send(command);
-    rcon.once('response', (str: string) => {
+    const onResponse = (str: string) => {
+      rcon.removeListener('error', onError);
       resolve(str);
-    });
-    rcon.once('error', (err: any) => {
+    };
+    const onError = (err: any) => {
+      rcon.removeListener('response', onResponse);
       reject(err);
-    });
+    };
+    rcon.once('response', onResponse);
+    rcon.once('error', onError);
   });
 }
 

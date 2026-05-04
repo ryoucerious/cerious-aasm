@@ -47,10 +47,19 @@ export function buildArkServerArgs(config: any): string[] {
   // RCON client will use the unencoded value from config, but ARK receives the
   // URL-encoded version in the command line and decodes it internally.
   if (config.serverPassword) paramParts.push(`ServerPassword=${encodeURIComponent(config.serverPassword)}`);
-  // ServerAdminPassword controls both in-game admin commands and RCON authentication.
-  // Prefer the user-configured serverAdminPassword; fall back to the auto-generated
-  // rconPassword so ARK always receives a password and therefore opens the RCON port.
-  // Without any ServerAdminPassword ARK silently refuses to bind the RCON listener.
+
+  // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
+  const toBool = (val: any) => val === true || val === 'true';
+  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE');
+
+  // ServerAdminPassword MUST be the LAST URL param.
+  // ARK:SA (UE5) has a known bug where it writes command-line URL params back to
+  // GameUserSettings.ini and treats everything AFTER ServerAdminPassword= up to the
+  // end of the param string as the password value.  Placing it last means nothing
+  // follows it, preventing concatenation such as:
+  //   ServerAdminPassword=mypassword?RCONEnabled=True?RCONPort=27020
+  // RCONEnabled and RCONPort are written to GameUserSettings.ini by writeArkConfigFiles
+  // and do NOT need to appear in the URL params.
   const adminPassword = config.serverAdminPassword || config.rconPassword;
   if (adminPassword) {
     console.log(`[ark-args] Setting ServerAdminPassword for RCON (length: ${String(adminPassword).length})`);
@@ -58,20 +67,6 @@ export function buildArkServerArgs(config: any): string[] {
   } else {
     console.warn(`[ark-args] No admin password configured - RCON will not work!`);
   }
-
-  // Always enable RCON if we have a port
-  if (config.rconPort) {
-    paramParts.push('RCONEnabled=True');
-    paramParts.push(`RCONPort=${config.rconPort}`);
-  }
-
-  // MaxPlayers - pass on command line so it overrides INI (avoids shared config dir race)
-  if (config.maxPlayers) paramParts.push(`MaxPlayers=${config.maxPlayers}`);
-
-  // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
-  // Must be checked before composing mainArg. We need isTrue helper inline here.
-  const toBool = (val: any) => val === true || val === 'true';
-  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE');
 
   // Compose the main command string
   let mainArg = mapArg;
@@ -81,8 +76,6 @@ export function buildArkServerArgs(config: any): string[] {
 
   args.push(mainArg);
 
-  // Helper to safely check boolean values (handles boolean and string 'true'/'false') 
-  // Note: duplicate definition is fine if scoped, but we should make isTrue available or locally defined correctly
   const isTrue = (val: any) => val === true || val === 'true';
   const isFalse = (val: any) => val === false || val === 'false';
 
@@ -120,10 +113,10 @@ export function buildArkServerArgs(config: any): string[] {
     args.push('-ServerPlatform=PC');
   }
 
-  // Windows Live Max Players (Required for some crossplay configurations to show up in lists)
-  if (config.winLiveMaxPlayers) {
-    args.push(`-WinLiveMaxPlayers=${config.winLiveMaxPlayers}`);
-  }
+  // MaxPlayers — ARK:SA uses -WinLiveMaxPlayers=N as the authoritative player cap flag.
+  // winLiveMaxPlayers takes explicit precedence; otherwise maxPlayers drives the value.
+  const winLiveMaxPlayers = config.winLiveMaxPlayers || config.maxPlayers;
+  if (winLiveMaxPlayers) args.push(`-WinLiveMaxPlayers=${winLiveMaxPlayers}`);
 
   // Add launch parameters from INI utils (handles mods, crossplay, maxPlayers, etc.)
   const launchParams = getArkLaunchParameters(config);

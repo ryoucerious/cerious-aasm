@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -86,7 +86,7 @@
     "@types/semver": "^7.7.1",
     "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.21",
-    "concurrently": "^9.0.1",
+    "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "electron": "^21.4.4",
     "electron-builder": "^25.1.8",
@@ -104,7 +104,7 @@
     "tailwindcss": "^3.4.17",
     "ts-jest": "^29.4.4",
     "typescript": "~5.8.2",
-    "wait-on": "^8.0.1"
+    "wait-on": "^8.0.5"
   },
   "main": "electron/main.js",
   "build": {

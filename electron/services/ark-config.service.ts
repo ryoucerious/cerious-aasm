@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ArkPathUtils } from '../utils/ark.utils';
+import { validateInstanceId } from '../utils/validation.utils';
 
 /**
  * Mapping entry for ARK server settings.
@@ -137,7 +138,8 @@ export class ArkConfigService {
     // =====================================================
     // Game.ini - [/script/engine.gamesession]
     // =====================================================
-    { key: "maxPlayers",                               iniKey: "MaxPlayers",                                 destination: "Game.ini", section: "[/script/engine.gamesession]" },
+    // MaxPlayers is NOT written to INI — ARK:SA ignores [/script/engine.gamesession] MaxPlayers.
+    // It is passed exclusively via the command-line URL param (?MaxPlayers=N in ark-args.utils.ts).
 
     // =====================================================
     // Game.ini - [/script/shootergame.shootergamemode]
@@ -587,15 +589,20 @@ export class ArkConfigService {
    * Read raw content of an INI file for a specific instance
    */
   readIniFile(instanceId: string, filename: string): string {
+      // Security: validate instanceId before using it in a file path
+      if (!validateInstanceId(instanceId)) {
+          throw new Error('Invalid instance ID');
+      }
+
+      // Security: ensure filename is just a filename, not a path
+      if (filename.includes('/') || filename.includes('\\')) {
+          throw new Error('Invalid filename');
+      }
+
       const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
       const instanceDir = path.join(getInstancesBaseDir(), instanceId);
       const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
       const filePath = path.join(configDir, filename);
-
-      // Security check: ensure filename is just a filename, not a path
-      if (filename.includes('/') || filename.includes('\\')) {
-          throw new Error('Invalid filename');
-      }
 
       if (fs.existsSync(filePath)) {
           return fs.readFileSync(filePath, 'utf8');
@@ -691,21 +698,25 @@ export class ArkConfigService {
    * Write raw content to an INI file for a specific instance
    */
   writeIniFile(instanceId: string, filename: string, content: string): void {
+      // Security: validate instanceId before using it in a file path
+      if (!validateInstanceId(instanceId)) {
+          throw new Error('Invalid instance ID');
+      }
+
+      // Security: ensure filename is just a filename, not a path
+      if (filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith('.ini')) {
+          throw new Error('Invalid filename. Must be a .ini file.');
+      }
+
       const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
       const instanceDir = path.join(getInstancesBaseDir(), instanceId);
       const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
-      
+
       if (!fs.existsSync(configDir)) {
           fs.mkdirSync(configDir, { recursive: true });
       }
 
       const filePath = path.join(configDir, filename);
-      
-      // Security check
-      if (filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith('.ini')) {
-          throw new Error('Invalid filename. Must be a .ini file.');
-      }
-
       fs.writeFileSync(filePath, content, 'utf8');
   }
 }
