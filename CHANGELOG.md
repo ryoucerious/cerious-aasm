@@ -4,6 +4,14 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **Admin Password / `enablecheats` Failing (Password Was URL-Encoded)**: The v1.0.13 fix that re-added `encodeURIComponent` to server and admin passwords was incorrect — ARK's command-line parser does not URL-decode parameter values, so a password stored as `mypass!` would arrive at ARK as `mypass%21`. The user's in-game `enablecheats mypass!` then failed because ARK was checking against the encoded form. Encoding has been removed; the raw password is passed directly, which aligns with the RCON client that already authenticates using the raw value from `config.json`.
+
+- **Critical Params Dropped When Session Name Contains a Space**: ARK's UE command-line parser splits on spaces before interpreting `?`-delimited parameters. `SessionName` was the second entry in the query string, so a session name like "My Server" caused everything after the space — Port, QueryPort, ServerAdminPassword, RCONEnabled, RCONPort, MaxPlayers — to be silently ignored (ARK could not bind the correct ports or set the admin password). `SessionName` is now appended **last** in the query string; a space in the name may truncate the displayed server name in ARK's browser, but all critical network and security parameters are guaranteed to be parsed first.
+
+- **`?` Character Allowed in Passwords**: The password validation did not reject `?`, which is ARK's travel-URL parameter separator. A password containing `?` would split the launch query string mid-value, corrupting all subsequent parameters. `?` is now rejected alongside `<`, `>`, `"`, and `'`.
+
 ## [1.0.13] - 2026-04-15
 
 ### Bug Fixes

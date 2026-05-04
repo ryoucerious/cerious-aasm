@@ -19,6 +19,27 @@ describe('ark-args.utils', () => {
       expect(mainArg).toContain('SessionName=Server Name');
     });
 
+    it('should place SessionName after critical params so spaces in name do not drop Port/Password/RCON', () => {
+      const args = buildArkServerArgs({
+        sessionName: 'My Server With Spaces',
+        gamePort: 7777,
+        serverAdminPassword: 'adminpass',
+        rconPort: 27020,
+        maxPlayers: 50,
+        queryPort: 27015
+      });
+      const mainArg = args[0];
+      const portIdx = mainArg.indexOf('Port=7777');
+      const queryIdx = mainArg.indexOf('QueryPort=27015');
+      const adminIdx = mainArg.indexOf('ServerAdminPassword=adminpass');
+      const rconIdx = mainArg.indexOf('RCONPort=27020');
+      const sessionIdx = mainArg.indexOf('SessionName=');
+      expect(sessionIdx).toBeGreaterThan(portIdx);
+      expect(sessionIdx).toBeGreaterThan(queryIdx);
+      expect(sessionIdx).toBeGreaterThan(adminIdx);
+      expect(sessionIdx).toBeGreaterThan(rconIdx);
+    });
+
     it('should include server password unencoded', () => {
       const args = buildArkServerArgs({ serverPassword: 'pass word' });
       const mainArg = args[0];

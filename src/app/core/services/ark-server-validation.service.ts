@@ -395,10 +395,12 @@ export class ArkServerValidationService {
         return { field, isValid: false, error: `${field} cannot exceed 100 characters` };
       }
 
-      // Check for potentially problematic characters
-      const problematicChars = /[<>"']/;
+      // Check for potentially problematic characters.
+      // '?' is the ARK travel-URL parameter separator — including it in a password
+      // would break command-line parsing and corrupt configuration.
+      const problematicChars = /[<>"'?]/;
       if (problematicChars.test(value)) {
-        return { field, isValid: false, error: `${field} contains invalid characters` };
+        return { field, isValid: false, error: `${field} contains invalid characters (< > " ' ? are not allowed)` };
       }
     }
 

@@ -19,7 +19,6 @@ export function buildArkServerArgs(config: any): string[] {
   let paramParts: string[] = [];
   paramParts.push('listen');
 
-  if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
   if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
 
   if (config.altSaveDirName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirName}`);
@@ -43,10 +42,11 @@ export function buildArkServerArgs(config: any): string[] {
   }
   if (config.clusterId) args.push(`-ClusterId=${config.clusterId}`);
 
-  // Passwords — URL-encode to handle special characters in query strings.
-  // RCON client will use the unencoded value from config, but ARK receives the
-  // URL-encoded version in the command line and decodes it internally.
-  if (config.serverPassword) paramParts.push(`ServerPassword=${encodeURIComponent(config.serverPassword)}`);
+  // Passwords — pass raw (not URL-encoded) so ARK uses the exact value and the
+  // RCON client authenticates with the same value from config.json.
+  // ARK's command-line parser does NOT URL-decode values, so encoding would cause
+  // a mismatch between the in-game admin password and `config.serverAdminPassword`.
+  if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
   // ServerAdminPassword controls both in-game admin commands and RCON authentication.
   // Prefer the user-configured serverAdminPassword; fall back to the auto-generated
   // rconPassword so ARK always receives a password and therefore opens the RCON port.
@@ -54,7 +54,7 @@ export function buildArkServerArgs(config: any): string[] {
   const adminPassword = config.serverAdminPassword || config.rconPassword;
   if (adminPassword) {
     console.log(`[ark-args] Setting ServerAdminPassword for RCON (length: ${String(adminPassword).length})`);
-    paramParts.push(`ServerAdminPassword=${encodeURIComponent(adminPassword)}`);
+    paramParts.push(`ServerAdminPassword=${adminPassword}`);
   } else {
     console.warn(`[ark-args] No admin password configured - RCON will not work!`);
   }
@@ -72,6 +72,12 @@ export function buildArkServerArgs(config: any): string[] {
   // Must be checked before composing mainArg. We need isTrue helper inline here.
   const toBool = (val: any) => val === true || val === 'true';
   if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE');
+
+  // SessionName is placed LAST in the query string so that if it contains a space,
+  // ARK's UE command-line parser (which splits on spaces before interpreting
+  // ?-delimited parameters) only truncates the session name — all critical params
+  // (Port, QueryPort, ServerAdminPassword, RCON, MaxPlayers) have already been read.
+  if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
 
   // Compose the main command string
   let mainArg = mapArg;
