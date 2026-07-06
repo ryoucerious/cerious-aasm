@@ -13,10 +13,6 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 - **Critical Params Dropped When Session Name Contains a Space**: ARK's UE command-line parser splits on spaces before interpreting `?`-delimited parameters. `SessionName` was the second entry in the query string, so a session name like "My Server" caused everything after the space — Port, QueryPort, ServerAdminPassword, RCONEnabled, RCONPort, MaxPlayers — to be silently ignored (ARK could not bind the correct ports or set the admin password). `SessionName` is now appended **last** in the query string; a space in the name may truncate the displayed server name in ARK's browser, but all critical network and security parameters are guaranteed to be parsed first.
 - **`?` Character Allowed in Passwords**: The password validation did not reject `?`, which is ARK's travel-URL parameter separator. A password containing `?` would split the launch query string mid-value, corrupting all subsequent parameters. `?` is now rejected alongside `<`, `>`, `"`, and `'`.
 
-### New Features & Improvements
-
-- **Crystal Isles & Fjordur Maps**: Added `CrystalIsles_WP` and `Fjordur_WP` to the Server Map dropdown options.
-
 ## [1.0.13] - 2026-04-15
 
 ### Bug Fixes
