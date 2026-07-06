@@ -64,16 +64,16 @@ describe('ark-args.utils', () => {
       expect(mainArg).not.toContain('MaxPlayers');
     });
 
-    it('should include ServerPVE when bPvE is true', () => {
+    it('should include ServerPVE=True when bPvE is true', () => {
       const args = buildArkServerArgs({ bPvE: true });
       const mainArg = args[0];
-      expect(mainArg).toContain('ServerPVE');
+      expect(mainArg).toContain('ServerPVE=True');
     });
 
-    it('should include ServerPVE when serverPVE is "true"', () => {
+    it('should include ServerPVE=True when serverPVE is "true"', () => {
       const args = buildArkServerArgs({ serverPVE: 'true' });
       const mainArg = args[0];
-      expect(mainArg).toContain('ServerPVE');
+      expect(mainArg).toContain('ServerPVE=True');
     });
 
     it('should not include ServerPVE when PvE is false', () => {

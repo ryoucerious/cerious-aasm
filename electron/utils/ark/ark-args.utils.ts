@@ -49,7 +49,9 @@ export function buildArkServerArgs(config: any): string[] {
 
   // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
   const toBool = (val: any) => val === true || val === 'true';
-  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE');
+  // Must be 'ServerPVE=True' — a bare '?ServerPVE' parses as an empty value (false)
+  // and, because this overrides the INI, would force the server back to PVP.
+  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE=True');
 
   // ServerAdminPassword MUST be the LAST URL param.
   // ARK:SA (UE5) has a known bug where it writes command-line URL params back to
