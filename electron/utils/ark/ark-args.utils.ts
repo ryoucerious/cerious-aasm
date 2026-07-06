@@ -19,7 +19,6 @@ export function buildArkServerArgs(config: any): string[] {
   let paramParts: string[] = [];
   paramParts.push('listen');
 
-  if (config.sessionName) paramParts.push(`SessionName=${config.sessionName}`);
   if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
 
   if (config.altSaveDirName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirName}`);
@@ -63,7 +62,7 @@ export function buildArkServerArgs(config: any): string[] {
   const adminPassword = config.serverAdminPassword || config.rconPassword;
   if (adminPassword) {
     console.log(`[ark-args] Setting ServerAdminPassword for RCON (length: ${String(adminPassword).length})`);
-    paramParts.push(`ServerAdminPassword=${encodeURIComponent(adminPassword)}`);
+    paramParts.push(`ServerAdminPassword=${adminPassword}`);
   } else {
     console.warn(`[ark-args] No admin password configured - RCON will not work!`);
   }

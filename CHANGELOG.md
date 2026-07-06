@@ -4,14 +4,13 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
-## [1.0.14] - 2026-05-04
-
 ### Bug Fixes
 
-- **Player Count Ignored by ARK:SA**: `MaxPlayers` was previously passed as a URL query param (`?MaxPlayers=N`) and also written to `Game.ini` under `[/script/engine.gamesession]`. ARK: Survival Ascended (UE5) ignores both of these. The player cap is now passed exclusively as `-WinLiveMaxPlayers=N`, which is the authoritative flag for dedicated servers in Ascended.
-- **Memory Polling Crash Every 60 Seconds**: The server monitoring service called `lifecycleService.getServerProcess()` which does not exist. It now correctly calls `serverProcessService.getServerProcess()`, eliminating the recurring `TypeError: lifecycleService.getServerProcess is not a function` error logged every minute per running instance.
-- **RCON EventEmitter Memory Leak**: Each RCON command added a `once('error')` and `once('response')` listener that was never cleaned up when the other event fired first, causing the `[Rcon]` EventEmitter to accumulate listeners until Node.js raised a `MaxListenersExceededWarning`. Both handlers now cross-remove each other before resolving or rejecting.
-- **Path Traversal in INI Read/Write**: `readIniFile` and `writeIniFile` now validate the `instanceId` against a strict alphanumeric pattern before constructing any file paths, preventing a malicious instance ID from escaping the instance directory.
+- **Admin Password / `enablecheats` Failing (Password Was URL-Encoded)**: The v1.0.13 fix that re-added `encodeURIComponent` to server and admin passwords was incorrect — ARK's command-line parser does not URL-decode parameter values, so a password stored as `mypass!` would arrive at ARK as `mypass%21`. The user's in-game `enablecheats mypass!` then failed because ARK was checking against the encoded form. Encoding has been removed; the raw password is passed directly, which aligns with the RCON client that already authenticates using the raw value from `config.json`.
+
+- **Critical Params Dropped When Session Name Contains a Space**: ARK's UE command-line parser splits on spaces before interpreting `?`-delimited parameters. `SessionName` was the second entry in the query string, so a session name like "My Server" caused everything after the space — Port, QueryPort, ServerAdminPassword, RCONEnabled, RCONPort, MaxPlayers — to be silently ignored (ARK could not bind the correct ports or set the admin password). `SessionName` is now appended **last** in the query string; a space in the name may truncate the displayed server name in ARK's browser, but all critical network and security parameters are guaranteed to be parsed first.
+
+- **`?` Character Allowed in Passwords**: The password validation did not reject `?`, which is ARK's travel-URL parameter separator. A password containing `?` would split the launch query string mid-value, corrupting all subsequent parameters. `?` is now rejected alongside `<`, `>`, `"`, and `'`.
 
 ## [1.0.13] - 2026-04-15
 
