@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # Pinned (not windows-latest): GitHub's rolling windows-latest image moved to a newer
+    # Visual Studio that node-gyp@9.x (used by @electron/rebuild for bcrypt/node-pty) fails
+    # to detect ("Could not find any Visual Studio installation"). windows-2022 matches the
+    # environment every prior release (v1.0.5-v1.0.14) built successfully on.
+    runs-on: windows-2022
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
