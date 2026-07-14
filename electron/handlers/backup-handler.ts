@@ -1,5 +1,7 @@
-﻿import { messagingService } from '../services/messaging.service';
+﻿import { shell } from 'electron';
+import { messagingService } from '../services/messaging.service';
 import { backupService } from '../services/backup/backup.service';
+import { applicationService } from '../services/application.service';
 
 /**
  * Initializes the backup system. This function should be called during the app startup
@@ -400,12 +402,26 @@ messagingService.on('download-backup', async (payload, sender) => {
   
   try {
     const result = await backupService.downloadBackup(instanceId, backupId);
-    
+
     if (result.success) {
+      // On the desktop app, reveal the backup in the OS file explorer so the
+      // "Download" button actually takes the user to the file. In headless/web
+      // mode there is no host file explorer to open, so this is skipped.
+      let revealed = false;
+      if (!applicationService.isHeadless() && result.filePath) {
+        try {
+          shell.showItemInFolder(result.filePath);
+          revealed = true;
+        } catch (revealError) {
+          console.error('[backup-handler] Failed to reveal backup in folder:', revealError);
+        }
+      }
+
       messagingService.sendToOriginator('download-backup', {
         success: true,
         filePath: result.filePath,
         fileName: result.fileName,
+        message: revealed ? 'Backup file revealed in file explorer' : undefined,
         requestId
       }, sender);
     } else {

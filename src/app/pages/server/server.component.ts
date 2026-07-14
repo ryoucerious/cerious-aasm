@@ -562,9 +562,9 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
-    if (confirm(`Are you sure you want to restore the backup "${backup.name}"? This will replace all current server files.`)) {
-      this.backupUIService.restoreBackup(this.activeServerInstance.id, backup);
-    }
+    // The confirmation prompt lives in backupUIService.restoreBackup; don't prompt
+    // here as well or the user is asked to confirm twice.
+    this.backupUIService.restoreBackup(this.activeServerInstance.id, backup);
   }
 
   downloadBackup(backup: any) {

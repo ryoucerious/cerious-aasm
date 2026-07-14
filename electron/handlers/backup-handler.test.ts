@@ -1,5 +1,9 @@
 import * as backupHandler from './backup-handler';
 // Mock the services
+jest.mock('electron', () => ({ shell: { showItemInFolder: jest.fn() } }));
+jest.mock('../services/application.service', () => ({
+  applicationService: { isHeadless: jest.fn(() => false) }
+}));
 jest.mock('../services/messaging.service');
 jest.mock('../services/backup/backup.service', () => ({
   backupService: {
@@ -1057,6 +1061,7 @@ describe('Backup Handler', () => {
         success: true,
         filePath: '/path/to/backup.zip',
         fileName: 'backup-123.zip',
+        message: 'Backup file revealed in file explorer',
         requestId: 'test-123'
       }, mockSender);
     });
