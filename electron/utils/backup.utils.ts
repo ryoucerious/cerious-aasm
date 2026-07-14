@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { BackupSettings, BackupMetadata } from '../types/backup.types';
+import { getDefaultInstallDir } from './platform.utils';
 
 /**
  * Backup Utilities - Helper Functions Only
@@ -139,9 +140,23 @@ export class BackupFilenameUtils {
  */
 export class BackupPathUtils {
   /**
-   * Get the backup directory for a specific instance
+   * Get the backup directory for a specific instance.
+   *
+   * Backups live in the app data directory (`<installDir>/backups/<instanceId>`),
+   * NOT inside the server instance directory. Keeping them out of the instance
+   * folder means a restore — which clears and rewrites that folder — can never
+   * touch, lock, or delete the backups it is reading from.
    */
   static getInstanceBackupDir(serverPath: string): string {
+    const instanceId = path.basename(serverPath);
+    return path.join(getDefaultInstallDir(), 'backups', instanceId);
+  }
+
+  /**
+   * Legacy backup directory (inside the server instance folder). Only used to
+   * migrate old backups to the new app-data location.
+   */
+  static getLegacyInstanceBackupDir(serverPath: string): string {
     return path.join(serverPath, 'backups');
   }
 

@@ -553,7 +553,15 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   restoreBackup(backup: any) {
     if (!this.activeServerInstance?.id || !backup) return;
-    
+
+    // Block restore while the server is anything but fully stopped. Restoring rewrites
+    // the instance directory and would fight file locks held by the running server.
+    const state = (this.activeServerInstance.state || '').toLowerCase();
+    if (state !== 'stopped' && state !== '') {
+      this.notificationService.warning('Stop the server before restoring a backup.', 'Backup');
+      return;
+    }
+
     if (confirm(`Are you sure you want to restore the backup "${backup.name}"? This will replace all current server files.`)) {
       this.backupUIService.restoreBackup(this.activeServerInstance.id, backup);
     }

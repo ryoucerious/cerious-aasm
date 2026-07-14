@@ -151,9 +151,9 @@ export class BackupOperationsService {
 
           const stats = await stat(backupFilePath);
 
-          // Parse metadata from filename
-          // Extract instanceId from serverPath
-          const instanceId = path.basename(path.dirname(instanceBackupDir));
+          // Parse metadata from filename. The backup dir is now
+          // `<installDir>/backups/<instanceId>`, so the instance ID is its basename.
+          const instanceId = path.basename(instanceBackupDir);
           const metadata = BackupFilenameUtils.parseFilename(backupFile, backupFilePath, instanceId);
 
           if (metadata) {
@@ -180,6 +180,12 @@ export class BackupOperationsService {
    */
   async restoreBackupInternal(backupId: string, serverPath: string): Promise<void> {
     try {
+      // Safety guard: never operate on an empty path or the instances root. A bad
+      // serverPath here would let clearServerDirectory() wipe every server on disk.
+      if (!serverPath || typeof serverPath !== 'string' || !path.isAbsolute(serverPath)) {
+        throw new Error(`Refusing to restore backup: invalid server path "${serverPath}"`);
+      }
+
       // Find the backup file by searching for files with matching ID
       const instanceBackupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
 
@@ -201,12 +207,28 @@ export class BackupOperationsService {
         throw new Error(`Backup file not found: ${backupFilePath}`);
       }
 
+      // Preserve the instance's config.json. It is what makes the server appear in
+      // the server list; if the restore fails partway (e.g. a file locked by a
+      // running server on Windows) or the backup happens not to contain a config,
+      // we must not leave the instance without one — otherwise the whole server
+      // silently vanishes from the list.
+      const configPath = path.join(serverPath, 'config.json');
+      let preservedConfig: Buffer | null = null;
+      if (fs.existsSync(configPath)) {
+        try {
+          preservedConfig = await readFile(configPath);
+        } catch (error) {
+          console.warn('[backup-operations] Failed to read existing config.json before restore:', error);
+        }
+      }
+
       // Create temporary directory for extraction
       const tempDir = path.join(path.dirname(backupFilePath), `temp_${backupId}`);
       await mkdir(tempDir, { recursive: true });
 
       try {
-        // Extract backup
+        // Extract backup fully BEFORE clearing anything, so a bad archive can't
+        // leave the server directory emptied.
         const zip = new AdmZip(backupFilePath);
         zip.extractAllTo(tempDir, true);
 
@@ -216,8 +238,23 @@ export class BackupOperationsService {
         // Copy extracted files to server directory
         await this.copyDirectory(tempDir, serverPath);
       } finally {
+        // Guarantee the instance still has a config.json so it never drops out of
+        // the server list, even if the restore threw partway through. Do this
+        // first, before temp cleanup, so a cleanup failure can't skip it.
+        try {
+          if (preservedConfig && !fs.existsSync(configPath)) {
+            await writeFile(configPath, preservedConfig);
+          }
+        } catch (error) {
+          console.error('[backup-operations] Failed to restore preserved config.json:', error);
+        }
+
         // Clean up temporary directory
-        await this.removeDirectory(tempDir);
+        try {
+          await this.removeDirectory(tempDir);
+        } catch (error) {
+          console.error('[backup-operations] Failed to clean up temp restore directory:', error);
+        }
       }
     } catch (error) {
       console.error('[backup-operations] Failed to restore backup:', error);
@@ -248,7 +285,7 @@ export class BackupOperationsService {
 
       // Third try: search by parsing all backup files and matching ID (most robust)
       if (!backupFile) {
-        const instanceId = path.basename(path.dirname(instanceBackupDir));
+        const instanceId = path.basename(instanceBackupDir);
         for (const file of files) {
           if (BackupFilenameUtils.isBackupFile(file)) {
             const filePath = path.join(instanceBackupDir, file);
@@ -270,6 +307,65 @@ export class BackupOperationsService {
     } catch (error) {
       console.error('[backup-operations] Failed to delete backup:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Migrate backups from the legacy location (inside the server instance folder)
+   * to the new app-data location. Best-effort and idempotent — safe to run on
+   * every startup.
+   */
+  async migrateLegacyBackups(serverPath: string): Promise<void> {
+    try {
+      const legacyDir = BackupPathUtils.getLegacyInstanceBackupDir(serverPath);
+      const newDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+
+      // Nothing to migrate, or the two resolve to the same place.
+      if (!fs.existsSync(legacyDir)) {
+        return;
+      }
+      if (path.resolve(legacyDir) === path.resolve(newDir)) {
+        return;
+      }
+
+      await mkdir(newDir, { recursive: true });
+
+      const entries = await readdir(legacyDir);
+      for (const entry of entries) {
+        const src = path.join(legacyDir, entry);
+        const dest = path.join(newDir, entry);
+        try {
+          const st = await stat(src);
+          // Only migrate backup files; leave anything else in place.
+          if (!st.isFile() || !BackupFilenameUtils.isBackupFile(entry)) {
+            continue;
+          }
+          if (fs.existsSync(dest)) {
+            continue;
+          }
+          try {
+            await fs.promises.rename(src, dest);
+          } catch {
+            // rename fails across volumes — fall back to copy + delete.
+            await fs.promises.copyFile(src, dest);
+            await unlink(src);
+          }
+        } catch (error) {
+          console.error(`[backup-operations] Failed to migrate backup ${entry}:`, error);
+        }
+      }
+
+      // Remove the legacy directory if it is now empty.
+      try {
+        const remaining = await readdir(legacyDir);
+        if (remaining.length === 0) {
+          fs.rmdirSync(legacyDir);
+        }
+      } catch {
+        // ignore — non-empty or already gone
+      }
+    } catch (error) {
+      console.error('[backup-operations] Failed to migrate legacy backups:', error);
     }
   }
 

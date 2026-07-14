@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { promisify } from 'util';
 import * as instanceUtils from '../../utils/ark/instance.utils';
 
@@ -17,11 +18,32 @@ const AdmZip = require('adm-zip') as any;
 
 export class BackupImportService {
   /**
+   * Generate a new instance ID.
+   *
+   * Uses Node's built-in crypto.randomUUID() so we never depend on the ESM-only
+   * `uuid` package, which fails to resolve from inside a packaged app.asar
+   * ("Cannot find package 'uuid'"). Falls back to a manual v4 generator on the
+   * off chance crypto.randomUUID is unavailable.
+   */
+  private generateInstanceId(): string {
+    try {
+      if (typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch {
+      // fall through to manual generator
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  /**
    * Import a backup file as a new server instance
    */
   async importBackupAsNewServer(serverName: string, backupFilePath: string): Promise<any> {
-    const { v4: uuidv4 } = await import('uuid');
-
     let newInstance: any = null;
 
     try {
@@ -31,7 +53,7 @@ export class BackupImportService {
       }
 
       // Generate new instance ID
-      const instanceId = uuidv4();
+      const instanceId = this.generateInstanceId();
 
       // Get base directory for instances
       const baseDir = instanceUtils.getInstancesBaseDir();

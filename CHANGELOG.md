@@ -4,6 +4,18 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-07-14
+
+### Bug Fixes
+
+- **Backup Import Crashing with "Cannot find package 'uuid'"**: Importing a backup as a new server threw `Cannot find package 'uuid'` in the packaged app. The import path used a dynamic `import('uuid')`, and the ESM-only `uuid` package fails to resolve from inside `app.asar`. New instance IDs are now generated with Node's built-in `crypto.randomUUID()` (with a manual v4 fallback), removing the dependency entirely.
+- **Restoring a Backup Could Remove Servers from the List**: A server only appears in the list if its directory contains a readable `config.json`. Restore cleared the instance directory (including `config.json`) before copying the backup back, so a mid-restore failure — likely on Windows, where a running server holds file locks — left the instance with no `config.json` and it silently disappeared. Restore now preserves the existing `config.json` and rewrites it if the restore does not leave one, guards against an empty/invalid server path, and prioritises config restoration over temp cleanup so the server can never drop out of the list.
+
+### New Features & Improvements
+
+- **Backups Moved to the App Data Directory**: Backups are now stored under `<installDir>/backups/<instanceId>` instead of inside each server instance folder. Because backups now live outside the directory that a restore clears and rewrites, a restore can no longer touch, lock, or delete the backups it is reading from. Existing backups are migrated to the new location automatically on first launch.
+- **Restore Blocked While a Server Is Running**: Restoring a backup over a server that is not fully stopped is now blocked in both the UI and the backend, with a clear "The server must be stopped before restoring a backup." message. This prevents the file-lock failures on Windows that could corrupt an instance mid-restore.
+
 ## [1.0.15] - 2026-07-05
 
 ### Bug Fixes

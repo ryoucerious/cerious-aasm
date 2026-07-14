@@ -7,12 +7,18 @@ import {
 // Mock path module
 jest.mock('path');
 
+// Backups now live under the app data directory, not the server instance folder.
+jest.mock('./platform.utils', () => ({
+  getDefaultInstallDir: jest.fn(() => '/install/dir')
+}));
+
 const mockPath = require('path');
 
 describe('backup.utils', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
+    mockPath.basename.mockImplementation((p: string) => p.split('/').filter(Boolean).pop() || '');
   });
 
   describe('BackupFilenameUtils', () => {
@@ -177,8 +183,16 @@ describe('backup.utils', () => {
     const serverPath = '/path/to/server';
 
     describe('getInstanceBackupDir', () => {
-      it('should return the backup directory path', () => {
+      it('should return the central app-data backup path for the instance', () => {
         const result = BackupPathUtils.getInstanceBackupDir(serverPath);
+        expect(mockPath.join).toHaveBeenCalledWith('/install/dir', 'backups', 'server');
+        expect(result).toBe('/install/dir/backups/server');
+      });
+    });
+
+    describe('getLegacyInstanceBackupDir', () => {
+      it('should return the legacy backup directory inside the instance folder', () => {
+        const result = BackupPathUtils.getLegacyInstanceBackupDir(serverPath);
         expect(mockPath.join).toHaveBeenCalledWith(serverPath, 'backups');
         expect(result).toBe('/path/to/server/backups');
       });
@@ -197,9 +211,9 @@ describe('backup.utils', () => {
         const filename = 'MyBackup.zip';
         const result = BackupPathUtils.getBackupFilePath(serverPath, filename);
 
-        expect(mockPath.join).toHaveBeenCalledWith(serverPath, 'backups');
-        expect(mockPath.join).toHaveBeenCalledWith('/path/to/server/backups', filename);
-        expect(result).toBe('/path/to/server/backups/MyBackup.zip');
+        expect(mockPath.join).toHaveBeenCalledWith('/install/dir', 'backups', 'server');
+        expect(mockPath.join).toHaveBeenCalledWith('/install/dir/backups/server', filename);
+        expect(result).toBe('/install/dir/backups/server/MyBackup.zip');
       });
     });
   });

@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { BackupSettings, BackupMetadata } from '../../types/backup.types';
 import { BackupFilenameUtils, BackupPathUtils } from '../../utils/backup.utils';
 import * as instanceUtils from '../../utils/ark/instance.utils';
+import { getNormalizedInstanceState } from '../../utils/ark/ark-server/ark-server-state.utils';
 
 // Import refactored services
 import { BackupOperationsService } from './backup-operations.service';
@@ -82,9 +83,26 @@ export class BackupService {
    */
   async initializeBackupSystem(): Promise<void> {
     try {
+      await this.migrateLegacyBackups();
       await this.restoreActiveSchedules();
     } catch (error) {
       console.error('[backup-service] Failed to initialize backup system:', error);
+    }
+  }
+
+  /**
+   * One-time (idempotent) migration of existing backups from the old per-instance
+   * location (`<serverPath>/backups`) to the new app-data location.
+   */
+  private async migrateLegacyBackups(): Promise<void> {
+    try {
+      const instances = await instanceUtils.getAllInstances();
+      for (const instance of instances) {
+        const serverPath = this.getInstanceServerPath(instance.id);
+        await this.operationsService.migrateLegacyBackups(serverPath);
+      }
+    } catch (error) {
+      console.error('[backup-service] Failed to migrate legacy backups:', error);
     }
   }
 
@@ -207,6 +225,18 @@ export class BackupService {
         return {
           success: false,
           error: 'Instance not found'
+        };
+      }
+
+      // Never restore over a server that is not fully stopped. Restoring clears and
+      // rewrites the instance directory; on Windows the running server holds locks on
+      // its files, so a mid-restore failure can leave the instance without a
+      // config.json and drop it from the server list.
+      const state = getNormalizedInstanceState(instanceId).toLowerCase();
+      if (state !== 'stopped') {
+        return {
+          success: false,
+          error: 'The server must be stopped before restoring a backup.'
         };
       }
 
