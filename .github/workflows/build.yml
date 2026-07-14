@@ -35,8 +35,11 @@ jobs:
           echo "PYTHON_EXECUTABLE=python" >> $env:GITHUB_ENV
           echo "npm_config_python=python" >> $env:GITHUB_ENV
           echo "npm_config_prefer_offline=true" >> $env:GITHUB_ENV
-      - name: Update npm to latest
-        run: npm install -g npm@latest
+      - name: Update npm
+        # Pinned to npm@11 (not npm@latest): npm@12 requires Node >=22, but these
+        # runners use Node 20 (the environment every prior release built on). npm@11
+        # is the latest major compatible with Node 20.
+        run: npm install -g npm@11
       - name: Clear npm cache
         run: npm cache clean --force
       - name: Install dependencies
@@ -69,8 +72,11 @@ jobs:
           python-version: '3.11'
       - name: Install Python setuptools
         run: python -m pip install setuptools
-      - name: Update npm to latest
-        run: npm install -g npm@latest
+      - name: Update npm
+        # Pinned to npm@11 (not npm@latest): npm@12 requires Node >=22, but these
+        # runners use Node 20 (the environment every prior release built on). npm@11
+        # is the latest major compatible with Node 20.
+        run: npm install -g npm@11
       - name: Clear npm cache
         run: npm cache clean --force
       - name: Install dependencies
