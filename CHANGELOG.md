@@ -13,6 +13,10 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 - **AsaApi Appeared Installed but Never Loaded**: Servers always launched `ArkAscendedServer.exe` from the wrong working directory. When `AsaApiLoader.exe` is present in the instance `Win64` folder, AASM now launches that loader with cwd set to instance Win64 so plugins and `ArkApi.log` actually load.
 - **Ubuntu 24.04 AppImage SUID Sandbox FATAL**: Chromium aborted because AppImages cannot set `chrome-sandbox` to root-owned mode `4755` under `/tmp/.mount_*`. Linux/AppImage builds now bake `--no-sandbox` / `--disable-setuid-sandbox`, and Linux sets `ELECTRON_DISABLE_SANDBOX=1` before Electron loads.
 
+### New Features & Improvements
+
+- **Genesis: Part 1 Map**: Added `Genesis_WP` to the server map dropdown (official ASA map id from the ARK community wiki / server manifest).
+
 ## [1.0.16] - 2026-07-14
 
 ### Bug Fixes

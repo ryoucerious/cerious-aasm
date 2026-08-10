@@ -9,6 +9,7 @@
     { "value": "Extinction_WP", "display": "Extinction" },
     { "value": "Ragnarok_WP", "display": "Ragnarok" },
     { "value": "Valguero_WP", "display": "Valguero" },
+    { "value": "Genesis_WP", "display": "Genesis: Part 1" },
     { "value": "LostColony_WP", "display": "Lost Colony" },
     { "value": "Astraeos_WP", "display": "Astraeos" }
   ], "description": "The map to use for this server instance. Select from common maps or enter a custom map name." },
