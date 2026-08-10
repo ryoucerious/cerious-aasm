@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -177,10 +177,18 @@
       "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
       "maintainer": "r YOU cerious",
       "executableArgs": [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
         "--disable-audio-output"
       ]
     },
-    "deb": {
+    "appImage": {
+      "executableArgs": [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-audio-output"
+      ]
+    },    "deb": {
       "depends": [
         "libnotify4",
         "libappindicator3-1",

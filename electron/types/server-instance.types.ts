@@ -22,7 +22,8 @@ export interface DiscordWebhookConfig {
 export interface ScheduledBroadcast {
   id: string;
   message: string;
-  intervalMinutes: number;
+  interval?: number;
+  intervalMinutes?: number;
   enabled: boolean;
   nextRun?: number;
 }

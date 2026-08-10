@@ -2,12 +2,13 @@ import { jest } from '@jest/globals';
 
 jest.mock('./rcon.service', () => ({
   rconService: {
-    executeRconCommand: jest.fn(() => Promise.resolve()),
+    executeRconCommand: jest.fn(() => Promise.resolve({ success: true })),
   },
 }));
 
 jest.mock('../utils/ark/instance.utils', () => ({
   getInstance: jest.fn(),
+  getAllInstances: jest.fn(),
 }));
 
 import { rconService } from './rcon.service';
@@ -27,8 +28,9 @@ describe('SchedulerService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.useFakeTimers();
+    jest.useFakeTimers({ now: new Date('2024-01-01T00:00:00.000Z') });
     service = new SchedulerService();
+    (mockRcon.executeRconCommand as jest.Mock<any>).mockResolvedValue({ success: true });
   });
 
   afterEach(() => {
@@ -39,23 +41,55 @@ describe('SchedulerService', () => {
   });
 
   describe('initSchedule', () => {
-    it('should initialize broadcasts from instance config', async () => {
-      const broadcasts = [
-        { id: 'b1', message: 'Hello', intervalMinutes: 5, enabled: true },
-        { id: 'b2', message: 'World', intervalMinutes: 10, enabled: false },
-      ];
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({
-        broadcasts,
+    it('should initialize from broadcastConfig', async () => {
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({
+        broadcastConfig: {
+          enabled: true,
+          messages: [
+            { id: 'b1', message: 'Hello', interval: 5, enabled: true },
+            { id: 'b2', message: 'World', interval: 10, enabled: false },
+          ],
+        },
       });
 
       await service.initSchedule('inst1');
 
-      // Should have stored the broadcasts and started the scheduler
       expect(mockInstanceUtils.getInstance).toHaveBeenCalledWith('inst1');
+
+      await jest.advanceTimersByTimeAsync(5 * 1000);
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst1', 'Broadcast Hello');
+      expect(mockRcon.executeRconCommand).not.toHaveBeenCalledWith('inst1', 'Broadcast World');
+    });
+
+    it('should fall back to legacy instance.broadcasts', async () => {
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({
+        broadcasts: [
+          { id: 'b1', message: 'Legacy', intervalMinutes: 5, enabled: true },
+        ],
+      });
+
+      await service.initSchedule('inst1');
+      await jest.advanceTimersByTimeAsync(5 * 1000);
+
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst1', 'Broadcast Legacy');
+    });
+
+    it('should stop scheduler when broadcastConfig is disabled', async () => {
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({
+        broadcastConfig: {
+          enabled: false,
+          messages: [{ id: 'b1', message: 'Nope', interval: 1, enabled: true }],
+        },
+      });
+
+      await service.initSchedule('inst1');
+      await jest.advanceTimersByTimeAsync(120 * 1000);
+
+      expect(mockRcon.executeRconCommand).not.toHaveBeenCalled();
     });
 
     it('should skip when instance not found', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue(null);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(null);
 
       await service.initSchedule('missing');
 
@@ -63,7 +97,7 @@ describe('SchedulerService', () => {
     });
 
     it('should skip when instance has no broadcasts', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockResolvedValue({ name: 'Server' });
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ name: 'Server' });
 
       await service.initSchedule('inst1');
 
@@ -71,24 +105,44 @@ describe('SchedulerService', () => {
     });
   });
 
+  describe('initAllSchedules', () => {
+    it('should init schedules for all instances', async () => {
+      (mockInstanceUtils.getAllInstances as jest.Mock<any>).mockResolvedValue([
+        { id: 'inst1' },
+        { id: 'inst2' },
+      ]);
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockImplementation((id: string) => ({
+        id,
+        broadcastConfig: {
+          enabled: true,
+          messages: [{ id: 'b1', message: `Hi ${id}`, interval: 5, enabled: true }],
+        },
+      }));
+
+      await service.initAllSchedules();
+      await jest.advanceTimersByTimeAsync(5 * 1000);
+
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst1', 'Broadcast Hi inst1');
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst2', 'Broadcast Hi inst2');
+    });
+  });
+
   describe('startScheduler / stopScheduler', () => {
-    it('should start checking every minute', async () => {
+    it('should start checking and fire an initial check', async () => {
       service.updateBroadcasts('inst1', [
-        { id: 'b1', message: 'Test', intervalMinutes: 1, enabled: true },
+        { id: 'b1', message: 'Test', interval: 1, enabled: true },
       ]);
 
       service.startScheduler('inst1');
 
-      // Advance 1 minute - should trigger check
-      await jest.advanceTimersByTimeAsync(60 * 1000);
+      await jest.advanceTimersByTimeAsync(5 * 1000);
 
-      // The broadcast has no nextRun, so it should execute
       expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst1', 'Broadcast Test');
     });
 
     it('should stop the scheduler', async () => {
       service.updateBroadcasts('inst1', [
-        { id: 'b1', message: 'Test', intervalMinutes: 1, enabled: true },
+        { id: 'b1', message: 'Test', interval: 1, enabled: true },
       ]);
 
       service.startScheduler('inst1');
@@ -96,20 +150,18 @@ describe('SchedulerService', () => {
 
       await jest.advanceTimersByTimeAsync(120 * 1000);
 
-      // Should not have been called since we stopped
       expect(mockRcon.executeRconCommand).not.toHaveBeenCalled();
     });
 
     it('should replace existing scheduler on restart', async () => {
       service.updateBroadcasts('inst1', [
-        { id: 'b1', message: 'Test', intervalMinutes: 1, enabled: true },
+        { id: 'b1', message: 'Test', interval: 1, enabled: true },
       ]);
 
       service.startScheduler('inst1');
-      service.startScheduler('inst1'); // Should clear first interval
+      service.startScheduler('inst1'); // Should clear first timers
 
-      await jest.advanceTimersByTimeAsync(60 * 1000);
-      // Should only be called once, not twice
+      await jest.advanceTimersByTimeAsync(5 * 1000);
       expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
     });
   });
@@ -117,7 +169,7 @@ describe('SchedulerService', () => {
   describe('checkBroadcasts', () => {
     it('should not execute disabled broadcasts', async () => {
       service.updateBroadcasts('inst1', [
-        { id: 'b1', message: 'Disabled', intervalMinutes: 1, enabled: false },
+        { id: 'b1', message: 'Disabled', interval: 1, enabled: false },
       ]);
 
       service.startScheduler('inst1');
@@ -126,26 +178,41 @@ describe('SchedulerService', () => {
       expect(mockRcon.executeRconCommand).not.toHaveBeenCalled();
     });
 
-    it('should schedule next run after executing', async () => {
+    it('should schedule next run after executing using interval', async () => {
       service.updateBroadcasts('inst1', [
-        { id: 'b1', message: 'Hello', intervalMinutes: 5, enabled: true },
+        { id: 'b1', message: 'Hello', interval: 5, enabled: true },
       ]);
 
       service.startScheduler('inst1');
 
-      // First minute - should execute (no nextRun set)
-      await jest.advanceTimersByTimeAsync(60 * 1000);
+      // Initial 5s check
+      await jest.advanceTimersByTimeAsync(5 * 1000);
       expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
 
-      // Second minute - should NOT execute (nextRun is 5 min from now)
-      await jest.advanceTimersByTimeAsync(60 * 1000);
+      // Still inside the 5-minute window (interval ticks at 60s boundaries)
+      await jest.advanceTimersByTimeAsync(4 * 60 * 1000);
       expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
 
-      // 3rd-5th minutes
-      await jest.advanceTimersByTimeAsync(3 * 60 * 1000);
+      // Advance past nextRun and to the next 60s interval tick
+      await jest.advanceTimersByTimeAsync(2 * 60 * 1000);
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(2);
+    });
+
+    it('should retry later when RCON is not connected', async () => {
+      (mockRcon.executeRconCommand as jest.Mock<any>).mockResolvedValue({
+        success: false,
+        error: 'RCON not connected for this instance',
+      });
+
+      service.updateBroadcasts('inst1', [
+        { id: 'b1', message: 'Hello', interval: 5, enabled: true },
+      ]);
+
+      service.startScheduler('inst1');
+      await jest.advanceTimersByTimeAsync(5 * 1000);
       expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
 
-      // 6th minute (5 minutes after first) - should execute again
+      (mockRcon.executeRconCommand as jest.Mock<any>).mockResolvedValue({ success: true });
       await jest.advanceTimersByTimeAsync(60 * 1000);
       expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(2);
     });
@@ -161,12 +228,11 @@ describe('SchedulerService', () => {
   describe('updateBroadcasts', () => {
     it('should update the broadcasts list', () => {
       const newBroadcasts = [
-        { id: 'b1', message: 'Updated', intervalMinutes: 10, enabled: true },
+        { id: 'b1', message: 'Updated', interval: 10, enabled: true },
       ];
 
       service.updateBroadcasts('inst1', newBroadcasts);
 
-      // Verify by starting scheduler and checking behavior
       expect(() => service.startScheduler('inst1')).not.toThrow();
     });
   });

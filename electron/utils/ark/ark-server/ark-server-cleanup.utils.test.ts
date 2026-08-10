@@ -111,6 +111,7 @@ describe('ark-server-cleanup.utils', () => {
     it('should cleanup orphaned processes on Windows', () => {
   platformSpy.mockReturnValue('windows');
       cleanupOrphanedArkProcesses();
+      expect(mockExecSync).toHaveBeenCalledWith('taskkill /F /IM AsaApiLoader.exe', { stdio: 'ignore' });
       expect(mockExecSync).toHaveBeenCalledWith('taskkill /F /IM ArkAscendedServer.exe', { stdio: 'ignore' });
     });
 

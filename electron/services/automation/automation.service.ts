@@ -124,6 +124,16 @@ export class AutomationService {
       }
     }
 
+    // Restore scheduled RCON announcements from saved broadcastConfig
+    try {
+      const { schedulerService } = require('../scheduler.service');
+      schedulerService.initAllSchedules().catch((error: Error) => {
+        console.error('[automation-service] Failed to init broadcast schedules:', error);
+      });
+    } catch (error) {
+      console.error('[automation-service] Failed to load scheduler service:', error);
+    }
+
     this.handleAutoStartOnAppLaunch();
   }
 

@@ -126,6 +126,11 @@ export function cleanupOrphanedArkProcesses(): void {
     // On Windows, use taskkill for orphaned processes
     try {
       try {
+        execSync('taskkill /F /IM AsaApiLoader.exe', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore if no processes found
+      }
+      try {
         execSync('taskkill /F /IM ArkAscendedServer.exe', { stdio: 'ignore' });
       } catch (e) {
         // Ignore if no processes found

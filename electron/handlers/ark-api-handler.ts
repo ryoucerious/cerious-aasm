@@ -2,6 +2,28 @@ import { messagingService } from '../services/messaging.service';
 import { arkApiPluginService } from '../services/ark-api-plugin.service';
 
 /**
+ * Check whether AsaApiLoader.exe is installed for an instance.
+ * Payload: { instanceId, requestId }
+ */
+messagingService.on('get-asaapi-status', async (payload: any, sender: any) => {
+  const { instanceId, requestId } = payload || {};
+  try {
+    const { isAsaApiLoaderInstalled } = require('../utils/ark/ark-server/ark-server-paths.utils');
+    const installed = !!instanceId && isAsaApiLoaderInstalled(instanceId);
+    messagingService.sendToOriginator('get-asaapi-status', {
+      success: true,
+      installed,
+      loaderExe: installed ? 'AsaApiLoader.exe' : null,
+      requestId
+    }, sender);
+  } catch (error) {
+    const errorMsg = (error as Error).message;
+    console.error('[ark-api-handler] get-asaapi-status error:', errorMsg);
+    messagingService.sendToOriginator('get-asaapi-status', { success: false, error: errorMsg, requestId }, sender);
+  }
+});
+
+/**
  * List installed ArkApi plugins for a server instance.
  * Payload: { instanceId, requestId }
  */

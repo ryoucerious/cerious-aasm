@@ -78,13 +78,19 @@ export class ServerProcessService {
       altSaveDirName: saveDir
     });
 
-    // Use cross-platform command preparation for Proton support on Linux
-    const { prepareArkServerCommand } = require('../../utils/ark/ark-server/ark-server-paths.utils');
-    const commandInfo = prepareArkServerCommand(ArkPathUtils.getArkExecutablePath(), args);
+    // Prefer AsaApiLoader.exe when installed for this instance; otherwise ArkAscendedServer.exe.
+    // cwd must be the instance Win64 folder so AsaApi DLLs/plugins resolve correctly.
+    const { prepareArkServerCommand, resolveServerLaunch } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+    const launch = resolveServerLaunch(instanceId);
+    const commandInfo = prepareArkServerCommand(launch.executable, args, instanceId);
+
+    if (launch.usesAsaApiLoader) {
+      console.log(`[server-process-service] Launching instance ${instanceId} via AsaApiLoader: ${launch.executable}`);
+    }
 
     // Set up spawn options with proper environment and working directory
     const { getPlatform } = require('../../utils/platform.utils');
-    const cwd = getPlatform() === 'windows' ? instanceDir : ArkPathUtils.getArkServerDir();
+    const cwd = launch.cwd;
 
     // Ensure steam_appid.txt exists in the working directory so the Steam
     // subsystem can initialize for every server instance, not just the first.
@@ -466,7 +472,13 @@ export class ServerProcessService {
     const { getPlatform } = require('../../utils/platform.utils');
     if (getPlatform() === 'linux') {
       try {
-        // Kill any remaining ARK server processes that might have been orphaned
+        // Kill any remaining AsaApiLoader / ARK server processes that might have been orphaned
+        try {
+          require('child_process').execSync('pkill -f AsaApiLoader', { stdio: 'ignore' });
+        } catch (e) {
+          // Ignore if no processes found
+        }
+
         try {
           require('child_process').execSync('pkill -f ArkAscendedServer', { stdio: 'ignore' });
         } catch (e) {

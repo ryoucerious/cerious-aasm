@@ -4,6 +4,15 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-08-10
+
+### Bug Fixes
+
+- **Linux: Third Concurrent Server Crash (Shared Proton Prefix)**: All ARK instances shared a single Proton/Wine prefix (`proton-prefix` / `.wine-ark`), which caused wineserver lock contention and reliably crashed one server when a third started. Each instance now gets an isolated prefix at `proton-prefix/<instanceId>` via `STEAM_COMPAT_DATA_PATH` / `WINEPREFIX`.
+- **Scheduled Announcements Never Firing**: The Broadcasts tab saved `broadcastConfig`, but the scheduler looked for a different shape (`broadcasts` / `intervalMinutes`) and was never started on save or app launch. Announcements now sync from `broadcastConfig` on save, restore on startup, and use the UI `interval` field.
+- **AsaApi Appeared Installed but Never Loaded**: Servers always launched `ArkAscendedServer.exe` from the wrong working directory. When `AsaApiLoader.exe` is present in the instance `Win64` folder, AASM now launches that loader with cwd set to instance Win64 so plugins and `ArkApi.log` actually load.
+- **Ubuntu 24.04 AppImage SUID Sandbox FATAL**: Chromium aborted because AppImages cannot set `chrome-sandbox` to root-owned mode `4755` under `/tmp/.mount_*`. Linux/AppImage builds now bake `--no-sandbox` / `--disable-setuid-sandbox`, and Linux sets `ELECTRON_DISABLE_SANDBOX=1` before Electron loads.
+
 ## [1.0.16] - 2026-07-14
 
 ### Bug Fixes

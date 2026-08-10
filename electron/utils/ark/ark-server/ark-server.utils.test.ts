@@ -51,6 +51,7 @@ jest.mock('../../proton.utils', () => ({
   getProtonBinaryPath: jest.fn().mockReturnValue('/mock/proton'),
   isProtonInstalled: jest.fn().mockReturnValue(false),
   ensureProtonPrefixExists: jest.fn(),
+  getProtonPrefixDir: jest.fn(),
 }));
 
 jest.mock('../../steamcmd.utils', () => ({

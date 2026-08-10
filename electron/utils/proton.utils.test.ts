@@ -34,6 +34,7 @@ const mockedRunInstaller = runInstaller as jest.MockedFunction<typeof runInstall
 // Import the module under test
 import {
   getProtonDir,
+  getProtonPrefixDir,
   isProtonInstalled,
   getProtonBinaryPath,
   installProton,
@@ -64,6 +65,18 @@ describe('proton.utils', () => {
       const result = getProtonDir();
       expect(mockedGetDefaultInstallDir).toHaveBeenCalled();
       expect(result).toBe(`${mockInstallDir}/proton`);
+    });
+  });
+
+  describe('getProtonPrefixDir', () => {
+    it('should return a per-instance proton-prefix directory', () => {
+      const result = getProtonPrefixDir('server-a');
+
+      expect(result).toBe(`${mockInstallDir}/proton-prefix/server-a`);
+    });
+
+    it('should throw when instanceId is missing', () => {
+      expect(() => getProtonPrefixDir('' as any)).toThrow('instanceId is required for a Proton prefix directory');
     });
   });
 
@@ -313,6 +326,14 @@ describe('proton.utils', () => {
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstallDir}/proton-prefix`, { recursive: true });
     });
 
+    it('should create a per-instance proton-prefix directory when instanceId is provided', () => {
+      mockedFs.existsSync.mockReturnValue(false);
+
+      ensureProtonPrefixExists('server-a');
+
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstallDir}/proton-prefix/server-a`, { recursive: true });
+    });
+
     it('should create all required directories if they do not exist', () => {
       mockedFs.existsSync.mockReturnValue(false);
 
@@ -341,6 +362,17 @@ describe('proton.utils', () => {
       ensureProtonPrefixExists();
 
       expect(mockedFs.chmodSync).toHaveBeenCalledWith(`${mockInstallDir}/proton-prefix`, 0o700);
+    });
+
+    it('should set permissions on the per-instance prefix when not writable', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.accessSync.mockImplementation(() => {
+        throw new Error('not writable');
+      });
+
+      ensureProtonPrefixExists('server-b');
+
+      expect(mockedFs.chmodSync).toHaveBeenCalledWith(`${mockInstallDir}/proton-prefix/server-b`, 0o700);
     });
 
     it('should handle access check errors gracefully', () => {

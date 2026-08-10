@@ -426,6 +426,7 @@ describe('ServerInstanceService', () => {
 
       serverInstanceService.cleanupOrphanedArkProcesses();
 
+      expect(execSyncMock).toHaveBeenCalledWith('taskkill /F /IM AsaApiLoader.exe', { stdio: 'ignore' });
       expect(execSyncMock).toHaveBeenCalledWith('taskkill /F /IM ArkAscendedServer.exe', { stdio: 'ignore' });
     });
 

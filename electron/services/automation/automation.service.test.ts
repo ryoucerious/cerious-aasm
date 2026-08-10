@@ -15,10 +15,17 @@ jest.mock('../server-instance/server-instance.service', () => ({
     startServerInstance: jest.fn()
   }
 }));
+jest.mock('../scheduler.service', () => ({
+  schedulerService: {
+    initAllSchedules: jest.fn(() => Promise.resolve()),
+    initSchedule: jest.fn(() => Promise.resolve()),
+  }
+}));
 
 const { getAllInstances } = require('../../utils/ark/instance.utils');
 
 const { serverInstanceService } = require('../server-instance/server-instance.service');
+const { schedulerService } = require('../scheduler.service');
 
 function makeAutomation(overrides: Partial<ServerAutomation['settings']> = {}) {
   return {
@@ -128,6 +135,7 @@ describe('AutomationService', () => {
     service.initializeAutomation();
     expect(spyCrash).toHaveBeenCalledWith('id');
     expect(spyRestart).toHaveBeenCalledWith('id');
+    expect(schedulerService.initAllSchedules).toHaveBeenCalled();
   });
 
   it('should cleanup and stop crash/restart', () => {

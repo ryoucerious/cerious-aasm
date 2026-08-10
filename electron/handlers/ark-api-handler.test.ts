@@ -19,6 +19,10 @@ jest.mock('../services/ark-api-plugin.service', () => ({
   },
 }));
 
+jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({
+  isAsaApiLoaderInstalled: jest.fn(),
+}));
+
 import { messagingService } from '../services/messaging.service';
 import { arkApiPluginService } from '../services/ark-api-plugin.service';
 
@@ -55,6 +59,22 @@ describe('ark-api-handler', () => {
     expect(handlers['download-asaapi']).toBeDefined();
     expect(handlers['install-plugin-from-zip']).toBeDefined();
     expect(handlers['install-plugin-from-url']).toBeDefined();
+    expect(handlers['get-asaapi-status']).toBeDefined();
+  });
+
+  describe('get-asaapi-status', () => {
+    it('should report when AsaApiLoader is installed', async () => {
+      const { isAsaApiLoaderInstalled } = require('../utils/ark/ark-server/ark-server-paths.utils');
+      (isAsaApiLoaderInstalled as jest.Mock).mockReturnValue(true);
+
+      await handlers['get-asaapi-status']({ instanceId: 'inst1', requestId: 'r0' }, mockSender);
+
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'get-asaapi-status',
+        { success: true, installed: true, loaderExe: 'AsaApiLoader.exe', requestId: 'r0' },
+        mockSender
+      );
+    });
   });
 
   describe('list-ark-api-plugins', () => {

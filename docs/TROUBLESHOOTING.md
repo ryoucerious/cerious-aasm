@@ -129,6 +129,22 @@ sudo modprobe fuse
 ./squashfs-root/cerious-aasm
 ```
 
+**Error**: `The SUID sandbox helper binary was found, but is not configured correctly` / `chrome-sandbox`
+
+**Cause**: Chromium requires `chrome-sandbox` to be root-owned with mode `4755`.
+AppImages mount under `/tmp/.mount_*`, so that permission model is impossible.
+Ubuntu 24.04 often aborts before Electron JS can disable the sandbox.
+
+**Immediate workaround** (current AppImage):
+```bash
+./Cerious-AASM-*.AppImage --no-sandbox --disable-setuid-sandbox
+# or:
+ELECTRON_DISABLE_SANDBOX=1 ./Cerious-AASM-*.AppImage
+```
+
+Newer builds bake `--no-sandbox` into the AppImage/desktop launch args so a
+plain `./Cerious-AASM-*.AppImage` start works without extra flags.
+
 ### Headless Mode Crashes on Linux (`Gtk-ERROR: Can't create a GtkStyleContext without a display connection`)
 
 **Cause**: Electron initialises GTK at the native-binary level, *before* any

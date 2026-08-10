@@ -75,8 +75,8 @@ messagingService.on('configure-crash-detection', async (payload, sender) => {
 messagingService.on('configure-discord-webhook', async (payload, sender) => {
   const { serverId, config, requestId } = payload || {};
   try {
-    const { instanceUtils } = require('../utils/ark/instance.utils');
-    const instance = await instanceUtils.getInstance(serverId);
+    const instanceUtils = require('../utils/ark/instance.utils');
+    const instance = instanceUtils.getInstance(serverId);
     if (!instance) throw new Error('Instance not found');
 
     instance.discordConfig = config;
@@ -94,23 +94,35 @@ messagingService.on('configure-discord-webhook', async (payload, sender) => {
 });
 
 /**
- * Configure Scheduled Broadcasts
+ * Configure Scheduled Broadcasts / Announcements
  */
 messagingService.on('configure-broadcasts', async (payload, sender) => {
-  const { serverId, broadcasts, requestId } = payload || {};
+  const { serverId, broadcastConfig, broadcasts, requestId } = payload || {};
   try {
-    const { instanceUtils } = require('../utils/ark/instance.utils');
+    const instanceUtils = require('../utils/ark/instance.utils');
     const { schedulerService } = require('../services/scheduler.service');
     
-    const instance = await instanceUtils.getInstance(serverId);
+    const instance = instanceUtils.getInstance(serverId);
     if (!instance) throw new Error('Instance not found');
 
-    instance.broadcasts = broadcasts;
+    if (broadcastConfig) {
+      instance.broadcastConfig = broadcastConfig;
+    } else if (Array.isArray(broadcasts)) {
+      // Legacy payload: flat broadcast list
+      instance.broadcastConfig = {
+        enabled: broadcasts.length > 0,
+        messages: broadcasts.map((b: any) => ({
+          id: b.id,
+          message: b.message,
+          interval: b.interval ?? b.intervalMinutes ?? 60,
+          enabled: b.enabled !== false
+        }))
+      };
+      instance.broadcasts = broadcasts;
+    }
+
     await instanceUtils.saveInstance(instance);
-    
-    // Update live scheduler
-    schedulerService.updateBroadcasts(serverId, broadcasts);
-    schedulerService.initSchedule(serverId);
+    await schedulerService.initSchedule(serverId);
 
     messagingService.sendToOriginator('configure-broadcasts', { success: true, requestId }, sender);
   } catch (error) {

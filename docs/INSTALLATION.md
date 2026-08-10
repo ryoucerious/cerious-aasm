@@ -75,6 +75,15 @@
    ./Cerious-AASM-*.AppImage
    ```
 
+   If you see a `chrome-sandbox` / SUID sandbox FATAL on Ubuntu 24.04 with an
+   older AppImage, launch with:
+   ```bash
+   ./Cerious-AASM-*.AppImage --no-sandbox --disable-setuid-sandbox
+   # or:
+   ELECTRON_DISABLE_SANDBOX=1 ./Cerious-AASM-*.AppImage
+   ```
+   Current builds include these flags automatically.
+
 3. **Optional: Desktop Integration**
    ```bash
    # Move to applications directory
@@ -84,7 +93,7 @@
    cat > ~/.local/share/applications/cerious-aasm.desktop << EOF
    [Desktop Entry]
    Name=Cerious AASM
-   Exec=/opt/cerious-aasm.AppImage
+   Exec=/opt/cerious-aasm.AppImage --no-sandbox --disable-setuid-sandbox
    Icon=cerious-aasm
    Type=Application
    Categories=Game;

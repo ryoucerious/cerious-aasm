@@ -63,6 +63,11 @@ jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({
     args: ['arg1'],
     env: {},
   })),
+  resolveServerLaunch: jest.fn(() => ({
+    executable: '/mock/instances/inst1/ShooterGame/Binaries/Win64/ArkAscendedServer.exe',
+    cwd: '/mock/instances/inst1/ShooterGame/Binaries/Win64',
+    usesAsaApiLoader: false,
+  })),
 }));
 
 jest.mock('../../utils/platform.utils', () => ({
@@ -227,6 +232,36 @@ describe('ServerProcessService', () => {
       expect(logUtils.snapshotLogFiles).toHaveBeenCalled();
       expect(logUtils.detectAndRegisterLogFile).toHaveBeenCalledWith(
         'inst1', 'TestServer', expect.anything()
+      );
+    });
+
+    it('should launch via AsaApiLoader when resolveServerLaunch reports it', async () => {
+      const paths = require('../../utils/ark/ark-server/ark-server-paths.utils');
+      (paths.resolveServerLaunch as jest.Mock).mockReturnValue({
+        executable: '/mock/instances/inst1/ShooterGame/Binaries/Win64/AsaApiLoader.exe',
+        cwd: '/mock/instances/inst1/ShooterGame/Binaries/Win64',
+        usesAsaApiLoader: true,
+      });
+      (paths.prepareArkServerCommand as jest.Mock).mockReturnValue({
+        command: '/mock/instances/inst1/ShooterGame/Binaries/Win64/AsaApiLoader.exe',
+        args: ['arg1'],
+        env: {},
+      });
+
+      await service.startServerProcess('inst1', { sessionName: 'TestServer' });
+
+      expect(paths.prepareArkServerCommand).toHaveBeenCalledWith(
+        '/mock/instances/inst1/ShooterGame/Binaries/Win64/AsaApiLoader.exe',
+        expect.any(Array),
+        'inst1'
+      );
+      const { spawn } = require('child_process');
+      expect(spawn).toHaveBeenCalledWith(
+        '/mock/instances/inst1/ShooterGame/Binaries/Win64/AsaApiLoader.exe',
+        ['arg1'],
+        expect.objectContaining({
+          cwd: '/mock/instances/inst1/ShooterGame/Binaries/Win64',
+        })
       );
     });
   });

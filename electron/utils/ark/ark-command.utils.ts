@@ -1,7 +1,7 @@
 // --- Imports ---
 import * as path from 'path';
 import { getPlatform, getDefaultInstallDir } from '../platform.utils';
-import { getProtonBinaryPath, isProtonInstalled, ensureProtonPrefixExists } from '../proton.utils';
+import { getProtonBinaryPath, isProtonInstalled, ensureProtonPrefixExists, getProtonPrefixDir } from '../proton.utils';
 import { ARK_APP_ID } from './ark-path.utils';
 
 // --- Command Preparation Helpers ---
@@ -9,9 +9,9 @@ export class ArkCommandUtils {
   /**
    * Prepare ARK server command for cross-platform execution
    * On Windows: Direct execution
-   * On Linux: Execute via Proton
+   * On Linux: Execute via Proton with a per-instance prefix
    */
-  static prepareArkServerCommand(arkExecutable: string, arkArgs: string[], env?: any): any {
+  static prepareArkServerCommand(arkExecutable: string, arkArgs: string[], env?: any, instanceId?: string): any {
     const workingDir = path.dirname(arkExecutable); // Set working directory to executable location
 
     if (getPlatform() === 'windows') {
@@ -26,12 +26,15 @@ export class ArkCommandUtils {
       if (!isProtonInstalled()) {
         throw new Error('Proton is required to run ARK server on Linux but is not installed');
       }
+      if (!instanceId) {
+        throw new Error('instanceId is required to isolate the Proton prefix on Linux');
+      }
 
-      // Ensure proton prefix exists so Proton's filelock can create pfx.lock
-      ensureProtonPrefixExists();
+      // Ensure per-instance proton prefix exists so Proton's filelock can create pfx.lock
+      ensureProtonPrefixExists(instanceId);
 
       const protonBinary = getProtonBinaryPath();
-      const prefixDir = path.join(getDefaultInstallDir(), 'proton-prefix');
+      const prefixDir = getProtonPrefixDir(instanceId);
 
       const protonEnv = {
         WINEPREFIX: prefixDir,

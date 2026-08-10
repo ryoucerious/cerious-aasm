@@ -25,6 +25,7 @@ export class ArkApiTabComponent implements OnInit, OnDestroy {
 
   plugins: PluginInfo[] = [];
   loading = false;
+  asaApiInstalled: boolean | null = null;
 
   latestVersion = '';
   latestDownloadUrl = '';
@@ -49,9 +50,24 @@ export class ArkApiTabComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.loadPlugins();
+    this.refreshAsaApiStatus();
   }
 
   ngOnDestroy() {}
+
+  refreshAsaApiStatus() {
+    if (!this.serverInstance?.id) return;
+    this.messaging.sendMessage('get-asaapi-status', { instanceId: this.serverInstance.id }).subscribe({
+      next: (res: any) => {
+        this.asaApiInstalled = !!res?.installed;
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.asaApiInstalled = null;
+        this.cdr.markForCheck();
+      },
+    });
+  }
 
   loadPlugins() {
     if (!this.serverInstance?.id) return;
@@ -105,8 +121,9 @@ export class ArkApiTabComponent implements OnInit, OnDestroy {
       next: (res: any) => {
         this.installing = false;
         if (res?.success) {
-          this.notification.success('AsaApi installed successfully.', 'AsaApi');
+          this.notification.success('AsaApi installed successfully. Restart the server to load via AsaApiLoader.', 'AsaApi');
           this.loadPlugins();
+          this.refreshAsaApiStatus();
         } else {
           this.notification.error(res?.error || 'Installation failed.', 'AsaApi');
         }

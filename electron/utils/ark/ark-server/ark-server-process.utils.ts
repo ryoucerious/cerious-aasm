@@ -7,41 +7,37 @@ import { spawn } from 'child_process';
 import { getPlatform } from '../../platform.utils';
 import { buildArkServerArgs } from '../ark-args.utils';
 import { getArkServerDir } from './ark-server-install.utils';
-import { getArkExecutablePath, prepareArkServerCommand } from './ark-server-paths.utils';
+import { prepareArkServerCommand, resolveServerLaunch } from './ark-server-paths.utils';
 import { setInstanceState, arkServerProcesses } from './ark-server-state.utils';
 
 /**
  * Spawns the ARK server process
  */
 export function spawnServerProcess(instanceId: string, instanceDir: string, config: any): { proc: any, commandInfo: any } {
-  // Prefer the instance's own exe copy so Windows DLL search loads AsaApi/plugins
-  // from the instance-specific Win64 folder rather than the shared install.
-  const instanceWin64 = path.join(instanceDir, 'ShooterGame', 'Binaries', 'Win64');
-  const instanceExe = path.join(instanceWin64, 'ArkAscendedServer.exe');
-  const sharedExe = getArkExecutablePath();
-  const useInstanceExe = getPlatform() === 'windows' && fs.existsSync(instanceExe);
-  const arkExecutable = useInstanceExe ? instanceExe : sharedExe;
+  const launch = resolveServerLaunch(instanceId);
+  const arkExecutable = launch.executable;
 
   if (!fs.existsSync(arkExecutable)) {
-    throw new Error('Ark server not installed');
+    throw new Error(launch.usesAsaApiLoader
+      ? 'AsaApiLoader.exe not found'
+      : 'Ark server not installed');
   }
 
   // Build command line args from config (ensure rconPassword is used)
   const args = buildArkServerArgs({ ...config, serverAdminPassword: undefined });
 
-  // Prepare cross-platform command
-  const commandInfo = prepareArkServerCommand(arkExecutable, args);
+  // Prepare cross-platform command (per-instance Proton prefix on Linux)
+  const commandInfo = prepareArkServerCommand(arkExecutable, args, instanceId);
 
   // Format save/config/log directories for env (use forward slashes for cross-platform compatibility)
   const formattedSaveDir = getInstanceSaveDir(instanceDir).replace(/\\/g, '/');
   const formattedConfigDir = instanceDir.replace(/\\/g, '/');
   const formattedLogDir = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs').replace(/\\/g, '/');
 
-  // Use detailed spawn options for best compatibility
-  // On Windows: run from instance Win64 dir so DLL search order finds per-instance AsaApi/plugins first.
-  // On Linux/Proton: run from shared ARK install dir (Proton handles library loading differently).
+  // Use detailed spawn options for best compatibility.
+  // cwd comes from resolveServerLaunch so AsaApiLoader / plugins load from instance Win64.
   let spawnOptions: any = {
-    cwd: useInstanceExe ? instanceWin64 : (getPlatform() === 'windows' ? instanceDir : getArkServerDir()),
+    cwd: launch.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,

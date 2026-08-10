@@ -7,8 +7,19 @@
     </div>
     <div class="card-body">
       <p class="form-control-label desc">
-        AsaApi is required to load server-side plugins. Check GitHub for the latest release and install it directly into this server instance's Win64 folder.
+        AsaApi is required to load server-side plugins. Install it into this server's Win64 folder.
+        After install, AASM launches <code>AsaApiLoader.exe</code> instead of <code>ArkAscendedServer.exe</code>
+        so the API and plugins actually load.
       </p>
+      <div *ngIf="asaApiInstalled !== null" style="margin-top:0.75rem;padding:0.65rem 0.85rem;border-radius:6px;background:rgba(148,163,184,0.08);">
+        <span *ngIf="asaApiInstalled" style="color:#4ade80;font-size:0.9rem;">
+          AsaApiLoader detected — this server will start via <strong>AsaApiLoader.exe</strong>.
+          Logs appear under <code>Win64/logs/ArkApi.log</code> after the next start.
+        </span>
+        <span *ngIf="!asaApiInstalled" style="color:#fbbf24;font-size:0.9rem;">
+          AsaApiLoader not found — install AsaApi below, then restart the server.
+        </span>
+      </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:0.75rem;">
         <button class="btn btn-ghost" (click)="checkLatestAsaApi()" [disabled]="checkingLatest">
           <i class="material-icons">search</i>

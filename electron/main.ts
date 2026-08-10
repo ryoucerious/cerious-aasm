@@ -2,6 +2,11 @@
 // Command Line Arguments & Sandbox Configuration
 // MUST BE FIRST - Before any Electron imports!
 // =========================
+// Disable Chromium SUID sandbox on Linux before Electron loads.
+// AppImages mount chrome-sandbox under /tmp/.mount_* where root:4755 is
+// impossible; Ubuntu 24.04 then aborts with setuid_sandbox_host FATAL.
+import './sandbox-bootstrap';
+
 // Check if running in headless mode or if we need to disable sandbox
 const isHeadlessMode = process.argv.includes('--headless');
 const isLinux = process.platform === 'linux';
@@ -53,7 +58,8 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
-// Apply sandbox fixes immediately after app import
+// Apply sandbox fixes immediately after app import (also passed via
+// linux/appImage executableArgs so Chromium sees them at process start)
 if (isLinux || isHeadlessMode) {
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-setuid-sandbox');

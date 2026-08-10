@@ -8,6 +8,19 @@ export function getProtonDir() {
   return path.join(getDefaultInstallDir(), 'proton');
 }
 
+/**
+ * Per-instance Proton/Wine prefix directory.
+ * Each ARK server must use an isolated prefix — a shared WINEPREFIX /
+ * STEAM_COMPAT_DATA_PATH causes wineserver lock contention and crashes
+ * when a third (or later) instance starts.
+ */
+export function getProtonPrefixDir(instanceId: string): string {
+  if (!instanceId || typeof instanceId !== 'string') {
+    throw new Error('instanceId is required for a Proton prefix directory');
+  }
+  return path.join(getDefaultInstallDir(), 'proton-prefix', instanceId);
+}
+
 export function isProtonInstalled(): boolean {
   const dir = getProtonDir();
   // Check for Proton binary in the expected directory structure
@@ -111,18 +124,21 @@ export function installProton(callback: (err: Error | null, output?: string) => 
 }
 
 /**
- * Ensure the proton prefix directory exists and is writable.
+ * Ensure a Proton prefix directory exists and is writable.
+ * When instanceId is provided, creates an isolated per-instance prefix.
  * Proton expects to be able to create a lock file inside this prefix (pfx.lock).
  */
-export function ensureProtonPrefixExists(): void {
+export function ensureProtonPrefixExists(instanceId?: string): void {
   const baseInstallDir = getDefaultInstallDir();
-  const prefixDir = path.join(baseInstallDir, 'proton-prefix');
+  const prefixDir = instanceId
+    ? getProtonPrefixDir(instanceId)
+    : path.join(baseInstallDir, 'proton-prefix');
   try {
     if (!fs.existsSync(prefixDir)) {
       fs.mkdirSync(prefixDir, { recursive: true });
     }
 
-    // Also ensure the standard Proton/Steam compatibility directories exist
+    // Shared Proton/Steam scaffolding (not the per-instance wine prefix)
     const requiredDirs = [
       path.join(baseInstallDir, '.wine-ark'),
       path.join(baseInstallDir, '.steam-compat'),

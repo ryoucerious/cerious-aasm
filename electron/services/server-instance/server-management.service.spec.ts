@@ -12,6 +12,12 @@ jest.mock('../../utils/ark/ark-server/ark-server-state.utils');
 jest.mock('../../utils/platform.utils');
 jest.mock('path');
 jest.mock('fs');
+jest.mock('../scheduler.service', () => ({
+  schedulerService: {
+    initSchedule: jest.fn(() => Promise.resolve()),
+    initAllSchedules: jest.fn(() => Promise.resolve()),
+  }
+}));
 
 describe('ServerManagementService', () => {
   let validateInstanceIdMock: any;

@@ -117,6 +117,16 @@ export class ServerManagementService {
         };
       }
 
+      // Keep scheduled announcements in sync with saved broadcastConfig
+      if (saved?.id) {
+        try {
+          const { schedulerService } = require('../scheduler.service');
+          await schedulerService.initSchedule(saved.id);
+        } catch (error) {
+          console.warn(`[server-management-service] Failed to sync broadcast schedule for ${saved.id}:`, error);
+        }
+      }
+
       // Handle whitelist file generation after successful save
       if (saved && saved.id && instance.useExclusiveList) {
         try {
@@ -194,6 +204,11 @@ export class ServerManagementService {
       // Stop monitoring
       monitoringService.stopPlayerPolling(instanceId);
       monitoringService.stopMemoryPolling(instanceId);
+
+      try {
+        const { schedulerService } = require('../scheduler.service');
+        schedulerService.stopScheduler(instanceId);
+      } catch {}
 
       // Delete the instance
       const deleted = await instanceUtils.deleteInstance(instanceId);
