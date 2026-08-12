@@ -20,32 +20,62 @@ const instanceSnapshotMap: Record<string, Map<string, number>> = {};
 /**
  * Get the shared ARK server Logs directory path.
  */
-function getLogsDir(): string {
+function getSharedLogsDir(): string {
   return path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
 }
 
 /**
- * List all ShooterGame*.log files (excluding BACKUP), sorted most-recent first.
+ * Log directories to consider for an instance, most specific first.
+ *
+ * ARK writes Saved/Logs relative to the tree that owns the executable it launched. An
+ * instance with isolated binaries therefore logs into its own folder, while an instance
+ * that falls back to the shared executable logs into the shared install. Both are scanned
+ * so detection works either way (and keeps working if isolation is added or removed).
  */
-function listLogFiles(logsDir: string): { file: string; path: string; mtime: number }[] {
-  if (!fs.existsSync(logsDir)) return [];
-  return fs.readdirSync(logsDir)
-    .filter(f => /^ShooterGame(\_\d+)?\.log$/.test(f) && !f.includes('BACKUP'))
-    .map(f => ({
-      file: f,
-      path: path.join(logsDir, f),
-      mtime: fs.statSync(path.join(logsDir, f)).mtimeMs
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
+function getLogsDirs(instanceId?: string): string[] {
+  const dirs: string[] = [];
+
+  if (instanceId) {
+    try {
+      const { getInstanceLogsDir } = require('./ark-server-paths.utils');
+      dirs.push(getInstanceLogsDir(instanceId));
+    } catch {
+      // Instance not resolvable (not installed yet) — fall back to the shared dir only
+    }
+  }
+
+  const shared = getSharedLogsDir();
+  if (!dirs.includes(shared)) dirs.push(shared);
+  return dirs;
+}
+
+/**
+ * List all ShooterGame*.log files (excluding BACKUP) across the given directories,
+ * sorted most-recent first.
+ */
+function listLogFiles(logsDirs: string[]): { file: string; path: string; mtime: number }[] {
+  const found: { file: string; path: string; mtime: number }[] = [];
+  for (const logsDir of logsDirs) {
+    if (!fs.existsSync(logsDir)) continue;
+    for (const f of fs.readdirSync(logsDir)) {
+      if (!/^ShooterGame(\_\d+)?\.log$/.test(f) || f.includes('BACKUP')) continue;
+      const filePath = path.join(logsDir, f);
+      try {
+        found.push({ file: f, path: filePath, mtime: fs.statSync(filePath).mtimeMs });
+      } catch {
+        // File vanished between readdir and stat
+      }
+    }
+  }
+  return found.sort((a, b) => b.mtime - a.mtime);
 }
 
 /**
  * Snapshot the current log files (path → mtime) BEFORE starting a server process.
  * Capturing mtime lets us detect files that are overwritten rather than newly created.
  */
-export function snapshotLogFiles(): Map<string, number> {
-  const logsDir = getLogsDir();
-  const files = listLogFiles(logsDir);
+export function snapshotLogFiles(instanceId?: string): Map<string, number> {
+  const files = listLogFiles(getLogsDirs(instanceId));
   const snapshot = new Map<string, number>();
   for (const f of files) snapshot.set(f.path, f.mtime);
   return snapshot;
@@ -69,12 +99,12 @@ export function detectAndRegisterLogFile(
   // Store snapshot so setupLogTailing can use the same detection strategy
   instanceSnapshotMap[instanceId] = preStartSnapshot;
 
-  const logsDir = getLogsDir();
+  const logsDirs = getLogsDirs(instanceId);
   let attempts = 0;
 
   function tryDetect() {
     attempts++;
-    const currentFiles = listLogFiles(logsDir);
+    const currentFiles = listLogFiles(logsDirs);
     const claimedPaths = new Set(
       Object.entries(instanceLogFileMap)
         .filter(([id]) => id !== instanceId)
@@ -138,8 +168,8 @@ export function unregisterLogFile(instanceId: string): void {
 export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
   const state = getInstanceState(instanceId)?.toLowerCase();
   if (state !== 'running' && state !== 'starting' && state !== 'stopping') return [];
-  const logsDir = getLogsDir();
-  if (!fs.existsSync(logsDir)) return [];
+  const logsDirs = getLogsDirs(instanceId);
+  if (!logsDirs.some(dir => fs.existsSync(dir))) return [];
 
   // Priority 1: Use the registered log file for this instance
   let foundLogFile: string | null = getRegisteredLogFile(instanceId);
@@ -158,7 +188,7 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
     } catch {}
     const sessionName = config.sessionName || '';
     if (sessionName) {
-      const logFiles = listLogFiles(logsDir);
+      const logFiles = listLogFiles(logsDirs);
       const claimedPaths = new Set(Object.values(instanceLogFileMap));
       for (const logInfo of logFiles) {
         try {
@@ -207,9 +237,10 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
  * Uses position-based reading and a polling fallback alongside fs.watch for reliability.
  * Returns a watcher object with a close() method.
  */
-export function startArkLogTailing(instanceDir: string, onLog?: (data: string) => void, forceLogFile?: string | null) {
-  // Correct log directory: <arkInstall>/ShooterGame/Saved/Logs
-  const logsDir = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
+export function startArkLogTailing(instanceDir: string, onLog?: (data: string) => void, forceLogFile?: string | null, instanceId?: string) {
+  // Log directory: the instance's own Saved/Logs when it has isolated binaries,
+  // otherwise the shared <arkInstall>/ShooterGame/Saved/Logs
+  const logsDirs = getLogsDirs(instanceId);
   let logFile: string | null = null;
   let logFileWatcher: fs.FSWatcher | null = null;
   let logFilePosition = 0;
@@ -220,19 +251,8 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
 
   function findLogFileForSession(): string | null {
     if (forceLogFile && fs.existsSync(forceLogFile)) return forceLogFile;
-    if (!fs.existsSync(logsDir)) return null;
-    // Only match ShooterGame.log and ShooterGame_<number>.log, and exclude any with 'BACKUP' in the name
-    const logFiles = fs.readdirSync(logsDir)
-      .filter(f => /^ShooterGame(\_\d+)?\.log$/.test(f) && !f.includes('BACKUP'))
-      .map(f => ({
-        file: f,
-        mtime: fs.statSync(path.join(logsDir, f)).mtimeMs
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-    if (logFiles.length > 0) {
-      return path.join(logsDir, logFiles[0].file);
-    }
-    return null;
+    const logFiles = listLogFiles(logsDirs);
+    return logFiles.length > 0 ? logFiles[0].path : null;
   }
 
   /**
@@ -277,7 +297,7 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
   function tryAttachWatcher() {
     if (closed) return;
     attempts++;
-    if (!fs.existsSync(logsDir)) {
+    if (!logsDirs.some(dir => fs.existsSync(dir))) {
       if (attempts < maxAttempts) setTimeout(tryAttachWatcher, 1000);
       return;
     }
@@ -324,17 +344,12 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
 /**
  * Cleans up old log files for the current session
  */
-export function cleanupOldLogFiles(config: any, onLog?: (data: string) => void): void {
+export function cleanupOldLogFiles(config: any, onLog?: (data: string) => void, instanceId?: string): void {
   try {
-    const logsDir = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
-    if (!fs.existsSync(logsDir)) return;
-
     const sessionName = config.sessionName || 'My Server';
-    const logFiles = fs.readdirSync(logsDir)
-      .filter(f => /^ShooterGame(\_\d+)?\.log$/.test(f) && !f.includes('BACKUP'));
+    const logFiles = listLogFiles(getLogsDirs(instanceId));
 
-    for (const file of logFiles) {
-      const filePath = path.join(logsDir, file);
+    for (const { file, path: filePath } of logFiles) {
       try {
         const content = fs.readFileSync(filePath, 'utf8');
         // Only delete if it contains our specific session name
@@ -394,7 +409,7 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
 
   function trySetupTailing() {
     attempts++;
-    const logsDir = getLogsDir();
+    const logsDirs = getLogsDirs(instanceId);
 
     // Priority 1: Use the log file already registered by detectAndRegisterLogFile
     let foundLogFile: string | null = getRegisteredLogFile(instanceId);
@@ -402,10 +417,10 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
     // Priority 2: Use the pre-start snapshot (same logic as detectAndRegisterLogFile)
     // This handles the case where setupLogTailing runs before detectAndRegisterLogFile
     // finishes, and also covers Linux/Proton which overwrites the existing log in-place.
-    if (!foundLogFile && fs.existsSync(logsDir)) {
+    if (!foundLogFile && logsDirs.some(dir => fs.existsSync(dir))) {
       const snapshot = instanceSnapshotMap[instanceId];
       if (snapshot) {
-        const currentFiles = listLogFiles(logsDir);
+        const currentFiles = listLogFiles(logsDirs);
         const claimedPaths = new Set(
           Object.entries(instanceLogFileMap)
             .filter(([id]) => id !== instanceId)
@@ -426,7 +441,7 @@ export function setupLogTailing(instanceId: string, instanceDir: string, config:
 
     if (foundLogFile) {
       if (onLog) onLog(`[INFO] Tailing log file: ${path.basename(foundLogFile)}`);
-      logTail = startArkLogTailing(instanceDir, wrappedOnLog, foundLogFile);
+      logTail = startArkLogTailing(instanceDir, wrappedOnLog, foundLogFile, instanceId);
     } else if (attempts < maxAttempts) {
       // Retry — the log file may not have been created or written to yet
       setTimeout(trySetupTailing, 1000);

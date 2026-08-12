@@ -93,6 +93,66 @@ export function resolveServerLaunch(instanceId: string): ResolvedServerLaunch {
 }
 
 /**
+ * The root of the directory tree ARK will actually run from for this instance.
+ *
+ * ARK resolves everything path-relative — config, saves, logs, the exclusive-join list —
+ * against the tree that owns the executable it launched, NOT against the working directory
+ * or the instance's config folder. An instance with isolated binaries therefore runs out of
+ * its own folder; one that falls back to the shared executable runs out of the shared install.
+ * Every "where will ARK read/write X" question must go through this function.
+ */
+export function getInstanceRuntimeRoot(instanceId: string): string {
+  const launch = resolveServerLaunch(instanceId);
+  // <root>/ShooterGame/Binaries/Win64/<exe> → <root>
+  return path.resolve(path.dirname(launch.executable), '..', '..', '..');
+}
+
+/**
+ * True when this instance runs from its own isolated tree rather than the shared install.
+ */
+export function isInstanceIsolated(instanceId: string): boolean {
+  const { getInstancesBaseDir } = require('../../ark/instance.utils');
+  const instanceDir = path.resolve(path.join(getInstancesBaseDir(), instanceId));
+  return getInstanceRuntimeRoot(instanceId) === instanceDir;
+}
+
+/**
+ * The config directory ARK will actually read GameUserSettings.ini / Game.ini from.
+ */
+export function getInstanceConfigDir(instanceId: string): string {
+  return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
+}
+
+/**
+ * The directory ARK will actually write ShooterGame.log to.
+ */
+export function getInstanceLogsDir(instanceId: string): string {
+  return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Logs');
+}
+
+/**
+ * The exclusive-join list path ARK reads when launched with -exclusivejoin.
+ * ARK looks for it next to the executable, in the Win64 binaries folder.
+ */
+export function getInstanceWhitelistPath(instanceId: string): string {
+  return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
+}
+
+/**
+ * The value to pass as ?AltSaveDirectoryName= for this instance.
+ *
+ * ARK appends this to <root>/ShooterGame/Saved/. An isolated instance is already rooted in
+ * its own folder, so a plain 'SavedArks' is correct; a shared-install instance needs the
+ * Servers/<id>/SavedArks path that lands it back inside its own instance folder.
+ * In both cases the saves end up in the instance's historical SavedArks location.
+ */
+export function getInstanceAltSaveDirName(instanceId: string): string {
+  return isInstanceIsolated(instanceId)
+    ? 'SavedArks'
+    : path.join('Servers', instanceId, 'SavedArks');
+}
+
+/**
  * True when AsaApiLoader.exe is installed for this instance.
  */
 export function isAsaApiLoaderInstalled(instanceId: string): boolean {

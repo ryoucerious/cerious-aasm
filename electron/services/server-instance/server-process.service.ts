@@ -63,11 +63,16 @@ export class ServerProcessService {
     const baseDir = require('../../utils/ark/instance.utils').getInstancesBaseDir();
     const instanceDir = path.join(baseDir, instanceId);
 
-    // Set up save directory for this instance
-    const saveDir = path.join('Servers', instanceId, 'SavedArks');
+    // Set up save directory for this instance.
+    // ARK appends AltSaveDirectoryName to <runtimeRoot>/ShooterGame/Saved/, and the runtime
+    // root differs between isolated and shared-install instances — resolving it here keeps
+    // worlds in the instance's own SavedArks folder either way instead of nesting a second
+    // Servers/<id>/ level inside the instance.
+    const { getInstanceAltSaveDirName, getInstanceLogsDir } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+    const saveDir = getInstanceAltSaveDirName(instanceId);
     const formattedSaveDir = saveDir.replace(/\\/g, '/');
     const formattedConfigDir = instanceDir.replace(/\\/g, '/');
-    const formattedLogDir = path.join(ArkPathUtils.getArkServerDir(), 'ShooterGame', 'Saved', 'Logs').replace(/\\/g, '/');
+    const formattedLogDir = getInstanceLogsDir(instanceId).replace(/\\/g, '/');
     
     // Build the ARK server command arguments
     const args = buildArkServerArgs({
@@ -136,7 +141,7 @@ export class ServerProcessService {
     }
 
     // Snapshot log files BEFORE starting so we can detect which new file belongs to this instance
-    const logSnapshot = snapshotLogFiles();
+    const logSnapshot = snapshotLogFiles(instanceId);
 
     // Start the server process
     const serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);

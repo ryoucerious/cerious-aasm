@@ -24,9 +24,21 @@ export class WhitelistService {
   }
 
   /**
-   * Get the path to the PlayersExclusiveJoinList.txt file in the main ARK server directory
+   * Get the path to the PlayersExclusiveJoinList.txt file the running server actually reads.
+   *
+   * ARK looks for the exclusive-join list next to the executable it launched, so an instance
+   * with isolated binaries reads its own Win64 folder rather than the shared install's.
+   * Falls back to the shared install when the instance can't be resolved.
    */
-  private getMainWhitelistPath(): string {
+  private getMainWhitelistPath(instanceDir?: string): string {
+    if (instanceDir) {
+      try {
+        const { getInstanceWhitelistPath } = require('../utils/ark/ark-server/ark-server-paths.utils');
+        return getInstanceWhitelistPath(path.basename(instanceDir));
+      } catch (e) {
+        console.warn('[whitelist-service] Could not resolve instance whitelist path, using shared:', e);
+      }
+    }
     const arkServerDir = ArkPathUtils.getArkServerDir();
     return path.join(arkServerDir, 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
   }
@@ -57,7 +69,7 @@ export class WhitelistService {
       fs.writeFileSync(instanceWhitelistPath, content, 'utf8');
 
       // Copy to main ARK directory (like config files do)
-      const mainWhitelistPath = this.getMainWhitelistPath();
+      const mainWhitelistPath = this.getMainWhitelistPath(instanceDir);
       const mainDir = path.dirname(mainWhitelistPath);
       if (!fs.existsSync(mainDir)) {
         fs.mkdirSync(mainDir, { recursive: true });
@@ -236,7 +248,7 @@ export class WhitelistService {
   copyWhitelistToMainDir(instanceDir: string): WhitelistResult {
     try {
       const instanceWhitelistPath = this.getInstanceWhitelistPath(instanceDir);
-      const mainWhitelistPath = this.getMainWhitelistPath();
+      const mainWhitelistPath = this.getMainWhitelistPath(instanceDir);
       
       // Ensure main directory exists
       const mainDir = path.dirname(mainWhitelistPath);

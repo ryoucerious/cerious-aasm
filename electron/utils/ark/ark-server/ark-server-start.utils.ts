@@ -98,7 +98,7 @@ export async function startArkServerInstance(instanceId: string, onLog?: (data: 
     }
 
     // 3. Clean up old log files for this session
-    cleanupOldLogFiles(config, onLog);
+    cleanupOldLogFiles(config, onLog, instanceId);
 
     // 4. Prepare server configuration
     const preparedConfig = prepareServerConfig(instanceDir, config);

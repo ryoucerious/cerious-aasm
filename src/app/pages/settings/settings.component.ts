@@ -328,7 +328,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.17';
+    return environment.version || '1.0.18';
   }
 
   getPlatform() {

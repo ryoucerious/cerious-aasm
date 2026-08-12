@@ -379,11 +379,38 @@ export class ServerManagementService {
                           await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
                       }
                   }
-                  // Specialized logic: We generally ignore subfolders (like ArkApi in source if any)
-                  // EXCEPT if the base game has vital subfolders. Usually ArkApi is user-installed.
-                  // For now, we only copy files to keep the instance clean.
-                  // IF ArkApi exists in destination, we preserve it naturally by not deleting it.
+                  // Subfolders are handled separately below — ArkApi and other per-instance
+                  // folders must stay instance-owned, so we never bulk-copy directories here.
               }
+
+              // Junction the game's own Win64 subfolders (RedpointEOS, BattlEye, D3D12, DML).
+              // Without RedpointEOS next to the exe the server aborts with
+              // "The EOS SDK could not be found. Please reinstall the application."
+              const { linkSharedWin64Subdirs } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
+              const linked = await linkSharedWin64Subdirs(sourceBinaries, destBinaries);
+              if (linked.length) {
+                  console.log(`[server-management] Linked Win64 subfolders for ${instanceId}: ${linked.join(', ')}`);
+              }
+          }
+
+          // Junction the game's bundled UE plugins (ShooterGame/Plugins: DiscordPartnerSDK,
+          // AWSSDK, sentry). Without them the server aborts with
+          // "Failed to load Discord Partner SDK third party library".
+          const { linkSharedShooterGameSubdirs } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
+          const linkedGameDirs = await linkSharedShooterGameSubdirs(
+              path.join(sourceDir, 'ShooterGame'),
+              shooterGameDir
+          );
+          if (linkedGameDirs.length) {
+              console.log(`[server-management] Linked ShooterGame subfolders for ${instanceId}: ${linkedGameDirs.join(', ')}`);
+          }
+
+          // Point the runtime save path at the instance's canonical SavedArks folder so an
+          // isolated instance keeps writing worlds where backups and restore expect them.
+          const { linkInstanceSaveDir } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
+          const { getInstanceRuntimeRoot } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+          if (await linkInstanceSaveDir(instanceDir, getInstanceRuntimeRoot(instanceId))) {
+              console.log(`[server-management] Linked runtime save directory for ${instanceId}`);
           }
       }
     } catch (error) {
@@ -408,7 +435,7 @@ export class ServerManagementService {
 
     // Write ARK configuration files (GameUserSettings.ini, Game.ini)
     try {
-      arkConfigService.writeArkConfigFiles(instanceDir, instance);
+      arkConfigService.writeArkConfigFiles(instanceDir, instance, instanceId);
       console.log(`[server-management-service] ARK config files written for instance ${instanceId}`);
     } catch (error) {
       console.error(`[server-management-service] Failed to write ARK config files for instance ${instanceId}:`, error);

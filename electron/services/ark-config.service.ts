@@ -224,8 +224,9 @@ export class ArkConfigService {
    * 
    * @param instanceDir - The directory of the server instance where config files will be generated.
    * @param config - The configuration object containing settings to be written.
+   * @param instanceId - Instance id, used to resolve the config directory ARK actually reads.
    */
-  writeArkConfigFiles(instanceDir: string, config: any): void {
+  writeArkConfigFiles(instanceDir: string, config: any, instanceId?: string): void {
     try {
       // Create Windows Server config directory if it doesn't exist
       const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
@@ -319,9 +320,9 @@ export class ArkConfigService {
       // managed output, so we can identify custom/unmapped lines to preserve.
       const managedKeys = this.buildManagedKeySet(config);
 
-      // Collect the main ARK config dir path so we can also read custom lines
-      // that users may have edited directly in the ARK server directory.
-      const mainConfigDir = this.getArkConfigDir();
+      // Collect the config dir the server will actually read, so we can pick up custom
+      // lines the user edited there directly — and, further down, write our INIs into it.
+      const mainConfigDir = this.getRuntimeConfigDir(instanceDir, config, instanceId);
 
       // Write each INI file, preserving any unmapped lines from the existing file
       Object.keys(iniFiles).forEach(filename => {
@@ -567,6 +568,28 @@ export class ArkConfigService {
    * 
    * Note: Always uses WindowsServer since we're running Windows binaries via Proton on Linux
    */
+  /**
+   * The config directory the running server actually reads.
+   *
+   * ARK resolves Saved/Config against the tree that owns the executable it launched, so an
+   * instance with isolated binaries reads its own ShooterGame/Saved/Config/WindowsServer —
+   * NOT the shared install's. Writing to the shared directory leaves such an instance running
+   * on ARK's generated defaults (a random "ARK #12345" session name and stock rates).
+   * Falls back to the shared directory when the instance can't be resolved.
+   */
+  private getRuntimeConfigDir(instanceDir: string, config: any, instanceId?: string): string {
+    const id = instanceId || config?.id || path.basename(instanceDir);
+    if (id) {
+      try {
+        const { getInstanceConfigDir } = require('../utils/ark/ark-server/ark-server-paths.utils');
+        return getInstanceConfigDir(id);
+      } catch (e) {
+        console.warn(`[ark-config-service] Could not resolve runtime config dir for ${id}, using shared:`, e);
+      }
+    }
+    return this.getArkConfigDir();
+  }
+
   private getArkConfigDir(): string {
       try {
         const { loadGlobalConfig } = require('../utils/global-config.utils');

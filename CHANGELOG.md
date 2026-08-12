@@ -4,6 +4,20 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-08-11
+
+Repairs per-instance isolation. Since instances began launching from their own folder, ARK resolved
+everything path-relative — binaries, config, saves, logs, whitelist — against that folder, while AASM
+was still writing to the shared install. Servers either refused to start or started as a default
+server that ignored their settings. Existing instances repair themselves on the next start, and no
+save data is moved.
+
+### Bug Fixes
+
+- **Isolated Instances Missing Game Folders ("EOS SDK could not be found", "Failed to load Discord Partner SDK third party library")**: The per-instance binary isolation added in 1.0.17 built each instance from loose files only — it copied `ShooterGame/Binaries/Win64` file-by-file while skipping every subfolder, and junctioned `ShooterGame/Content` but nothing else under `ShooterGame`. ARK resolves the EOS SDK (`Win64/RedpointEOS/EOSSDK-Win64-Shipping.dll`) and its bundled UE plugins (`ShooterGame/Plugins/DiscordPartnerSDK`, `AWSSDK`, `sentry`) relative to the instance it launches from, so isolated instances aborted at startup with one of those dialogs. AASM now junctions the game's own subfolders at both levels into each instance, leaving instance-owned folders (`ArkApi`, `Binaries`, `Saved`, `.sentry-native`, …) untouched. Existing broken instances repair themselves on the next start.
+- **Isolated Instances Ignored Their Own Settings (Wrong Session Name, Default Rates, Nested Save Folder)**: A server with isolated binaries runs out of its own folder, and ARK resolves config, saves and the exclusive-join list against that tree — but AASM still wrote them to the shared install. Servers therefore started with ARK's generated defaults (a random `ARK #12345` session name instead of the configured one) and ignored every rate, multiplier and rule from the instance. `?AltSaveDirectoryName=` was likewise still relative to the shared install, so worlds were created one level too deep at `<instance>/ShooterGame/Saved/Servers/<id>/SavedArks`. All runtime paths now resolve through the instance's actual launch root, and the runtime save path is junctioned onto the instance's canonical `SavedArks` folder so backups and restore are unaffected.
+- **No Live Log Output for Isolated Instances ("Could not detect log file after 30 attempts")**: Log detection and tailing only ever scanned the shared install's `ShooterGame/Saved/Logs`, but ARK writes `Saved/Logs` relative to the tree that owns the executable it launched — so an instance with isolated binaries logs into its own folder. Log discovery, tailing, and cleanup now scan the instance's log directory as well as the shared one, keeping both isolated and non-isolated instances working.
+
 ## [1.0.17] - 2026-08-10
 
 ### Bug Fixes

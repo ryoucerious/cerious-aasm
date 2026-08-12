@@ -68,6 +68,9 @@ jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({
     cwd: '/mock/instances/inst1/ShooterGame/Binaries/Win64',
     usesAsaApiLoader: false,
   })),
+  getInstanceRuntimeRoot: jest.fn(() => '/mock/instances/inst1'),
+  getInstanceAltSaveDirName: jest.fn(() => 'SavedArks'),
+  getInstanceLogsDir: jest.fn(() => '/mock/instances/inst1/ShooterGame/Saved/Logs'),
 }));
 
 jest.mock('../../utils/platform.utils', () => ({
