@@ -46,7 +46,7 @@ export class SettingsPageComponent {
       this.serverInstanceService.getInstances().subscribe(instances => {
         this.hasRunningServers = instances.some(i => {
           const state = (i.state || i.status || '').toLowerCase();
-          return state === 'running' || state === 'starting';
+          return state === 'running' || state === 'starting' || state === 'stopping';
         });
         this.cdr.markForCheck();
       })
@@ -328,7 +328,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.18';
+    return environment.version || '1.0.19';
   }
 
   getPlatform() {

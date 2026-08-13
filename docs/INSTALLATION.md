@@ -173,44 +173,43 @@
 ### Command Line Usage (Headless Mode)
 
 Cerious AASM can run as a headless background service, exposing a web REST API
-instead of launching a GUI window.  **On Linux, Electron requires a display
-connection (X11 or Wayland) at the native level even when running headless.**
-Use `xvfb-run` to provide a virtual framebuffer on servers with no physical display.
+instead of launching a GUI window.  **On Linux, Electron still loads GTK at the
+native level even with `--headless`, so a display connection is required.**
+Current `.deb` / `.rpm` / AppImage packages install a launcher that automatically
+uses `xvfb-run` when you pass `--headless` and no `DISPLAY`/`WAYLAND_DISPLAY`
+is set. The `xvfb` package is pulled in as a dependency of the `.deb`/`.rpm`.
 
-#### 1. Install xvfb (first time only)
+#### 1. Install (xvfb comes with the package on deb/rpm)
 
 ```bash
-# Debian / Ubuntu
-sudo apt install xvfb
+# Debian / Ubuntu — xvfb is a package dependency of cerious-aasm
+sudo apt install ./Cerious-AASM-*.deb
 
-# Fedora / RHEL / Rocky
-sudo dnf install xorg-x11-server-Xvfb
+# If you only have the AppImage, install xvfb once:
+sudo apt install xvfb          # Debian / Ubuntu
+sudo dnf install xorg-x11-server-Xvfb   # Fedora / RHEL / Rocky
 ```
 
 #### 2. Run headless
 
 ```bash
-# Basic headless mode (virtual framebuffer)
-xvfb-run -a cerious-aasm --no-sandbox --headless
+# Basic headless mode (launcher attaches xvfb automatically when needed)
+cerious-aasm --no-sandbox --headless
 
 # With custom port
-xvfb-run -a cerious-aasm --no-sandbox --headless --port=8080
+cerious-aasm --no-sandbox --headless --port=8080
 
 # With authentication
-xvfb-run -a cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
+cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
 
 # Full example
-xvfb-run -a cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
+cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
 ```
 
-Alternatively, use the bundled [cerious-aasm-headless-appimage.sh](../scripts/cerious-aasm-headless-appimage.sh)
-helper script which detects whether a display is already present and applies
-`xvfb-run -a` automatically.
-
-```bash
-# Put the script on your PATH, then run:
-cerious-aasm-headless-appimage.sh --auth-enabled --password=yourpassword --port=3000
-```
+Manual `xvfb-run -a …` still works and is useful for older builds (≤1.0.11) or
+when invoking the raw Electron `.bin` directly. The helper script
+[cerious-aasm-headless-appimage.sh](../scripts/cerious-aasm-headless-appimage.sh)
+also wraps AppImages the same way.
 
 #### 3. Run as a systemd service
 
@@ -220,7 +219,7 @@ Description=Cerious AASM headless service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/xvfb-run -a /usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=yourpassword --port=3000
+ExecStart=/usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=yourpassword --port=3000
 Restart=on-failure
 Environment=ELECTRON_DISABLE_SANDBOX=1
 

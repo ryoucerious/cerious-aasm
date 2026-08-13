@@ -93,7 +93,8 @@ describe('ServerInstanceService', () => {
 
     serverProcessServiceMock = {
       getServerProcess: jest.fn(),
-      setInstanceState: jest.fn()
+      setInstanceState: jest.fn(),
+      forceKillServerProcess: jest.fn().mockResolvedValue(undefined),
     };
     jest.mocked(require('./server-process.service')).serverProcessService = serverProcessServiceMock;
 
@@ -332,14 +333,11 @@ describe('ServerInstanceService', () => {
   });
 
   describe('forceStopInstance', () => {
-    it('should force stop instance on Windows', async () => {
+    it('should force stop instance via forceKillServerProcess', async () => {
       const instanceId = 'test-instance';
 
       validateInstanceIdMock.mockReturnValue(true);
-      getPlatformMock.mockReturnValue('windows');
       instanceUtilsMock.getInstance.mockResolvedValue({ name: 'Test Server' });
-      const mockProcess = { killed: false, kill: jest.fn() };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
 
       const result = await serverInstanceService.forceStopInstance(instanceId);
 
@@ -349,29 +347,7 @@ describe('ServerInstanceService', () => {
         instanceName: 'Test Server',
         shouldNotifyAutomation: true
       });
-      expect(rconServiceMock.forceDisconnectRcon).toHaveBeenCalledWith(instanceId);
-      expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL');
-      expect(serverProcessServiceMock.setInstanceState).toHaveBeenCalledWith(instanceId, 'stopping');
-    });
-
-    it('should force stop instance on Linux', async () => {
-      const instanceId = 'test-instance';
-
-      validateInstanceIdMock.mockReturnValue(true);
-      getPlatformMock.mockReturnValue('linux');
-      instanceUtilsMock.getInstance.mockResolvedValue({ name: 'Test Server' });
-      const mockProcess = { killed: false, pid: 123, kill: jest.fn() };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
-
-      const result = await serverInstanceService.forceStopInstance(instanceId);
-
-      expect(result).toEqual({
-        success: true,
-        instanceId,
-        instanceName: 'Test Server',
-        shouldNotifyAutomation: true
-      });
-      expect(process.kill).toHaveBeenCalledWith(-123, 'SIGKILL');
+      expect(serverProcessServiceMock.forceKillServerProcess).toHaveBeenCalledWith(instanceId);
     });
 
     it('should handle invalid instance ID', async () => {
@@ -385,19 +361,20 @@ describe('ServerInstanceService', () => {
         success: false,
         error: 'Invalid instance ID'
       });
+      expect(serverProcessServiceMock.forceKillServerProcess).not.toHaveBeenCalled();
     });
 
     it('should handle exception', async () => {
       const instanceId = 'test-instance';
 
       validateInstanceIdMock.mockReturnValue(true);
-      rconServiceMock.forceDisconnectRcon.mockRejectedValue(new Error('Disconnect failed'));
+      serverProcessServiceMock.forceKillServerProcess.mockRejectedValue(new Error('Kill failed'));
 
       const result = await serverInstanceService.forceStopInstance(instanceId);
 
       expect(result).toEqual({
         success: false,
-        error: 'Disconnect failed',
+        error: 'Kill failed',
         instanceId
       });
     });

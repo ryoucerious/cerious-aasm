@@ -52,6 +52,75 @@ export class ServerProcessService {
   }
 
   /**
+   * Whether a live ChildProcess is still tracked for this instance.
+   */
+  hasActiveProcess(instanceId: string): boolean {
+    const proc = this.arkServerProcesses[instanceId];
+    return !!(proc && !proc.killed && proc.exitCode === null);
+  }
+
+  /**
+   * Aggressively kill a server process, clear tracking, disconnect RCON, and broadcast stopped.
+   * Used by cluster-update timeout, pre-SteamCMD verification, and manual force-stop.
+   */
+  async forceKillServerProcess(
+    instanceId: string,
+    options?: { broadcast?: boolean }
+  ): Promise<void> {
+    const broadcast = options?.broadcast !== false;
+    const rconService = require('../rcon.service').rconService;
+
+    try {
+      await rconService.forceDisconnectRcon(instanceId);
+    } catch (e) {
+      // Continue — kill must proceed even if RCON disconnect fails
+    }
+
+    const proc = this.arkServerProcesses[instanceId];
+    if (proc?.pid) {
+      const { getPlatform } = require('../../utils/platform.utils');
+      const platform = getPlatform();
+      try {
+        if (platform === 'linux') {
+          try {
+            process.kill(-proc.pid, 'SIGKILL');
+          } catch {
+            try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+          }
+          try {
+            execSync(`kill -9 ${proc.pid}`, { stdio: 'ignore' });
+          } catch { /* already gone */ }
+        } else {
+          // Windows: kill the full process tree (Proton/Wine children included when applicable)
+          try {
+            execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
+          } catch {
+            try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+          }
+        }
+      } catch (e) {
+        console.warn(`[server-process-service] forceKill for ${instanceId} encountered an error:`, e);
+      }
+    } else if (proc && !proc.killed) {
+      try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+    }
+
+    delete this.arkServerProcesses[instanceId];
+    delete this.processStartTimes[instanceId];
+    this.setInstanceState(instanceId, 'stopped');
+
+    if (broadcast) {
+      try {
+        const messagingService = require('../messaging.service').messagingService;
+        messagingService.sendToAll('server-instance-state', { state: 'stopped', instanceId });
+        messagingService.sendToAll('rcon-status', { instanceId, connected: false });
+      } catch (e) {
+        console.warn(`[server-process-service] Failed to broadcast stopped state for ${instanceId}:`, e);
+      }
+    }
+  }
+
+  /**
    * Start the actual server process
    */
   async startServerProcess(instanceId: string, instance: any): Promise<ServerInstanceResult> {
@@ -364,14 +433,16 @@ export class ServerProcessService {
     this.setInstanceState(instanceId, 'stopping');
     const rconService = require('../rcon.service').rconService;
 
-    // 1. Try graceful "SaveWorld" via RCON
+    // 1. Try graceful "SaveWorld" via RCON (bounded — hung RCON must not block the stop path)
     try {
       console.log(`[server-process-service] Stopping instance ${instanceId}: Sending SaveWorld...`);
-      await rconService.executeRconCommand(instanceId, 'SaveWorld');
-      
-      // Wait up to 60s for save to complete (simple delay for now, ideally watch logs)
-      // Most servers save within 5-10 seconds
-      await new Promise(resolve => setTimeout(resolve, 5000)); 
+      const saveResult = await rconService.executeRconCommand(instanceId, 'SaveWorld', 30000);
+      if (saveResult?.success) {
+        // Wait for save to flush; most servers finish within 5-10 seconds
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } else {
+        console.warn(`[server-process-service] RCON SaveWorld failed for ${instanceId}:`, saveResult?.error);
+      }
     } catch (error) {
       console.warn(`[server-process-service] RCON SaveWorld failed for ${instanceId}:`, error);
     }
@@ -379,7 +450,10 @@ export class ServerProcessService {
     // 2. Try graceful "DoExit" via RCON
     try {
       console.log(`[server-process-service] Stopping instance ${instanceId}: Sending DoExit...`);
-      await rconService.executeRconCommand(instanceId, 'DoExit');
+      const exitResult = await rconService.executeRconCommand(instanceId, 'DoExit', 15000);
+      if (!exitResult?.success) {
+        console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, exitResult?.error);
+      }
     } catch (error) {
       console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, error);
     }
@@ -445,14 +519,9 @@ export class ServerProcessService {
     }
 
     // Process 'exit' handler (setupProcessMonitoring) will handle cleanup, state update, and RCON disconnect
-    // But we manually ensure cleanup here just in case the exit handler didn't fire (e.g. if we killed it aggressively)
+    // But we manually ensure cleanup + UI broadcast here if the exit handler didn't fire
     if (this.arkServerProcesses[instanceId]) {
-       delete this.arkServerProcesses[instanceId];
-       delete this.processStartTimes[instanceId];
-       this.setInstanceState(instanceId, 'stopped');
-       try {
-         await rconService.disconnectRcon(instanceId);
-       } catch (e) {}
+      await this.forceKillServerProcess(instanceId);
     }
 
     return { success: true, instanceId };

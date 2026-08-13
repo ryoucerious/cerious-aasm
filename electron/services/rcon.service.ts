@@ -127,7 +127,11 @@ export class RconService {
    * @param command - The RCON command to execute
    * @returns A promise resolving to an object indicating the result of the command execution
    */
-  async executeRconCommand(instanceId: string, command: string): Promise<RconCommandResult> {
+  async executeRconCommand(
+    instanceId: string,
+    command: string,
+    timeoutMs?: number
+  ): Promise<RconCommandResult> {
     try {
       if (!instanceId || !command) {
         return {
@@ -145,7 +149,7 @@ export class RconService {
         };
       }
 
-      const response = await sendRconCommand(instanceId, command);
+      const response = await sendRconCommand(instanceId, command, timeoutMs);
       return {
         success: true,
         response,

@@ -12,15 +12,16 @@ const isHeadlessMode = process.argv.includes('--headless');
 const isLinux = process.platform === 'linux';
 
 // =========================
-// Headless Linux: ensure a display server is available
-// GTK initialises at the native level when Electron is imported — BEFORE any
-// JavaScript runs.  Without a DISPLAY connection (X11/Wayland) the process
-// crashes with:  Gtk-ERROR: Can't create a GtkStyleContext without a display
-//
-// If no DISPLAY is set we automatically re-exec via `xvfb-run` (virtual
-// framebuffer) so users don't need a wrapper script.
+// Headless Linux: ensure a display server is available (best-effort fallback)
+// GTK can initialise at the native Electron binary level BEFORE any JavaScript
+// runs, aborting with: Gtk-ERROR: Can't create a GtkStyleContext without a
+// display connection.  Packaged Linux builds install a shell entrypoint
+// (scripts/linux-electron-wrapper.sh via afterPack) that runs xvfb-run before
+// the binary starts — that is the reliable fix.  This block remains as a
+// fallback when the .bin is invoked directly and JS still gets a chance to run.
 // =========================
-if (isHeadlessMode && isLinux && !process.env.DISPLAY) {
+const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+if (isHeadlessMode && isLinux && !hasDisplay) {
   const { execFileSync, execSync } = require('child_process');
 
   // Check if xvfb-run is available

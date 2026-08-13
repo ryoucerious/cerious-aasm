@@ -87,6 +87,7 @@ jest.mock('../rcon.service', () => ({
   rconService: {
     connectRcon: jest.fn(() => Promise.resolve()),
     disconnectRcon: jest.fn(() => Promise.resolve()),
+    forceDisconnectRcon: jest.fn(() => Promise.resolve()),
     executeRconCommand: jest.fn(() => Promise.resolve()),
   },
 }));
@@ -325,6 +326,53 @@ describe('ServerProcessService', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('forceKillServerProcess', () => {
+    it('should kill process tree on Windows, clear tracking, and broadcast stopped', async () => {
+      const { execSync } = require('child_process');
+      await service.startServerProcess('inst1', { sessionName: 'TestServer' });
+      const proc = service.getServerProcess('inst1');
+      proc.pid = 4242;
+
+      await service.forceKillServerProcess('inst1');
+
+      expect(execSync).toHaveBeenCalledWith('taskkill /F /T /PID 4242', { stdio: 'ignore' });
+      expect(service.getServerProcess('inst1')).toBeNull();
+      const stateUtils = require('../../utils/ark/ark-server/ark-server-state.utils');
+      expect(stateUtils.setInstanceState).toHaveBeenCalledWith('inst1', 'stopped');
+      const { messagingService } = require('../messaging.service');
+      expect(messagingService.sendToAll).toHaveBeenCalledWith(
+        'server-instance-state',
+        { state: 'stopped', instanceId: 'inst1' }
+      );
+      const { rconService } = require('../rcon.service');
+      expect(rconService.forceDisconnectRcon).toHaveBeenCalledWith('inst1');
+    });
+
+    it('should use process-group kill on Linux', async () => {
+      const platformUtils = require('../../utils/platform.utils');
+      (platformUtils.getPlatform as jest.Mock).mockReturnValue('linux');
+      const processKillSpy = jest.spyOn(process, 'kill').mockImplementation(() => true as any);
+
+      await service.startServerProcess('inst1', { sessionName: 'TestServer' });
+      const proc = service.getServerProcess('inst1');
+      proc.pid = 999;
+
+      await service.forceKillServerProcess('inst1');
+
+      expect(processKillSpy).toHaveBeenCalledWith(-999, 'SIGKILL');
+      expect(service.getServerProcess('inst1')).toBeNull();
+      processKillSpy.mockRestore();
+    });
+
+    it('hasActiveProcess reflects tracked live processes', async () => {
+      expect(service.hasActiveProcess('inst1')).toBe(false);
+      await service.startServerProcess('inst1', { sessionName: 'TestServer' });
+      expect(service.hasActiveProcess('inst1')).toBe(true);
+      await service.forceKillServerProcess('inst1', { broadcast: false });
+      expect(service.hasActiveProcess('inst1')).toBe(false);
     });
   });
 

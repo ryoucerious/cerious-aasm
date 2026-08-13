@@ -48,6 +48,7 @@ describe('rcon.utils', () => {
       disconnect: jest.fn(),
       send: jest.fn(),
       removeAllListeners: jest.fn(),
+      removeListener: jest.fn(),
       on: jest.fn(),
       once: jest.fn(),
       emit: jest.fn()
@@ -244,6 +245,25 @@ describe('rcon.utils', () => {
       } catch (error) {
         expect(error).toBe(expectedError);
       }
+    });
+
+    it('should reject when connection ends before response', async () => {
+      rconClients['instance1'] = mockRconInstance;
+      const promise = sendRconCommand('instance1', 'SaveWorld');
+
+      const endCall = mockRconInstance.once.mock.calls.find((call: any[]) => call[0] === 'end');
+      endCall[1]();
+
+      await expect(promise).rejects.toThrow('RCON connection closed before response');
+    });
+
+    it('should reject on timeout', async () => {
+      rconClients['instance1'] = mockRconInstance;
+      const promise = sendRconCommand('instance1', 'DoExit', 1000);
+
+      jest.advanceTimersByTime(1000);
+
+      await expect(promise).rejects.toThrow('RCON command timed out after 1000ms');
     });
   });
 

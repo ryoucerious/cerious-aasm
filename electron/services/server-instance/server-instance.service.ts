@@ -3,7 +3,6 @@ import { execSync } from 'child_process';
 import * as instanceUtils from '../../utils/ark/instance.utils';
 import { validateInstanceId } from '../../utils/validation.utils';
 import { automationService } from '../automation/automation.service';
-import { rconService } from '../rcon.service';
 import { getPlatform } from '../../utils/platform.utils';
 import {
   ServerInstanceResult,
@@ -209,28 +208,8 @@ export class ServerInstanceService {
         };
       }
 
-      // Disconnect RCON if connected
-      await rconService.forceDisconnectRcon(instanceId);
-
-      // Kill the ARK server process for this instance
-      const proc = require('./server-process.service').serverProcessService.getServerProcess(instanceId);
-      if (proc && !proc.killed) {
-        // For detached processes on Linux, we need special handling
-        if (getPlatform() === 'linux' && proc.pid) {
-          // Use process group kill for detached processes
-          try {
-            process.kill(-proc.pid, 'SIGKILL');
-          } catch (e) {
-            // Fallback to regular kill if process group kill fails
-            proc.kill('SIGKILL');
-          }
-        } else {
-          proc.kill('SIGKILL');
-        }
-      }
-
-      // Update instance state
-      require('./server-process.service').serverProcessService.setInstanceState(instanceId, 'stopping');
+      // Full force-kill: RCON disconnect, process tree kill, clear tracking, broadcast stopped
+      await require('./server-process.service').serverProcessService.forceKillServerProcess(instanceId);
 
       // Get instance details for notification
       const instance = await instanceUtils.getInstance(instanceId);

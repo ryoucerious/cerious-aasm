@@ -104,24 +104,47 @@ export function disconnectRcon(instanceId: string) {
   }
 }
 
+/** Default max wait for an RCON command response before rejecting. */
+export const DEFAULT_RCON_COMMAND_TIMEOUT_MS = 30000;
+
 /**
  * Send an RCON command to a connected instance.
+ * Rejects on error, disconnect (`end`), or timeout so callers cannot hang forever.
  */
-export function sendRconCommand(instanceId: string, command: string): Promise<string> {
+export function sendRconCommand(
+  instanceId: string,
+  command: string,
+  timeoutMs: number = DEFAULT_RCON_COMMAND_TIMEOUT_MS
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const rcon = rconClients[instanceId];
     if (!rcon) return reject(new Error('RCON not connected'));
-    rcon.send(command);
-    const onResponse = (str: string) => {
-      rcon.removeListener('error', onError);
-      resolve(str);
-    };
-    const onError = (err: any) => {
+
+    let settled = false;
+    const cleanup = () => {
       rcon.removeListener('response', onResponse);
-      reject(err);
+      rcon.removeListener('error', onError);
+      rcon.removeListener('end', onEnd);
+      clearTimeout(timer);
     };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    const onResponse = (str: string) => settle(() => resolve(str));
+    const onError = (err: any) => settle(() => reject(err));
+    const onEnd = () => settle(() => reject(new Error('RCON connection closed before response')));
+    const timer = setTimeout(() => {
+      settle(() => reject(new Error(`RCON command timed out after ${timeoutMs}ms`)));
+    }, timeoutMs);
+
     rcon.once('response', onResponse);
     rcon.once('error', onError);
+    rcon.once('end', onEnd);
+    rcon.send(command);
   });
 }
 

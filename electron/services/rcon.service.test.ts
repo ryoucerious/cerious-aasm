@@ -93,6 +93,13 @@ describe('RconService', () => {
     expect(result.response).toBe('resp');
   });
 
+  it('executeRconCommand forwards timeoutMs to sendRconCommand', async () => {
+    jest.spyOn(rconUtils, 'isRconConnected').mockReturnValue(true);
+    const sendSpy = jest.spyOn(rconUtils, 'sendRconCommand').mockResolvedValue('ok');
+    await service.executeRconCommand('id', 'SaveWorld', 30000);
+    expect(sendSpy).toHaveBeenCalledWith('id', 'SaveWorld', 30000);
+  });
+
   it('executeRconCommand handles error', async () => {
     jest.spyOn(rconUtils, 'isRconConnected').mockReturnValue(true);
     jest.spyOn(rconUtils, 'sendRconCommand').mockRejectedValue(new Error('fail'));

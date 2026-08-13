@@ -28,7 +28,13 @@ jest.mock('./server-instance/server-management.service', () => ({
 }));
 
 jest.mock('./server-instance/server-process.service', () => ({
-  serverProcessService: { getNormalizedInstanceState: jest.fn().mockReturnValue('stopped') }
+  serverProcessService: {
+    getNormalizedInstanceState: jest.fn().mockReturnValue('stopped'),
+    hasActiveProcess: jest.fn().mockReturnValue(false),
+    getServerProcess: jest.fn().mockReturnValue(null),
+    forceKillServerProcess: jest.fn().mockResolvedValue(undefined),
+    setInstanceState: jest.fn(),
+  }
 }));
 
 jest.mock('./server-instance/server-instance.service', () => ({
@@ -183,6 +189,41 @@ describe('ArkUpdateService', () => {
       // Should have synced installedBuildId with latestBuildId since version was unchanged
       expect(service['installedBuildId']).toBe('99999');
       expect(service['lastUpdateAttemptTime']).toBeGreaterThan(0);
+    });
+
+    it('performClusterUpdate force-kills instances still tracked before SteamCMD', async () => {
+      const { serverLifecycleService } = require('./server-instance/server-lifecycle.service');
+      const { serverProcessService } = require('./server-instance/server-process.service');
+      const { serverManagementService } = require('./server-instance/server-management.service');
+      const { serverInstanceService } = require('./server-instance/server-instance.service');
+
+      (globalConfigUtils.loadGlobalConfig as jest.Mock).mockReturnValue({ serverStartDelaySeconds: 0 });
+
+      // Stop "succeeds" but process remains tracked (incomplete cleanup)
+      serverLifecycleService.stopServerInstance.mockResolvedValue({});
+      serverProcessService.getNormalizedInstanceState.mockReturnValue('stopping');
+      serverProcessService.hasActiveProcess
+        .mockReturnValueOnce(true)  // pre-SteamCMD gate sees live process
+        .mockReturnValue(false);
+      serverProcessService.getServerProcess.mockReturnValue({ pid: 1234 });
+      serverManagementService.getAllInstances.mockResolvedValue({ instances: [] });
+      serverInstanceService.getStandardEventCallbacks.mockReturnValue({
+        onLog: jest.fn(),
+        onState: jest.fn(),
+      });
+      serverInstanceService.startServerInstance = jest.fn().mockResolvedValue({});
+
+      await service.performClusterUpdate([{ id: 'stuck-1' }]);
+
+      expect(serverProcessService.forceKillServerProcess).toHaveBeenCalledWith('stuck-1');
+      expect(messagingService.sendToAll).toHaveBeenCalledWith(
+        'cluster-update-status',
+        expect.objectContaining({ status: 'updating' })
+      );
+      expect(messagingService.sendToAll).toHaveBeenCalledWith(
+        'cluster-update-status',
+        expect.objectContaining({ status: 'complete' })
+      );
     });
   });
 });

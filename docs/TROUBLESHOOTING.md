@@ -152,9 +152,19 @@ JavaScript runs.  GTK requires a live display connection (X11 or Wayland).
 On a headless server where no display is available the process crashes
 immediately with a core dump regardless of the `--headless` flag.
 
-**Fix**: Use `xvfb-run` to create a virtual framebuffer that GTK can connect to.
+**Current packages (≥ 1.0.19)**: the installed `cerious-aasm`
+command is a shell launcher that automatically runs `xvfb-run` when `--headless`
+is passed and no display is available. The `.deb`/`.rpm` already depends on
+`xvfb`, so this should just work:
 
-1. **Install xvfb**:
+```bash
+cerious-aasm --no-sandbox --headless --auth-enabled --password=admin123 --port=3000
+```
+
+**Older builds (e.g. 1.0.11)** or if you invoke the raw `cerious-aasm.bin`
+directly: wrap with `xvfb-run` yourself.
+
+1. **Install xvfb** (if not already pulled in by the package):
    ```bash
    # Debian / Ubuntu
    sudo apt install xvfb
@@ -163,30 +173,21 @@ immediately with a core dump regardless of the `--headless` flag.
    sudo dnf install xorg-x11-server-Xvfb
    ```
 
-2. **AppImage / system-installed binary** – use the bundled helper script:
-   ```bash
-   # Copy the helper to a convenient location
-   sudo cp /path/to/cerious-aasm-headless-appimage.sh /usr/local/bin/cerious-aasm-headless
-   sudo chmod +x /usr/local/bin/cerious-aasm-headless
-
-   # Run (the script auto-detects the binary and adds xvfb-run)
-   cerious-aasm-headless --auth-enabled --password=admin123 --port=3000
-   ```
-   Or run directly without the script:
+2. **Manual / older packages**:
    ```bash
    xvfb-run -a cerious-aasm --no-sandbox --headless --auth-enabled --password=admin123 --port=3000
    ```
+   Or use [cerious-aasm-headless-appimage.sh](../scripts/cerious-aasm-headless-appimage.sh).
 
 3. **Source / development builds** – use the existing helper script:
    ```bash
    ./scripts/cerious-aasm-headless.sh --auth-enabled --password=admin123 --port=3000
    ```
-   The script detects that no display is present and invokes `xvfb-run -a` automatically.
 
-4. **systemd service** – add the `xvfb-run` wrapper in the `ExecStart` line:
+4. **systemd** (current packages — launcher handles xvfb):
    ```ini
    [Service]
-   ExecStart=/usr/bin/xvfb-run -a /usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=<password> --port=3000
+   ExecStart=/usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=<password> --port=3000
    ```
 
 ## Server Issues

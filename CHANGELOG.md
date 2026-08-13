@@ -4,6 +4,13 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-08-13
+
+### Bug Fixes
+
+- **Auto ARK Update Stuck on One Server in "Stopping"**: Cluster auto-update could hang after SteamCMD because a single instance's RCON `SaveWorld`/`DoExit` never returned (no command timeout), and the 5-minute stop safety net only sent `SIGKILL` + set in-memory `stopped` without broadcasting UI state, clearing the process table, disconnecting RCON, or using Windows `taskkill /T` / Linux process-group kill. RCON commands now time out; stop-timeout and pre-SteamCMD checks use a full `forceKillServerProcess` cleanup that broadcasts `stopped`; Install/Update stays disabled while any instance is `stopping`.
+- **Headless Linux Crash Before Startup (`GtkStyleContext` / no display)**: On servers with no X11/Wayland display, Electron can abort in native GTK init *before* any JavaScript runs — so the in-process `xvfb-run` re-exec never had a chance (reproduced on Debian 13 with 1.0.11). Packaged Linux builds now install a shell entrypoint (`afterPack` + `linux-electron-wrapper.sh`) that starts `xvfb-run` before the Electron `.bin` when `--headless` is used without a display. Plain `cerious-aasm --headless` works; manual `xvfb-run` remains supported for older builds.
+
 ## [1.0.18] - 2026-08-11
 
 Repairs per-instance isolation. Since instances began launching from their own folder, ARK resolved

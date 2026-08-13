@@ -124,19 +124,31 @@ export class ArkUpdateService {
           console.warn('[ark-update-service] Overall stop timeout reached (5 min). Force-killing remaining servers...');
           for (const inst of preRunningInstances!) {
               const state = serverProcessService.getNormalizedInstanceState(inst.id);
-              if (state !== 'stopped') {
-                  console.warn(`[ark-update-service] Instance ${inst.id} still in state '${state}' — force-killing`);
-                  try {
-                      const proc = serverProcessService.getServerProcess(inst.id);
-                      if (proc && proc.pid) {
-                          proc.kill('SIGKILL');
-                      }
-                  } catch (e) {}
-                  serverProcessService.setInstanceState(inst.id, 'stopped');
+              const stillTracked = serverProcessService.hasActiveProcess(inst.id);
+              if (state !== 'stopped' || stillTracked) {
+                  console.warn(`[ark-update-service] Instance ${inst.id} still in state '${state}' (tracked=${stillTracked}) — force-killing`);
+                  await serverProcessService.forceKillServerProcess(inst.id);
               }
           }
-          // Brief pause after force kills
+          // Brief pause after force kills so OS releases ports/file locks
           await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      // Final gate: ensure no tracked processes remain before SteamCMD (file locks / port conflicts)
+      let neededExtraKill = false;
+      for (const inst of preRunningInstances!) {
+          if (serverProcessService.hasActiveProcess(inst.id) || serverProcessService.getServerProcess(inst.id)) {
+              console.warn(`[ark-update-service] Instance ${inst.id} still has a tracked process before SteamCMD — force-killing`);
+              await serverProcessService.forceKillServerProcess(inst.id);
+              neededExtraKill = true;
+          } else if (serverProcessService.getNormalizedInstanceState(inst.id) !== 'stopped') {
+              // Backend/UI may still show stopping even with no ChildProcess — clear it
+              await serverProcessService.forceKillServerProcess(inst.id);
+              neededExtraKill = true;
+          }
+      }
+      if (neededExtraKill) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
       this.messagingService.sendToAll('cluster-update-status', { status: 'updating', message: 'Updating ARK server files (via SteamCMD)...' });
