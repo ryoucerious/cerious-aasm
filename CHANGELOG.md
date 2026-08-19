@@ -4,6 +4,30 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-08-19
+
+Adds a light theme, and repairs a restore path that could delete the shared ARK
+installation. The test suite is green again and now gates releases.
+
+### Bug Fixes
+
+- **Restoring a Backup Deleted the Shared ARK Installation (Servers Then Refused to Start with "Could not detect log file")**: Since binaries were isolated per instance, a server folder is mostly junctions into the shared install — `ShooterGame/Content` (~70 GB), `Engine`, `Win64/RedpointEOS`, `ShooterGame/Plugins`. The restore path cleared the instance folder using `stat()`, which follows a junction and reports it as an ordinary directory, so the recursive delete walked *through* the junctions and unlinked the real game files. One restore stripped the shared installation, after which **every** server on the machine failed to launch. Because ARK aborts before creating `ShooterGame.log`, the only symptom users saw was `Could not detect log file for this server instance`. Clearing an instance now uses `lstat()` and removes junctions without following them, and the recursive delete uses `fs.rm`, which never traverses a link. The same unsafe delete in the backup-import cleanup path has been fixed. Affected installations need the ARK server reinstalled/verified once; no save data was touched.
+- **Servers Started Even When Their Game Files Were Missing**: Start-up only checked that `ArkAscendedServer.exe` existed. That file is a real per-instance copy, so it survives even when every game folder around it is gone — AASM launched a server that could not possibly run and reported nothing useful. The launch tree is now verified after the instance structure is prepared, and a start is refused with a message naming the missing folders and pointing at Install/Verify, distinguishing a broken shared installation from a broken instance.
+- **No Crash Diagnostics on Windows**: `stderr` was captured to a per-instance `stderr.log` on Linux only; on Windows it was discarded, so a server that died during startup reported "No stderr output captured." stderr is now captured on every platform, and the inherited file descriptor is released after spawn instead of leaking once per start.
+- **Scheduled Backups Failed Silently**: When an automatic backup failed, the error went to the console only — from the UI an enabled schedule and a schedule failing every single run were indistinguishable, which users reported as automatic backups not running. Failures now raise a toast and a line in the server's log view.
+- **One Bad Instance Disabled Every Later Instance's Backup Schedule**: Schedule restore on startup ran all instances inside a single `try`/`catch`, so one unreadable or malformed `backup-settings.json` aborted the loop and left every instance after it unscheduled. Each instance is now restored independently, and a missing or malformed backup time falls back to 02:00 instead of throwing.
+- **Backups Archived ARK Log Files**: Isolation moved each server's `ShooterGame/Saved/Logs` inside the instance folder, so backups began sweeping it up. ARK logs grow to several GB and every file is read fully into memory while building the archive, bloating backups and risking failure of the whole run. The instance log directory is now excluded; saves, config and plugins are unaffected.
+- **Server Join Password Was URL-Encoded**: The 1.0.15 fix that stopped URL-encoding passwords was only applied to `ServerAdminPassword`; `ServerPassword` was still encoded. ARK does not URL-decode command-line values, so a join password containing a space or a character like `!` reached the server percent-encoded and no player typing the real password could connect. The raw value is now passed, matching the admin password and the RCON client.
+
+### New Features & Improvements
+
+- **Light Theme**: The app can now run light or dark, selected under Settings → General → Appearance. The choice follows your operating system by default and is stored per device, so the desktop app and each browser you open the web UI in can differ — a display preference belongs to the screen you are looking at, not to the server. The theme is applied before the first paint, so there is no flash of the wrong colours on launch.
+- **Colours Are Now Themeable Tokens**: Every colour in the app resolved from a hard-coded hex value scattered across a 3,700-line stylesheet and 49 inline template styles, which is why theming was not possible before. All 254 of them now resolve through CSS custom properties defined in one place (`src/styles/_theme.scss`). The dark theme is unchanged — every distinct original colour kept its own token holding its exact original value, and a compiled diff of the dark output against the previous stylesheet is part of how that is verified. The light palette is derived from the dark one so the two share an ordering and hierarchy, and every text/surface pair is checked at WCAG AA. Because a light UI cannot separate panels using the very subtle background steps the dark theme relies on, cards get an explicit outline in light mode only.
+
+### Testing & CI
+
+- **Test Suite Is Now Green and Gates Releases**: 64 tests across 7 Electron suites had been failing, so the suite gave no usable signal, and CI never ran tests at all — it only packaged and published. All 97 suites (1,512 tests) now pass, and a new `Tests` workflow runs the Electron suite on Windows and Linux plus the Angular suite, on every push to `main`, every pull request, and as a required gate before a tagged release is packaged. Several red suites were hiding real defects (the server-password encoding above) or asserting behaviour that had since changed deliberately; those assertions were brought in line with the current design and documented so the intent is not lost again.
+
 ## [1.0.19] - 2026-08-13
 
 ### Bug Fixes

@@ -1,0 +1,285 @@
+/* --- THEME TOKENS ---
+ *
+ * Runtime theming lives here. Every colour in the app resolves to one of these CSS
+ * custom properties, so switching themes is an attribute flip on <html> rather than a
+ * rebuild — SCSS variables are compile-time and cannot do that on their own.
+ *
+ * The dark values ARE the app's original palette, value for value. Theming was meant to
+ * add a light option, not restyle the dark one, so every distinct original colour kept
+ * its own token even where two shades are nearly indistinguishable — hence the numbered
+ * extras. A compiled diff of the dark output against the pre-theming stylesheet is the
+ * check that this still holds.
+ *
+ * The light values are hand-picked and contrast-checked (>= 4.5:1 body text, >= 3:1 for
+ * accents and UI). A numbered extra shares its family's light value: the light theme is
+ * deliberately flatter, because those near-identical dark greys carry no meaning of
+ * their own to preserve.
+ *
+ * Names describe ROLE, not literal colour: `--surface` is "the colour panels sit on",
+ * which is dark in one theme and white in the other. Never hard-code a hex outside this
+ * file, and never pass these to a SCSS colour function — they are var() references.
+ */
+
+// ── Dark (default) ────────────────────────────────────────────────────────────────
+@mixin theme-dark {
+  // Text, loudest to quietest
+  --text-strong: #ffffff;
+  --text-emphasis: #e5e7eb;
+  --text-primary: #b0b6c1;
+  --text-secondary: #888c94;
+  --text-muted: #9ca3af;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --text-emphasis-1: #e0e0e0;
+  --text-emphasis-2: #e2e8f0;
+  --text-emphasis-3: #e6e8eb;
+  --text-emphasis-4: #e8eaed;
+  --text-muted-1: #9aa0a6;
+  --text-muted-2: #aaa;
+  --text-primary-1: #a7b3c1;
+  --text-primary-2: #a8b4d1;
+  --text-primary-3: #c6c6c6;
+  --text-secondary-1: #555d6e;
+  --text-secondary-2: #7c8898;
+  --text-secondary-3: #7d8590;
+  --text-secondary-4: #8a96a8;
+  --text-secondary-5: #8b9dc3;
+
+  // Surfaces, furthest back to closest
+  --surface-base: #1e2228;
+  --surface: #23272f;
+  --surface-raised: #31343c;
+  --surface-overlay: rgba(255, 255, 255, 0.02);
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --surface-1: #23242a;
+  --surface-2: #252a36;
+  --surface-3: #2a2a2e;
+  --surface-base-1: #181a1b;
+  --surface-base-2: #1a1d23;
+  --surface-base-3: #1a1e23;
+  --surface-base-4: #1e1e1e;
+  --surface-base-5: #1e1e22;
+  --surface-raised-1: #2a2f38;
+  --surface-raised-10: #5a5d61;
+  --surface-raised-2: #2d323c;
+  --surface-raised-3: #2d3240;
+  --surface-raised-4: #2d3846;
+  --surface-raised-5: #30363c;
+  --surface-raised-6: #353c42;
+  --surface-raised-7: #3a3e47;
+  --surface-raised-8: #3a3f4b;
+  --surface-raised-9: #3a4060;
+
+  // Borders, most to least prominent
+  --border-strong: #5e6870;
+  --border: #444444;
+  --border-subtle: #44474d;
+  --border-muted: #333333;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --border-1: #404550;
+  --border-2: #454950;
+  --border-muted-1: #1e2027;
+  --border-strong-1: #495467;
+
+  // Brand and status
+  --primary: #0ea5e9;
+  --primary-hover: #0284c7;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --warning: #facc15;
+  --info: #15a1bb;
+  --secondary: #6b7280;
+  --focus: #8ab4f8;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --danger-1: #dc2626;
+  --danger-2: #e53935;
+  --danger-3: #ea4335;
+  --danger-4: #f87171;
+  --danger-5: #fca5a5;
+  --danger-6: #ff2222;
+  --danger-7: #ff6b6b;
+  --primary-1: #3b82f6;
+  --primary-2: #4285f4;
+  --primary-3: #4a90e2;
+  --primary-4: #93c5fd;
+  --primary-5: #bfdbfe;
+  --success-1: #10b981;
+  --success-2: #16a34a;
+  --success-3: #28a745;
+  --success-4: #34a853;
+  --warning-1: #f59e0b;
+  --warning-2: #fbbc04;
+  --warning-3: #fbbf24;
+  --warning-4: #fcd34d;
+  // Text that sits ON a saturated fill (status pills, badges). Not --text-strong, which
+  // follows the theme and would put near-black on a red pill in the light theme.
+  --text-on-accent: #ffffff;
+  // Warning is the exception: its fill is bright yellow here and dark amber in the light
+  // theme, so the readable text colour inverts where the others do not.
+  --text-on-warning: #23272f;
+
+  // Neutral track behind a switch knob — a UI surface, not text
+  --control-track: #b0b6c1;
+  // Panels are separated by background steps alone in this theme, so they need no
+  // outline. Kept transparent rather than absent so the light theme can fill it in.
+  --card-outline: transparent;
+
+  // Depth
+  --shadow-color: #000a;
+  --shadow-color-soft: #0003;
+  --shadow-color-strong: rgba(0, 0, 0, 0.8);
+
+  @include theme-constants;
+
+  color-scheme: dark;
+}
+
+// ── Light ─────────────────────────────────────────────────────────────────────────
+@mixin theme-light {
+  // Surfaces, borders and text below are DERIVED from their dark counterparts rather
+  // than picked by eye: each family's dark lightness ramp is re-mapped onto a light one
+  // that preserves the same ordering and relative spacing. That is what keeps the light
+  // theme structurally recognisable — a recessed console well still reads as recessed,
+  // and a strong border is still stronger than a subtle one. Every text/surface pair is
+  // checked at AA (>= 4.5:1); accents stay hand-tuned because they must also carry white
+  // text when used as a fill.
+  // Text, loudest to quietest
+  --text-strong: #1f1f1f;
+  --text-emphasis: #27282a;
+  --text-primary: #373a40;
+  --text-secondary: #494b50;
+  --text-muted: #3e4248;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --text-emphasis-1: #2a2a2a;
+  --text-emphasis-2: #25282b;
+  --text-emphasis-3: #272829;
+  --text-emphasis-4: #262728;
+  --text-muted-1: #404447;
+  --text-muted-2: #3f3f3f;
+  --text-primary-1: #363c43;
+  --text-primary-2: #353b49;
+  --text-primary-3: #343434;
+  --text-secondary-1: #5c616b;
+  --text-secondary-2: #484e57;
+  --text-secondary-3: #4b4f55;
+  --text-secondary-4: #424851;
+  --text-secondary-5: #3b4458;
+
+  // Surfaces, furthest back to closest
+  --surface-base: #f8fafd;
+  --surface: #f5f6fa;
+  --surface-raised: #edeef2;
+  --surface-overlay: rgba(0, 0, 0, 0.02);
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --surface-1: #f7f8fb;
+  --surface-2: #f2f4fa;
+  --surface-3: #f4f4f6;
+  --surface-base-1: #feffff;
+  --surface-base-2: #fcfdff;
+  --surface-base-3: #fbfdff;
+  --surface-base-4: #fcfcfc;
+  --surface-base-5: #fcfcfe;
+  --surface-raised-1: #f0f2f6;
+  --surface-raised-10: #dcddde;
+  --surface-raised-2: #eef0f4;
+  --surface-raised-3: #edeff6;
+  --surface-raised-4: #e9edf3;
+  --surface-raised-5: #ebeef0;
+  --surface-raised-6: #e7eaed;
+  --surface-raised-7: #e7e8ec;
+  --surface-raised-8: #e6e8ed;
+  --surface-raised-9: #e4e5f3;
+
+  // Borders, most to least prominent
+  --border-strong: #979ca0;
+  --border: #b2b2b2;
+  --border-subtle: #aeb0b3;
+  --border-muted: #bebebe;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --border-1: #afb1b7;
+  --border-2: #adafb2;
+  --border-muted-1: #cbccd0;
+  --border-strong-1: #a3a8b1;
+
+  // Brand and status
+  --primary: #0284c7;
+  --primary-hover: #0369a1;
+  --success: #15803d;
+  --danger: #dc2626;
+  --warning: #b45309;
+  --info: #0e7490;
+  --secondary: #6b7280;
+  --focus: #2563eb;
+  // Additional shades in these families. The dark theme used many
+  // near-identical greys; each keeps its own token so dark is unchanged.
+  --danger-1: #dc2626;
+  --danger-2: #dc2626;
+  --danger-3: #dc2626;
+  --danger-4: #dc2626;
+  --danger-5: #dc2626;
+  --danger-6: #dc2626;
+  --danger-7: #dc2626;
+  --primary-1: #0284c7;
+  --primary-2: #0284c7;
+  --primary-3: #0284c7;
+  --primary-4: #0284c7;
+  --primary-5: #0284c7;
+  --success-1: #15803d;
+  --success-2: #15803d;
+  --success-3: #15803d;
+  --success-4: #15803d;
+  --warning-1: #b45309;
+  --warning-2: #b45309;
+  --warning-3: #b45309;
+  --warning-4: #b45309;
+  // Every light-theme fill is darkened, so white reads on all of them — warning included.
+  --text-on-accent: #ffffff;
+  --text-on-warning: #ffffff;
+
+  --control-track: #b6bfc9;
+  // Near white there is not enough room to separate panels by background step alone —
+  // reproducing the dark theme's steps literally turns the whole UI grey. Light UIs
+  // outline their cards instead, so that is what this does.
+  --card-outline: #d5dbe1;
+
+  --shadow-color: rgba(15, 23, 42, 0.16);
+  --shadow-color-soft: rgba(15, 23, 42, 0.08);
+  --shadow-color-strong: rgba(15, 23, 42, 0.24);
+
+  @include theme-constants;
+
+  color-scheme: light;
+}
+
+// Colours that intentionally do NOT change with the theme.
+@mixin theme-constants {
+  // The firewall command block is a console. Terminals stay dark in a light UI the same
+  // way code editors do, so this pair is fixed rather than following --surface.
+  --terminal-bg: #000000;
+  --terminal-text: #00ff00;
+  // A switch knob rides on a coloured track and stays white in both themes, matching
+  // how OS-level switches behave.
+  --control-knob: #ffffff;
+}
+
+:root {
+  @include theme-dark;
+}
+
+// Pre-script fallback only. `:not([data-theme])` keeps it from fighting an explicit
+// choice: once ThemeService (or the inline bootstrap in index.html) stamps the
+// attribute, this block stops matching entirely.
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    @include theme-light;
+  }
+}
+
+:root[data-theme='dark'] { @include theme-dark; }
+:root[data-theme='light'] { @include theme-light; }

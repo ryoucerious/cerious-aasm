@@ -19,7 +19,10 @@ jest.mock('./ark-server-install.utils', () => ({
 }));
 jest.mock('./ark-server-paths.utils', () => ({
   getArkExecutablePath: jest.fn(),
-  prepareArkServerCommand: jest.fn()
+  prepareArkServerCommand: jest.fn(),
+  // Added when AsaApiLoader support landed; spawnServerProcess resolves the executable
+  // through this rather than getArkExecutablePath.
+  resolveServerLaunch: jest.fn()
 }));
 jest.mock('./ark-server-state.utils', () => ({
   setInstanceState: jest.fn(),
@@ -44,9 +47,25 @@ describe('ark-server-process.utils', () => {
 
   describe('spawnServerProcess', () => {
     it('throws if executable does not exist', () => {
-      arkServerPaths.getArkExecutablePath.mockReturnValue('/ark.exe');
-  jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      arkServerPaths.resolveServerLaunch.mockReturnValue({
+        executable: '/ark.exe',
+        cwd: '/ark',
+        usesAsaApiLoader: false
+      });
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
       expect(() => processUtils.spawnServerProcess('id', '/instance', {})).toThrow('Ark server not installed');
+    });
+
+    // A missing loader must not be reported as "Ark server not installed" — the install is
+    // fine, the AsaApi loader is what is absent.
+    it('names the AsaApi loader when that is the missing executable', () => {
+      arkServerPaths.resolveServerLaunch.mockReturnValue({
+        executable: '/instance/ShooterGame/Binaries/Win64/AsaApiLoader.exe',
+        cwd: '/instance/ShooterGame/Binaries/Win64',
+        usesAsaApiLoader: true
+      });
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      expect(() => processUtils.spawnServerProcess('id', '/instance', {})).toThrow('AsaApiLoader.exe not found');
     });
   });
 

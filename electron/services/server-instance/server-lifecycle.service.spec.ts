@@ -12,6 +12,7 @@ jest.mock('../rcon.service');
 jest.mock('./server-management.service');
 jest.mock('./server-process.service');
 jest.mock('../../utils/ark/instance.utils');
+jest.mock('../../utils/ark/ark-server/ark-server-paths.utils');
 
 describe('ServerLifecycleService', () => {
   let validateInstanceIdMock: any;
@@ -24,6 +25,7 @@ describe('ServerLifecycleService', () => {
   let serverManagementServiceMock: any;
   let serverProcessServiceMock: any;
   let instanceUtilsMock: any;
+  let arkServerPathsMock: any;
   let fsMock: any;
   let execSyncMock: any;
 
@@ -70,6 +72,17 @@ describe('ServerLifecycleService', () => {
       getInstance: jest.fn()
     };
     jest.mocked(require('../../utils/ark/instance.utils')).getInstance = instanceUtilsMock.getInstance;
+
+    // Default to a healthy launch tree; tests that care override this
+    arkServerPathsMock = {
+      validateInstanceRuntimeTree: jest.fn().mockReturnValue({
+        valid: true,
+        missing: [],
+        sharedInstallBroken: false
+      })
+    };
+    jest.mocked(require('../../utils/ark/ark-server/ark-server-paths.utils')).validateInstanceRuntimeTree =
+      arkServerPathsMock.validateInstanceRuntimeTree;
 
     fsMock = {
       existsSync: jest.fn()

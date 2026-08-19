@@ -223,20 +223,10 @@ export class BackupImportService {
         return;
       }
 
-      const items = await readdir(dirPath);
-
-      for (const item of items) {
-        const itemPath = path.join(dirPath, item);
-        const stats = await stat(itemPath);
-
-        if (stats.isDirectory()) {
-          await this.removeDirectory(itemPath);
-        } else {
-          await fs.promises.unlink(itemPath);
-        }
-      }
-
-      fs.rmdirSync(dirPath);
+      // fs.rm unlinks symlinks/junctions rather than recursing through them. Cleaning up
+      // a failed import removes the half-built instance directory, which may already hold
+      // junctions into the shared install — walking those would delete the game itself.
+      await fs.promises.rm(dirPath, { recursive: true, force: true });
     } catch (error) {
       console.error('[backup-import] Failed to remove directory:', error);
       throw error;

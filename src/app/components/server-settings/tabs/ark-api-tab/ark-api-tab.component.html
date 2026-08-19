@@ -11,12 +11,12 @@
         After install, AASM launches <code>AsaApiLoader.exe</code> instead of <code>ArkAscendedServer.exe</code>
         so the API and plugins actually load.
       </p>
-      <div *ngIf="asaApiInstalled !== null" style="margin-top:0.75rem;padding:0.65rem 0.85rem;border-radius:6px;background:rgba(148,163,184,0.08);">
-        <span *ngIf="asaApiInstalled" style="color:#4ade80;font-size:0.9rem;">
+      <div *ngIf="asaApiInstalled !== null" style="margin-top:0.75rem;padding:0.65rem 0.85rem;border-radius:6px;background:var(--surface-overlay);">
+        <span *ngIf="asaApiInstalled" style="color:var(--success);font-size:0.9rem;">
           AsaApiLoader detected — this server will start via <strong>AsaApiLoader.exe</strong>.
           Logs appear under <code>Win64/logs/ArkApi.log</code> after the next start.
         </span>
-        <span *ngIf="!asaApiInstalled" style="color:#fbbf24;font-size:0.9rem;">
+        <span *ngIf="!asaApiInstalled" style="color:var(--warning);font-size:0.9rem;">
           AsaApiLoader not found — install AsaApi below, then restart the server.
         </span>
       </div>
@@ -29,7 +29,7 @@
           <i class="material-icons">download</i>
           {{ installing ? 'Installing...' : 'Install / Update AsaApi' }}
         </button>
-        <span *ngIf="latestVersion" style="color:#94a3b8;font-size:0.85rem;">
+        <span *ngIf="latestVersion" style="color:var(--text-secondary);font-size:0.85rem;">
           Latest: <strong>{{ latestVersion }}</strong>
         </span>
       </div>
@@ -60,9 +60,9 @@
 
       <!-- Divider -->
       <div style="display:flex;align-items:center;gap:0.75rem;">
-        <div style="flex:1;height:1px;background:#2d3748;"></div>
-        <span style="color:#64748b;font-size:0.8rem;">OR</span>
-        <div style="flex:1;height:1px;background:#2d3748;"></div>
+        <div style="flex:1;height:1px;background:var(--border);"></div>
+        <span style="color:var(--text-secondary);font-size:0.8rem;">OR</span>
+        <div style="flex:1;height:1px;background:var(--border);"></div>
       </div>
 
       <!-- From ZIP file -->
@@ -92,38 +92,38 @@
     </div>
     <div class="card-body">
 
-      <div *ngIf="loading" style="color:#b0b6c1;text-align:center;padding:2rem;">
+      <div *ngIf="loading" style="color:var(--text-primary);text-align:center;padding:2rem;">
         <i class="material-icons" style="font-size:32px;">hourglass_empty</i><br>Loading...
       </div>
 
-      <div *ngIf="!loading && plugins.length === 0" style="color:#6b7280;padding:1rem;">
+      <div *ngIf="!loading && plugins.length === 0" style="color:var(--secondary);padding:1rem;">
         No plugins found in the ArkApi/Plugins directory. Install AsaApi first, then place plugin folders inside <code>Win64/ArkApi/Plugins/</code>.
       </div>
 
       <div *ngIf="!loading && plugins.length > 0" class="plugin-list">
         <div *ngFor="let plugin of plugins" class="plugin-item" style="
           display:flex;align-items:flex-start;justify-content:space-between;
-          padding:0.75rem 0; border-bottom:1px solid #2d3748;">
+          padding:0.75rem 0; border-bottom:1px solid var(--border);">
           <div style="flex:1;">
             <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-weight:600;color:#e2e8f0;">{{ plugin.name }}</span>
-              <span *ngIf="plugin.version !== 'Unknown'" style="font-size:0.78rem;color:#64748b;
-                background:#1e293b;padding:1px 8px;border-radius:999px;">
+              <span style="font-weight:600;color:var(--text-emphasis);">{{ plugin.name }}</span>
+              <span *ngIf="plugin.version !== 'Unknown'" style="font-size:0.78rem;color:var(--text-secondary);
+                background:var(--surface-raised);padding:1px 8px;border-radius:999px;">
                 v{{ plugin.version }}
               </span>
             </div>
-            <div *ngIf="plugin.author !== 'Unknown'" style="font-size:0.82rem;color:#94a3b8;margin-top:2px;">
+            <div *ngIf="plugin.author !== 'Unknown'" style="font-size:0.82rem;color:var(--text-secondary);margin-top:2px;">
               by {{ plugin.author }}
             </div>
-            <div *ngIf="plugin.description" style="font-size:0.82rem;color:#94a3b8;margin-top:2px;">
+            <div *ngIf="plugin.description" style="font-size:0.82rem;color:var(--text-secondary);margin-top:2px;">
               {{ plugin.description }}
             </div>
-            <div *ngIf="!plugin.hasPluginJson" style="font-size:0.78rem;color:#f59e0b;margin-top:2px;">
+            <div *ngIf="!plugin.hasPluginJson" style="font-size:0.78rem;color:var(--warning);margin-top:2px;">
               <i class="material-icons" style="font-size:13px;vertical-align:middle;">warning</i>
               No plugin.json — metadata unavailable
             </div>
           </div>
-          <button class="btn btn-sm btn-ghost" style="color:#ef4444;"
+          <button class="btn btn-sm btn-ghost" style="color:var(--danger);"
                   (click)="confirmRemove(plugin)" title="Remove Plugin">
             <i class="material-icons">delete</i>
           </button>
@@ -139,10 +139,10 @@
 <app-modal [show]="showConfirmRemove" [title]="'Remove Plugin'" (close)="cancelRemove()">
   <div>
     <p>Are you sure you want to remove <strong>{{ pluginToRemove?.name }}</strong>?</p>
-    <p style="color:#94a3b8;font-size:0.85rem;">This will permanently delete the folder: <code>{{ pluginToRemove?.folderName }}</code></p>
+    <p style="color:var(--text-secondary);font-size:0.85rem;">This will permanently delete the folder: <code>{{ pluginToRemove?.folderName }}</code></p>
     <div class="action-group-modal" style="margin-top:1rem;">
       <button class="btn" (click)="cancelRemove()">Cancel</button>
-      <button class="btn" style="background:#ef4444;" (click)="doRemove()">Remove</button>
+      <button class="btn" style="background:var(--danger);" (click)="doRemove()">Remove</button>
     </div>
   </div>
 </app-modal>

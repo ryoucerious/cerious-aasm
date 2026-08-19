@@ -9,7 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  # Gate: the packaging jobs below only run if the full test suite passes, so a tagged
+  # release can never be built from a red suite.
+  test:
+    uses: ./.github/workflows/test.yml
+
   build-windows:
+    needs: test
     # Pinned (not windows-latest): GitHub's rolling windows-latest image moved to a newer
     # Visual Studio that node-gyp@9.x (used by @electron/rebuild for bcrypt/node-pty) fails
     # to detect ("Could not find any Visual Studio installation"). windows-2022 matches the
@@ -58,6 +64,7 @@ jobs:
             dist-electron/latest.yml
 
   build-linux:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

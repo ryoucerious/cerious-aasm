@@ -74,6 +74,15 @@ export class BackupOperationsService {
   }
 
   /**
+   * True for an instance's ARK log directory (<instance>/ShooterGame/Saved/Logs).
+   * Matched on the path tail so it only ever excludes ARK's own log folder, not a
+   * user folder that happens to be called "Logs".
+   */
+  private isInstanceLogsDir(dirPath: string): boolean {
+    return /[/\\]ShooterGame[/\\]Saved[/\\]Logs$/i.test(dirPath);
+  }
+
+  /**
    * Recursively add files to zip, excluding backup directories and junctions/symlinks.
    * Uses lstat() (not stat()) so junction points to the shared Content (~70 GB) and
    * Engine (~3 GB) directories are detected as symlinks and skipped rather than
@@ -108,6 +117,15 @@ export class BackupOperationsService {
         }
 
         if (lstats.isDirectory()) {
+          // Never archive the instance's ARK log directory. Since binaries were isolated
+          // per instance, ShooterGame/Saved/Logs lives inside the instance folder rather
+          // than the shared install, so the backup walk reaches it. ARK log files grow to
+          // several GB and every file here is read fully into memory by AdmZip, which
+          // bloats the archive and can fail the whole backup. Logs are disposable runtime
+          // output — a restore has no use for them.
+          if (this.isInstanceLogsDir(itemPath)) {
+            continue;
+          }
           // Recursively add real directory contents
           await this.addToZip(zip, itemPath, itemRelativePath, instanceId);
         } else if (lstats.isFile()) {
@@ -383,9 +401,16 @@ export class BackupOperationsService {
         }
 
         const itemPath = path.join(serverPath, item);
-        const stats = await stat(itemPath);
+        // lstat, never stat: an instance directory is mostly junctions into the shared
+        // install (ShooterGame/Content, Engine, Win64/RedpointEOS, ShooterGame/Plugins).
+        // stat() follows a junction and reports a directory, which would send the removal
+        // walking into the shared game files and deleting them for every instance on the
+        // machine. lstat describes the link itself so it is unlinked, not traversed.
+        const stats = await fs.promises.lstat(itemPath);
 
-        if (stats.isDirectory()) {
+        if (stats.isSymbolicLink()) {
+          await this.removeLink(itemPath);
+        } else if (stats.isDirectory()) {
           await this.removeDirectory(itemPath);
         } else {
           await unlink(itemPath);
@@ -394,6 +419,20 @@ export class BackupOperationsService {
     } catch (error) {
       console.error('[backup-operations] Failed to clear server directory:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Remove a symlink/junction without touching whatever it points at.
+   *
+   * Windows represents a directory junction as a reparse point that unlink() refuses;
+   * rmdir() removes the link itself and leaves the target intact.
+   */
+  private async removeLink(linkPath: string): Promise<void> {
+    try {
+      await fs.promises.unlink(linkPath);
+    } catch {
+      await fs.promises.rmdir(linkPath);
     }
   }
 
@@ -432,20 +471,10 @@ export class BackupOperationsService {
         return;
       }
 
-      const items = await readdir(dirPath);
-
-      for (const item of items) {
-        const itemPath = path.join(dirPath, item);
-        const stats = await stat(itemPath);
-
-        if (stats.isDirectory()) {
-          await this.removeDirectory(itemPath);
-        } else {
-          await unlink(itemPath);
-        }
-      }
-
-      fs.rmdirSync(dirPath);
+      // fs.rm unlinks symlinks/junctions instead of recursing through them, so a
+      // junction into the shared install (Content, Engine, RedpointEOS, Plugins) is
+      // removed without deleting the game files it points at.
+      await fs.promises.rm(dirPath, { recursive: true, force: true });
     } catch (error) {
       console.error('[backup-operations] Failed to remove directory:', error);
       throw error;

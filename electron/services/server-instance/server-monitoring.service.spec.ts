@@ -8,7 +8,7 @@ jest.mock('../../utils/ark/ark-server/ark-server-logging.utils');
 jest.mock('../../utils/ark/instance.utils');
 jest.mock('../../utils/ark/ark-server/ark-server-state.utils');
 jest.mock('path');
-jest.mock('./server-lifecycle.service');
+jest.mock('./server-process.service');
 
 describe('ServerMonitoringService', () => {
   let getProcessMemoryUsageMock: any;
@@ -17,7 +17,7 @@ describe('ServerMonitoringService', () => {
   let getInstanceMock: any;
   let getInstanceStateMock: any;
   let pathMock: any;
-  let serverLifecycleServiceMock: any;
+  let serverProcessServiceMock: any;
   let storedIntervalCallbacks: { [key: string]: Function } = {};
 
   // Helper to execute stored interval callbacks
@@ -74,10 +74,10 @@ describe('ServerMonitoringService', () => {
     };
     jest.mocked(require('path')).join = pathMock.join;
 
-    serverLifecycleServiceMock = {
+    serverProcessServiceMock = {
       getServerProcess: jest.fn()
     };
-    jest.mocked(require('./server-lifecycle.service')).serverLifecycleService = serverLifecycleServiceMock;
+    jest.mocked(require('./server-process.service')).serverProcessService = serverProcessServiceMock;
   });
 
   afterEach(() => {
@@ -294,7 +294,7 @@ describe('ServerMonitoringService', () => {
     it('should start memory polling', async () => {
       const callback = jest.fn();
       const mockProcess = { pid: 123 };
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue(mockProcess);
+      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
       getProcessMemoryUsageMock.mockReturnValue(512);
 
       serverMonitoringService.startMemoryPolling('instance1', callback);
@@ -302,13 +302,13 @@ describe('ServerMonitoringService', () => {
       await executePollingCallbacks();
 
       expect(callback).toHaveBeenCalledWith('instance1', 512);
-      expect(serverLifecycleServiceMock.getServerProcess).toHaveBeenCalledWith('instance1');
+      expect(serverProcessServiceMock.getServerProcess).toHaveBeenCalledWith('instance1');
       expect(getProcessMemoryUsageMock).toHaveBeenCalledWith(123);
     });
 
     it('should handle no process found', async () => {
       const callback = jest.fn();
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue(null);
+      serverProcessServiceMock.getServerProcess.mockReturnValue(null);
 
       serverMonitoringService.startMemoryPolling('instance1', callback);
 
@@ -319,7 +319,7 @@ describe('ServerMonitoringService', () => {
 
     it('should handle process without pid', async () => {
       const callback = jest.fn();
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue({});
+      serverProcessServiceMock.getServerProcess.mockReturnValue({});
 
       serverMonitoringService.startMemoryPolling('instance1', callback);
 
@@ -331,7 +331,7 @@ describe('ServerMonitoringService', () => {
     it('should handle memory usage null', async () => {
       const callback = jest.fn();
       const mockProcess = { pid: 123 };
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue(mockProcess);
+      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
       getProcessMemoryUsageMock.mockReturnValue(null);
 
       serverMonitoringService.startMemoryPolling('instance1', callback);
@@ -343,7 +343,7 @@ describe('ServerMonitoringService', () => {
 
     it('should handle polling errors silently', async () => {
       const callback = jest.fn();
-      serverLifecycleServiceMock.getServerProcess.mockImplementation(() => { throw new Error('Process error'); });
+      serverProcessServiceMock.getServerProcess.mockImplementation(() => { throw new Error('Process error'); });
 
       serverMonitoringService.startMemoryPolling('instance1', callback);
 
@@ -361,7 +361,7 @@ describe('ServerMonitoringService', () => {
       serverMonitoringService.startMemoryPolling('instance1', callback2);
 
       const mockProcess = { pid: 456 };
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue(mockProcess);
+      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
       getProcessMemoryUsageMock.mockReturnValue(256);
 
       await executePollingCallbacks();
@@ -379,7 +379,7 @@ describe('ServerMonitoringService', () => {
       serverMonitoringService.stopMemoryPolling('instance1');
 
       const mockProcess = { pid: 123 };
-      serverLifecycleServiceMock.getServerProcess.mockReturnValue(mockProcess);
+      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
       getProcessMemoryUsageMock.mockReturnValue(512);
 
       jest.advanceTimersByTime(60000);

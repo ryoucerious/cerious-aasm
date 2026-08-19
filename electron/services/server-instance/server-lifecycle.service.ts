@@ -33,6 +33,15 @@ export class ServerLifecycleService {
       const managementService = require('./server-management.service').serverManagementService;
       await managementService.prepareInstanceConfiguration(instanceId, instance);
 
+      // Preparation reports its own failures to the console and deliberately continues, so
+      // confirm the tree ARK will launch from is actually usable before spawning. Without
+      // this a missing Content/EOS/Engine folder only surfaced as ARK exiting before it
+      // wrote a log, which reached the user as "Could not detect log file".
+      const treeCheck = this.validateRuntimeTree(instanceId);
+      if (!treeCheck.success) {
+        return treeCheck;
+      }
+
       // Start the server process
       const processService = require('./server-process.service').serverProcessService;
       const processResult = await processService.startServerProcess(instanceId, instance);
@@ -58,6 +67,36 @@ export class ServerLifecycleService {
         instanceId
       };
     }
+  }
+
+  /**
+   * Verify the instance's launch tree has the game folders ARK needs, turning what was a
+   * silent early exit into an actionable message.
+   */
+  private validateRuntimeTree(instanceId: string): ServerInstanceResult {
+    let result;
+    try {
+      const { validateInstanceRuntimeTree } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+      result = validateInstanceRuntimeTree(instanceId);
+    } catch (error) {
+      // Never block a start because the check itself failed
+      console.warn(`[server-lifecycle-service] Runtime tree check failed for ${instanceId}:`, error);
+      return { success: true, instanceId };
+    }
+
+    if (result.valid) {
+      return { success: true, instanceId };
+    }
+
+    const missing = result.missing.join(', ');
+    const error = result.sharedInstallBroken
+      ? `The ARK installation is incomplete — missing or empty: ${missing}. ` +
+        `Reinstall/verify the ARK server from the Install tab, then start the server again.`
+      : `This server's game files are incomplete — missing or empty: ${missing}. ` +
+        `Reinstall/verify the ARK server from the Install tab, then start the server again.`;
+
+    console.error(`[server-lifecycle-service] Refusing to start ${instanceId}: ${error}`);
+    return { success: false, error, instanceId };
   }
 
   /**

@@ -7,6 +7,7 @@ import { ConnectionLostComponent } from './components/connect-lost/connection-lo
 import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { MessagingService } from './core/services/messaging/messaging.service';
 import { NotificationService } from './core/services/notification.service';
+import { ThemeService } from './core/services/theme.service';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { ModalComponent } from './components/modal/modal.component';
 import { ServerInstance } from './core/models/server-instance.model';
@@ -49,7 +50,10 @@ export class App implements OnInit, OnDestroy {
     private utility: UtilityService,
     private router: Router,
     // Eagerly instantiate NotificationService for global notifications
-    _notification: NotificationService
+    _notification: NotificationService,
+    // Eagerly instantiate ThemeService so the theme applies and keeps following the OS
+    // even on screens that never inject it (e.g. the login page)
+    _theme: ThemeService
   ) {
     this.detectMobile();
     this.setupResizeListener();

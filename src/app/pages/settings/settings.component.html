@@ -47,9 +47,34 @@
         </div>
         <div class="card-body">
 
+          <!-- Appearance -->
+          <div class="settings-section vertical-section">
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Appearance</h4>
+            <div class="form-group">
+              <label class="form-control-label">Theme</label>
+              <div class="theme-options" role="radiogroup" aria-label="Theme">
+                <button *ngFor="let option of themeOptions"
+                        type="button"
+                        role="radio"
+                        class="btn btn-sm"
+                        [class.btn-primary]="themePreference === option.value"
+                        [class.btn-secondary]="themePreference !== option.value"
+                        [attr.aria-checked]="themePreference === option.value"
+                        (click)="onThemeChange(option.value)">
+                  <i class="material-icons">{{ option.icon }}</i>
+                  <span>{{ option.label }}</span>
+                </button>
+              </div>
+              <label class="form-control-label desc">
+                Choose light or dark, or follow your operating system. Saved on this device, so
+                the desktop app and each browser you open the web UI in can differ.
+              </label>
+            </div>
+          </div>
+
           <!-- Server Data Directory -->
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Storage</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Storage</h4>
             <div class="form-group">
               <label class="form-control-label">Server Data Directory</label>
               <div style="display: flex; gap: 10px; align-items: center;">
@@ -67,7 +92,7 @@
 
           <!-- Auto Update -->
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Automation</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Automation</h4>
             <div class="form-group">
               <div class="form-control-label toggle-label">
                 <input type="checkbox" class="toggle-switch" [checked]="autoUpdateArkServer" (change)="onAutoUpdateArkServerChange($event)" tabindex="0" />
@@ -80,7 +105,7 @@
 
           <!-- Update Warning -->
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Update Warning</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Update Warning</h4>
             <div class="form-group">
               <label class="form-control-label">Update Warning (Minutes)</label>
               <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
@@ -90,7 +115,7 @@
 
           <!-- Server Start Stagger -->
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Server Start Delay</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Server Start Delay</h4>
             <div class="form-group">
               <label class="form-control-label">Delay Between Server Starts (Seconds)</label>
               <input type="number" [ngModel]="serverStartDelaySeconds" (change)="onServerStartDelaySecondsChange($event.target.value)" class="form-control input" min="10" max="300" />
@@ -136,7 +161,7 @@
         </div>
         <div class="card-body ">
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Port</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Port</h4>
             <div class="form-group">
               <label class="form-control-label">Port</label>
               <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (ngModelChange)="onPortChange($event)" [disabled]="webServerRunning" class="form-control input" />
@@ -152,7 +177,7 @@
           </div>
 
           <div class="settings-section vertical-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Authentication</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Authentication</h4>
             <div class="form-group">
               <div class="form-control-label toggle-label">
                 <input type="checkbox" class="toggle-switch" [checked]="authenticationEnabled" (change)="onAuthenticationEnabledChange($event.target.checked)" [disabled]="webServerRunning" tabindex="0" />
@@ -172,7 +197,7 @@
               <label class="form-control-label desc">Password for web interface login</label>
             </div>
             <div *ngIf="authenticationEnabled && (!authenticationUsername.trim() || !authenticationPassword.trim())" class="form-group">
-              <label class="form-control-label desc" style="color: #d73527; font-style: italic;">
+              <label class="form-control-label desc" style="color: var(--danger); font-style: italic;">
                 ⚠ Please enter both username and password above to complete authentication setup.
               </label>
             </div>
@@ -186,7 +211,7 @@
           
           <!-- Backup Settings Section -->
           <div class="settings-section">
-            <h4 style="color: #0ea5e9; margin-bottom: 1rem;">Backup Downloads</h4>
+            <h4 style="color: var(--primary); margin-bottom: 1rem;">Backup Downloads</h4>
             <div class="form-group">
               <label class="form-control-label">Max Download Size (MB)</label>
               <input type="number" 

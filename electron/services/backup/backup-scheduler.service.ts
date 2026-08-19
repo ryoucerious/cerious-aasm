@@ -27,16 +27,21 @@ export class BackupSchedulerService {
             });
           } else {
             console.error(`[backup-scheduler] Scheduled backup failed for instance: ${instanceId}`, result.error);
+            this.reportFailure(instanceId, result.error);
           }
         }
       } catch (error) {
         console.error(`[backup-scheduler] Error during scheduled backup for instance: ${instanceId}`, error);
+        this.reportFailure(instanceId, (error as Error)?.message);
       }
     };
 
-    // Calculate next run time based on frequency
+    // Calculate next run time based on frequency.
+    // Parse defensively: a missing or malformed `time` used to throw here, which
+    // aborted schedule restore on startup. Fall back to the UI's own default instead
+    // of leaving the instance — and everything after it — unscheduled.
     let nextRunMs: number;
-    const [hours, minutes] = settings.time.split(':').map(Number);
+    const { hours, minutes } = this.parseScheduleTime(settings.time, instanceId);
     const now = new Date();
     const scheduledTime = new Date();
     scheduledTime.setHours(hours, minutes, 0, 0);
@@ -77,6 +82,61 @@ export class BackupSchedulerService {
 
       this.activeSchedules[instanceId] = setInterval(schedulerFunction, intervalMs);
     }, nextRunMs);
+  }
+
+  /**
+   * Parse an "HH:MM" schedule time, falling back to 02:00 when it is absent or invalid.
+   */
+  private parseScheduleTime(time: unknown, instanceId: string): { hours: number; minutes: number } {
+    const DEFAULT = { hours: 2, minutes: 0 };
+    if (typeof time !== 'string') {
+      console.warn(`[backup-scheduler] Missing backup time for ${instanceId} — defaulting to 02:00`);
+      return DEFAULT;
+    }
+
+    const [rawHours, rawMinutes] = time.split(':');
+    const hours = Number(rawHours);
+    const minutes = Number(rawMinutes);
+
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) ||
+        hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      console.warn(`[backup-scheduler] Invalid backup time "${time}" for ${instanceId} — defaulting to 02:00`);
+      return DEFAULT;
+    }
+
+    return { hours, minutes };
+  }
+
+  /**
+   * Surface a failed scheduled backup to the UI.
+   *
+   * A scheduled backup that fails used to be logged to the console only, so from the
+   * user's side an enabled schedule and a schedule that silently failed every run were
+   * indistinguishable — reported as "automatic backups are not running". Failures now
+   * raise a toast and a line in the instance's log view.
+   */
+  private reportFailure(instanceId: string, error?: string): void {
+    try {
+      const { messagingService } = require('../../services/messaging.service');
+      let instanceName = instanceId;
+      try {
+        const instance = require('../../utils/ark/instance.utils').getInstance(instanceId);
+        if (instance?.name) instanceName = instance.name;
+      } catch {
+        // Fall back to the id — never let name lookup swallow the notification
+      }
+      const detail = error || 'Unknown error';
+      messagingService.sendToAll('notification', {
+        type: 'error',
+        message: `Scheduled backup failed for "${instanceName}": ${detail}`
+      });
+      messagingService.sendToAll('server-instance-log', {
+        log: `[BACKUP] Scheduled backup failed: ${detail}`,
+        instanceId
+      });
+    } catch (e) {
+      console.error(`[backup-scheduler] Failed to report backup failure for ${instanceId}:`, e);
+    }
   }
 
   /**

@@ -30,7 +30,9 @@ jest.mock('../../proton.utils', () => ({
   getProtonDir: jest.fn()
 }));
 jest.mock('fs', () => ({
-  existsSync: jest.fn()
+  existsSync: jest.fn(),
+  statSync: jest.fn(),
+  readdirSync: jest.fn()
 }));
 jest.mock('../../ark/instance.utils', () => ({
   getInstancesBaseDir: jest.fn(() => '/instances')
@@ -57,7 +59,8 @@ const {
   getInstanceConfigDir,
   getInstanceLogsDir,
   getInstanceWhitelistPath,
-  getInstanceAltSaveDirName
+  getInstanceAltSaveDirName,
+  validateInstanceRuntimeTree
 } = require('./ark-server-paths.utils');
 
 describe('ark-server-paths.utils', () => {
@@ -235,6 +238,97 @@ describe('ark-server-paths.utils', () => {
       expect(result.env.STEAM_COMPAT_DATA_PATH).toBe('/default/proton-prefix/inst-1');
       expect(ensureProtonPrefixExists).toHaveBeenCalledWith('inst-1');
       expect(getProtonPrefixDir).toHaveBeenCalledWith('inst-1');
+    });
+  });
+  // A restore that walked junctions used to delete the shared install's game folders.
+  // The instance still looked startable (ArkAscendedServer.exe is a real file that
+  // survives), so ARK was launched, aborted before writing a log, and the user saw only
+  // "Could not detect log file". This check turns that into an actionable message.
+  describe('validateInstanceRuntimeTree', () => {
+    const SHARED = '/ark';
+    const INSTANCE = '/instances/inst1';
+
+    // Directories that exist and have contents; everything else reads as missing/empty
+    const present = (dirs: string[]) => {
+      const set = new Set(dirs);
+      fs.statSync.mockImplementation((p: string) => {
+        if (!set.has(p)) throw new Error('ENOENT');
+        return { isDirectory: () => true };
+      });
+      fs.readdirSync.mockImplementation((p: string) => (set.has(p) ? ['a-file'] : []));
+    };
+
+    const required = (root: string) => [
+      `${root}/ShooterGame/Content`,
+      `${root}/ShooterGame/Binaries/Win64/RedpointEOS`,
+      `${root}/Engine`
+    ];
+
+    beforeEach(() => {
+      getPlatform.mockReturnValue('windows');
+      getArkServerDir.mockReturnValue(SHARED);
+    });
+
+    // Isolated instance: its own exe exists, so it runs from its own tree
+    const makeIsolated = () => fs.existsSync.mockImplementation(
+      (p: string) => p === `${INSTANCE}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`
+    );
+    // Shared-install instance: no instance exe, falls back to the shared tree
+    const makeShared = () => fs.existsSync.mockReturnValue(false);
+
+    it('passes when an isolated instance has every required folder', () => {
+      makeIsolated();
+      present([...required(SHARED), ...required(INSTANCE)]);
+      expect(validateInstanceRuntimeTree('inst1')).toEqual({
+        valid: true,
+        missing: [],
+        sharedInstallBroken: false
+      });
+    });
+
+    it('reports the instance when its junctions are missing but the install is fine', () => {
+      makeIsolated();
+      present(required(SHARED));
+      const result = validateInstanceRuntimeTree('inst1');
+      expect(result.valid).toBe(false);
+      expect(result.sharedInstallBroken).toBe(false);
+      expect(result.missing).toHaveLength(3);
+    });
+
+    // The exact aftermath of the destructive restore: junctions were followed and the
+    // shared game folders were emptied, breaking every instance on the machine.
+    it('blames the shared install when its folders were emptied', () => {
+      makeIsolated();
+      present([]);
+      const result = validateInstanceRuntimeTree('inst1');
+      expect(result.valid).toBe(false);
+      expect(result.sharedInstallBroken).toBe(true);
+      expect(result.missing).toContain('ShooterGame/Content');
+      expect(result.missing).toContain('Engine');
+    });
+
+    it('treats an existing-but-empty folder as missing', () => {
+      makeIsolated();
+      fs.statSync.mockReturnValue({ isDirectory: () => true });
+      fs.readdirSync.mockReturnValue([]); // present, but nothing inside
+      const result = validateInstanceRuntimeTree('inst1');
+      expect(result.valid).toBe(false);
+      expect(result.sharedInstallBroken).toBe(true);
+    });
+
+    it('does not double-check a shared-install instance against itself', () => {
+      makeShared();
+      present(required(SHARED));
+      expect(validateInstanceRuntimeTree('inst1').valid).toBe(true);
+    });
+
+    it('reports a partial break rather than everything', () => {
+      makeIsolated();
+      present([...required(SHARED), `${INSTANCE}/ShooterGame/Content`, `${INSTANCE}/Engine`]);
+      const result = validateInstanceRuntimeTree('inst1');
+      expect(result.valid).toBe(false);
+      expect(result.missing).toEqual(['ShooterGame/Binaries/Win64/RedpointEOS']);
+      expect(result.sharedInstallBroken).toBe(false);
     });
   });
 });

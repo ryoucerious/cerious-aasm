@@ -1,4 +1,4 @@
-import { WebServerService } from './web-server.service';
+import { WebServerService, webServerService } from './web-server.service';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import * as networkUtils from '../utils/network.utils';
 import { messagingService } from './messaging.service';
@@ -34,6 +34,11 @@ describe('WebServerService', () => {
   });
 
   afterEach(() => {
+    // The constructor starts a 2s status-polling interval, so any live instance keeps the
+    // Node event loop open and Jest reports a leaked worker handle. That includes the
+    // module-level singleton, which is constructed simply by importing this module.
+    service.cleanup();
+    webServerService.cleanup();
     jest.restoreAllMocks();
   });
 

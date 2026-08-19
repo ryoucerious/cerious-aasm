@@ -5,7 +5,7 @@
       <input type="file" #configFileInput hidden accept=".ini" (change)="onFileSelected($event)">
       <div class="form-control-label toggle-label" style="margin:0 0.75rem 0 0;gap:0.5rem;align-items:center;" (click)="$event.stopPropagation()">
         <input type="checkbox" class="toggle-switch" [checked]="expertMode" (change)="toggleExpertMode($event)" tabindex="0" style="flex-shrink:0;" />
-        <span class="toggle-text" style="font-size:0.95rem;color:#b0b6c1;white-space:nowrap;">Expert Mode</span>
+        <span class="toggle-text" style="font-size:0.95rem;color:var(--text-primary);white-space:nowrap;">Expert Mode</span>
       </div>
       <button class="btn" (click)="onImportConfig($event)" title="Import settings from an INI file">
         <i class="material-icons">file_upload</i>
@@ -92,7 +92,7 @@
           <i class="material-icons" style="font-size:16px;">save</i> {{ iniSaving ? 'Saving...' : 'Save' }}
         </button>
       </div>
-      <div *ngIf="iniLoading" style="color:#b0b6c1;padding:2rem;text-align:center;">
+      <div *ngIf="iniLoading" style="color:var(--text-primary);padding:2rem;text-align:center;">
         <i class="material-icons" style="font-size:32px;">hourglass_empty</i><br>Loading...
       </div>
       <textarea *ngIf="!iniLoading"
@@ -101,7 +101,7 @@
                 [(ngModel)]="iniContent"
                 spellcheck="false"
                 placeholder="No content loaded. Select a file and click Reload."></textarea>
-      <p class="form-control-label desc" style="margin:0;color:#ef4444;">
+      <p class="form-control-label desc" style="margin:0;color:var(--danger);">
         <i class="material-icons" style="font-size:14px;vertical-align:middle;">warning</i>
         Expert Mode - edits directly modify the raw INI file on disk. Managed settings fields above are not synced when using this view.
       </p>
@@ -278,12 +278,12 @@
     <div class="form-group">
       <label>Source Server</label>
       <div class="custom-dropdown" style="position: relative;">
-        <button type="button" class="form-control input" (click)="toggleCopyConfigDropdown()" style="width: 100%; text-align: left; background: #23272f; border: 1px solid #444; border-radius: 6px; color: #b0b6c1; padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between;">
+        <button type="button" class="form-control input" (click)="toggleCopyConfigDropdown()" style="width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between;">
           <span>{{ selectedSourceServer ? getSourceServerDisplayName() : 'Select a server...' }}</span>
           <span class="material-icons" style="font-size: 1.1em;">{{ copyConfigDropdownOpen ? 'arrow_drop_up' : 'arrow_drop_down' }}</span>
         </button>
-        <div *ngIf="copyConfigDropdownOpen" class="dropdown-menu show" style="position: absolute; left: 0; right: 0; top: 100%; background: #23272f; border: 1px solid #444; border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem; max-height: 200px; overflow-y: auto;">
-          <div *ngFor="let server of allServers" (mousedown)="onSelectSourceServer(server)" style="padding: 0.5rem 1rem; cursor: pointer; color: #b0b6c1; font-size: 0.97em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" [ngClass]="{'selected': selectedSourceServer?.id === server.id}">
+        <div *ngIf="copyConfigDropdownOpen" class="dropdown-menu show" style="position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: 20; width: 100%; margin-top: 0.1rem; max-height: 200px; overflow-y: auto;">
+          <div *ngFor="let server of allServers" (mousedown)="onSelectSourceServer(server)" style="padding: 0.5rem 1rem; cursor: pointer; color: var(--text-primary); font-size: 0.97em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" [ngClass]="{'selected': selectedSourceServer?.id === server.id}">
             {{ server.sessionName || server.name }} ({{ server.mapName || 'Unknown Map' }})
           </div>
         </div>

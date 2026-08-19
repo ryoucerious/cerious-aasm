@@ -87,7 +87,10 @@
   flex-shrink: 0;
 
   &:hover {
-    background: lighten($primary, 6%);
+    // $primary is a var() reference now, so SCSS colour functions cannot operate on it.
+    // The themed hover shade lives in the token instead — which also makes this button
+    // agree with every other primary button, all of which already darkened on hover.
+    background: $primary-hover;
   }
 }
 

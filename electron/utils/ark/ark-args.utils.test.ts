@@ -7,43 +7,43 @@ describe('ark-args.utils', () => {
       expect(args).toContain('-ServerPlatform=PC');
     });
 
-    it('should include session name with spaces unencoded', () => {
+    // SessionName is delivered through GameUserSettings.ini [SessionSettings] (see the
+    // sessionName mapping in ark-config.service.ts), NOT the launch URL. UE splits the
+    // command line on spaces before parsing `?` params, so a name like "My Server" used
+    // to truncate everything after it — dropping Port, QueryPort and the admin password.
+    it('should not put SessionName on the command line', () => {
       const args = buildArkServerArgs({ sessionName: 'My Test Server' });
-      const mainArg = args[0];
-      expect(mainArg).toContain('SessionName=My Test Server');
+      expect(args.join(' ')).not.toContain('SessionName');
     });
 
-    it('should include session name with special characters unencoded', () => {
-      const args = buildArkServerArgs({ sessionName: 'Server Name' });
-      const mainArg = args[0];
-      expect(mainArg).toContain('SessionName=Server Name');
-    });
-
-    it('should place SessionName after critical params so spaces in name do not drop Port/Password/RCON', () => {
+    it('should keep critical params intact when the session name contains spaces', () => {
       const args = buildArkServerArgs({
         sessionName: 'My Server With Spaces',
         gamePort: 7777,
         serverAdminPassword: 'adminpass',
-        rconPort: 27020,
-        maxPlayers: 50,
         queryPort: 27015
       });
       const mainArg = args[0];
-      const portIdx = mainArg.indexOf('Port=7777');
-      const queryIdx = mainArg.indexOf('QueryPort=27015');
-      const adminIdx = mainArg.indexOf('ServerAdminPassword=adminpass');
-      const rconIdx = mainArg.indexOf('RCONPort=27020');
-      const sessionIdx = mainArg.indexOf('SessionName=');
-      expect(sessionIdx).toBeGreaterThan(portIdx);
-      expect(sessionIdx).toBeGreaterThan(queryIdx);
-      expect(sessionIdx).toBeGreaterThan(adminIdx);
-      expect(sessionIdx).toBeGreaterThan(rconIdx);
+      // No space anywhere in the query string means nothing downstream can be truncated
+      expect(mainArg).not.toContain(' ');
+      expect(mainArg).toContain('Port=7777');
+      expect(mainArg).toContain('QueryPort=27015');
+      expect(mainArg).toContain('ServerAdminPassword=adminpass');
     });
 
+    // ARK does not URL-decode command-line values, so an encoded password would reach the
+    // server encoded and no player typing the real one could join.
     it('should include server password unencoded', () => {
       const args = buildArkServerArgs({ serverPassword: 'pass word' });
       const mainArg = args[0];
       expect(mainArg).toContain('ServerPassword=pass word');
+    });
+
+    it('should not percent-encode special characters in the server password', () => {
+      const args = buildArkServerArgs({ serverPassword: 'p@ss!word#1' });
+      const mainArg = args[0];
+      expect(mainArg).toContain('ServerPassword=p@ss!word#1');
+      expect(mainArg).not.toContain('%');
     });
 
     it('should include admin password unencoded', () => {
@@ -52,16 +52,21 @@ describe('ark-args.utils', () => {
       expect(mainArg).toContain('ServerAdminPassword=adminpass');
     });
 
-    it('should include MaxPlayers on command line', () => {
+    // ARK:SA honours -WinLiveMaxPlayers, not the [/script/engine.gamesession] INI key
+    // and not a ?MaxPlayers= URL param.
+    it('should pass the player cap as -WinLiveMaxPlayers', () => {
       const args = buildArkServerArgs({ maxPlayers: 20 });
-      const mainArg = args[0];
-      expect(mainArg).toContain('MaxPlayers=20');
+      expect(args).toContain('-WinLiveMaxPlayers=20');
+    });
+
+    it('should let winLiveMaxPlayers override maxPlayers', () => {
+      const args = buildArkServerArgs({ maxPlayers: 20, winLiveMaxPlayers: 70 });
+      expect(args).toContain('-WinLiveMaxPlayers=70');
     });
 
     it('should not include MaxPlayers when not set', () => {
       const args = buildArkServerArgs({});
-      const mainArg = args[0];
-      expect(mainArg).not.toContain('MaxPlayers');
+      expect(args.join(' ')).not.toContain('MaxPlayers');
     });
 
     it('should include ServerPVE=True when bPvE is true', () => {
@@ -94,14 +99,35 @@ describe('ark-args.utils', () => {
       expect(mainArg).toContain('QueryPort=27015');
     });
 
-    it('should add -NOSTEAM when disableSteamSubsystem is true', () => {
-      const args = buildArkServerArgs({ disableSteamSubsystem: true });
-      expect(args).toContain('-NOSTEAM');
-    });
+    // The Wine/Proton compatibility flags are Linux-only and are what carries -NOSTEAM.
+    // The old per-server `disableSteamSubsystem` toggle no longer drives anything.
+    describe('Wine/Proton compatibility flags', () => {
+      const { getPlatform } = require('../platform.utils');
 
-    it('should not add -NOSTEAM by default', () => {
-      const args = buildArkServerArgs({});
-      expect(args).not.toContain('-NOSTEAM');
+      afterEach(() => jest.restoreAllMocks());
+
+      it('should add the compat flags on Linux by default', () => {
+        jest.spyOn(require('../platform.utils'), 'getPlatform').mockReturnValue('linux');
+        const args = buildArkServerArgs({});
+        expect(args).toContain('-NOSTEAM');
+        expect(args).toContain('-NoHangDetection');
+        expect(args).toContain('-norhithread');
+      });
+
+      it('should omit the compat flags when disableWineCompatFlags is set', () => {
+        jest.spyOn(require('../platform.utils'), 'getPlatform').mockReturnValue('linux');
+        const args = buildArkServerArgs({ disableWineCompatFlags: true });
+        expect(args).not.toContain('-NOSTEAM');
+        expect(args).not.toContain('-NoHangDetection');
+      });
+
+      it('should never add the compat flags on Windows', () => {
+        jest.spyOn(require('../platform.utils'), 'getPlatform').mockReturnValue('windows');
+        const args = buildArkServerArgs({});
+        expect(args).not.toContain('-NOSTEAM');
+        expect(args).not.toContain('-norhithread');
+        expect(getPlatform).toBeDefined();
+      });
     });
 
     it('should use serverPlatform if set', () => {

@@ -1,0 +1,83 @@
+name: Tests
+
+# Runs on every push to main and every pull request, and is called by the release
+# workflow (build.yml) so a tagged release cannot be produced from a red test suite.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  electron:
+    # The main-process suite covers real filesystem behaviour (junctions, path handling,
+    # process spawning) that differs between platforms, so it runs on both targets the
+    # app ships for. The suite takes seconds, so the matrix is close to free.
+    name: Electron main process (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-2022 (not windows-latest) to match the pinned release runner.
+        os: [ubuntu-latest, windows-2022]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Set up Python
+        # node-gyp needs Python to build the native deps (bcrypt, node-pty).
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python setuptools
+        run: python -m pip install setuptools
+      - name: Install dependencies
+        run: npm install
+      - name: Type-check main process
+        run: npx tsc -p tsconfig.electron.json --noEmit
+      - name: Run Electron tests
+        run: npm run test:electron
+
+  frontend:
+    name: Angular frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python setuptools
+        run: python -m pip install setuptools
+      - name: Install dependencies
+        run: npm install
+      - name: Run frontend tests
+        # Chrome is preinstalled on the GitHub ubuntu image. The runner executes as a
+        # non-root user, so the Chrome sandbox works and --no-sandbox is not needed.
+        #
+        # Retried because @angular/build 20.3.1's karma builder has a teardown race: when
+        # Chrome drops its connection at the end of a run, karma logs `read ECONNRESET`
+        # and the builder enqueues a second result onto an already-closed stream, exiting
+        # 1 while reporting all tests passed. Reproduced locally at roughly one run in
+        # three, with 588/588 green every time. A gate that fails at random is worse than
+        # no gate, so a spurious exit is retried; three genuinely failing runs still fail
+        # the job. Drop this once the builder is upgraded past the bug.
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          for attempt in 1 2 3; do
+            if npx ng test --watch=false --browsers=ChromeHeadless; then
+              exit 0
+            fi
+            echo "::warning::Frontend test run $attempt exited non-zero — retrying (suspected @angular/build karma teardown flake)"
+          done
+          echo "::error::Frontend tests failed three consecutive runs"
+          exit 1

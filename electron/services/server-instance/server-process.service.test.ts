@@ -23,6 +23,9 @@ jest.mock('fs', () => {
     mkdirSync: jest.fn(),
     writeFileSync: jest.fn(),
     openSync: jest.fn(() => 3),
+    // Must be stubbed alongside openSync: the service closes the stderr descriptor it
+    // opens, and the real closeSync would close fd 3 of the Jest worker itself.
+    closeSync: jest.fn(),
     existsSync: jest.fn(() => true),
   };
 });
@@ -237,6 +240,31 @@ describe('ServerProcessService', () => {
       expect(logUtils.detectAndRegisterLogFile).toHaveBeenCalledWith(
         'inst1', 'TestServer', expect.anything()
       );
+    });
+
+    // stderr capture used to be Linux-only, so a Windows server that aborted before
+    // creating ShooterGame.log produced no diagnostics at all and surfaced to the user
+    // only as "Could not detect log file".
+    it('should capture stderr to a per-instance log file on Windows', async () => {
+      const { getPlatform } = require('../../utils/platform.utils');
+      getPlatform.mockReturnValue('windows');
+      const fs = require('fs');
+      const { spawn } = require('child_process');
+
+      await service.startServerProcess('inst1', {});
+
+      expect(fs.openSync).toHaveBeenCalledWith(expect.stringContaining('stderr.log'), 'w');
+      const spawnOptions = spawn.mock.calls[spawn.mock.calls.length - 1][2];
+      expect(spawnOptions.stdio).toEqual(['ignore', 'ignore', 3]);
+    });
+
+    it('should release the parent copy of the stderr descriptor after spawn', async () => {
+      const fs = require('fs');
+
+      await service.startServerProcess('inst1', {});
+
+      // Leaking this per start would exhaust descriptors over repeated restarts
+      expect(fs.closeSync).toHaveBeenCalledWith(3);
     });
 
     it('should launch via AsaApiLoader when resolveServerLaunch reports it', async () => {

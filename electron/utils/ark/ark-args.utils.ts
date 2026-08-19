@@ -42,10 +42,14 @@ export function buildArkServerArgs(config: any): string[] {
   }
   if (config.clusterId) args.push(`-ClusterId=${config.clusterId}`);
 
-  // Passwords — URL-encode to handle special characters in query strings.
-  // RCON client will use the unencoded value from config, but ARK receives the
-  // URL-encoded version in the command line and decodes it internally.
-  if (config.serverPassword) paramParts.push(`ServerPassword=${encodeURIComponent(config.serverPassword)}`);
+  // Passwords are passed RAW, never URL-encoded. ARK's command-line parser does not
+  // URL-decode parameter values, so an encoded password arrives at the server still
+  // encoded — a join password of `my pass!` would become `my%20pass%21` and no player
+  // typing the real password could connect. This matches ServerAdminPassword below and
+  // the RCON client, which both authenticate with the raw value from config.json.
+  // Characters that would break the query string (`?`, `<`, `>`, `"`, `'`) are rejected
+  // by password validation instead.
+  if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
 
   // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
   const toBool = (val: any) => val === true || val === 'true';

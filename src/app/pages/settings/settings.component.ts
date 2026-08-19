@@ -9,6 +9,7 @@ import { ServerInstanceService } from '../../core/services/server-instance.servi
 import { ModalComponent } from '../../components/modal/modal.component';
 import { Subscription } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { ThemeService, ThemePreference } from '../../core/services/theme.service';
 
 @Component({
   selector: 'app-settings-page',
@@ -32,6 +33,15 @@ export class SettingsPageComponent {
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
   serverStartDelaySeconds = 60;
+
+  // Appearance. Unlike the settings around it this is a per-device preference held in
+  // localStorage, not part of the server-side global config — see ThemeService.
+  themePreference: ThemePreference = 'system';
+  readonly themeOptions: { value: ThemePreference; label: string; icon: string }[] = [
+    { value: 'system', label: 'System', icon: 'brightness_auto' },
+    { value: 'light', label: 'Light', icon: 'light_mode' },
+    { value: 'dark', label: 'Dark', icon: 'dark_mode' }
+  ];
   // Backend-provided system info (populated when running in Electron)
   backendNodeVersion: string | null = null;
   backendElectronVersion: string | null = null;
@@ -148,8 +158,10 @@ export class SettingsPageComponent {
     private utility: UtilityService,
     private notification: NotificationService,
     private configService: GlobalConfigService,
-    private serverInstanceService: ServerInstanceService
+    private serverInstanceService: ServerInstanceService,
+    private themeService: ThemeService
   ) {
+    this.themePreference = this.themeService.preference;
     this.isElectron = this.utility.getPlatform() === 'Electron';
     this.tabs = [
       { id: 'server-installation', label: 'Server Installation', icon: 'dns', showUpdateBadge: false },
@@ -157,6 +169,16 @@ export class SettingsPageComponent {
       ...(this.isElectron ? [{ id: 'web-server', label: 'Web Server', icon: 'cloud' }] : []),
       { id: 'about', label: 'About', icon: 'info' }
     ];
+  }
+
+  /**
+   * Apply a theme choice. Takes effect immediately — there is no Save step, because the
+   * result is visible the moment it is clicked and is stored on this device only.
+   */
+  onThemeChange(preference: ThemePreference) {
+    this.themePreference = preference;
+    this.themeService.setPreference(preference);
+    this.cdr.markForCheck();
   }
 
   private updateArkUpdateBadge() {
@@ -328,7 +350,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.19';
+    return environment.version || '1.0.20';
   }
 
   getPlatform() {

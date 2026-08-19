@@ -1,4 +1,10 @@
 import { jest } from '@jest/globals';
+
+// This suite exercises real filesystem behaviour in a temp directory, so it opts out of
+// the global fs/path mocks in test/setup.ts — both here and inside the service under test.
+jest.unmock('fs');
+jest.unmock('path');
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';

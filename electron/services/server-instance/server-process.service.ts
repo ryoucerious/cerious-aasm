@@ -198,22 +198,39 @@ export class ServerProcessService {
       windowsHide: true
     };
 
-    // On Linux, redirect stderr to a per-instance log file for diagnostics
-    if (getPlatform() === 'linux') {
-      try {
-        const stderrLogPath = path.join(instanceDir, 'stderr.log');
-        const stderrFd = fs.openSync(stderrLogPath, 'w');
-        spawnOptions.stdio = ['ignore', 'ignore', stderrFd] as any;
-      } catch (e) {
-        console.warn(`[server-process-service] Could not create stderr log for ${instanceId}:`, e);
-      }
+    // Redirect stderr to a per-instance log file for diagnostics on every platform.
+    // Writing to a file rather than a pipe keeps the pipe-buffer hazard described above
+    // out of play, and it is the only diagnostic available when ARK aborts before it
+    // creates ShooterGame.log — previously Windows captured nothing at all, so a server
+    // that could not launch reported only "Could not detect log file".
+    let stderrFd: number | null = null;
+    try {
+      const stderrLogPath = path.join(instanceDir, 'stderr.log');
+      fs.mkdirSync(instanceDir, { recursive: true });
+      stderrFd = fs.openSync(stderrLogPath, 'w');
+      spawnOptions.stdio = ['ignore', 'ignore', stderrFd] as any;
+    } catch (e) {
+      console.warn(`[server-process-service] Could not create stderr log for ${instanceId}:`, e);
     }
 
     // Snapshot log files BEFORE starting so we can detect which new file belongs to this instance
     const logSnapshot = snapshotLogFiles(instanceId);
 
     // Start the server process
-    const serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
+    let serverProcess;
+    try {
+      serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
+    } finally {
+      // The child has inherited the descriptor by the time spawn() returns, so release the
+      // parent's copy. Without this every start/restart leaks an fd for the app's lifetime.
+      if (stderrFd !== null) {
+        try {
+          fs.closeSync(stderrFd);
+        } catch {
+          // Already closed / never valid — nothing to release
+        }
+      }
+    }
 
     // Detect and register the log file for this instance (async, retries internally)
     const sessionName = instance.sessionName || instance.serverName || 'My Server';

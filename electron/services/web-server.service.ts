@@ -175,7 +175,15 @@ export class WebServerService {
     }
 
     return new Promise((resolve) => {
+      // Cleared once the server is down so the force-kill timer does not keep the event
+      // loop alive for a further 5 seconds after a clean, immediate shutdown.
+      let forceKillTimer: NodeJS.Timeout | null = null;
+
       const cleanupAndResolve = (message: string) => {
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = null;
+        }
         this.apiProcess = null;
         this.webServerRunning = false;
         this.webServerStarting = false;
@@ -188,8 +196,10 @@ export class WebServerService {
         });
 
         this.apiProcess.kill();
-      }      // Timeout after 5 seconds
-      setTimeout(() => {
+      }
+
+      // Timeout after 5 seconds
+      forceKillTimer = setTimeout(() => {
         if (this.apiProcess) {
           this.apiProcess.kill('SIGKILL');
           cleanupAndResolve('Web server force stopped');

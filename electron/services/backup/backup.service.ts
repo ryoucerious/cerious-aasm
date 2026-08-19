@@ -110,18 +110,27 @@ export class BackupService {
    * Restore active backup schedules on startup
    */
   private async restoreActiveSchedules(): Promise<void> {
+    let instances: any[] = [];
     try {
-      const instances = await instanceUtils.getAllInstances();
+      instances = await instanceUtils.getAllInstances();
+    } catch (error) {
+      console.error('[backup-service] Failed to enumerate instances for schedule restore:', error);
+      return;
+    }
 
-      for (const instance of instances) {
+    // Each instance is restored independently: a single instance with unreadable or
+    // malformed backup-settings.json must not abort the loop and leave every instance
+    // after it without a scheduler.
+    for (const instance of instances) {
+      try {
         const serverPath = this.getInstanceServerPath(instance.id);
         const settings = await this.settingsService.getBackupSettingsInternal(instance.id, serverPath);
         if (settings?.enabled) {
           await this.schedulerService.startBackupSchedulerInternal(instance.id, settings, this.createBackup.bind(this));
         }
+      } catch (error) {
+        console.error(`[backup-service] Failed to restore backup schedule for ${instance?.id}:`, error);
       }
-    } catch (error) {
-      console.error('[backup-service] Failed to restore active schedules:', error);
     }
   }
 

@@ -153,6 +153,64 @@ export function getInstanceAltSaveDirName(instanceId: string): string {
 }
 
 /**
+ * Game folders ARK resolves relative to the tree it launches from. Each is either a real
+ * folder (shared-install instances) or a junction onto the shared install (isolated
+ * instances) — ARK aborts at startup if any is missing or empty.
+ */
+const REQUIRED_RUNTIME_SUBPATHS = [
+  path.join('ShooterGame', 'Content'),
+  path.join('ShooterGame', 'Binaries', 'Win64', 'RedpointEOS'),
+  'Engine'
+];
+
+/** True when `dirPath` is a directory that exists and holds at least one entry. */
+function hasContents(dirPath: string): boolean {
+  try {
+    return fs.statSync(dirPath).isDirectory() && fs.readdirSync(dirPath).length > 0;
+  } catch {
+    // Missing, unreadable, or a junction whose target is gone
+    return false;
+  }
+}
+
+/**
+ * Check that the tree this instance will actually launch from has the game folders ARK
+ * needs, and report which are missing and whether the shared install is the cause.
+ *
+ * Call this AFTER the instance structure has been prepared — preparation is what creates
+ * the junctions, so running it earlier reports a fresh instance as broken.
+ *
+ * Existence alone is not enough: a junction can point at a directory that has been
+ * emptied, in which case ARK still aborts. Each folder is therefore required to be
+ * non-empty, at both the shared install (which every instance links back to) and the
+ * instance's own runtime root.
+ */
+export function validateInstanceRuntimeTree(
+  instanceId: string
+): { valid: boolean; missing: string[]; sharedInstallBroken: boolean } {
+  const runtimeRoot = path.resolve(getInstanceRuntimeRoot(instanceId));
+  const sharedRoot = path.resolve(getArkServerDir());
+  const missing: string[] = [];
+  let sharedInstallBroken = false;
+
+  for (const subPath of REQUIRED_RUNTIME_SUBPATHS) {
+    // A shared-install instance runs out of sharedRoot, so checking both would just
+    // duplicate the same path — attribute the failure to the install in that case.
+    const sharedOk = hasContents(path.join(sharedRoot, subPath));
+    if (!sharedOk) {
+      sharedInstallBroken = true;
+      missing.push(subPath);
+      continue;
+    }
+    if (runtimeRoot !== sharedRoot && !hasContents(path.join(runtimeRoot, subPath))) {
+      missing.push(subPath);
+    }
+  }
+
+  return { valid: missing.length === 0, missing, sharedInstallBroken };
+}
+
+/**
  * True when AsaApiLoader.exe is installed for this instance.
  */
 export function isAsaApiLoaderInstalled(instanceId: string): boolean {

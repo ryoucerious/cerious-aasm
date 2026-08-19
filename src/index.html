@@ -7,6 +7,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/png" href="assets/logo-square-256.png">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <script>
+    // Resolve the theme before first paint. Angular bootstraps well after the browser
+    // has painted, so doing this in a service alone would show a dark flash to light-mode
+    // users on every launch. Kept deliberately tiny and dependency-free; ThemeService
+    // owns the same logic from here on and reads the same storage key.
+    (function () {
+      try {
+        var stored = localStorage.getItem('cerious-aasm.theme');
+        var choice = (stored === 'light' || stored === 'dark' || stored === 'system') ? stored : 'system';
+        var resolved = choice === 'system'
+          ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+          : choice;
+        document.documentElement.setAttribute('data-theme', resolved);
+        // Bootstrap 5.3 reads its own attribute for component colours.
+        document.documentElement.setAttribute('data-bs-theme', resolved);
+      } catch (e) {
+        // Private mode / storage disabled — fall back to the stylesheet default (dark)
+      }
+    })();
+  </script>
 </head>
 <body class="right-dashboard">
   <div class="wrapper">

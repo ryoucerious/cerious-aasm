@@ -11,36 +11,53 @@ $breakpoint-xl: 1200px;  // Large desktop
 // =========================
 // COLORS
 // =========================
+//
+// These are aliases onto the theme tokens in _theme.scss — they hold a `var()`
+// reference, not a colour, so they follow the active theme at runtime.
+//
+// The names below are historical and literal ($background-dark is white in the light
+// theme). They are kept so existing rules did not all have to be rewritten; prefer the
+// semantic token names for anything new, e.g. `var(--surface)` over `$background-dark`.
+//
+// Because these are `var()` references they cannot be passed to SCSS colour functions
+// (darken/lighten/mix) — those run at compile time and have no colour to work on. Add a
+// token for the variant you need instead, the way --primary-hover exists for what used
+// to be `lighten($primary, 6%)`.
 
 // Primary brand colors
-$primary: #0ea5e9;
-$success: #22c55e;
-$danger: #ef4444;
-$warning: #facc15;
-$info: #15a1bb;
-$secondary: #6b7280;
+$primary: var(--primary);
+$primary-hover: var(--primary-hover);
+$success: var(--success);
+$danger: var(--danger);
+$warning: var(--warning);
+$info: var(--info);
+$secondary: var(--secondary);
 
 // Background colors
-$background-dark: #23272f;
-$background-darker: #1e2228;
-$background-card: rgba(255, 255, 255, 0.02);
-$background-hover: #31343c;
+$background-dark: var(--surface);
+$background-darker: var(--surface-base);
+$background-card: var(--surface-overlay);
+$background-hover: var(--surface-raised);
 
 // Text colors
-$text-primary: #b0b6c1;
-$text-secondary: #888c94;
-$text-white: #fff;
-$text-light: #e5e7eb;
-$text-muted: #9ca3af;
+$text-primary: var(--text-primary);
+$text-secondary: var(--text-secondary);
+$text-white: var(--text-strong);
+$text-light: var(--text-emphasis);
+$text-muted: var(--text-muted);
 
 // Border colors
-$border-color: #5e6870;
-$border-dark: #444;
-$border-darker: #333;
-$border-subtle: #44474d;
+$border-color: var(--border-strong);
+$border-dark: var(--border);
+$border-darker: var(--border-muted);
+$border-subtle: var(--border-subtle);
 
 // Focus and interaction colors
-$focus-color: #8ab4f8;
+$focus-color: var(--focus);
+
+// Shadows
+$shadow-color: var(--shadow-color);
+$shadow-color-strong: var(--shadow-color-strong);
 
 // =========================
 // BORDER RADIUS

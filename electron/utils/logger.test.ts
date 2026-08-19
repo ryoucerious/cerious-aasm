@@ -1,7 +1,9 @@
 import { jest } from '@jest/globals';
 
-// Mock electron-log before any imports
-jest.mock('electron-log/main', () => {
+// Mock the exact specifier logger.ts imports ('electron-log'). Mocking
+// 'electron-log/main' silently missed, letting the real module load and throw
+// "this.initializeFn is not a function" on log.initialize().
+jest.mock('electron-log', () => {
   const mockLog: any = {
     log: jest.fn(),
     info: jest.fn(),
@@ -45,13 +47,17 @@ describe('logger', () => {
   });
 
   it('should export default log instance', () => {
+    // logger.ts wires everything up in top-level side effects that run once per module
+    // registry. An earlier test already required it, and the global beforeEach clears
+    // mock call records, so the registry must be reset for those side effects to re-run.
+    jest.resetModules();
     const logModule = require('./logger');
     expect(logModule.default).toBeDefined();
     expect(logModule.default.initialize).toHaveBeenCalled();
   });
 
   it('should configure file transport settings', () => {
-    const log = require('electron-log/main').default;
+    const log = require('electron-log').default;
     expect(log.transports.file.level).toBe('debug');
   });
 });
