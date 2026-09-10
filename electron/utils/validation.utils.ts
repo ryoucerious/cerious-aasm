@@ -87,8 +87,14 @@ export function validateEmail(email: string): boolean {
  */
 export function validateIPAddress(ip: string): boolean {
   if (!ip || typeof ip !== 'string') return false;
-  const ipRegex = /^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$/;
-  return ipRegex.test(ip);
+  const octets = ip.split('.');
+  if (octets.length !== 4) return false;
+  return octets.every(octet => {
+    if (!/^\d{1,3}$/.test(octet)) return false;
+    // Reject zero-padded octets ("010") — some resolvers read those as octal
+    if (octet.length > 1 && octet.startsWith('0')) return false;
+    return Number(octet) <= 255;
+  });
 }
 
 /**

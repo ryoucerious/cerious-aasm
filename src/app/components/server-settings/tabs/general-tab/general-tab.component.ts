@@ -24,6 +24,8 @@ export class GeneralTabComponent {
   @Input() isLocked = false;
   @Input() generalFields: Field[] = [];
   @Input() dropdownOpen = false;
+  @Input() fieldErrors: { [key: string]: string } = {};
+  @Input() fieldWarnings: { [key: string]: string } = {};
 
   @Output() saveSettings = new EventEmitter<void>();
   @Output() validateField = new EventEmitter<{key: string, value: any}>();
@@ -45,20 +47,19 @@ export class GeneralTabComponent {
   }
 
   hasFieldError(key: string): boolean {
-    // This would be implemented based on your validation logic
-    return false;
+    return !!this.fieldErrors[key];
   }
 
   getFieldError(key: string): string {
-    return '';
+    return this.fieldErrors[key] || '';
   }
 
   hasFieldWarning(key: string): boolean {
-    return false;
+    return !!this.fieldWarnings[key];
   }
 
   getFieldWarning(key: string): string {
-    return '';
+    return this.fieldWarnings[key] || '';
   }
 
   onSaveSettings(): void {

@@ -27,6 +27,41 @@ describe('ArkServerValidationService', () => {
     expect(result.errors.length).toBe(0);
   });
 
+  describe('validateMultiHome', () => {
+    it('should accept an empty value (bind all interfaces)', () => {
+      for (const empty of [undefined, null, '', '   ']) {
+        expect(service.validateMultiHome(empty).isValid).toBeTrue();
+      }
+    });
+
+    it('should accept a valid IPv4 address', () => {
+      expect(service.validateMultiHome('10.147.20.5').isValid).toBeTrue();
+      expect(service.validateMultiHome('0.0.0.0').isValid).toBeTrue();
+      expect(service.validateMultiHome('255.255.255.255').isValid).toBeTrue();
+      expect(service.validateMultiHome('  192.168.1.50  ').isValid).toBeTrue();
+    });
+
+    it('should reject anything that is not a dotted-quad IPv4 address', () => {
+      for (const bad of ['not-an-ip', '999.1.1.1', '10.0.0', '10.0.0.1.1', '10.0.001.1', '::1']) {
+        const result = service.validateMultiHome(bad);
+        expect(result.isValid).withContext(bad).toBeFalse();
+        expect(result.error).withContext(bad).toContain('MultiHome IP');
+      }
+    });
+
+    it('should surface an invalid multiHome through validateField', () => {
+      expect(service.validateField('multiHome', 'nope').isValid).toBeFalse();
+      expect(service.validateField('multiHome', '10.147.20.5').isValid).toBeTrue();
+    });
+
+    it('should fail whole-config validation when multiHome is invalid', () => {
+      const result = service.validateServerConfiguration({
+        name: 'Test', sessionName: 'Session', mapName: 'TheIsland_WP', multiHome: 'nope'
+      });
+      expect(result.isValid).toBeFalse();
+    });
+  });
+
   it('should validate server name', () => {
     expect(service.validateServerName('ValidName').isValid).toBeTrue();
     expect(service.validateServerName('').isValid).toBeFalse();

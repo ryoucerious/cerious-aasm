@@ -21,12 +21,23 @@ export interface InstallerOptions {
   export let procKilled = false;
   export let extractProcKilled = false;
 
+  // Installers that run in-process rather than as a child process (SteamCMD's download
+  // and extract) register an AbortController here so cancelInstaller() can stop them the
+  // same way it kills a pty. Without this, Cancel would appear to work while the download
+  // kept streaming in the background.
+  export let currentAbort: AbortController | null = null;
+
+  export function setCurrentAbort(controller: AbortController | null) {
+    currentAbort = controller;
+  }
+
   // Reset function for testing
   export function resetInstallerState() {
     currentProc = null;
     currentExtractProc = null;
     procKilled = false;
     extractProcKilled = false;
+    currentAbort = null;
   }
 
   // File-based lock for cross-process install prevention (use installDir)
@@ -59,6 +70,14 @@ export interface InstallerOptions {
   }
 
   export function cancelInstaller() {
+    if (currentAbort) {
+      try {
+        currentAbort.abort();
+      } catch (e) {
+        // ignore
+      }
+      currentAbort = null;
+    }
     if (currentProc) {
       try {
         procKilled = true;

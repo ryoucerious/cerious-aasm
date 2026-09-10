@@ -1,6 +1,7 @@
 // --- Imports ---
 import * as path from 'path';
 import { getDefaultInstallDir, getPlatform } from '../platform.utils';
+import { validateIPAddress } from '../validation.utils';
 
 // --- ARK Server Argument Building ---
 
@@ -29,8 +30,22 @@ export function buildArkServerArgs(config: any): string[] {
   // Auto-calculated as gamePort + 1 (UE default) — not user-configurable.
   const peerPort = config.gamePort ? parseInt(config.gamePort, 10) + 1 : null;
   if (peerPort) paramParts.push(`PeerPort=${peerPort}`);
-  // MultiHome ensures each instance properly binds its own sockets
-  paramParts.push('MultiHome=0.0.0.0');
+  // MultiHome selects the local address each instance binds its sockets to.
+  // Default 0.0.0.0 binds every interface, which is what a normal LAN/WAN server wants
+  // and keeps multiple instances from fighting over the same socket. Users routing
+  // traffic through a VPN/tunnel (ZeroTier, WireGuard) need to bind that interface's
+  // address instead, so an explicit multiHome overrides the default.
+  // Anything that isn't a well-formed IPv4 address is ignored rather than passed
+  // through, since this value is interpolated into the `?`-delimited launch URL.
+  const multiHome = typeof config.multiHome === 'string' ? config.multiHome.trim() : '';
+  if (multiHome && validateIPAddress(multiHome)) {
+    paramParts.push(`MultiHome=${multiHome}`);
+  } else {
+    if (multiHome) {
+      console.warn(`[ark-args] Ignoring invalid MultiHome address "${multiHome}" - falling back to 0.0.0.0`);
+    }
+    paramParts.push('MultiHome=0.0.0.0');
+  }
 
   // Cluster parameters
   if (config.clusterDirOverride) {

@@ -87,6 +87,47 @@ describe('ark-args.utils', () => {
       expect(mainArg).not.toContain('ServerPVE');
     });
 
+    // Issue: users tunnelling traffic through ZeroTier/WireGuard must bind the tunnel
+    // interface, but MultiHome was hardcoded to 0.0.0.0 so the server advertised the
+    // host's own address and was unreachable.
+    describe('MultiHome', () => {
+      it('should default to 0.0.0.0 when multiHome is not configured', () => {
+        const args = buildArkServerArgs({});
+        expect(args[0]).toContain('MultiHome=0.0.0.0');
+      });
+
+      it('should use a configured multiHome address', () => {
+        const args = buildArkServerArgs({ multiHome: '10.147.20.5' });
+        expect(args[0]).toContain('MultiHome=10.147.20.5');
+        expect(args[0]).not.toContain('MultiHome=0.0.0.0');
+      });
+
+      it('should trim surrounding whitespace from multiHome', () => {
+        const args = buildArkServerArgs({ multiHome: '  192.168.1.50  ' });
+        expect(args[0]).toContain('MultiHome=192.168.1.50');
+      });
+
+      it('should fall back to 0.0.0.0 when multiHome is empty', () => {
+        const args = buildArkServerArgs({ multiHome: '   ' });
+        expect(args[0]).toContain('MultiHome=0.0.0.0');
+      });
+
+      // The value is interpolated into the `?`-delimited launch URL, so a malformed
+      // entry must never reach the command line.
+      it('should fall back to 0.0.0.0 for a malformed multiHome', () => {
+        for (const bad of ['not-an-ip', '999.1.1.1', '10.0.0', '10.0.0.1?Foo=bar', '10.0.0.1 extra']) {
+          const args = buildArkServerArgs({ multiHome: bad });
+          expect(args[0]).toContain('MultiHome=0.0.0.0');
+          expect(args[0]).not.toContain(bad);
+        }
+      });
+
+      it('should emit exactly one MultiHome param', () => {
+        const args = buildArkServerArgs({ multiHome: '10.147.20.5' });
+        expect(args[0].split('MultiHome=').length - 1).toBe(1);
+      });
+    });
+
     it('should not include QueryPort when set to 0', () => {
       const args = buildArkServerArgs({ queryPort: 0 });
       const mainArg = args[0];

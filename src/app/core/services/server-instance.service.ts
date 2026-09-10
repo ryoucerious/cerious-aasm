@@ -173,6 +173,7 @@ export class ServerInstanceService {
           defaults.gamePort = 7777;
           defaults.rconPort = 27020;
           defaults.queryPort = 27015;
+          defaults.multiHome = ''; // empty = bind all interfaces (0.0.0.0)
           defaults.rconPassword = '';
           defaults.battleEye = false; // Default to disabled for easier setup
           defaults.noTransferFromFiltering = false;

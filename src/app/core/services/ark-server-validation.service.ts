@@ -65,6 +65,7 @@ export class ArkServerValidationService {
       this.validateServerName(server.name),
       this.validateSessionName(server.sessionName),
       this.validatePorts(server),
+      this.validateMultiHome(server.multiHome),
       this.validatePlayerLimits(server),
       this.validateMultipliers(server),
       this.validateStatArrays(server),
@@ -180,6 +181,43 @@ export class ArkServerValidationService {
     }
 
     return { field: 'mapName', isValid: true, label };
+  }
+
+  /**
+   * Validate the MultiHome bind address.
+   *
+   * Empty means "bind all interfaces" (0.0.0.0) and is always valid. A value must be a
+   * dotted-quad IPv4 address — it is interpolated into the server's launch URL, and ARK's
+   * MultiHome parameter does not handle IPv6 literals reliably.
+   */
+  validateMultiHome(value: any, label?: string): FieldValidation {
+    // multiHome has no advanced-settings-meta.json entry (the field is hand-written in
+    // the general tab), so both label lookups fall back to the raw key — use a
+    // human-readable name instead of putting "multiHome" in front of the user.
+    const fieldLabel = label && label !== 'multiHome' ? label : 'MultiHome IP';
+
+    if (value === undefined || value === null || String(value).trim() === '') {
+      return { field: 'multiHome', isValid: true, label };
+    }
+
+    const trimmed = String(value).trim();
+    const octets = trimmed.split('.');
+    const isIpv4 = octets.length === 4 && octets.every(octet =>
+      /^\d{1,3}$/.test(octet) &&
+      !(octet.length > 1 && octet.startsWith('0')) &&
+      Number(octet) <= 255
+    );
+
+    if (!isIpv4) {
+      return {
+        field: 'multiHome',
+        isValid: false,
+        error: `${fieldLabel} must be a valid IPv4 address (e.g. 10.147.20.5), or empty to bind all interfaces`,
+        label
+      };
+    }
+
+    return { field: 'multiHome', isValid: true, label };
   }
 
   /**
@@ -518,6 +556,8 @@ export class ArkServerValidationService {
       case 'queryPort':
       case 'rconPort':
         return this.validatePorts(server || {});
+      case 'multiHome':
+        return this.validateMultiHome(value, label);
       case 'maxPlayers':
         return this.validatePlayerLimits({ maxPlayers: value });
       case 'maxBackupsToKeep':

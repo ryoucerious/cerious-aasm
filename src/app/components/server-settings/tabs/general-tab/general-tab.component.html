@@ -99,6 +99,19 @@
     </div>
 
     <div class="form-group">
+      <label class="form-control-label">MultiHome IP</label>
+      <input class="form-control input"
+             type="text"
+             placeholder="0.0.0.0 (all interfaces)"
+             [(ngModel)]="serverInstance.multiHome"
+             (blur)="onSaveSettings(); onValidateField('multiHome', serverInstance.multiHome)"
+             [disabled]="isLocked" />
+      <div class="form-control-label desc">Local IPv4 address the server binds to. Leave empty to listen on all interfaces (default). Set this to the address of a specific NIC or VPN/tunnel interface (ZeroTier, WireGuard) when players must reach the server through that interface.</div>
+      <div *ngIf="hasFieldError('multiHome')" class="validation-error">{{ getFieldError('multiHome') }}</div>
+      <div *ngIf="hasFieldWarning('multiHome')" class="validation-warning">{{ getFieldWarning('multiHome') }}</div>
+    </div>
+
+    <div class="form-group">
       <label class="form-control-label">RCON Port</label>
       <input class="form-control input"
              type="number"

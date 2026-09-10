@@ -37,6 +37,32 @@ describe('ArkConfigService', () => {
     expect(service.getArkMapName({})).toBe('TheIsland_WP');
   });
 
+  // bDisableStructurePlacementCollision is read from Game.ini [/script/shootergame.shootergamemode].
+  // It used to be written to GameUserSettings.ini [ServerSettings], where ARK ignores it —
+  // and because the key is app-managed, a hand-edited Game.ini entry was stripped on launch.
+  it('writeArkConfigFiles writes bDisableStructurePlacementCollision to Game.ini', () => {
+    const writes: { [filePath: string]: string } = {};
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
+    jest.spyOn(fs, 'writeFileSync').mockImplementation(((filePath: any, content: any) => {
+      writes[String(filePath)] = String(content);
+    }) as any);
+    jest.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
+    (ArkPathUtils.getArkServerDir as jest.Mock).mockReturnValue('ARK_SERVER_DIR');
+    (path.join as jest.Mock).mockImplementation((...args) => args.join('/'));
+
+    // sessionName forces GameUserSettings.ini to be written too, so the negative
+    // assertion below is checked against real content rather than an absent file.
+    service.writeArkConfigFiles('INSTANCE_DIR', { bDisableStructurePlacementCollision: true, sessionName: 'Test' });
+
+    const gameIni = writes['INSTANCE_DIR/Config/WindowsServer/Game.ini'] || '';
+    const gameUserSettings = writes['INSTANCE_DIR/Config/WindowsServer/GameUserSettings.ini'] || '';
+
+    expect(gameIni).toContain('[/script/shootergame.shootergamemode]');
+    expect(gameIni).toContain('bDisableStructurePlacementCollision=true');
+    expect(gameUserSettings).not.toContain('bDisableStructurePlacementCollision');
+  });
+
   it('writeArkConfigFiles writes files and copies them', () => {
     // Simulate that source files exist so copyFileSync is called for both
     (fs.existsSync as jest.Mock).mockImplementation((filePath) => {

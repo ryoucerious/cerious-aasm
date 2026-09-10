@@ -59,7 +59,6 @@ export class ArkConfigService {
     { key: "dayCycleSpeedScale",                       iniKey: "DayCycleSpeedScale",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dayTimeSpeedScale",                        iniKey: "DayTimeSpeedScale",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "nightTimeSpeedScale",                      iniKey: "NightTimeSpeedScale",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bDisableStructurePlacementCollision",      iniKey: "bDisableStructurePlacementCollision",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "structureDamageMultiplier",                iniKey: "StructureDamageMultiplier",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "structureResistanceMultiplier",            iniKey: "StructureResistanceMultiplier",              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "overrideStructurePlatformPrevention",      iniKey: "OverrideStructurePlatformPrevention",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -144,6 +143,9 @@ export class ArkConfigService {
     // =====================================================
     // Game.ini - [/script/shootergame.shootergamemode]
     // =====================================================
+    // bDisableStructurePlacementCollision is a ShooterGameMode setting. ARK ignores it in
+    // GameUserSettings.ini [ServerSettings], so writing it there silently did nothing.
+    { key: "bDisableStructurePlacementCollision",      iniKey: "bDisableStructurePlacementCollision",        destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bDisableGenesis",                          iniKey: "bDisableGenesis",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bAutoUnlockAllEngrams",                    iniKey: "bAutoUnlockAllEngrams",                     destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "globalVoiceChat",                          iniKey: "GlobalVoiceChat",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },

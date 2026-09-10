@@ -114,6 +114,8 @@
       [isLocked]="isLocked"
       [generalFields]="generalFields"
       [dropdownOpen]="dropdownOpen"
+      [fieldErrors]="fieldErrors"
+      [fieldWarnings]="fieldWarnings"
       (saveSettings)="onSaveSettings()"
       (validateField)="validateField($event.key, $event.value)"
       (toggleMultiOption)="onToggleMultiOption($event.key, $event.option, $event.checked)"

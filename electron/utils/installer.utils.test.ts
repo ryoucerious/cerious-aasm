@@ -181,6 +181,35 @@ describe('installer.utils', () => {
   // });
 
   describe('cancelInstaller', () => {
+    // SteamCMD's download/extract runs in-process now, so there is no pty to kill —
+    // cancelling has to go through the registered AbortController instead.
+    it('should abort an in-process installer and clear the controller', () => {
+      const controller = new AbortController();
+      installerUtils.setCurrentAbort(controller);
+
+      installerUtils.cancelInstaller();
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(installerUtils.currentAbort).toBeNull();
+    });
+
+    it('should not throw when no abort controller is registered', () => {
+      installerUtils.setCurrentAbort(null);
+
+      expect(() => installerUtils.cancelInstaller()).not.toThrow();
+    });
+
+    it('should abort the controller and kill processes together', () => {
+      const controller = new AbortController();
+      installerUtils.setCurrentAbort(controller);
+      installerUtilsMutable.currentProc = mockProc;
+
+      installerUtils.cancelInstaller();
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(mockProc.kill).toHaveBeenCalled();
+    });
+
     it('should kill current process and set flags', () => {
       installerUtilsMutable.currentProc = mockProc;
 

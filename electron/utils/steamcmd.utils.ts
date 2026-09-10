@@ -1,8 +1,9 @@
 
 import * as path from 'path';
 import * as pty from 'node-pty';
+import axios from 'axios';
 import { getDefaultInstallDir } from './platform.utils';
-import { runInstaller } from './installer.utils';
+import { setCurrentAbort } from './installer.utils';
 import * as fs from 'fs';
 
 
@@ -21,59 +22,133 @@ export function isSteamCmdInstalled(): boolean {
   }
 }
 
+const STEAMCMD_URLS = {
+  win32: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
+  linux: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz',
+};
+
+/** Download and extract share the progress bar: 0-50% download, 50-100% extract. */
+const PHASE_SPLIT = 50;
+
+/**
+ * Stream a URL to disk, reporting real byte progress.
+ *
+ * This used to shell out — `powershell.exe -Command Invoke-WebRequest` on Windows and
+ * `bash -c curl` on Linux — and scrape percentages out of a pty. Streaming it here means
+ * no shell at all: no PowerShell download cradle for antivirus to flag, no dependence on
+ * curl/tar being present, and Content-Length gives exact progress instead of the 5 MB
+ * guess the old Windows path divided by.
+ */
+async function downloadFile(
+  url: string,
+  destination: string,
+  signal: AbortSignal,
+  onBytes: (received: number, total: number) => void
+): Promise<void> {
+  const response = await axios.get(url, {
+    responseType: 'stream',
+    signal,
+    maxRedirects: 5,
+  });
+
+  const total = Number(response.headers['content-length']) || 0;
+  let received = 0;
+
+  await new Promise<void>((resolve, reject) => {
+    const out = fs.createWriteStream(destination);
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      out.destroy();
+      response.data.destroy();
+      reject(err);
+    };
+
+    // An abort mid-stream must reject rather than leave a truncated archive behind that
+    // the extract step would then fail on with a confusing error.
+    const onAbort = () => fail(new Error('Install cancelled.'));
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    response.data.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      onBytes(received, total);
+    });
+    response.data.on('error', fail);
+    out.on('error', fail);
+    out.on('finish', () => {
+      signal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      resolve();
+    });
+
+    response.data.pipe(out);
+  });
+}
+
+/**
+ * Unpack the SteamCMD archive. The format differs by platform — a zip on Windows, a
+ * gzipped tar on Linux — so the two branches are inherent, but neither spawns a process.
+ */
+async function extractArchive(archivePath: string, destination: string): Promise<void> {
+  // Both libraries are required lazily rather than imported at the top: `tar` reads
+  // `path.win32` during module init, which throws in any test that mocks the path module,
+  // and each platform only ever needs one of the two.
+  if (process.platform === 'win32') {
+    const AdmZip = require('adm-zip');
+    // adm-zip is synchronous; SteamCMD's zip is a few MB, so this is not worth a worker.
+    new AdmZip(archivePath).extractAllTo(destination, true);
+  } else {
+    const tar = require('tar');
+    await tar.x({ file: archivePath, cwd: destination });
+  }
+}
+
 export function installSteamCmd(callback: (err: Error | null, output?: string) => void, onData?: (data: any) => void) {
   const dir = getSteamCmdDir();
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const url = process.platform === 'win32'
-    ? 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip'
-    : 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz';
-  const archivePath = path.join(dir, process.platform === 'win32' ? 'steamcmd.zip' : 'steamcmd_linux.tar.gz');
-  runInstaller(
-    {
-      command: process.platform === 'win32' ? 'powershell.exe' : 'bash',
-      args: process.platform === 'win32'
-        ? ['-Command', `Invoke-WebRequest -Uri \"${url}\" -OutFile \"${archivePath}\"`]
-        : ['-c', `curl -L ${url} -o ${archivePath}`],
-      cwd: dir,
-      estimatedTotal: process.platform === 'win32' ? 5 * 1024 * 1024 : undefined,
-      phaseSplit: 50,
-      parseProgress: (data, lastPercent, estimatedTotal) => {
-        if (process.platform === 'win32') {
-          const match = /Number of bytes written: (\d+)/.exec(data);
-          if (match && estimatedTotal) {
-            const bytes = parseInt(match[1], 10);
-            let percent = Math.floor((bytes / estimatedTotal) * 50);
-            if (percent > 50) percent = 50;
-            return percent > lastPercent ? percent : null;
-          }
-          return null;
-        } else {
-          return lastPercent < 50 ? lastPercent + 5 : null;
-        }
-      },
-      extractPhase: () => process.platform === 'win32'
-        ? {
-            command: 'powershell.exe',
-            args: ['-Command', `Expand-Archive -Path \"${archivePath}\" -DestinationPath \"${dir}\" -Force`],
-            cwd: dir,
-          }
-        : {
-            command: 'bash',
-            args: ['-c', `tar -xzf ${archivePath} -C ${dir}`],
-            cwd: dir,
-          },
-    },
-    // Only send structured progress, not raw terminal output
-    (progress) => {
-      if (onData) {
-        onData(progress);
+
+  const isWindows = process.platform === 'win32';
+  const url = isWindows ? STEAMCMD_URLS.win32 : STEAMCMD_URLS.linux;
+  const archivePath = path.join(dir, isWindows ? 'steamcmd.zip' : 'steamcmd_linux.tar.gz');
+
+  const report = (percent: number, step: string, message: string) => {
+    if (onData) {
+      onData({ percent, step, message });
+    }
+  };
+
+  // Registered so the existing Cancel button (cancelInstaller) can stop the download.
+  const abort = new AbortController();
+  setCurrentAbort(abort);
+
+  report(0, 'download', 'Downloading SteamCMD...');
+
+  let lastPercent = 0;
+  const run = async () => {
+    await downloadFile(url, archivePath, abort.signal, (received, total) => {
+      if (!total) return;
+      const percent = Math.min(Math.floor((received / total) * PHASE_SPLIT), PHASE_SPLIT);
+      if (percent > lastPercent) {
+        lastPercent = percent;
+        report(percent, 'download', `Downloading... (${percent}%)`);
       }
-    },
-    (err, output) => {
+    });
+
+    report(PHASE_SPLIT, 'extract', 'Download complete. Extracting...');
+    await extractArchive(archivePath, dir);
+    report(100, 'complete', 'Extraction complete.');
+  };
+
+  run().then(
+    () => {
+      setCurrentAbort(null);
+
       // On Linux, ensure steamcmd.sh is executable after extraction
-      if (!err && process.platform !== 'win32') {
+      if (process.platform !== 'win32') {
         const steamcmdSh = path.join(dir, 'steamcmd.sh');
         if (fs.existsSync(steamcmdSh)) {
           try { fs.chmodSync(steamcmdSh, '755'); } catch (e) {
@@ -81,15 +156,19 @@ export function installSteamCmd(callback: (err: Error | null, output?: string) =
           }
         }
       }
-      if (err) {
-        callback(err, output);
-        return;
-      }
+
       // SteamCMD must self-update on first run before it can process commands.
       // Run it once with +quit to complete the self-update.
       initializeSteamCmd(dir, onData, () => {
-        callback(null, output);
+        callback(null, 'SteamCMD installed');
       });
+    },
+    (err: any) => {
+      setCurrentAbort(null);
+      const message = err?.message || String(err);
+      console.error('[steamcmd] Install failed:', message);
+      report(lastPercent, 'error', message);
+      callback(err instanceof Error ? err : new Error(message));
     }
   );
 }

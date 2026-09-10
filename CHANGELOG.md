@@ -4,6 +4,23 @@ All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-09-10
+
+Adds a MultiHome bind address for servers reached over a VPN or tunnel, and repairs two
+settings that silently did nothing — a structure toggle written to the wrong INI file, and
+toast text that was invisible in the light theme. SteamCMD no longer installs itself
+through a shell.
+
+### Bug Fixes
+
+- **Toast Messages Were Unreadable in Light Mode**: ngx-toastr renders each toast with its `toastClass` (`ngx-toastr`), never a `.toast` class, so the app's `.toast` rule — which set the themed text colour — matched nothing and had in fact never applied. The library's own `.toast-container .ngx-toastr { color: #FFFFFF }` decided the text colour instead. The per-type rules did theme the background, so light mode ended up with white text on a near-white surface at 1.07:1 contrast. Toast text now resolves to the theme token (12.56:1 in light, unchanged in dark). The close button's white text-shadow, which haloed the themed glyph, and the library's hard-coded white on toast links are fixed alongside it.
+- **"Disable Structure Placement Collision" Did Nothing**: `bDisableStructurePlacementCollision` was written to `GameUserSettings.ini` under `[ServerSettings]`, but ARK reads it from `Game.ini` under `[/script/shootergame.shootergamemode]` — so the toggle had no effect on the server. Editing `Game.ini` by hand did not work either: the key is app-managed, so the hand-added line was stripped and re-added to `GameUserSettings.ini` on the next launch. It is now written to `Game.ini`, and the stale `GameUserSettings.ini` entry is cleaned up on the next start.
+
+### New Features & Improvements
+
+- **SteamCMD Is Downloaded and Extracted In-Process, Not Through a Shell**: Installing SteamCMD shelled out to fetch and unpack the archive — `powershell.exe -Command Invoke-WebRequest` and `Expand-Archive` on Windows, `bash -c curl` and `bash -c tar` on Linux — and scraped progress percentages out of a pty. The download now streams through `axios` and the archive is unpacked with `adm-zip` (Windows) or `tar` (Linux), all in-process. No shell is involved, so antivirus no longer sees the `powershell.exe … Invoke-WebRequest` download-cradle pattern, and the install no longer depends on curl/tar being on PATH. Progress comes from the response's `Content-Length` rather than dividing by a hardcoded 5 MB guess. Cancel still works: an in-process install registers an `AbortController` that `cancelInstaller` aborts. The ARK server and SteamCMD app installs were already spawned directly and are unchanged.
+- **MultiHome IP Is Now Configurable**: `MultiHome=0.0.0.0` was hardcoded onto the launch command line so each instance would bind its own sockets. That binds every interface, which broke setups that route player traffic through a VPN or tunnel (ZeroTier, WireGuard) to a VPS — the server advertised the host's own address and players could not connect. Server Settings → General → Network Settings now has a **MultiHome IP** field. Leave it empty to keep the previous behaviour of binding all interfaces; set it to the address of the interface players reach the server through. Only dotted-quad IPv4 is accepted, since the value is interpolated into the `?`-delimited launch URL; anything malformed is rejected in the UI and falls back to `0.0.0.0` at launch.
+
 ## [1.0.20] - 2026-08-19
 
 Adds a light theme, and repairs a restore path that could delete the shared ARK

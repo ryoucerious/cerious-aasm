@@ -14,6 +14,8 @@ export interface ServerInstance {
   gamePort?: number;
   rconPort?: number;
   queryPort?: number;
+  /** Local address the server binds its sockets to (?MultiHome=). Empty means 0.0.0.0 (all interfaces). */
+  multiHome?: string;
   rconPassword?: string;
   bPvE?: boolean;
   serverPVE?: boolean;

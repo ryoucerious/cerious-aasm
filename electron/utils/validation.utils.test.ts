@@ -209,6 +209,11 @@ describe('Validation Utils', () => {
             expect(validateIPAddress('192.168.1.1.1')).toBe(false);
             expect(validateIPAddress('abc.def.ghi.jkl')).toBe(false);
             expect(validateIPAddress('1234.123.123.123')).toBe(false);
+            expect(validateIPAddress('1234')).toBe(false);
+            expect(validateIPAddress('192.168.001.1')).toBe(false); // zero-padded octet
+            expect(validateIPAddress('192.168.1.1?Foo=bar')).toBe(false);
+            expect(validateIPAddress('192.168.1.1 ')).toBe(false);
+            expect(validateIPAddress('192.168.1.-1')).toBe(false);
             expect(validateIPAddress(null as any)).toBe(false);
             expect(validateIPAddress(undefined as any)).toBe(false);
             expect(validateIPAddress(123 as any)).toBe(false);

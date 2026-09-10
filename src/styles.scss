@@ -888,13 +888,19 @@ ng-container > .card:last-child,
 .toast-top-right, .toast-bottom-right, .toast-top-left, .toast-bottom-left {
   z-index: 9999;
 }
-.toast {
-  background: var(--surface-raised-4) !important;
+// ngx-toastr renders each toast with its `toastClass` (default `ngx-toastr`) plus the
+// type class below — never a plain `.toast` class. A `.toast` rule therefore matches
+// nothing, and the library's own `.toast-container .ngx-toastr { color: #FFFFFF }` wins
+// by default. That was survivable on the dark theme but left white text on the light
+// theme's toast surface (1.07:1), so toasts were unreadable in light mode. Match the
+// library's selector so the themed colour applies.
+//
+// Only the colour is set here on purpose: the type rules below already own background,
+// border and shadow, and the toast font is left inheriting the app's — the old `.toast`
+// block asked for 15px Roboto but never applied, so adopting it now would resize toasts
+// in the dark theme too.
+.toast-container .ngx-toastr {
   color: var(--text-emphasis) !important;
-  border-radius: 8px !important;
-  font-family: 'Roboto', sans-serif;
-  font-size: 15px;
-  border: 1px solid var(--border-strong-1);
 }
 .toast-success {
   background: var(--surface-raised-4) !important;
@@ -1014,6 +1020,9 @@ ng-container > .card:last-child,
 }
 .toast-close-button {
   color: var(--text-primary) !important;
+  // The library pairs its white glyph with a white text-shadow; with the glyph themed
+  // dark, that shadow is just a halo on the light theme's toast surface.
+  text-shadow: none !important;
   opacity: 0.7;
   font-size: 1.2em;
   transition: opacity 0.2s;
@@ -1028,6 +1037,10 @@ ng-container > .card:last-child,
 }
 .toast-message {
   padding-left: 2px;
+}
+.toast-message a,
+.toast-message label {
+  color: var(--text-emphasis) !important;
 }
 /* --- GLOBAL APP LAYOUT & COLORS --- */
 html, body {
