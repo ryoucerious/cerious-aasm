@@ -69,12 +69,14 @@ describe('ServerManagementService', () => {
     serverProcessServiceMock = {
       getServerProcess: jest.fn(),
       getNormalizedInstanceState: jest.fn(),
+      getProcessStartTime: jest.fn(),
       stopServerInstance: jest.fn()
     };
   jest.mocked(require('./server-process.service')).serverProcessService = serverProcessServiceMock;
 
     serverMonitoringServiceMock = {
       getLatestPlayerCount: jest.fn(),
+      getLatestCpuPercent: jest.fn(),
       stopPlayerPolling: jest.fn(),
       stopMemoryPolling: jest.fn()
     };
@@ -115,6 +117,8 @@ describe('ServerManagementService', () => {
       serverProcessServiceMock.getServerProcess.mockReturnValue({ pid: 123 });
       getProcessMemoryUsageMock.mockReturnValue(512);
       serverMonitoringServiceMock.getLatestPlayerCount.mockReturnValue(5);
+      serverMonitoringServiceMock.getLatestCpuPercent.mockReturnValue(7.5);
+      serverProcessServiceMock.getProcessStartTime.mockReturnValue(1700000000000);
 
       const result = await serverManagementService.getAllInstances();
 
@@ -125,6 +129,8 @@ describe('ServerManagementService', () => {
             name: 'Server 1',
             state: 'running',
             memory: 512,
+            cpu: 7.5,
+            startedAt: 1700000000000,
             players: 5
           },
           {
@@ -132,6 +138,8 @@ describe('ServerManagementService', () => {
             name: 'Server 2',
             state: 'running',
             memory: 512,
+            cpu: 7.5,
+            startedAt: 1700000000000,
             players: 5
           }
         ]
@@ -152,6 +160,8 @@ describe('ServerManagementService', () => {
         name: 'Server 1',
         state: 'stopped',
         memory: undefined,
+        cpu: null,
+        startedAt: null,
         players: undefined
       });
     });

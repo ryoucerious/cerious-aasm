@@ -15,7 +15,8 @@ describe('ServerInstanceService', () => {
   beforeEach(() => {
     messaging = jasmine.createSpyObj('MessagingService', ['receiveMessage', 'sendMessage']);
     http = jasmine.createSpyObj('HttpClient', ['get', 'post']);
-    ws = jasmine.createSpyObj('WebSocketService', ['connect', 'disconnect']);
+    // The service re-asks for the list whenever the socket comes up.
+    ws = jasmine.createSpyObj('WebSocketService', ['connect', 'disconnect'], { connected$: of(false) });
     util = jasmine.createSpyObj('UtilityService', ['getPlatform']);
     messaging.receiveMessage.and.callFake(<T = any>(channel: string): any => {
       if (channel === 'server-instances') return of([{ id: '1', name: 'Test', state: 'stopped' }] as T);

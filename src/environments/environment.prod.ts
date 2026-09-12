@@ -1,5 +1,5 @@
 export const environment = {
   production: true,
-  version: '1.0.21',
+  version: '1.1.0',
   curseForgeApiKey: 'CURSEFORGE_KEY_PLACEHOLDER'
 };

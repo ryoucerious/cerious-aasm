@@ -238,6 +238,8 @@ export interface ServerInstance {
   // Runtime information (not persisted)
   players?: number; // Current player count
   memory?: number; // Memory usage in MB (runtime only)
+  cpu?: number | null; // Process CPU usage as a percentage of the whole machine (runtime only)
+  startedAt?: number | null; // Epoch ms the server process was spawned, for uptime (runtime only)
   message?: string; // Status message (runtime only)
 
   // Discord Integration

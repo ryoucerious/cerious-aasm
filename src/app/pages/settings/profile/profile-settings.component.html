@@ -1,0 +1,73 @@
+<div class="profile-settings settings-pane">
+  <!-- Who you are -->
+  <section class="settings-card">
+  <div class="profile-identity">
+    <span class="profile-avatar">{{ displayName.charAt(0).toUpperCase() }}</span>
+    <div class="profile-identity-text">
+      <div class="profile-name">{{ displayName }}</div>
+      <div class="profile-meta">
+        {{ roleName }}
+        <span *ngIf="identity?.user?.username"> · {{ identity?.user?.username }}</span>
+      </div>
+    </div>
+  </div>
+
+  <dl class="profile-facts">
+    <div class="profile-fact">
+      <dt>Role</dt>
+      <dd>{{ roleName }}</dd>
+    </div>
+    <div class="profile-fact">
+      <dt>Permissions</dt>
+      <dd>{{ identity?.isAdmin ? 'All' : permissionCount }}</dd>
+    </div>
+    <div class="profile-fact" *ngIf="hasAccount">
+      <dt>Last sign-in</dt>
+      <dd>{{ identity?.user?.lastLoginAt ? (identity?.user?.lastLoginAt | date:'short') : 'This session' }}</dd>
+    </div>
+  </dl>
+
+  </section>
+
+  <!-- Nothing to manage without an account behind the session -->
+  <div class="ark-install-notice" *ngIf="!hasAccount">
+    <i class="material-icons">info</i>
+    <span *ngIf="isDesktop">
+      The desktop app runs as the owner of this machine and does not sign in, so there is no
+      password to change here. Accounts under Users &amp; Roles control who can use the web interface.
+    </span>
+    <span *ngIf="!isDesktop">
+      This web console is open without authentication, so no account backs this session. Turn
+      authentication on under Web Server and give each person an account under Users &amp; Roles.
+    </span>
+  </div>
+
+  <!-- Change your own password -->
+  <section class="settings-card" *ngIf="hasAccount">
+    <h3 class="settings-card-title">Change your password</h3>
+    <p class="settings-card-hint">Signing in elsewhere continues until those sessions end.</p>
+
+    <div class="form-group">
+      <label class="form-control-label">Current password</label>
+      <input type="password" class="form-control" [(ngModel)]="form.current" [disabled]="saving" autocomplete="current-password" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">New password</label>
+      <input type="password" class="form-control" [(ngModel)]="form.next" [disabled]="saving"
+             placeholder="At least 8 characters" autocomplete="new-password" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Confirm new password</label>
+      <input type="password" class="form-control" [(ngModel)]="form.confirm" [disabled]="saving" autocomplete="new-password" />
+      <div class="form-control-label desc form-error" *ngIf="!passwordsMatch">
+        The two passwords do not match.
+      </div>
+    </div>
+
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="changePassword()" [disabled]="!canSave">
+        <i class="material-icons">key</i> Change password
+      </button>
+    </div>
+  </section>
+</div>

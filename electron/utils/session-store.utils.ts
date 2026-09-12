@@ -4,11 +4,18 @@ import path from 'path';
 import { getDefaultInstallDir } from './platform.utils';
 
 /**
- * Session data interface
+ * Session data interface.
+ *
+ * Carries the resolved account so the WebSocket handshake and the permission checks that
+ * follow do not need another database round trip. `userId` is absent for sessions created
+ * before accounts existed, and for the legacy single-login mode.
  */
 export interface SessionData {
   username: string;
   created: Date;
+  userId?: string;
+  roleId?: string;
+  permissions?: string[];
 }
 
 // Module-level state
@@ -233,6 +240,26 @@ export function deleteSession(token: string): boolean {
  * @param token - Session token
  * @returns True if session exists
  */
+/**
+ * Remove sessions for one user, or for everyone with a given role. Used when an account is
+ * demoted, disabled or deleted so its rights stop applying immediately.
+ * Returns how many sessions were dropped.
+ */
+export function invalidateSessionsFor(filter: { userId?: string; roleId?: string }): number {
+  if (!initialized) initializeSecureSessionStore();
+  let removed = 0;
+  for (const [token, session] of Array.from(sessions.entries())) {
+    const matchesUser = filter.userId && session.userId === filter.userId;
+    const matchesRole = filter.roleId && session.roleId === filter.roleId;
+    if (matchesUser || matchesRole) {
+      sessions.delete(token);
+      removed++;
+    }
+  }
+  if (removed > 0) saveSessions();
+  return removed;
+}
+
 export function hasSession(token: string): boolean {
   if (!initialized) initializeSecureSessionStore();
   return sessions.has(token);

@@ -48,7 +48,7 @@ export class ServerLifecycleService {
     
     // Show toast notification that we're stopping the server
     const serverName = serverInstance.name || serverInstance.id;
-    this.notificationService.info(`Stopping server ${serverName}...`, 'Server Control');
+    this.notificationService.info(`Stopping ${serverName}...`, 'Server Control');
     
     // First, broadcast a shutdown message to the server using ServerChat
     this.rconManagementService.sendRconCommand(

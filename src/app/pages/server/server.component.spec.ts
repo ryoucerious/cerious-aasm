@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
+import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ServerComponent } from './server.component';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
@@ -241,7 +242,28 @@ describe('ServerComponent', () => {
     expect(mockServerConfig.saveServerSettings).not.toHaveBeenCalled();
   });
 
-  it('should default activeTab to general', () => {
-    expect(component.activeTab).toBe('general');
+  it('should default activeTab to the console', () => {
+    expect(component.activeTab).toBe('console');
+    expect(component.isSettingsTab).toBeFalse();
+    expect(component.pageTitle).toBe('Console');
+  });
+
+  it('should navigate when a child requests another tab', () => {
+    const router = TestBed.inject(Router);
+    spyOn(router, 'navigate').and.returnValue(Promise.resolve(true));
+    component.onTabChanged('rates');
+    expect(router.navigate).toHaveBeenCalledWith(['/server', 'rates']);
+    component.onTabChanged('not-a-tab');
+    expect(router.navigate).toHaveBeenCalledTimes(1);
+    component.goToDashboard();
+    expect(router.navigate).toHaveBeenCalledWith(['/dashboard']);
+  });
+
+  it('should treat configuration pages as settings tabs', () => {
+    component.activeTab = 'general';
+    expect(component.isSettingsTab).toBeTrue();
+    expect(component.pageTitle).toBe('General');
+    component.activeTab = 'players';
+    expect(component.isSettingsTab).toBeFalse();
   });
 });

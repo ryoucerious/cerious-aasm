@@ -1,4 +1,4 @@
-import { getProcessMemoryUsage } from '../../utils/platform.utils';
+import { getProcessMemoryUsage, getProcessCpuSeconds, processCpuPercent } from '../../utils/platform.utils';
 import { rconService } from '../rcon.service';
 import { isRconConnected, isRconConnecting } from '../../utils/rcon.utils';
 import { ServerStateResult, ServerLogsResult, PlayerCountResult } from '../../types/server-instance.types';
@@ -23,6 +23,11 @@ export class ServerMonitoringService {
 
   // Track callbacks for memory updates
   private memoryUpdateCallbacks: Record<string, (instanceId: string, memory: number) => void> = {};
+
+  // CPU polling: interval handles, the previous sample per instance, and the latest percentage
+  private cpuPollingIntervals: Record<string, NodeJS.Timeout> = {};
+  private cpuSamples: Record<string, { seconds: number; at: number }> = {};
+  private latestCpuPercents: Record<string, number> = {};
 
   /**
    * Get server instance state (uses backend state utils)
@@ -180,6 +185,57 @@ export class ServerMonitoringService {
     if (this.memoryUpdateCallbacks[instanceId]) {
       delete this.memoryUpdateCallbacks[instanceId];
     }
+  }
+
+  /**
+   * Start polling the server process for CPU usage. The first tick only records a baseline;
+   * every tick after that reports the percentage of total machine capacity used since the
+   * previous tick, so the number reflects recent load rather than the lifetime average.
+   */
+  startCpuPolling(instanceId: string, callback: (instanceId: string, cpuPercent: number) => void, intervalMs = 10000): void {
+    this.stopCpuPolling(instanceId);
+
+    this.cpuPollingIntervals[instanceId] = setInterval(() => {
+      try {
+        const { serverProcessService } = require('./server-process.service');
+        const process = serverProcessService.getServerProcess(instanceId);
+        if (!process || !process.pid) return;
+
+        const seconds = getProcessCpuSeconds(process.pid);
+        if (seconds === null) return;
+
+        const now = Date.now();
+        const previous = this.cpuSamples[instanceId];
+        this.cpuSamples[instanceId] = { seconds, at: now };
+        if (!previous) return; // baseline only
+
+        const percent = processCpuPercent(previous.seconds, seconds, now - previous.at);
+        this.latestCpuPercents[instanceId] = percent;
+        callback(instanceId, percent);
+      } catch (error) {
+        console.debug(`[server-monitoring-service] CPU polling error for ${instanceId}:`, error);
+      }
+    }, intervalMs);
+  }
+
+  /**
+   * Stop CPU polling and forget the last reading so a stopped server does not report stale load.
+   */
+  stopCpuPolling(instanceId: string): void {
+    if (this.cpuPollingIntervals[instanceId]) {
+      clearInterval(this.cpuPollingIntervals[instanceId]);
+      delete this.cpuPollingIntervals[instanceId];
+    }
+    delete this.cpuSamples[instanceId];
+    delete this.latestCpuPercents[instanceId];
+  }
+
+  /**
+   * Latest CPU percentage for an instance, or null when none has been measured yet.
+   */
+  getLatestCpuPercent(instanceId: string): number | null {
+    const value = this.latestCpuPercents[instanceId];
+    return typeof value === 'number' ? value : null;
   }
 
   /**

@@ -1,0 +1,1105 @@
+/* --- DASHBOARD, SERVER CARDS, SERVER HEADER, SETTINGS PANEL ---
+ * Layout and chrome for the refreshed pages. Colours come from _theme.scss tokens; map
+ * artwork gradients are inline (decorative, theme-independent).
+ */
+@use 'variables' as *;
+
+// =========================
+// DASHBOARD FRAME
+// =========================
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.dash-card {
+  background: var(--surface);
+  border: 1px solid var(--card-outline);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem 1.25rem;
+  box-shadow: 0 1px 2px var(--shadow-color-soft);
+}
+
+.dash-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+
+  h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: $font-semibold;
+    color: var(--text-strong);
+  }
+}
+
+.dash-card-sub {
+  font-weight: $font-normal;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.dash-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.dash-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+// =========================
+// HERO
+// =========================
+.dash-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  padding: 1.75rem 2rem 1.5rem;
+  min-height: 190px;
+  background-color: var(--surface);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  border: 1px solid var(--card-outline);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+// The artwork is shown as it is; the welcome text carries its own shadow instead of a wash
+// across the photo.
+.dash-hero-art {
+  display: none;
+}
+
+.dash-hero-content {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+// Over photographs of every brightness, so the text is white with a shadow rather than a
+// theme colour that only works against one of them.
+.dash-hero-title {
+  margin: 0 0 0.35rem;
+  font-size: 2rem;
+  font-weight: $font-bold;
+  color: #fff;
+  letter-spacing: -0.01em;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85), 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.dash-hero-subtitle {
+  margin: 0 0 1.25rem;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 1rem;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+}
+
+.dash-stat-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.dash-stat-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  min-width: 150px;
+  // Its own dark ground, blurred over whatever part of the photograph it lands on, since
+  // the artwork behind it runs from bright sky to deep water.
+  background: rgba(8, 12, 20, 0.68);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+}
+
+.dash-stat-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  .material-icons {
+    font-size: 22px;
+  }
+}
+
+.dash-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+
+  &.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+  &.offline { background: var(--text-secondary-1); }
+}
+
+.dash-stat-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.dash-stat-value {
+  font-size: 1.35rem;
+  font-weight: $font-semibold;
+  color: #fff;
+}
+
+.dash-stat-label {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.tone-success-text { color: var(--success); }
+
+.dash-hero-quote {
+  position: relative;
+  z-index: 1;
+  text-align: right;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+  font-style: italic;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+
+.dash-hero-quote-by {
+  color: rgba(255, 255, 255, 0.75);
+  font-style: normal;
+}
+
+// =========================
+// SERVERS SECTION
+// =========================
+.dash-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.dash-section-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dash-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dash-view-toggle {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.dash-toggle-btn {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+
+  .material-icons { font-size: 20px; }
+
+  &.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+}
+
+// The toolbar dropdowns are the shared app-dropdown sized to their content.
+.dash-toolbar .dash-select {
+  display: block;
+  width: 150px;
+  flex: 0 0 auto;
+
+  &.dash-select-wide { width: 170px; }
+}
+
+.server-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.25rem;
+  min-height: 120px;
+
+  &.list-view {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+}
+
+.dash-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px dashed var(--border-muted);
+  border-radius: 12px;
+
+  // Direct child only, so the Add Server button's own icon keeps the button's text colour.
+  > .material-icons {
+    font-size: 40px;
+    color: var(--text-secondary-1);
+  }
+
+  p { margin: 0.5rem 0 1rem; }
+}
+
+// =========================
+// SERVER CARD
+// =========================
+.server-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--card-outline);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px var(--shadow-color-soft);
+  transition: transform $transition-fast, box-shadow $transition-fast, border-color $transition-fast;
+  height: 100%;
+
+  &:hover {
+    box-shadow: 0 8px 24px var(--shadow-color-soft);
+    border-color: var(--border-muted);
+  }
+
+  &.online .server-card-hero-shade {
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0.55) 100%);
+  }
+}
+
+.server-card-hero {
+  position: relative;
+  height: 128px;
+  color: #fff;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.server-card-hero-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0.65) 100%);
+}
+
+.server-card-drag {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 20px;
+  cursor: grab;
+}
+
+.server-card-title {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 0.85rem;
+}
+
+.server-card-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.server-card-name {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: $font-bold;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  @include text-ellipsis;
+  min-width: 0;
+}
+
+.card-status.status-badge {
+  margin-left: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.6rem;
+  flex-shrink: 0;
+}
+
+// What players see this server called, which is not always what it is called here.
+.server-card-session {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  // The card is a button; its text is read, not selected.
+  cursor: inherit;
+  user-select: none;
+
+  .material-icons {
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+}
+
+.server-card-session-name {
+  @include text-ellipsis;
+}
+
+.server-card-map {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  margin-top: 0.15rem;
+}
+
+.server-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem 1rem;
+  flex: 1 1 auto;
+}
+
+.server-card-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.server-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+
+  .material-icons {
+    font-size: 18px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+}
+
+.server-stat-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.server-stat-value {
+  font-size: 0.9rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  @include text-ellipsis;
+}
+
+.server-stat-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  @include text-ellipsis;
+}
+
+.server-card-spark {
+  height: 36px;
+
+  .sparkline {
+    width: 100%;
+    height: 36px;
+    display: block;
+  }
+
+  &.dim { opacity: 0.55; }
+}
+
+.server-card-actions {
+  display: flex;
+  // Stretch rather than a fixed height: the buttons keep the standard .btn metrics (which
+  // scale with the 12px root font size), and any one of them growing takes the others with it.
+  align-items: stretch;
+  gap: 0.5rem;
+  margin-top: auto;
+
+  // Start sits at its own width beside Console rather than stretching across the card; the
+  // menu button is pushed to the far end.
+  .btn:first-child {
+    flex: 0 0 auto;
+  }
+
+  .server-card-menu-anchor {
+    margin-left: auto;
+  }
+
+  // .btn-icon-only reserves a 2.5rem box, which is taller than a standard button; here the
+  // menu button should be exactly as tall as Start and Console, just narrower.
+  .btn-icon-only {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.4rem 0.55rem;
+  }
+}
+
+.server-card-menu-anchor {
+  position: relative;
+  margin-left: auto;
+  display: flex;
+}
+
+.card-menu {
+  // Fixed, so the card's own overflow: hidden cannot clip it. The component sets the
+  // coordinates from the button's position.
+  position: fixed;
+  min-width: 170px;
+  background: var(--surface);
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px var(--shadow-color);
+  padding: 0.35rem;
+  z-index: 1100;
+}
+
+.card-menu-item {
+  @include button-reset;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: 7px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  text-align: left;
+
+  .material-icons { font-size: 18px; color: var(--text-secondary); }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  &.danger { color: var(--danger); .material-icons { color: var(--danger); } }
+}
+
+// List view: hero becomes a slim left strip, everything else flows in one row
+.server-card.list-view {
+  flex-direction: row;
+  align-items: stretch;
+
+  .server-card-hero {
+    width: 220px;
+    height: auto;
+    min-height: 96px;
+    flex-shrink: 0;
+  }
+
+  .server-card-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 0.75rem 1rem;
+  }
+
+  // A quarter of the leftover width is not enough for "0 / 70 Players", so in a row the
+  // stats take their natural width and wrap instead of ellipsing to a single character.
+  .server-card-stats {
+    flex: 1 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.5rem;
+    min-width: 0;
+  }
+
+  .server-stat {
+    flex: 0 0 auto;
+  }
+
+  // In a row the session name is one item among several, so it gives up width before the
+  // stats do and steps out entirely once the row is tight rather than being run over.
+  .server-card-session {
+    flex: 0 1 11rem;
+    min-width: 0;
+  }
+
+  @media (max-width: 1100px) {
+    .server-card-session { display: none; }
+  }
+
+  // The sparkline is the least important thing in the row, so it gives up its width first
+  // and drops out entirely once the row is tight.
+  .server-card-spark {
+    flex: 0 1 160px;
+    min-width: 0;
+  }
+
+  @media (max-width: 1100px) {
+    .server-card-spark { display: none; }
+  }
+
+  .server-card-actions {
+    margin-top: 0;
+    flex-shrink: 0;
+
+    .btn:first-child { flex: 0 0 auto; }
+  }
+}
+
+// =========================
+// BOTTOM ROW: chart, uptime, promo
+// =========================
+.dash-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.dash-chart-stats {
+  display: flex;
+  gap: 1.25rem;
+
+  span {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.15;
+  }
+
+  small { font-size: 0.72rem; color: var(--text-secondary); }
+  strong { font-size: 1.1rem; color: var(--text-strong); }
+}
+
+.dash-chart {
+  position: relative;
+  padding: 0 0 1.4rem 2rem;
+}
+
+.dash-chart-svg {
+  display: block;
+  width: 100%;
+  height: 150px;
+}
+
+.dash-chart-gridline {
+  stroke: var(--border-muted-1);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+
+  // The chart stands on this one, so it is drawn as a line rather than a guide.
+  &.baseline {
+    stroke: var(--border-muted);
+    stroke-dasharray: none;
+  }
+}
+
+.dash-chart-line {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dash-chart-yaxis {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 150px;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  width: 1.75rem;
+  text-align: right;
+}
+
+.dash-chart-xaxis {
+  position: relative;
+  height: 1.2rem;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+
+  span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  // The labels at either end are pulled inside the chart rather than half cut off by it.
+  span:first-child { transform: none; }
+  span:last-child { transform: translateX(-100%); }
+}
+
+// Nothing has been recorded yet: say so rather than draw an empty grid.
+.dash-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-height: 150px;
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+
+  .material-icons {
+    font-size: 28px;
+    color: var(--text-secondary-1);
+  }
+
+  p { margin: 0; }
+}
+
+.dash-uptime-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  height: 170px;
+  padding-top: 0.25rem;
+}
+
+.dash-uptime-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  height: 100%;
+}
+
+.dash-uptime-value {
+  font-size: 0.72rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.dash-uptime-track {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 44px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface-base);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dash-uptime-fill {
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(180deg, var(--success) 0%, var(--success-2) 100%);
+  transition: height 0.4s ease;
+
+  &.empty { height: 3px !important; background: var(--border-muted); }
+}
+
+.dash-uptime-name {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  max-width: 100%;
+  @include text-ellipsis;
+}
+
+// =========================
+// SIDE COLUMN
+// =========================
+.dash-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.dash-action {
+  @include button-reset;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface-base);
+  border: 1px solid var(--card-outline);
+  border-radius: 10px;
+  color: var(--text-emphasis);
+  font-size: 0.85rem;
+  text-align: left;
+  line-height: 1.2;
+  transition: background $transition-fast, border-color $transition-fast;
+
+  &:hover:not(:disabled) {
+    background: var(--surface-raised);
+    border-color: var(--border-muted);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.dash-action-icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  .material-icons { font-size: 18px; }
+}
+
+.dash-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dash-resource {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.dash-resource-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  .material-icons { font-size: 24px; }
+}
+
+.dash-resource-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.dash-resource-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.dash-resource-name {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.dash-resource-detail {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dash-resource-value {
+  font-size: 1.15rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  min-width: 3.5rem;
+}
+
+.meter {
+  flex: 1 1 auto;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-base);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+
+  &.tone-primary { background: var(--primary); }
+  &.tone-violet  { background: var(--violet); }
+  &.tone-success { background: var(--success); }
+}
+
+.dash-activity {
+  display: flex;
+  flex-direction: column;
+
+  .activity-row { padding-left: 0; padding-right: 0; }
+}
+
+.dash-activity-all {
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+// =========================
+// SERVER HEADER (top of every server page)
+// =========================
+.server-header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--card-outline);
+  border-radius: 12px;
+}
+
+.server-header-art {
+  flex-shrink: 0;
+  width: 84px;
+  height: 84px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.8);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+
+  .material-icons { font-size: 34px; }
+
+  // With real artwork the globe glyph is clutter; keep it only for gradient-only maps.
+  &.has-image .material-icons { display: none; }
+}
+
+.server-header-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.server-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  flex-wrap: wrap;
+  line-height: 1.2;
+}
+
+.server-header-name {
+  margin: 0;
+  font-size: 1.45rem;
+  line-height: 1.2;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  @include text-ellipsis;
+  max-width: 100%;
+}
+
+.server-header-page {
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+.server-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+
+  > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .material-icons { font-size: 16px; line-height: 1; }
+}
+
+.server-header-rcon.connected { color: var(--success); }
+
+.server-header-stats {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.15rem;
+}
+
+.server-header-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  font-weight: $font-medium;
+  color: var(--text-strong);
+
+  .material-icons { font-size: 18px; line-height: 1; color: var(--text-secondary); }
+  small { font-size: 0.72rem; line-height: 1.2; font-weight: $font-normal; color: var(--text-secondary); }
+}
+
+.server-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+// =========================
+// SETTINGS PANEL (toolbar above every configuration page)
+// =========================
+.settings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 1rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-muted-1);
+}
+
+.settings-toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: $font-semibold;
+    color: var(--text-strong);
+  }
+}
+
+.settings-toolbar-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: 6px;
+  padding: 0.2rem 0.55rem;
+
+  .material-icons { font-size: 15px; }
+}
+
+.settings-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.settings-expert-toggle {
+  margin: 0 0.5rem 0 0;
+  gap: 0.5rem;
+  align-items: center;
+  cursor: pointer;
+
+  .toggle-text {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+}
+
+.console-card .card-header h2 {
+  letter-spacing: 0.08em;
+}
+
+// =========================
+// RESPONSIVE
+// =========================
+@media (max-width: 1280px) {
+  .dash-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dash-side {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+
+}
+
+@media (max-width: 860px) {
+  .dash-hero {
+    flex-direction: column;
+    padding: 1.25rem;
+  }
+
+  .dash-hero-quote { display: none; }
+  .dash-hero-title { font-size: 1.5rem; }
+  .dash-bottom { grid-template-columns: 1fr; }
+  .dash-side { grid-template-columns: 1fr; }
+
+  .server-card.list-view {
+    flex-direction: column;
+
+    .server-card-hero { width: auto; height: 110px; }
+    .server-card-body { flex-direction: column; align-items: stretch; }
+    .server-card-spark { width: auto; }
+  }
+
+  .server-header {
+    flex-wrap: wrap;
+  }
+
+  .server-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

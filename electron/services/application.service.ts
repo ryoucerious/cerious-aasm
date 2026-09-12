@@ -75,9 +75,10 @@ export class ApplicationService {
       let authOptions: WebServerAuthOptions | undefined;
 
       if (authEnabled) {
+        // --password is optional now: without one, the accounts under Users & Roles are
+        // the only way in, which is the arrangement most installs want.
         if (!password) {
-          console.error('[ApplicationService] Error: --auth-enabled requires --password to be set');
-          process.exit(1);
+          console.log('[ApplicationService] --auth-enabled without --password: sign-in is by account.');
         }
         authOptions = {
           enabled: true,

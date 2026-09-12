@@ -185,8 +185,12 @@ export async function initializeAuthFromEnv(): Promise<void> {
       passwordHash: await hashPassword(authPassword)
     };
     saveAuthConfig(); // Save the new config
-  } else if (authEnabled && !authPassword) {
-    console.error('[Auth] ERROR: AUTH_ENABLED is true but AUTH_PASSWORD is not set');
+  } else if (authEnabled) {
+    // No single password given: accounts are the login. Turning authentication off here
+    // instead would leave the web interface open to anyone who can reach it.
+    authConfig = { ...authConfig, enabled: true };
+    saveAuthConfig();
+    console.log('[Auth] Authentication is on with no single login; accounts are the way in.');
   }
 }
 

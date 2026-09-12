@@ -55,7 +55,9 @@ describe('ServerInstanceService', () => {
       startMemoryPolling: jest.fn((instanceId, callback) => callback(instanceId, 100)),
       startPlayerPolling: jest.fn((instanceId, callback) => callback(instanceId, 5)),
       stopMemoryPolling: jest.fn(),
-      stopPlayerPolling: jest.fn()
+      stopPlayerPolling: jest.fn(),
+      startCpuPolling: jest.fn((instanceId, callback) => callback(instanceId, 12.5)),
+      stopCpuPolling: jest.fn()
     };
     jest.mocked(require('./server-monitoring.service')).serverMonitoringService = serverMonitoringServiceMock;
 
@@ -158,7 +160,9 @@ describe('ServerInstanceService', () => {
       expect(serverMonitoringServiceMock.startMemoryPolling).toHaveBeenCalled();
       expect(serverMonitoringServiceMock.startPlayerPolling).toHaveBeenCalled();
       expect(messagingServiceMock.sendToAll).toHaveBeenCalledWith('server-instance-memory', { instanceId, memory: 100 });
-      expect(messagingServiceMock.sendToAll).toHaveBeenCalledWith('server-instance-players', { instanceId, count: 5 });
+      expect(messagingServiceMock.sendToAll).toHaveBeenCalledWith('server-instance-players', { instanceId, players: 5, count: 5 });
+      expect(serverMonitoringServiceMock.startCpuPolling).toHaveBeenCalled();
+      expect(messagingServiceMock.sendToAll).toHaveBeenCalledWith('server-instance-cpu', { instanceId, cpu: 12.5 });
       expect(serverOperationsServiceMock.connectRcon).toHaveBeenCalledWith(instanceId);
       expect(messagingServiceMock.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId, connected: true });
     });
@@ -173,6 +177,7 @@ describe('ServerInstanceService', () => {
 
       expect(serverMonitoringServiceMock.stopMemoryPolling).toHaveBeenCalledWith(instanceId);
       expect(serverMonitoringServiceMock.stopPlayerPolling).toHaveBeenCalledWith(instanceId);
+      expect(serverMonitoringServiceMock.stopCpuPolling).toHaveBeenCalledWith(instanceId);
     });
 
     it('should handle RCON connection failure', async () => {

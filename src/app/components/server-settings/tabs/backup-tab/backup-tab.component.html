@@ -1,5 +1,5 @@
     <div class="tab-content">
-      <div class="form-group" style="grid-column: 1 / -1;">
+      <div class="form-group page-intro">
         <h4>Server Backup Management</h4>
         <p class="form-control-label desc">Create and manage backups of your server instance folder.</p>
       </div>
@@ -9,7 +9,7 @@
         <h5>Manual Backup</h5>
         <p class="section-desc">Create an immediate backup of your server files.</p>
 
-        <div class="form-group" style="grid-column: 1 / -1;">
+        <div class="form-group span-all">
           <label class="form-control-label">Create Backup</label>
           <div style="display: flex; gap: 0.5rem; align-items: center;">
             <button class="btn btn-ghost" (click)="onCreateManualBackup()" [disabled]="isBackupLocked">
@@ -82,7 +82,7 @@
         <h5>Available Backups</h5>
         <p class="section-desc">Manage your existing backups - restore, download, or delete.</p>
 
-        <div class="form-group backup-table-container" style="grid-column: 1 / -1;">
+        <div class="form-group backup-table-container span-all">
         <div class="backup-list">
           <table class="backup-table">
             <thead>

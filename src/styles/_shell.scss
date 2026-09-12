@@ -1,0 +1,1871 @@
+/* --- APP SHELL: top bar, side navigation, page frame ---
+ *
+ * The frame is a column (update banner, top bar) whose last row is a flex row of
+ * sidebar + scrolling main content. Every colour is a theme token from _theme.scss.
+ */
+@use 'variables' as *;
+
+$topbar-height: 64px;
+$sidenav-width: 248px;
+
+// =========================
+// TOP BAR
+// =========================
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  height: $topbar-height;
+  min-height: $topbar-height;
+  padding: 0 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-muted-1);
+  position: relative;
+  z-index: 1100;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.topbar-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.topbar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.topbar-brand-name {
+  font-size: 1.15rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  letter-spacing: 0.01em;
+}
+
+.topbar-brand-sub {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.topbar-search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  height: 40px;
+  background: var(--surface-base);
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  transition: border-color $transition-fast, box-shadow $transition-fast;
+
+  &.open,
+  &:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+  }
+}
+
+.topbar-search-icon {
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+
+.topbar-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-emphasis);
+  font-size: 0.95rem;
+
+  &::placeholder {
+    color: var(--text-secondary);
+  }
+}
+
+.topbar-kbd {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+
+  kbd {
+    font-family: inherit;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+  }
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  // Full height of the bar, so the window controls at the end of it can run edge to edge
+  // the way they do on the desktop. Everything else in here stays centred.
+  align-self: stretch;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.topbar-user {
+  flex-shrink: 0;
+}
+
+.topbar-icon-btn {
+  position: relative;
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  color: var(--text-primary);
+  transition: background $transition-fast, color $transition-fast;
+
+  .material-icons {
+    font-size: 22px;
+  }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+}
+
+// A count over the bell. Small enough to sit on the glyph rather than cover it: the ring
+// around it is what separates it from the icon, not its size.
+.topbar-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  box-sizing: border-box;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--danger);
+  color: var(--text-on-accent);
+  font-size: 0.62rem;
+  font-weight: $font-semibold;
+  line-height: 12px;
+  text-align: center;
+  border: 1px solid var(--surface);
+}
+
+.topbar-menu-anchor {
+  position: relative;
+}
+
+.topbar-user {
+  @include button-reset;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.5rem 0.3rem 0.3rem;
+  border-radius: 10px;
+  color: inherit;
+  transition: background $transition-fast;
+
+  &:hover {
+    background: var(--surface-raised);
+  }
+}
+
+.topbar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--primary-fill);
+  color: var(--text-on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: $font-semibold;
+}
+
+.topbar-user-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.topbar-user-name {
+  font-size: 0.95rem;
+  font-weight: $font-medium;
+  color: var(--text-strong);
+}
+
+.topbar-user-role {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.topbar-user-chevron {
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+
+.topbar-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 260px;
+  background: var(--surface);
+  border: 1px solid var(--border-muted);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px var(--shadow-color);
+  padding: 0.5rem;
+  z-index: 1200;
+}
+
+.topbar-search-results {
+  left: 0;
+  right: 0;
+  min-width: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.topbar-result {
+  @include button-reset;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  color: var(--text-primary);
+  text-align: left;
+
+  .material-icons {
+    font-size: 20px;
+    color: var(--text-secondary);
+  }
+
+  &.highlighted,
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+}
+
+.topbar-result-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.topbar-result-label {
+  font-size: 0.92rem;
+  @include text-ellipsis;
+}
+
+.topbar-result-detail {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  @include text-ellipsis;
+}
+
+.topbar-result-kind {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-muted);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+}
+
+.topbar-empty,
+.dash-muted {
+  padding: 0.75rem 0.65rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.topbar-notifications {
+  width: 340px;
+}
+
+.topbar-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.65rem 0.6rem;
+  font-weight: $font-medium;
+  color: var(--text-strong);
+  border-bottom: 1px solid var(--border-muted-1);
+  margin-bottom: 0.35rem;
+}
+
+.topbar-user-menu {
+  min-width: 200px;
+}
+
+.topbar-menu-item {
+  @include button-reset;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  text-align: left;
+
+  .material-icons {
+    font-size: 20px;
+    color: var(--text-secondary);
+  }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+}
+
+.link-btn {
+  @include button-reset;
+  color: var(--primary);
+  font-size: 0.85rem;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+    text-decoration: none;
+  }
+}
+
+// =========================
+// ACTIVITY ROWS (shared by the bell and the dashboard)
+// =========================
+.activity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+
+  & + .activity-row {
+    border-top: 1px solid var(--border-muted-1);
+    border-radius: 0;
+  }
+}
+
+.activity-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  .material-icons {
+    font-size: 18px;
+  }
+}
+
+.activity-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.activity-message {
+  font-size: 0.9rem;
+  color: var(--text-emphasis);
+}
+
+.activity-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+// Soft tinted icon chips
+.tone-primary { background: var(--primary-soft); color: var(--primary); }
+.tone-success { background: var(--success-soft); color: var(--success); }
+.tone-danger  { background: var(--danger-soft);  color: var(--danger); }
+.tone-warning { background: var(--warning-soft); color: var(--warning); }
+.tone-info    { background: var(--info-soft);    color: var(--info); }
+.tone-violet  { background: var(--violet-soft);  color: var(--violet); }
+.tone-muted   { background: var(--surface-raised); color: var(--text-secondary); }
+
+// =========================
+// SIDE NAVIGATION
+// =========================
+.sidenav {
+  display: flex;
+  flex-direction: column;
+  width: $sidenav-width;
+  height: 100%;
+  background: var(--surface);
+  border-right: 1px solid var(--border-muted-1);
+}
+
+.sidenav-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem 0.5rem;
+}
+
+.nav-item {
+  @include button-reset;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  // Shared with the server rows below, so a selected page and a selected server are the
+  // same shape and carry the same accent mark.
+  min-height: $sidenav-row-height;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  text-align: left;
+  transition: background $transition-fast, color $transition-fast;
+
+  .material-icons {
+    font-size: 21px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+
+    .material-icons {
+      color: var(--text-emphasis);
+    }
+  }
+
+  &.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: $font-medium;
+
+    .material-icons {
+      color: var(--primary);
+    }
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 3px;
+      background: var(--primary);
+    }
+  }
+}
+
+.nav-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  @include text-ellipsis;
+}
+
+.nav-item-hint {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  @include text-ellipsis;
+  max-width: 90px;
+}
+
+.nav-group-chevron {
+  margin-left: auto;
+  // Same glyph size as the Servers section header's chevron.
+  font-size: 18px !important;
+}
+
+.nav-group-items {
+  padding-left: 0.5rem;
+}
+
+.nav-sub-item {
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+  font-size: 0.9rem;
+
+  .material-icons {
+    font-size: 18px;
+  }
+}
+
+.nav-section {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-muted-1);
+}
+
+.nav-section-bottom {
+  margin-top: 0.75rem;
+}
+
+.nav-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.85rem 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+
+  &.static {
+    cursor: default;
+    padding-top: 0.5rem;
+    padding-bottom: 0.6rem;
+  }
+}
+
+.nav-section-title {
+  font-size: 0.72rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.nav-section-server {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 1.02rem;
+  font-weight: $font-semibold;
+  color: var(--primary);
+  @include text-ellipsis;
+}
+
+.nav-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0;
+}
+
+.nav-section-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.nav-mini-btn {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+
+  .material-icons {
+    font-size: 18px;
+  }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+}
+
+.nav-section-chevron {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+// Server list inside the nav
+.sidenav .server-list {
+  margin: 0 0 0.25rem;
+  padding: 0;
+  list-style: none;
+}
+
+.sidenav .server-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: $sidenav-row-height;
+  padding: 0.5rem 0.85rem;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background $transition-fast, color $transition-fast;
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  &.selected {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+    // The same accent mark the active navigation item carries down its left edge, so the
+    // server you are working on reads as selected at a glance. The outline stays neutral;
+    // the mark alone is the signal.
+    box-shadow: inset 0 0 0 1px var(--border-muted);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 3px;
+      background: var(--primary);
+    }
+  }
+
+  .server-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.92rem;
+    // The whole row is a button, so the name keeps the row's pointer rather than offering a
+    // text caret, and does not select under the double-click that starts a rename.
+    user-select: none;
+    @include text-ellipsis;
+  }
+
+  .editing-server-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.9rem;
+  }
+
+  .server-item-players {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    background: var(--surface-base);
+    border-radius: 6px;
+    padding: 0.05rem 0.4rem;
+  }
+
+  .delete-server-btn {
+    @include button-reset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    color: var(--danger);
+    opacity: 0;
+    transition: opacity $transition-fast, background $transition-fast;
+
+    .material-icons {
+      font-size: 16px;
+    }
+
+    &:hover {
+      background: var(--danger-soft);
+    }
+  }
+
+  &:hover .delete-server-btn {
+    opacity: 1;
+  }
+}
+
+.server-status-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--secondary);
+  box-shadow: 0 0 0 3px var(--surface-raised);
+
+  &.status-running  { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+  &.status-stopped  { background: var(--text-secondary-1); }
+  &.status-starting { background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
+  &.status-stopping { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+  &.status-error    { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+}
+
+.server-list-empty {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.sidenav-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--border-muted-1);
+  background: var(--surface);
+}
+
+.sidenav-footer-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.sidenav-footer-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.sidenav-footer-name {
+  font-size: 0.9rem;
+  font-weight: $font-medium;
+  color: var(--text-strong);
+}
+
+.sidenav-footer-meta {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+// =========================
+// PAGE FRAME
+// =========================
+.page-panel {
+  background: var(--surface);
+  border: 1px solid var(--card-outline);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.page-empty {
+  text-align: center;
+  padding: 4rem 1.5rem;
+  color: var(--text-secondary);
+
+  .material-icons {
+    font-size: 48px;
+    color: var(--text-secondary-1);
+  }
+
+  h2 {
+    margin: 0.75rem 0 0.25rem;
+    font-weight: $font-normal;
+    color: var(--text-strong);
+  }
+
+  p {
+    margin: 0 0 1.25rem;
+  }
+}
+
+// Responsive shell
+@media (max-width: 860px) {
+  .topbar {
+    padding: 0 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .topbar-brand-sub,
+  .topbar-user-text,
+  .topbar-user-chevron,
+  .topbar-kbd {
+    display: none;
+  }
+
+  .topbar-search {
+    max-width: none;
+  }
+
+  .sidenav {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar-brand-text {
+    display: none;
+  }
+}
+
+// =========================
+// DRAWER (settings and other app-wide panels)
+// =========================
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--shadow-color);
+  z-index: 1300;
+  animation: drawer-fade 0.18s ease;
+}
+
+@keyframes drawer-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(720px, 94vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border-muted-1);
+  box-shadow: -16px 0 48px var(--shadow-color);
+  z-index: 1301;
+  // Slid in from the right edge rather than with a transform. A transform makes this the
+  // containing block for every fixed descendant, which threw the modals opened inside it —
+  // and their dropdown lists — off the side of the window.
+  right: -100%;
+  transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  visibility: hidden;
+
+  &.open {
+    right: 0;
+    visibility: visible;
+  }
+
+  &.narrow { width: min(520px, 92vw); }
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-muted-1);
+  flex-shrink: 0;
+}
+
+.drawer-header-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 22px;
+}
+
+.drawer-header-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.drawer-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  line-height: 1.2;
+}
+
+.drawer-subtitle {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  @include text-ellipsis;
+}
+
+.drawer-close {
+  @include button-reset;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+}
+
+.drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+body.drawer-open {
+  overflow: hidden;
+}
+
+// =========================
+// SETTINGS INSIDE THE DRAWER
+// =========================
+// The rail and the section beside it, with the panel's footer underneath both.
+.settings-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-layout {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+// Sits at the foot of the panel on every section, not only About.
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding: 0.75rem 1.5rem;
+  border-top: 1px solid var(--border-muted-1);
+  background: var(--surface-base);
+}
+
+.settings-footer-copy {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.settings-rail {
+  flex: 0 0 186px;
+  padding: 0.85rem 0.6rem;
+  border-right: 1px solid var(--border-muted-1);
+  overflow-y: auto;
+  background: var(--surface-base);
+}
+
+.settings-rail-item {
+  @include button-reset;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.93rem;
+  text-align: left;
+
+  .material-icons {
+    font-size: 20px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  &.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: $font-medium;
+
+    .material-icons { color: var(--primary); }
+  }
+}
+
+.settings-rail-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  @include text-ellipsis;
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+@media (max-width: 860px) {
+  .settings-layout { flex-direction: column; }
+
+  .settings-rail {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 0.35rem;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border-muted-1);
+    padding: 0.5rem;
+  }
+
+  .settings-rail-item {
+    width: auto;
+    margin-bottom: 0;
+    white-space: nowrap;
+  }
+
+  .settings-rail-label { display: none; }
+
+  .settings-content { padding: 1rem; }
+}
+
+// =========================
+// CUSTOM WINDOW CHROME
+// =========================
+// The desktop window is frameless, so the top bar doubles as the title bar: its empty
+// areas drag the window, and everything interactive opts back out. These properties are
+// inert in a browser, so the same markup serves the web UI unchanged.
+.topbar {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.topbar button,
+.topbar a,
+.topbar input,
+.topbar kbd,
+.topbar .topbar-search,
+.topbar .topbar-dropdown,
+.topbar .topbar-menu-anchor {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+// The component's own element is the flex item in a centred row, so it has to stretch
+// itself — otherwise the buttons are only as tall as their glyphs and the close button's
+// red fill is a short block floating in the middle of the bar.
+app-window-controls {
+  display: flex;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  // Never squeezed: when the bar ran short of room these gave up their width, which left
+  // the close button narrower than the rest and a gap between it and the window edge.
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+  margin-right: -1.25rem;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-control {
+  @include button-reset;
+  width: 46px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: background $transition-fast, color $transition-fast;
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  &.close:hover {
+    background: var(--danger);
+    color: var(--text-on-accent);
+  }
+}
+
+@media (max-width: 860px) {
+  .window-controls { margin-right: -0.75rem; }
+  .window-control { width: 40px; }
+}
+
+// =========================
+// USERS & ROLES
+// =========================
+.users-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.users-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.users-toggle {
+  display: inline-flex;
+  background: var(--surface-base);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.users-toggle-btn {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+
+  .material-icons { font-size: 18px; }
+
+  &.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+}
+
+.users-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.users-intro {
+  margin: 0 0 0.25rem;
+}
+
+.users-table-wrap {
+  overflow-x: auto;
+}
+
+// Specific enough to beat .data-table's fixed layout, which this pair of tables opts out of.
+.data-table.users-table {
+  width: 100%;
+  // Columns sized to their content. The shared table layout is fixed, which split the width
+  // into equal shares and left a short username sitting in a column several times the width
+  // of anything in it. The actions column takes the slack instead, so its buttons stay
+  // against the right edge however wide the drawer is.
+  table-layout: auto;
+
+  th, td { padding: 0.6rem 0.75rem; vertical-align: middle; }
+
+  // Short values keep to one line, so the column sizes to the value rather than wrapping
+  // "Server Manager" into two rows. The description under a name is free to wrap.
+  th,
+  td:nth-child(2),
+  .users-muted,
+  .users-actions { white-space: nowrap; }
+}
+
+// Which columns take the leftover width differs by what the table holds. The name and the
+// role are what you read down a list of accounts, so they get the room and the short
+// columns — status, date, buttons — keep to their content. A role's description lives in
+// its first column, so there it is that column alone.
+.accounts-table {
+  th:nth-child(1) { width: 45%; }
+  th:nth-child(2) { width: 35%; }
+}
+
+.roles-table th:first-child { width: 100%; }
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--primary-fill);
+  color: var(--text-on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: $font-semibold;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.user-cell-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.user-cell-name {
+  color: var(--text-strong);
+  font-weight: $font-medium;
+}
+
+.user-cell-sub {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.users-muted { color: var(--text-secondary); }
+
+.users-actions {
+  text-align: right;
+  white-space: nowrap;
+
+  .btn { margin-left: 0.25rem; }
+}
+
+.role-builtin {
+  // inline-flex, not inline: a bordered, padded inline box does not add to the height of
+  // its line, so the badge used to hang over the description underneath it.
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-muted);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+
+.users-empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-muted);
+  border-radius: 10px;
+
+  // Direct child only: the button below it carries its own icon, which must keep the
+  // button's text colour rather than the muted grey of the empty-state glyph.
+  > .material-icons { font-size: 36px; color: var(--text-secondary); }
+  p { margin: 0.5rem 0 1rem; }
+}
+
+.permission-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  background: var(--surface-base);
+}
+
+.permission-group-title {
+  font-size: 0.72rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.permission-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.35rem 0;
+  cursor: pointer;
+
+  // A switch rather than a checkbox: a permission is something a role has turned on, and
+  // this is the same control the rest of Settings uses for that.
+  .toggle-switch {
+    margin-top: 0.2rem;
+  }
+
+  &:has(.toggle-switch:disabled) {
+    cursor: default;
+  }
+}
+
+.permission-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.permission-item-label {
+  font-size: 0.88rem;
+  color: var(--text-emphasis);
+}
+
+.permission-item-desc {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+// Who performed an action, shown beside its time in the activity feed.
+.activity-by {
+  color: var(--text-secondary);
+}
+
+// =========================
+// ARK INSTALLATION
+// =========================
+// Kept as an alias: the ARK Installation panel was the first to use this shape and the
+// rest of Settings now shares it.
+.ark-install-card { @extend .settings-card; }
+
+.ark-install-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-muted-1);
+}
+
+.ark-install-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  .material-icons { font-size: 24px; }
+}
+
+// Takes its colours from a tone-* class, so it reads the same way in both themes.
+.ark-status-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.22rem 0.7rem;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.02em;
+}
+
+.ark-install-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
+
+  h4 {
+    margin: 0 0 0.15rem;
+    font-size: 1rem;
+    color: var(--text-strong);
+  }
+
+  p { margin: 0; }
+}
+
+.ark-install-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 0;
+}
+
+.ark-fact {
+  min-width: 0;
+
+  dt {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 0.2rem;
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.ark-fact-wide { grid-column: 1 / -1; }
+
+.ark-path {
+  font-family: 'Fira Mono', 'Consolas', monospace;
+  font-size: 0.82rem !important;
+  color: var(--text-primary) !important;
+  word-break: break-all;
+}
+
+.ark-install-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--info-soft);
+  color: var(--text-emphasis);
+  font-size: 0.88rem;
+
+  .material-icons { font-size: 18px; color: var(--info); }
+
+  &.warning {
+    background: var(--warning-soft);
+    .material-icons { color: var(--warning); }
+  }
+}
+
+.ark-install-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+}
+
+// Rail groupings inside the settings drawer.
+.settings-rail-group + .settings-rail-group {
+  margin-top: 0.75rem;
+}
+
+.settings-rail-group-title {
+  font-size: 0.68rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 0 0.75rem 0.3rem;
+}
+
+// One section's content. The drawer already frames it, so the panes inside do not need
+// their own card chrome.
+.settings-pane .card,
+.settings-pane .sub-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+}
+
+// =========================
+// SETTINGS PANE VOCABULARY
+// =========================
+// Every section of Settings is built from these three pieces, so a person moving between
+// ARK Installation, Web Server and My Account meets the same shapes in the same places
+// rather than a different arrangement on each screen.
+.settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+// A group of related settings.
+.settings-card {
+  background: var(--surface-base);
+  border: 1px solid var(--card-outline);
+  border-radius: 12px;
+  padding: 1.25rem;
+
+  // The last control in a card should not push a gap against its own edge.
+  > .form-group:last-child { margin-bottom: 0; }
+}
+
+.settings-card-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+}
+
+.settings-card-hint {
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+// A title with something beside it — a status pill, a Start button.
+.settings-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+
+  .settings-card-title { margin-bottom: 0.15rem; }
+  .settings-card-hint { margin-bottom: 0; }
+}
+
+.settings-card-head-text { min-width: 0; }
+
+// A validation message under a field.
+.form-control-label.form-error { color: var(--danger); }
+
+.settings-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+// A row of controls that belong on one line: a path and the buttons that change it.
+.settings-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  .form-control { flex: 1 1 auto; min-width: 0; }
+}
+
+.settings-pane .settings-section + .settings-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-muted-1);
+}
+
+@media (max-width: 860px) {
+  .settings-rail-group-title { display: none; }
+  .settings-rail-group { display: contents; }
+}
+
+// Settings at the foot of the side navigation, replacing the branding block.
+.sidenav-footer-item {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.sidenav-footer-version {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+// A new version of the app is waiting. Amber, next to the version it would replace.
+.sidenav-update-icon {
+  font-size: 16px !important;
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.topbar-menu-note {
+  padding: 0.4rem 0.65rem 0.2rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+// =========================
+// MY ACCOUNT
+// =========================
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-muted-1);
+}
+
+.profile-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--primary-fill);
+  color: var(--text-on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: $font-semibold;
+  flex-shrink: 0;
+}
+
+.profile-name {
+  font-size: 1.05rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+}
+
+.profile-meta {
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+}
+
+.profile-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 0;
+}
+
+.profile-fact {
+  dt {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 0.2rem;
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-strong);
+  }
+}
+
+.profile-section-title {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  color: var(--primary);
+}
+
+.profile-settings .settings-section {
+  margin-top: 1.5rem;
+}
+
+// =========================
+// TOOLTIP
+// =========================
+// Replaces the browser's own tooltip, which arrives late, ignores the theme and cannot be
+// styled. Positioned by TooltipHostComponent in viewport coordinates.
+.tooltip-bubble {
+  position: fixed;
+  z-index: 2000;
+  max-width: 17rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 7px;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  border: 1px solid var(--tooltip-border);
+  box-shadow: 0 8px 20px var(--shadow-color);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+
+  &.visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  // The arrow, pointing at whatever is being described.
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    margin-left: -5px;
+    border: 5px solid transparent;
+    border-top-color: var(--tooltip-bg);
+    top: 100%;
+  }
+
+  &.below::after {
+    top: auto;
+    bottom: 100%;
+    border-top-color: transparent;
+    border-bottom-color: var(--tooltip-bg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-bubble { transition: none; }
+}
+
+// =========================
+// PANEL CARD (server pages)
+// =========================
+// The same shape Settings uses, for the pages behind a server: a titled card with whatever
+// describes its state beside the title. No folding headers — a page shows its content.
+.panel-card {
+  background: var(--surface);
+  border: 1px solid var(--card-outline);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.panel-card-head-text { min-width: 0; }
+
+.panel-card-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.panel-card-title {
+  margin: 0 0 0.15rem;
+  font-size: 0.95rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+}
+
+.panel-card-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.panel-card-meta {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+// RCON's command line and the suggestions under it, previously a run of inline styles.
+.rcon-send-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rcon-input-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rcon-known-commands {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  margin-top: 0.25rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px var(--shadow-color);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rcon-known-command {
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  white-space: pre;
+
+  &:hover {
+    background: var(--surface-base);
+    color: var(--text-strong);
+  }
+}
+
+.rcon-response {
+  margin-top: 1rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-base);
+  border: 1px solid var(--border-muted-1);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.rcon-response-title {
+  margin-bottom: 0.25rem;
+  font-weight: $font-semibold;
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+
+// A section's title with whatever belongs beside it — a status pill, a Refresh button.
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+
+  h5 { margin: 0 0 0.15rem; }
+  .section-desc { margin: 0; }
+}
+
+.section-head-text { min-width: 0; }
+
+.section-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.section-head-fact {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+// Runs the whole width of the three-column grid the server pages lay out in.
+.span-all { grid-column: 1 / -1; }
+
+// The page's own title, above the sections. The pages around it sit in a three-column grid,
+// so the introduction has to be told to run the whole width — the older pages do it with an
+// inline style; this is the same thing, once.
+.page-intro {
+  grid-column: 1 / -1;
+
+  h4 { margin: 0 0 0.25rem; }
+  .desc { margin: 0; }
+}

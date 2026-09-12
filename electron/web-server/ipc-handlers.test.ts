@@ -10,7 +10,9 @@ const mockAuthConfig = require('../web-server/auth-config');
 
 // Setup the mock messaging service
 mockMessagingService.messagingService = {
-  sendToAllWebSockets: jest.fn()
+  sendToAllWebSockets: jest.fn(),
+  // Replies are addressed to the client that asked, rather than broadcast to everyone.
+  sendToWebSocket: jest.fn()
 };
 
 // Mock process globally
@@ -37,6 +39,7 @@ describe('ipc-handlers', () => {
 
   // Setup default mocks
   mockMessagingService.messagingService.sendToAllWebSockets = jest.fn();
+  mockMessagingService.messagingService.sendToWebSocket = jest.fn();
     mockAuthConfig.updateAuthConfig = jest.fn();
     mockAuthConfig.hashPassword = jest.fn().mockResolvedValue('hashedpassword');
   });
@@ -73,7 +76,9 @@ describe('ipc-handlers', () => {
 
       messageHandler(message);
 
-  expect(mockMessagingService.messagingService.sendToAllWebSockets).toHaveBeenCalledWith('test-channel', { test: 'data' });
+  // A reply goes only to the client that asked, identified by its connection id.
+  expect(mockMessagingService.messagingService.sendToWebSocket)
+    .toHaveBeenCalledWith(undefined, 'test-channel', { test: 'data' });
     });
 
     it('should handle broadcast-web messages', () => {

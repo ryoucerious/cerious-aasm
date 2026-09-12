@@ -83,13 +83,20 @@ export async function ensureAuthInitialized(req: express.Request, res: express.R
 }
 
 /**
- * Create and set a session for a user
+ * Create and set a session for a user.
+ *
+ * `account` is the row from the user database; it is stored on the session so the
+ * WebSocket handshake can attach an identity without another database round trip.
+ * It is omitted in the legacy single-login mode, which has no database user.
  */
-export function createSession(res: express.Response, username: string): void {
+export function createSession(res: express.Response, username: string, account?: { id: string; roleId: string; permissions: string[] }): void {
   const sessionToken = generateSessionToken();
   setSession(sessionToken, {
     username,
-    created: new Date()
+    created: new Date(),
+    userId: account?.id,
+    roleId: account?.roleId,
+    permissions: account?.permissions
   });
 
   // Set session cookie (secure for local environment)
@@ -121,6 +128,32 @@ export function destroySession(req: express.Request, res: express.Response): voi
     path: '/',
     expires: new Date(0)
   });
+}
+
+/** Pull the session token out of a raw Cookie header. */
+export function sessionTokenFromCookieHeader(cookieHeader: string | undefined): string | null {
+  if (!cookieHeader) return null;
+  const entry = cookieHeader.split(';').find((c: string) => c.trim().startsWith('session='));
+  if (!entry) return null;
+  // Split once only: a token is hex, but a stray '=' should not silently truncate it.
+  const value = entry.trim().slice('session='.length);
+  return value || null;
+}
+
+/**
+ * The session behind a raw Cookie header, or null when it is missing or expired.
+ * Used by the WebSocket upgrade, which never passes through Express middleware.
+ */
+export function resolveSessionFromCookieHeader(cookieHeader: string | undefined) {
+  const token = sessionTokenFromCookieHeader(cookieHeader);
+  if (!token) return null;
+  const session = getSession(token);
+  if (!session) return null;
+  if (Date.now() - new Date(session.created).getTime() > SESSION_MAX_AGE) {
+    deleteSession(token);
+    return null;
+  }
+  return session;
 }
 
 /**

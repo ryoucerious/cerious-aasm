@@ -1,6 +1,6 @@
 <!-- Whitelist Tab Content -->
 <div class="tab-content">
-  <div class="form-group" style="grid-column: 1 / -1;">
+  <div class="form-group page-intro">
     <h4>Server Whitelist Management</h4>
     <p class="form-control-label desc">Manage the server's exclusive join list. Only whitelisted players can join when whitelist mode is enabled.</p>
   </div>
@@ -25,7 +25,7 @@
     </div>
 
     <!-- Whitelist Status -->
-    <div class="form-group" style="grid-column: 1 / -1;">
+    <div class="form-group span-all">
       <div class="whitelist-status" [ngClass]="{ 'enabled': serverInstance?.useExclusiveList, 'disabled': !serverInstance?.useExclusiveList }">
         <span class="status-indicator"></span>
         {{ serverInstance?.useExclusiveList ? 'Whitelist Active' : 'Whitelist Disabled' }}
@@ -39,7 +39,7 @@
     <p class="section-desc">Add individual players or manage existing whitelist entries.</p>
 
     <!-- Add Player Actions -->
-    <div class="form-group" style="grid-column: 1 / -1;">
+    <div class="form-group span-all">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button class="btn btn-ghost" 
                 (click)="openAddPlayerModal()" 
@@ -60,7 +60,7 @@
     </div>
 
     <!-- Whitelist Table -->
-    <div class="form-group whitelist-table-container" style="grid-column: 1 / -1;">
+    <div class="form-group whitelist-table-container span-all">
       <label class="form-control-label">Whitelisted Players ({{ whitelistedPlayers.length }})</label>
       <div class="whitelist-list">
         <table class="whitelist-table">
@@ -96,7 +96,7 @@
   </div>
 
   <!-- Status Message -->
-  <div *ngIf="statusMessage" class="form-group" style="grid-column: 1 / -1;">
+  <div *ngIf="statusMessage" class="form-group span-all">
     <div class="status-message" [ngClass]="'status-' + statusType">
       <i class="material-icons">{{ statusType === 'success' ? 'check_circle' : statusType === 'warning' ? 'warning' : 'error' }}</i>
       {{ statusMessage }}

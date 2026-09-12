@@ -1,12 +1,18 @@
-import { Component, ChangeDetectorRef } from '@angular/core';
+import { Component, ChangeDetectorRef, inject } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { NotificationService } from '../../core/services/notification.service';
 import { UtilityService } from '../../core/services/utility.service';
-import { NgFor, NgIf, NgClass } from '@angular/common';
+import { NgFor, NgIf, NgClass, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { ModalComponent } from '../../components/modal/modal.component';
+import { DrawerComponent } from '../../components/drawer/drawer.component';
+import { UsersSettingsComponent } from './users/users-settings.component';
+import { ProfileSettingsComponent } from './profile/profile-settings.component';
+import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
+import { AuthService } from '../../core/services/auth.service';
 import { Subscription } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ThemeService, ThemePreference } from '../../core/services/theme.service';
@@ -14,7 +20,7 @@ import { ThemeService, ThemePreference } from '../../core/services/theme.service
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, ModalComponent, FormsModule],
+  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent],
   templateUrl: './settings.component.html'  
 })
 export class SettingsPageComponent {
@@ -28,6 +34,8 @@ export class SettingsPageComponent {
   authenticationEnabled = false;
   authenticationUsername = '';
   authenticationPassword = '';
+  /** True once at least one account exists, so we know whether anyone could sign in. */
+  accountsInUse = false;
   maxBackupDownloadSizeMB = 100;
   serverDataDir = '';
   autoUpdateArkServer = false;
@@ -49,8 +57,121 @@ export class SettingsPageComponent {
   backendConfigPath: string | null = null;
   subscriptions: Subscription[] = [];
   showSettings = true;
+  /** Mirrors SettingsDrawerService so the template can bind without an async pipe. */
+  drawerOpen = false;
+  private readonly settingsDrawer = inject(SettingsDrawerService);
+  private readonly auth = inject(AuthService);
+
+  get activeTabLabel(): string {
+    return this.tabs.find(tab => tab.id === this.activeTab)?.label || '';
+  }
+
+  /**
+   * The rail, grouped under headings, preserving the order of `tabs`.
+   *
+   * Built once rather than on demand: a getter would hand *ngFor a new array on every
+   * change detection pass, which rebuilds the buttons continuously and stops clicks from
+   * registering at all. The tab objects themselves are mutated in place (the update badge),
+   * so the grouping stays correct.
+   */
+  tabGroups: { name: string; tabs: any[] }[] = [];
+
+  private buildTabGroups(): void {
+    const groups: { name: string; tabs: any[] }[] = [];
+    for (const tab of this.tabs) {
+      const name = tab.group || 'General';
+      let group = groups.find(g => g.name === name);
+      if (!group) {
+        group = { name, tabs: [] };
+        groups.push(group);
+      }
+      group.tabs.push(tab);
+    }
+    this.tabGroups = groups;
+  }
+
+  trackByGroupName(_index: number, group: { name: string }): string {
+    return group.name;
+  }
+
+  trackByTabId(_index: number, tab: { id: string }): string {
+    return tab.id;
+  }
+
+  onCloseDrawer(): void {
+    this.settingsDrawer.close();
+  }
+
+  /** What is installed, what Steam has, and where it lives. Null until the first load. */
+  arkInstallation: {
+    installed: boolean;
+    installedBuildId: string | null;
+    latestBuildId: string | null;
+    updateAvailable: boolean;
+    lastCheckedAt: number | null;
+    installPath: string;
+  } | null = null;
+  arkInstallationLoading = false;
+
+  /** Pull the installation status. Called when the drawer opens and after an install. */
+  loadArkInstallation(): void {
+    this.arkInstallationLoading = true;
+    this.cdr.markForCheck();
+    this.subscriptions.push(
+      this.messaging.sendMessage<any>('get-ark-installation', {}).subscribe({
+        next: (res) => {
+          if (res && res.success !== false) {
+            this.arkInstallation = {
+              installed: !!res.installed,
+              installedBuildId: res.installedBuildId ?? null,
+              latestBuildId: res.latestBuildId ?? null,
+              updateAvailable: !!res.updateAvailable,
+              lastCheckedAt: res.lastCheckedAt ?? null,
+              installPath: res.installPath || ''
+            };
+          }
+          this.arkInstallationLoading = false;
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.arkInstallationLoading = false;
+          this.cdr.markForCheck();
+        }
+      })
+    );
+  }
+
+  get arkStatusLabel(): string {
+    if (!this.arkInstallation) return 'Checking...';
+    if (!this.arkInstallation.installed) return 'Not installed';
+    return this.arkInstallation.updateAvailable ? 'Update available' : 'Up to date';
+  }
+
+  /**
+   * A soft tint rather than a solid fill: "Update available" on a saturated yellow forced
+   * near-black text to stay legible, which read as a warning sign rather than a status.
+   */
+  get arkStatusClass(): string {
+    if (!this.arkInstallation) return 'tone-muted';
+    if (!this.arkInstallation.installed) return 'tone-danger';
+    return this.arkInstallation.updateAvailable ? 'tone-warning' : 'tone-success';
+  }
 
   async ngOnInit() {
+    this.subscriptions.push(this.auth.identity$.subscribe(identity => {
+      this.accountsInUse = identity.accountsInUse;
+      this.cdr.markForCheck();
+    }));
+
+    this.subscriptions.push(this.settingsDrawer.isOpen$.subscribe(open => {
+      this.drawerOpen = open;
+      if (open) this.loadArkInstallation();
+      this.cdr.markForCheck();
+    }));
+    this.subscriptions.push(this.settingsDrawer.section$.subscribe(section => {
+      this.activeTab = section;
+      this.cdr.markForCheck();
+    }));
     // Track whether any server instances are running/starting
     this.subscriptions.push(
       this.serverInstanceService.getInstances().subscribe(instances => {
@@ -135,8 +256,11 @@ export class SettingsPageComponent {
   }
 
   ngOnDestroy() {
-    this.subscriptions.forEach(sub => sub.unsubscribe());
-    this.installSub?.unsubscribe();
+    // Tolerate an entry that never produced a real Subscription: this component is always
+    // mounted now (it hosts the settings drawer), so a teardown error here would surface
+    // on every page it outlives.
+    this.subscriptions.forEach(sub => sub?.unsubscribe?.());
+    this.installSub?.unsubscribe?.();
   }
 
   activeTab = 'server-installation';
@@ -163,12 +287,19 @@ export class SettingsPageComponent {
   ) {
     this.themePreference = this.themeService.preference;
     this.isElectron = this.utility.getPlatform() === 'Electron';
+    // Grouped by what the operator is trying to change, rather than one catch-all "General".
     this.tabs = [
-      { id: 'server-installation', label: 'Server Installation', icon: 'dns', showUpdateBadge: false },
-      { id: 'general', label: 'General', icon: 'settings' },
-      ...(this.isElectron ? [{ id: 'web-server', label: 'Web Server', icon: 'cloud' }] : []),
-      { id: 'about', label: 'About', icon: 'info' }
+      { id: 'server-installation', label: 'ARK Installation', icon: 'inventory_2', showUpdateBadge: false, group: 'Server' },
+      { id: 'servers', label: 'Server Defaults', icon: 'tune', group: 'Server' },
+      { id: 'updates', label: 'Updates', icon: 'system_update_alt', group: 'Server' },
+      { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
+      { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
+      { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
+      ...(this.isElectron ? [{ id: 'web-server', label: 'Web Server', icon: 'cloud', group: 'Access' }] : []),
+      { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
+      { id: 'about', label: 'About', icon: 'info', group: 'Application' }
     ];
+    this.buildTabGroups();
   }
 
   /**
@@ -200,6 +331,7 @@ export class SettingsPageComponent {
 
   selectTab(tabId: string) {
     this.activeTab = tabId;
+    this.settingsDrawer.selectSection(tabId as SettingsSection);
   }
 
   getActiveTabLabel() {
@@ -350,7 +482,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.0.21';
+    return environment.version || '1.1.0';
   }
 
   getPlatform() {
@@ -437,57 +569,36 @@ export class SettingsPageComponent {
     }));
   }
 
+  /**
+   * Turning authentication on or off. Who may sign in comes from the accounts under Users &
+   * Roles; the single username and password this page used to collect is gone, and an
+   * install that still has one keeps it as a fallback until its owner replaces it with an
+   * account.
+   */
   onAuthenticationEnabledChange(newValue: boolean) {
+    this.authenticationEnabled = newValue;
+    this.configService.authenticationEnabled = newValue;
+
     if (newValue) {
-      // First, enable authentication to show the fields
-      this.authenticationEnabled = true;
-      this.configService.authenticationEnabled = true;
-      
-      // Then check if validation is needed - if fields are empty, show helpful message
-      if (!this.authenticationUsername.trim() || !this.authenticationPassword.trim()) {
-        this.notification.info('Please enter username and password below to complete authentication setup', 'Authentication');
-        return;
-      }
-      
-      // If we have both username and password, show success message
       this.notification.success('Authentication enabled. Restart the web server for changes to take effect.', 'Authentication');
+      if (!this.accountsInUse) {
+        this.notification.info('Add an account under Users & Roles so someone can sign in.', 'Authentication');
+      }
     } else {
-      // Disabling authentication
-      this.authenticationEnabled = false;
-      this.configService.authenticationEnabled = false;
-      
-      // Clear username and password when disabling
-      this.authenticationUsername = '';
-      this.authenticationPassword = '';
-      this.configService.authenticationUsername = '';
-      this.configService.authenticationPassword = '';
-      
       this.notification.info('Authentication disabled.', 'Authentication');
     }
   }
 
-  onAuthenticationUsernameChange(newValue: string) {
-    this.authenticationUsername = newValue;
-    this.configService.authenticationUsername = newValue;
-    
-    // Only show feedback when user finishes editing (on blur)
-    if (this.authenticationEnabled && newValue.trim() && this.authenticationPassword.trim()) {
-      this.notification.success('Authentication is now configured. Restart the web server for changes to take effect.', 'Authentication');
-    } else if (this.authenticationEnabled && !newValue.trim() && this.authenticationPassword.trim()) {
-      this.notification.warning('Username is required for authentication', 'Authentication');
-    }
+  /** "2025" in the first year, "2025-2026" and onwards after that. */
+  get copyrightYears(): string {
+    const first = 2025;
+    const now = new Date().getFullYear();
+    return now > first ? `${first}–${now}` : `${first}`;
   }
 
-  onAuthenticationPasswordChange(newValue: string) {
-    this.authenticationPassword = newValue;
-    this.configService.authenticationPassword = newValue;
-    
-    // Only show feedback when user finishes editing (on blur)
-    if (this.authenticationEnabled && newValue.trim() && this.authenticationUsername.trim()) {
-      this.notification.success('Authentication is now configured. Restart the web server for changes to take effect.', 'Authentication');
-    } else if (this.authenticationEnabled && !newValue.trim() && this.authenticationUsername.trim()) {
-      this.notification.warning('Password is required for authentication', 'Authentication');
-    }
+  /** Jump to the accounts list, which is where web access is decided now. */
+  goToUsers(): void {
+    this.settingsDrawer.open('users');
   }
 
   onMaxBackupDownloadSizeChange(newValue: string) {

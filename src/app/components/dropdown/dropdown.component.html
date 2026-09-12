@@ -1,0 +1,29 @@
+<div class="custom-dropdown app-dropdown" [class.disabled]="disabled" [class.open]="open">
+  <button #trigger
+          type="button"
+          class="form-control input"
+          [attr.id]="inputId || null"
+          [attr.aria-label]="ariaLabel || null"
+          [attr.aria-expanded]="open"
+          aria-haspopup="listbox"
+          [disabled]="disabled"
+          (click)="toggle()"
+          (keydown)="onKeydown($event)">
+    <span class="app-dropdown-label" [class.placeholder]="!selectedOption">{{ displayLabel }}</span>
+    <span class="material-icons">{{ open ? 'arrow_drop_up' : 'arrow_drop_down' }}</span>
+  </button>
+  <!-- Positioned against the viewport so no scrolling or clipping ancestor (a modal, a
+       drawer, a card) can cut the list off. -->
+  <div *ngIf="open" #menu class="dropdown-menu show floating" role="listbox"
+       [style.left.px]="menuPosition.left" [style.top.px]="menuPosition.top" [style.width.px]="menuPosition.width">
+    <div *ngFor="let option of options; let i = index; trackBy: trackByValue"
+         role="option"
+         [attr.aria-selected]="isSelected(option)"
+         [ngClass]="{ 'selected': isSelected(option), 'highlighted': i === highlightedIndex }"
+         (mouseenter)="highlightedIndex = i"
+         (mousedown)="$event.preventDefault(); select(option)">
+      {{ option.label }}
+    </div>
+    <div class="app-dropdown-empty" *ngIf="!options.length">No options</div>
+  </div>
+</div>

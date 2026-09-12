@@ -1,6 +1,12 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, ElementRef, AfterViewInit, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, ElementRef, AfterViewInit, HostListener, inject } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, ActivatedRoute } from '@angular/router';
+import { ServerNavService, ServerTabId, DEFAULT_SERVER_TAB } from '../../core/services/server-nav.service';
+import { LiveServersService } from '../../core/services/live-servers.service';
+import { ServerInstance } from '../../core/models/server-instance.model';
+import { ServerHeaderComponent } from '../../components/server-header/server-header.component';
+import { PlayerListComponent } from '../../components/player-list/player-list.component';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 
@@ -14,7 +20,7 @@ import { BackupUIService } from '../../core/services/backup-ui.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { EventSubscriptionService } from '../../core/services/event-subscription.service';
 import { UtilityService } from '../../core/services/utility.service';
-import { Subscription, take } from 'rxjs';
+import { Subscription, take, interval } from 'rxjs';
 import { ModalComponent } from '../../components/modal/modal.component';
 import { ServerStateComponent } from '../../components/server-state/server-state.component';
 import { RconControlComponent } from '../../components/rcon-control/rcon-control.component';
@@ -23,7 +29,7 @@ import { ServerSettingsComponent } from '../../components/server-settings/server
 @Component({
   selector: 'app-server',
   standalone: true,
-  imports: [NgIf, FormsModule, ModalComponent, ServerStateComponent, RconControlComponent, ServerSettingsComponent],
+  imports: [NgIf, FormsModule, ModalComponent, ServerStateComponent, RconControlComponent, ServerSettingsComponent, ServerHeaderComponent, PlayerListComponent],
   templateUrl: './server.component.html'
 })
 export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
@@ -68,12 +74,18 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
   get crossplayPlatforms() {
     return this.serverConfigurationService.crossplayPlatforms;
   }
-  activeTab: 'general' | 'rates' | 'structures' | 'misc' | 'mods' | 'stats' | 'automation' | 'backup' | 'cluster' | 'firewall' | 'whitelist' | 'discord' | 'broadcasts' | 'players' | 'arkapi' | 'ini-GameUserSettings' | 'ini-Game' | 'ini-Engine' = 'general';
+  /** Which page of the selected server is showing. Driven by the /server/:tab route; the sidebar owns the links. */
+  activeTab: ServerTabId = DEFAULT_SERVER_TAB;
+  /** Re-evaluated every 30s so the uptime in the header keeps counting. */
+  now = Date.now();
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute, { optional: true });
+  private readonly serverNav = inject(ServerNavService);
+  private readonly liveServers = inject(LiveServersService);
   modsInput: string = '';
   modList: any[] = [];
   installProgress: { percent: number, step: string, message: string, phase?: string } | null = null;
   installOutput: string[] = [];
-  showServerState = true;
   showServerSettings = true;
   activeServerInstance: any = null;
   originalServerInstance: any = null; // Keep track of original values for change detection
@@ -135,6 +147,51 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
   ngOnInit() {
     // Initialize all event subscriptions through the service
     this.activeServerSub = this.eventSubscriptionService.initializeSubscriptions(this, this.cdr);
+
+    // The page shown is the :tab route parameter. Anything unknown falls back to the console.
+    if (this.route?.paramMap) {
+      this.subscriptions.push(this.route.paramMap.subscribe(params => {
+        const tab = params.get('tab');
+        if (this.serverNav.isValidTab(tab)) {
+          this.activeTab = tab;
+          this.serverNav.rememberTab(tab);
+          this.cdr.markForCheck();
+        } else if (tab) {
+          this.router.navigate(['/server', DEFAULT_SERVER_TAB], { replaceUrl: true });
+        }
+      }));
+    }
+
+    this.subscriptions.push(this.liveServers.servers$.subscribe(() => this.cdr.markForCheck()));
+    this.subscriptions.push(interval(30000).subscribe(() => {
+      this.now = Date.now();
+      this.cdr.markForCheck();
+    }));
+  }
+
+  /** True for every page rendered by the settings component (everything except console and players). */
+  get isSettingsTab(): boolean {
+    return this.activeTab !== 'console' && this.activeTab !== 'players';
+  }
+
+  get pageTitle(): string {
+    return this.serverNav.find(this.activeTab)?.label || '';
+  }
+
+  /** Roster entry for the selected server, carrying live CPU / uptime / player numbers. */
+  get liveServer(): ServerInstance | null {
+    return this.liveServers.find(this.activeServerInstance?.id) || null;
+  }
+
+  /** A child (settings toolbar, expert-mode toggle) asked for another page: it is a route change. */
+  onTabChanged(tab: ServerTabId | string) {
+    if (!this.serverNav.isValidTab(tab)) return;
+    this.serverNav.rememberTab(tab);
+    this.router.navigate(['/server', tab]);
+  }
+
+  goToDashboard() {
+    this.router.navigate(['/dashboard']);
   }
 
   ngAfterViewInit() {

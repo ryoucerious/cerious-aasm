@@ -1,6 +1,6 @@
 <!-- Mods Tab Content -->
 <div class="tab-content">
-  <div class="form-group" style="grid-column: 1 / -1;">
+  <div class="form-group page-intro">
     <h4>Server Mod Management</h4>
     <p class="form-control-label desc">Add and manage CurseForge mods for your server. Enter mod IDs from the CurseForge to install and configure mods.</p>
   </div>
@@ -10,7 +10,7 @@
     <p class="section-desc">Add new mods and manage your current mod list.</p>
 
     <!-- Add Mod Section -->
-    <div class="form-group" style="grid-column: 1 / -1;">
+    <div class="form-group span-all">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button class="btn btn-ghost" (click)="openAddModModal()" [disabled]="isLocked" style="white-space: nowrap;">
           <i class="material-icons">add</i> Add Mod
@@ -22,7 +22,7 @@
     </div>
 
     <!-- Mod List Section -->
-    <div class="form-group mod-table-container" style="grid-column: 1 / -1;">
+    <div class="form-group mod-table-container span-all">
       <label class="form-control-label">Installed Mods</label>
       <div class="mod-list">
         <table class="mod-table">

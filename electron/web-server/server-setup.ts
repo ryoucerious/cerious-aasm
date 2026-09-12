@@ -5,6 +5,7 @@ import { messagingService } from '../services/messaging.service';
 import { sessionAuth } from './auth-middleware';
 import { setupAuthRoutes } from './auth-routes';
 import { setupIPCHandlers } from './ipc-handlers';
+import { installSocketAuth } from './socket-auth';
 
 // =============================================================================
 // CONSTANTS
@@ -155,6 +156,7 @@ export function startServer(app: express.Express, port: number): void {
 
   // Setup IPC handlers
   setupIPCHandlers();
+  installSocketAuth();
 
   // Attach WebSocket server
   messagingService.attachWebSocketServer(server);

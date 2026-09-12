@@ -59,15 +59,23 @@ describe('SettingsPageComponent', () => {
   });
 
   it('should build tabs without web-server tab in Web mode', () => {
+    // "General" was split into sections that say what they change.
     expect(component.tabs.find((t: any) => t.id === 'web-server')).toBeUndefined();
-    expect(component.tabs.find((t: any) => t.id === 'general')).toBeTruthy();
-    expect(component.tabs.find((t: any) => t.id === 'about')).toBeTruthy();
-    expect(component.tabs.find((t: any) => t.id === 'server-installation')).toBeTruthy();
+    expect(component.tabs.find((t: any) => t.id === 'general')).toBeUndefined();
+    for (const id of ['server-installation', 'servers', 'updates', 'storage', 'users', 'appearance', 'about']) {
+      expect(component.tabs.find((t: any) => t.id === id)).toBeTruthy();
+    }
+  });
+
+  it('groups the rail by area, keeping tab order', () => {
+    expect(component.tabGroups.map((g: any) => g.name)).toEqual(['Server', 'Access', 'Application']);
+    expect(component.tabGroups[0].tabs.map((t: any) => t.id))
+      .toEqual(['server-installation', 'servers', 'updates', 'storage']);
   });
 
   it('should set activeTab on selectTab()', () => {
-    component.selectTab('general');
-    expect(component.activeTab).toBe('general');
+    component.selectTab('storage');
+    expect(component.activeTab).toBe('storage');
   });
 
   it('should return correct active tab label', () => {

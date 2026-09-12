@@ -5,6 +5,9 @@
 // must come first. 'variables' aliases the historical $names onto those properties.
 @use 'styles/theme';
 @use 'styles/variables' as *;
+// Refreshed shell (top bar, side navigation) and dashboard / server pages.
+@use 'styles/shell';
+@use 'styles/dashboard';
 
 // =========================
 // UTILITY CLASSES
@@ -79,8 +82,41 @@
   text-align: center;
 }
 
+// A sign-in that did not work, said plainly rather than in a line of small red label text.
+.login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  color: var(--text-strong);
+  // The login page sizes its type in pixels rather than the app's 12px rem base, so this
+  // matches the fields it sits above instead of shrinking to a footnote.
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+
+  .material-icons {
+    font-size: 19px;
+    color: var(--danger);
+    flex-shrink: 0;
+  }
+}
+
 .login-header {
   margin-bottom: 30px;
+
+  .login-logo {
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    margin: 0 auto 1rem;
+    display: block;
+    box-shadow: 0 8px 24px var(--shadow-color-soft);
+  }
   
   h1 {
     font-size: 28px;
@@ -201,9 +237,9 @@
   transition: $transition-colors;
 }
 .stat-tab.active, .stat-tab:hover {
-  background: $primary;
+  background: var(--primary-fill);
   color: var(--text-on-accent);
-  border-color: $primary;
+  border-color: var(--primary-fill);
 }
 .stat-multiplier-fields {
   min-width: 0;
@@ -363,34 +399,6 @@
   max-width: 90vw;
 }
 
-/* Sidebar toggle container to reserve space for the button on mobile */
-.sidebar-toggle-container {
-  width: 3.5rem;
-  min-width: 3.5rem;
-  max-width: 3.5rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  background: transparent;
-  z-index: 10001;
-}
-@include above-700px {
-  .sidebar-toggle-container {
-    display: none;
-  }
-}
-
-.sidebar-footer {
-  display: flex;
-  gap: 0.5rem;
-  padding: 1rem;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.sidebar {
-  position: relative;
-}
 /* Responsive styles for server/settings pages */
 .settings-tabs {
   display: flex;
@@ -404,7 +412,11 @@
   /* Preserve 3-column structure on wide screens */
   grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 1.25rem 2rem;
-  margin-bottom: 1rem;
+  /* Matches the row gap above, so a page built from two components has the same rhythm as
+     one built from a single grid. */
+  margin-bottom: 1.25rem;
+
+  &:last-child { margin-bottom: 0; }
 }
 /* Ensure grid items can shrink within the grid area */
 .tab-content > * { min-width: 0; }
@@ -429,34 +441,6 @@
   padding-bottom: 0.5rem;
   margin-bottom: 1.5rem;
 }
-.sidebar {
-  @extend .flex-column;
-  height: 100vh;
-  min-width: 220px;
-  max-width: 350px;
-  background: $background-dark;
-  color: $text-white;
-  box-shadow: 2px 0 8px rgba(0,0,0,0.08);
-}
-
-.sidebar-header {
-  padding: $spacing-md;
-  font-size: 1.2rem;
-  font-weight: 600;
-}
-
-.sidebar-content {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: $spacing-sm $spacing-sm $spacing-md $spacing-sm;
-}
-
-.sidebar-footer {
-  display: flex;
-  gap: $spacing-sm;
-  padding: $spacing-md;
-  align-items: center;
-}
 @include below-900px {
   .tabs {
     flex-wrap: wrap;
@@ -477,77 +461,6 @@
   }
   .tab-content {
     gap: 0.75rem;
-  }
-}
-/* Sidebar Responsive Styles */
-.sidebar {
-  @extend .flex-column;
-  height: 100vh;
-  min-width: 220px;
-  max-width: 350px;
-  background: $background-dark;
-  color: $text-white;
-  box-shadow: 2px 0 8px rgba(0,0,0,0.08);
-}
-
-.sidebar-header {
-  padding: 1rem;
-  font-size: 1.2rem;
-  font-weight: 600;
-}
-
-.sidebar-content {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 0.5rem 0.5rem 1rem 0.5rem;
-}
-
-.server-list {
-  @extend .flex-column;
-  gap: $spacing-xs;
-}
-
-.server-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.server-item.selected {
-  background: var(--surface-raised-2);
-}
-.server-status-icon {
-  width: 24px;
-  text-align: center;
-}
-.server-name {
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delete-server-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--danger-7);
-  font-size: 1.1rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  border-radius: 0.25rem;
-  margin-left: 0.5rem;
-  padding: 0.25rem;
-  min-width: auto;
-  min-height: auto;
-  
-  &:hover {
-    color: var(--danger-6);
-    background: rgba(255, 34, 34, 0.1);
   }
 }
 
@@ -636,13 +549,6 @@
   
 }
 
-/* Legacy sidebar button styles - consolidated into .btn system */
-.sidebar-footer {
-  display: flex;
-  gap: 0.5rem;
-  padding: 1rem;
-  align-items: center;
-}
 
 /* Toggle Switch Disabled State */
 .toggle-switch:disabled + .toggle-text,
@@ -745,15 +651,15 @@
   
   /* Legacy status mappings */
   &.status-running {
-    background: $success;
+    background: var(--success-fill);
     color: var(--text-on-accent);
-    border-color: $success;
+    border-color: var(--success-fill);
   }
   
   &.status-stopped {
-    background: $danger;
+    background: var(--danger-fill);
     color: var(--text-on-accent);
-    border-color: $danger;
+    border-color: var(--danger-fill);
   }
   
   &.status-starting {
@@ -866,19 +772,17 @@ ng-container > .card:last-child,
   color: $text-primary;
 }
 /* Badge for ARK update available */
+/* "Something needs attention here", beside a navigation label. A dot rather than a glyph:
+   as a flex item it was squashed out of round and the character inside it never showed. */
 .update-badge {
-  display: inline-block;
-  background: var(--warning);
-  color: var(--text-on-warning);
-  font-weight: bold;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  width: 1.2em;
-  height: 1.2em;
-  line-height: 1.2em;
-  font-size: 0.95em;
-  margin-left: 0.5em;
-  vertical-align: middle;
-  box-shadow: 0 1px 4px var(--shadow-color-soft);
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
 }
 
 // =====================
@@ -1139,64 +1043,12 @@ html, body {
 
 .app-container {
   display: flex;
-  height: 100vh;
-  width: 100vw;
-  background: var(--surface-raised-6);
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  background: var(--surface-base);
   overflow: hidden;
   position: relative;
-}
-
-/* Mobile Header */
-.mobile-header {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 60px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border-muted);
-  z-index: 1002;
-  align-items: center;
-  padding: 0 1rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
-.mobile-menu-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 1.5rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  border-radius: 0.25rem;
-  padding: 0.5rem;
-  min-width: 48px;
-  min-height: 48px;
-  
-  .material-icons {
-    pointer-events: none;
-    user-select: none;
-    font-size: 24px;
-    margin: 0;
-  }
-  
-  &:hover {
-    background: var(--surface-raised-8);
-    color: var(--text-strong);
-  }
-}
-
-.mobile-header-title {
-  flex: 1;
-  text-align: center;
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: var(--text-emphasis);
-  margin-left: -60px; /* Center accounting for menu button */
 }
 
 /* Mobile Overlay */
@@ -1218,119 +1070,6 @@ html, body {
   z-index: 1000;
 }
 
-.sidebar {
-  width: 220px;
-  max-width: 220px;
-  background: var(--surface-raised-5);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 100vh;
-  box-shadow: 1px 0 0 0 var(--surface-raised-5);
-  z-index: 1000;
-  transition: transform 0.3s cubic-bezier(.4,0,.2,1);
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3.5rem 1.5rem 1rem 1.5rem;
-  color: var(--text-emphasis);
-  cursor: pointer;
-  gap: 8px;
-}
-.sidebar-header h3 {
-  font-weight: normal;
-  margin: 0;
-}
-.sidebar-header .material-icons {
-  font-size: 20px;
-  user-select: none;
-  margin-left: auto;
-}
-
-.sidebar-content {
-  flex: 1 1 auto;
-  padding: 0 0.5rem;
-}
-
-.server-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.server-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  padding-right: 2rem;
-  gap: 0.75rem;
-  padding: .9rem 1.25rem;
-  margin: 0 1rem;
-  border-radius: 6px;
-  color: var(--text-primary);
-  cursor: pointer;
-  margin-bottom: 0.25rem;
-  transition: background 0.2s, color 0.2s;
-}
-
-.server-status {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--success);
-  display: inline-block;
-}
-
-/* Sidebar server status icon colors */
-.server-status-icon.status-running {
-  color: var(--success);
-}
-.server-status-icon.status-stopped {
-  color: var(--secondary);
-}
-.server-status-icon.status-starting {
-  color: var(--info);
-}
-.server-status-icon.status-stopping {
-  color: var(--warning);
-}
-.server-status-icon.status-error {
-  color: var(--danger);
-}
-.server-status-icon.status-unknown {
-  color: var(--secondary);
-}
-
-.delete-server-btn {
-  position: absolute;
-  right: 0.5rem;
-  background: transparent;
-  border: none;
-  color: var(--danger-2);
-  font-size: 1.2rem;
-  opacity: 0;
-  cursor: pointer;
-  transition: opacity 0.2s;
-  z-index: 2;
-  pointer-events: none;
-}
-
-.server-item:hover .delete-server-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-footer {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 1rem;
-}
 /* --- UNIFIED BUTTON SYSTEM --- */
 .btn {
   display: inline-flex;
@@ -1390,9 +1129,9 @@ html, body {
 
 /* Button Variants */
 .btn-primary {
-  background: $primary;
-  color: var(--text-strong);
-  border-color: $primary;
+  background: var(--primary-fill);
+  color: var(--text-on-accent);
+  border-color: var(--primary-fill);
   
   &:hover:not(:disabled) {
     background: var(--primary-hover);
@@ -1401,9 +1140,9 @@ html, body {
 }
 
 .btn-danger {
-  background: $danger;
-  color: var(--text-strong);
-  border-color: $danger;
+  background: var(--danger-fill);
+  color: var(--text-on-accent);
+  border-color: var(--danger-fill);
   
   &:hover:not(:disabled) {
     background: var(--danger-1);
@@ -1412,9 +1151,9 @@ html, body {
 }
 
 .btn-success {
-  background: $success;
-  color: var(--text-strong);
-  border-color: $success;
+  background: var(--success-fill);
+  color: var(--text-on-accent);
+  border-color: var(--success-fill);
   
   &:hover:not(:disabled) {
     background: var(--success-2);
@@ -1561,59 +1300,42 @@ html, body {
 .main-content {
   flex: 1 1 0;
   min-width: 0;
-  height: 100vh;
-  padding: 2.5rem 2.5rem;
+  min-height: 0;
+  padding: 1.75rem 2rem 2.5rem;
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* Mobile Responsive Styles */
-@include below-700px {
-  .mobile-header {
-    display: flex !important;
-  }
-  
+/* Mobile Responsive Styles: the sidebar slides in under the top bar */
+@media (max-width: 860px) {
   .mobile-overlay.mobile-menu-open {
     display: block !important;
   }
-  
-  .app-container {
-    flex-direction: column;
-    padding-top: 60px; /* Account for mobile header */
-  }
-  
+
   .sidebar-container {
     position: fixed;
-    top: 60px;
+    top: 64px;
     left: 0;
     bottom: 0;
     width: 280px;
-    max-width: 80vw;
+    max-width: 85vw;
     z-index: 1001;
     transform: translateX(-100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 2px 0 16px var(--shadow-color);
   }
-  
+
   .sidebar-container.mobile-open {
     transform: translateX(0);
   }
-  
-  .sidebar {
-    width: 100%;
-    max-width: 100%;
-    height: 100%;
-    box-shadow: 2px 0 8px rgba(0,0,0,0.18);
-  }
-  
+
   .main-content {
-    width: 100vw;
-    padding: 1rem 1rem;
-    height: calc(100vh - 60px);
-    margin-left: 0;
+    width: 100%;
+    padding: 1rem 1rem 2rem;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  
+
   .main-content.mobile-menu-open {
     pointer-events: none; /* Prevent interaction when menu is open */
   }
@@ -1628,10 +1350,6 @@ html, body {
   .sidebar-container {
     width: 100vw;
     max-width: 100vw;
-  }
-  
-  .mobile-header-title {
-    font-size: 1rem;
   }
 }
 
@@ -1701,8 +1419,8 @@ html, body {
   justify-content: center;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--text-strong);
-  background-color: var(--primary);
+  color: var(--text-on-accent);
+  background-color: var(--primary-fill);
   transition: width 0.3s;
   min-width: 0;
   white-space: nowrap;
@@ -1829,11 +1547,23 @@ html, body {
   min-width: 340px;
   max-width: 90vw;
   min-height: 120px;
+  // Never taller than the window: a long form used to push the dialog past both edges of
+  // the screen, leaving Cancel and Save jammed against the bottom.
+  max-height: calc(100vh - 2rem);
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   margin: 1rem;
+}
+
+/* The shared app-dropdown floats its list against the viewport, so a modal or drawer that
+   hides its overflow cannot clip the options. Position comes from the component. */
+.app-dropdown .dropdown-menu.floating {
+  position: fixed;
+  right: auto;
+  margin-top: 0;
+  z-index: 1100;
 }
 
 /* Modal Content Variants */
@@ -1968,7 +1698,22 @@ html, body {
 .modal-body {
   padding: 1.5rem;
   padding-top: 0;
+  // The bottom padding belongs to the sticky footer below, so the footer can sit flush
+  // against the bottom of the scrolling area rather than floating above a gap.
+  padding-bottom: 0;
   color: $text-secondary;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The action row stays on screen while a long form scrolls behind it. */
+.modal-body .action-group-modal {
+  position: sticky;
+  bottom: 0;
+  margin-top: 1.25rem;
+  padding: 0.9rem 0 1.5rem;
+  background: $background-dark;
 }
 
 .form-group {
@@ -2097,7 +1842,7 @@ input[type="time"].form-control {
       }
       
       &.selected {
-        background: var(--primary);
+        background: var(--primary-fill);
         color: var(--text-on-accent);
       }
     }
@@ -2110,6 +1855,40 @@ input[type="time"].form-control {
       color: var(--text-secondary) !important;
       cursor: not-allowed !important;
     }
+  }
+}
+
+/* app-dropdown: the shared component that renders the .custom-dropdown pattern */
+app-dropdown {
+  display: block;
+  min-width: 0;
+}
+.app-dropdown {
+  .form-control { width: 100% !important; }
+
+  .app-dropdown-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &.placeholder { color: var(--text-secondary); }
+  }
+
+  .dropdown-menu {
+    max-height: 260px;
+    overflow-y: auto;
+
+    div.highlighted:not(.selected) {
+      background: var(--surface-raised-7);
+      color: var(--text-strong);
+    }
+  }
+
+  .app-dropdown-empty {
+    cursor: default;
+    color: var(--text-secondary);
   }
 }
 
@@ -2245,11 +2024,22 @@ input[type="time"].form-control {
   // Common "no data" styling
   .no-data-row {
     .no-data {
-      text-align: center;
+      // The icon and its message on one line, centred together — as inline content the
+      // glyph sat above the text's baseline.
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
       color: $text-secondary;
       font-style: italic;
       padding: 2rem 1rem;
       border-bottom: none;
+
+      .material-icons {
+        font-size: 18px;
+        font-style: normal;
+        line-height: 1;
+      }
     }
   }
   
@@ -2518,8 +2308,9 @@ p {
     border-radius: 10px;
   }
 
+  // Theme tokens, not a fixed white: a white thumb is invisible on the light theme.
   &::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--scrollbar-thumb);
     border-radius: 10px;
     border: 2px solid transparent;
     background-clip: content-box;
@@ -2527,12 +2318,12 @@ p {
   }
 
   &::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.35);
+    background: var(--scrollbar-thumb-hover);
     background-clip: content-box;
   }
 
   &::-webkit-scrollbar-thumb:active {
-    background: rgba(255, 255, 255, 0.5);
+    background: var(--scrollbar-thumb-active);
     background-clip: content-box;
   }
 
@@ -2542,7 +2333,7 @@ p {
 
   /* Firefox */
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 /* For light themes or specific elements that need darker scrollbars */
@@ -2926,7 +2717,7 @@ p {
   top: 6px;
   right: 6px;
   background: var(--success-2);
-  color: var(--text-strong);
+  color: var(--text-on-accent);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.68rem;
@@ -3269,7 +3060,7 @@ p {
   margin-left: 0.5em;
   vertical-align: middle;
   background: var(--danger);
-  color: var(--text-strong);
+  color: var(--text-on-accent);
   border: 1.5px solid var(--danger);
   box-shadow: 0 1px 4px var(--shadow-color-soft);
   letter-spacing: 0.01em;
@@ -3435,7 +3226,11 @@ p {
   border-radius: 8px;
   padding: 0;
   margin: 1rem 0;
-  min-height: 500px;
+  // A column that fills the panel, so the footer below sits at the bottom of the page
+  // rather than halfway up it.
+  display: flex;
+  flex-direction: column;
+  min-height: min(500px, 70vh);
   color: var(--text-emphasis-4);
 }
 
@@ -3485,9 +3280,9 @@ p {
 
 .about-content-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  // One column since the feature list went: System Info is all that lives here.
+  grid-template-columns: 1fr;
   gap: 0;
-  min-height: 400px;
 }
 
 .about-section {
@@ -3501,27 +3296,27 @@ p {
   margin: 0 0 1.5rem 0;
 }
 
-.features-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.feature-item {
-  display: flex;
+// Link to the project's Discord, at the foot of the About page.
+.about-discord {
+  display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-}
-
-.feature-check {
-  color: var(--success-4) !important;
-  font-size: 1.25rem !important;
-}
-
-.feature-text {
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-muted);
   color: var(--text-emphasis-4);
-  font-size: 0.95rem;
-  font-weight: 400;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+  svg { color: #5865f2; }  // Discord's own blurple, the one thing here that is not themed
+
+  &:hover {
+    background: var(--surface-raised);
+    border-color: var(--primary);
+    color: var(--text-strong);
+  }
 }
 
 .system-info-list {
@@ -3548,6 +3343,11 @@ p {
 }
 
 .about-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: auto;
   text-align: center;
   padding: 1.5rem 2rem;
 }
@@ -3620,20 +3420,57 @@ p {
 // =========================
 // CDK DRAG & DROP
 // =========================
+// The preview is a copy of the row or card being carried, attached to the body — so it sits
+// outside everything that styled the original and has to say how it looks on its own.
 .cdk-drag-preview {
   box-sizing: border-box;
-  border-radius: 4px;
-  box-shadow: 0 5px 5px -3px rgba(0, 0, 0, 0.2),
-              0 8px 10px 1px rgba(0, 0, 0, 0.14),
-              0 3px 14px 2px rgba(0, 0, 0, 0.12);
-  background: var(--bg-secondary, var(--surface-3));
-  color: var(--text-primary, var(--text-emphasis-1));
-  padding: 8px 12px;
-  font-size: 14px;
-  opacity: 0.9;
+  box-shadow: 0 14px 32px var(--shadow-color-strong);
+  opacity: 0.95;
 }
 
+// A server being carried in the sidebar: the same row, lifted off the list.
+.cdk-drag-preview.server-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  font-size: 0.92rem;
+  border: 1px solid var(--primary);
+
+  // Nothing to click while it is in the air, and the players badge keeps its own styling.
+  .delete-server-btn { display: none; }
+
+  .server-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// A dashboard card keeps its own look; it only needs to lift.
+app-server-card.cdk-drag-preview {
+  border-radius: 14px;
+}
+
+// The gap left behind, shown as an outline rather than a ghost of the row.
 .cdk-drag-placeholder {
+  opacity: 1;
+  visibility: visible;
+
+  &.server-item {
+    background: var(--primary-soft);
+    box-shadow: inset 0 0 0 1px var(--primary);
+
+    > * { visibility: hidden; }
+  }
+}
+
+.cdk-drag-placeholder:not(.server-item) {
   opacity: 0.3;
 }
 

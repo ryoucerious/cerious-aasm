@@ -1,23 +1,17 @@
-<!-- Login page - full screen without sidebar -->
+<!-- Login page - full screen without chrome -->
 <div *ngIf="isLoginPage" class="login-page-container">
   <router-outlet></router-outlet>
 </div>
 
-<!-- Main app layout - with sidebar -->
+<!-- Main app layout - top bar, sidebar, content -->
 <ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
   <div class="app-root-wrapper">
     <!-- App Update Banner - full width above everything -->
     <app-update-banner *ngIf="isElectron"></app-update-banner>
 
-    <div class="app-container">
-      <!-- Mobile Header -->
-      <div *ngIf="isMobile" class="mobile-header">
-        <button class="mobile-menu-btn" (click)="toggleMobileMenu()" [attr.aria-label]="isMobileMenuOpen ? 'Close menu' : 'Open menu'">
-          <span class="material-icons">{{ isMobileMenuOpen ? 'close' : 'menu' }}</span>
-        </button>
-        <div class="mobile-header-title">Cerious AASM</div>
-      </div>
+    <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
+    <div class="app-container">
       <!-- Mobile Overlay -->
       <div *ngIf="isMobile && isMobileMenuOpen" class="mobile-overlay" (click)="closeMobileMenu()"></div>
 
@@ -40,14 +34,20 @@
             <div class="action-group-modal">
               <button class="btn" (click)="onExitModalClose('cancel')">Cancel</button>
               <button class="btn" (click)="onExitModalClose('exit')">Exit Anyway</button>
-              <button class="btn" (click)="onExitModalClose('shutdown')">Shut Down Servers &amp; Exit</button>
+              <button class="btn btn-danger" (click)="onExitModalClose('shutdown')">Shut Down Servers &amp; Exit</button>
             </div>
           </div>
         </app-modal>
       </div>
     </div>
+
+    <!-- Settings live in a drawer over the current page rather than a page of their own -->
+    <app-settings-page></app-settings-page>
   </div>
 </ng-container>
+<!-- One tooltip for the whole app, in place of the browser's own -->
+<app-tooltip-host></app-tooltip-host>
+
 <ng-template #lostOrConnecting>
   <div *ngIf="connecting" class="connection-lost-container">
     <div class="connection-lost-content">

@@ -149,7 +149,7 @@ messagingService.on('force-stop-server-instance', async (payload, sender) => {
       // Broadcast notification using service-provided name
       messagingService.sendToAll('notification', {
         type: 'warning',
-        message: `Server ${result.instanceName} force stopped.`
+        message: `${result.instanceName} force stopped.`
       });
     }
     
@@ -440,7 +440,7 @@ messagingService.on('start-server-instance', async (payload, sender) => {
     if (result.started) {
       messagingService.sendToAll('notification', {
         type: 'info',
-        message: `Server ${result.instanceName} started.`
+        message: `${result.instanceName} started.`
       });
     } else {
       if (result.portError && sender && typeof sender.send === 'function') {
@@ -643,7 +643,15 @@ messagingService.on('delete-server-instance', async (payload, sender) => {
     if (result.success) {
       const allInstances = await serverManagementService.getAllInstances();
       messagingService.sendToAll('server-instances', allInstances.instances);
-      
+
+      try {
+        const { activityLogService } = require('../services/activity-log.service');
+        const { identifySender } = require('../services/auth/permission-gate');
+        activityLogService.record('info', 'Server deleted', id, identifySender(sender).user?.username || null);
+      } catch {
+        // The feed is a convenience; never fail a delete because of it.
+      }
+
       messagingService.sendToAllOthers('notification', {
         type: 'info',
         message: 'Server deleted.'

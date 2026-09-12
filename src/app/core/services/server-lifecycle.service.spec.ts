@@ -49,7 +49,7 @@ describe('ServerLifecycleService', () => {
       return 0;
     });
     service.stopServer(instance);
-    expect(notificationMock.info).toHaveBeenCalledWith('Stopping server TestServer...', 'Server Control');
+    expect(notificationMock.info).toHaveBeenCalledWith('Stopping TestServer...', 'Server Control');
     expect(rconMock.sendRconCommand).toHaveBeenCalledWith('id2', 'ServerChat Server is shutting down in 5 seconds!');
     setTimeout(() => {
       expect(rconMock.sendRconCommand).toHaveBeenCalledWith('id2', 'DoExit');

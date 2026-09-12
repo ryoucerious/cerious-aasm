@@ -97,16 +97,17 @@ describe('ApplicationService', () => {
     expect(mockStartWebServer).toHaveBeenCalledWith(1234);
   });
 
-  it('exits with error if --auth-enabled is set without --password', () => {
+  it('starts with --auth-enabled and no --password, leaving sign-in to accounts', async () => {
     process.argv = ['node', 'main.js', '--headless', '--auth-enabled'];
-      let exited = false;
-      const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => { exited = true; return undefined as never; });
-      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      const service = new ApplicationService();
-      service.initializeApplication();
-      expect(exited).toBe(true);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('requires --password'));
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
+    let exited = false;
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => { exited = true; return undefined as never; });
+
+    const service = new ApplicationService();
+    await service.initializeApplication();
+
+    // A password was once required here, which made an accounts-only install impossible.
+    expect(exited).toBe(false);
+    expect(mockStartWebServer).toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });

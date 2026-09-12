@@ -1,4 +1,6 @@
 import { messagingService } from '../services/messaging.service';
+import { resolveAuthVerify } from './user-bridge';
+import { invalidateSessionsFor } from '../utils/session-store.utils';
 import { updateAuthConfig, hashPassword } from './auth-config';
 
 /**
@@ -7,9 +9,17 @@ import { updateAuthConfig, hashPassword } from './auth-config';
 export function setupIPCHandlers(): void {
   // Listen for messaging responses from main process
   process.on('message', async (message: any) => {
-    if (message.type === 'messaging-response') {
-      // Forward to WebSocket clients
-      messagingService.sendToAllWebSockets(message.channel, message.data);
+    if (message.type === 'auth-verify-result') {
+      resolveAuthVerify(message.requestId, message.user || null);
+    } else if (message.type === 'invalidate-sessions') {
+      const removed = invalidateSessionsFor({ userId: message.userId, roleId: message.roleId });
+      if (removed > 0) {
+        console.info(`[ipc-handlers] Dropped ${removed} session(s) after an account or role change.`);
+      }
+    } else if (message.type === 'messaging-response') {
+      // A reply belongs to the client that asked. Sending it to every socket leaked one
+      // user's data to all the others and let a stale requestId resolve someone else's call.
+      messagingService.sendToWebSocket(message.cid, message.channel, message.data);
     } else if (message.type === 'broadcast-web') {
       // Main process requests a broadcast to web clients, with sender exclusion
       messagingService.sendToAllWebSockets(message.channel, message.data, message.excludeCid);

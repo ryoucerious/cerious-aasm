@@ -4,8 +4,20 @@
     {
       "name": "angular-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start"],
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
       "port": 4200
+    },
+    {
+      "name": "web-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "web-ui:dev"
+      ],
+      "port": 3000
     }
   ]
 }

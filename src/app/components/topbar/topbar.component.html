@@ -1,0 +1,102 @@
+<header class="topbar">
+  <button *ngIf="isMobile" class="topbar-icon-btn topbar-menu-btn" type="button"
+          (click)="menuToggle.emit()"
+          [attr.aria-label]="menuOpen ? 'Close menu' : 'Open menu'">
+    <span class="material-icons">{{ menuOpen ? 'close' : 'menu' }}</span>
+  </button>
+
+  <a class="topbar-brand" (click)="goToDashboard()" title="Dashboard">
+    <img class="topbar-logo" src="assets/logo-square-256.png" alt="Cerious AASM logo" />
+    <span class="topbar-brand-text">
+      <span class="topbar-brand-name">Cerious-AASM</span>
+      <span class="topbar-brand-sub">ARK Ascended Server Manager</span>
+    </span>
+  </a>
+
+  <div class="topbar-search" [class.open]="searchOpen">
+    <span class="material-icons topbar-search-icon">search</span>
+    <input #searchInput
+           type="text"
+           class="topbar-search-input"
+           placeholder="Search servers, pages, or commands..."
+           [(ngModel)]="searchQuery"
+           (focus)="openSearch()"
+           (input)="onSearchInput()"
+           (keydown)="onSearchKeydown($event)"
+           aria-label="Search" />
+    <span class="topbar-kbd"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+
+    <div class="topbar-dropdown topbar-search-results" *ngIf="searchOpen && searchResults.length">
+      <button type="button"
+              class="topbar-result"
+              *ngFor="let result of searchResults; let i = index"
+              [class.highlighted]="i === highlightedIndex"
+              (mouseenter)="highlightedIndex = i"
+              (mousedown)="$event.preventDefault()"
+              (click)="runResult(result)">
+        <span class="material-icons">{{ result.icon }}</span>
+        <span class="topbar-result-text">
+          <span class="topbar-result-label">{{ result.label }}</span>
+          <span class="topbar-result-detail">{{ result.detail }}</span>
+        </span>
+        <span class="topbar-result-kind">{{ result.kind === 'server' ? 'Server' : 'Page' }}</span>
+      </button>
+    </div>
+    <div class="topbar-dropdown topbar-search-results" *ngIf="searchOpen && !searchResults.length">
+      <div class="topbar-empty">No matches for "{{ searchQuery }}"</div>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <button type="button" class="topbar-icon-btn" (click)="toggleTheme()" [title]="themeTitle" aria-label="Toggle theme">
+      <span class="material-icons">{{ themeIcon }}</span>
+    </button>
+
+    <div class="topbar-menu-anchor">
+      <button type="button" class="topbar-icon-btn" (click)="toggleNotifications()" title="Recent activity" aria-label="Notifications">
+        <span class="material-icons">notifications</span>
+        <span class="topbar-badge" *ngIf="unreadCount > 0">{{ unreadCount > 9 ? '9+' : unreadCount }}</span>
+      </button>
+      <div class="topbar-dropdown topbar-notifications" *ngIf="notificationsOpen">
+        <div class="topbar-dropdown-header">
+          <span>Recent Activity</span>
+          <button type="button" class="link-btn" (click)="viewAllActivity()">View all</button>
+        </div>
+        <div class="topbar-empty" *ngIf="!recentActivity.length">Nothing has happened yet.</div>
+        <div class="activity-row" *ngFor="let item of recentActivity; trackBy: trackActivity">
+          <span class="activity-icon" [ngClass]="'tone-' + activityIcons[item.kind].tone">
+            <span class="material-icons">{{ activityIcons[item.kind].icon }}</span>
+          </span>
+          <span class="activity-text">
+            <span class="activity-message">{{ item.message }}</span>
+            <span class="activity-time">
+            {{ relativeTime(item) }}<span class="activity-by" *ngIf="item.username"> · by {{ item.username }}</span>
+          </span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="topbar-menu-anchor">
+      <button type="button" class="topbar-user" (click)="toggleUserMenu()" aria-haspopup="menu" [attr.aria-expanded]="userMenuOpen">
+        <span class="topbar-avatar">{{ userInitial }}</span>
+        <span class="topbar-user-text">
+          <span class="topbar-user-name">{{ userName }}</span>
+          <span class="topbar-user-role">{{ userRole }}</span>
+        </span>
+        <span class="material-icons topbar-user-chevron">expand_more</span>
+      </button>
+      <div class="topbar-dropdown topbar-user-menu" *ngIf="userMenuOpen" role="menu">
+        <button type="button" class="topbar-menu-item" role="menuitem" (click)="openAccount()">
+          <span class="material-icons">account_circle</span> User Settings
+        </button>
+        <button type="button" class="topbar-menu-item" role="menuitem" *ngIf="canSignOut" (click)="logout()">
+          <span class="material-icons">logout</span> Sign out
+        </button>
+        <div class="topbar-menu-note" *ngIf="!canSignOut">{{ signOutNote }}</div>
+      </div>
+    </div>
+
+    <app-window-controls></app-window-controls>
+  </div>
+</header>

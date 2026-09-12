@@ -1,35 +1,67 @@
 <ng-template #noServerSelected>
-  <div class="card">
-    <div class="card-body" style="text-align:center; min-height:180px; display:flex; align-items:center; justify-content:center;">
-      <div>
-        <h2 style="color:var(--text-primary); font-weight:400;">No Server Selected</h2>
-        <p style="color:var(--secondary);">Select a server from the list to view its details.</p>
-      </div>
-    </div>
+  <div class="page-panel page-empty">
+    <span class="material-icons">dns</span>
+    <h2>No Server Selected</h2>
+    <p>Select a server from the sidebar, or add one, to view its pages.</p>
+    <button type="button" class="btn btn-primary" (click)="goToDashboard()"><span class="material-icons">home</span> Go to Dashboard</button>
   </div>
 </ng-template>
+
 <ng-container *ngIf="activeServerInstance; else noServerSelected">
-  <app-server-state
-    [serverInstance]="activeServerInstance"
-    [logs]="filteredLogs"
-    [isVisible]="showServerState"
+  <app-server-header
+    [server]="activeServerInstance"
+    [live]="liveServer"
+    [pageTitle]="pageTitle"
+    [now]="now"
+    [rconConnected]="rconConnected"
     (startServer)="startServer()"
     (stopServer)="stopServer()"
-    (forceStopServer)="forceStopServer()"
-    (visibilityToggled)="showServerState = $event">
-  </app-server-state>
-  
-  <app-rcon-control 
-    [rconConnected]="rconConnected"
-    [serverState]="mapServerState(activeServerInstance?.state)"
-    [knownCommands]="knownRconCommands"
-    [lastResponse]="rconLastResponse"
-    (sendMessage)="sendRconMessage($event)"
-    (inputFocus)="onRconInputFocus()"
-    (inputBlur)="onRconInputBlur()"
-    (commandFill)="fillRconCommand($event)">
-  </app-rcon-control>
+    (forceStopServer)="forceStopServer()">
+  </app-server-header>
+
+  <!-- Console: live output plus RCON, in the same panel and toolbar every other page uses -->
+  <div class="page-panel settings-panel" *ngIf="activeTab === 'console'">
+    <div class="settings-toolbar">
+      <div class="settings-toolbar-title">
+        <h2>Console</h2>
+      </div>
+    </div>
+
+    <app-server-state
+      [serverInstance]="activeServerInstance"
+      [logs]="filteredLogs"
+      (startServer)="startServer()"
+      (stopServer)="stopServer()"
+      (forceStopServer)="forceStopServer()"
+      >
+    </app-server-state>
+
+    <app-rcon-control
+      [rconConnected]="rconConnected"
+      [serverState]="mapServerState(activeServerInstance?.state)"
+      [knownCommands]="knownRconCommands"
+      [lastResponse]="rconLastResponse"
+      (sendMessage)="sendRconMessage($event)"
+      (inputFocus)="onRconInputFocus()"
+      (inputBlur)="onRconInputBlur()"
+      (commandFill)="fillRconCommand($event)">
+    </app-rcon-control>
+  </div>
+
+  <!-- Online players -->
+  <div class="page-panel settings-panel" *ngIf="activeTab === 'players'">
+    <div class="settings-toolbar">
+      <div class="settings-toolbar-title">
+        <h2>Players</h2>
+      </div>
+    </div>
+
+    <app-player-list [serverInstance]="activeServerInstance"></app-player-list>
+  </div>
+
+  <!-- Every configuration / feature page -->
   <app-server-settings
+    *ngIf="isSettingsTab"
     [serverInstance]="activeServerInstance"
     [isVisible]="showServerSettings"
     [activeTab]="activeTab"
@@ -58,8 +90,8 @@
     [backupList]="backupList"
     (toggleVisibility)="showServerSettings = !showServerSettings"
     (openDirectory)="openServerDirectory()"
-    (tabChanged)="activeTab = $event"
-    (backupTabClicked)="activeTab = 'backup'"
+    (tabChanged)="onTabChanged($event)"
+    (backupTabClicked)="onTabChanged('backup')"
     (settingsChanged)="saveSettings()"
     (toggleMultiOption)="onToggleMultiOption($event.fieldKey, $event.option, $event.checked)"
     (mapSelected)="activeServerInstance.mapName = $event; saveSettings(); dropdownOpen = false"
@@ -83,21 +115,21 @@
     (saveAutomationSettings)="saveAutomationSettings()"
     (saveAutoStartSettings)="saveAutoStartSettings()"
     (saveCrashDetectionSettings)="saveCrashDetectionSettings()"
-    (saveScheduledRestartSettings)="saveScheduledRestartSettings()">>
+    (saveScheduledRestartSettings)="saveScheduledRestartSettings()">
   </app-server-settings>
 
   <!-- Backup Name Modal -->
-  <app-modal 
-    [title]="'Create Backup'" 
-    [show]="showBackupNameModal" 
+  <app-modal
+    [title]="'Create Backup'"
+    [show]="showBackupNameModal"
     (close)="onBackupNameCancel()">
     <div class="modal-form">
       <div class="form-group">
         <label class="form-control-label">Backup Name</label>
-        <input 
-          type="text" 
-          class="form-control" 
-          [(ngModel)]="backupName" 
+        <input
+          type="text"
+          class="form-control"
+          [(ngModel)]="backupName"
           placeholder="Enter backup name..."
           maxlength="50"
           [disabled]="isCreatingBackup">
@@ -109,7 +141,7 @@
     </div>
     <div class="action-group-modal">
       <button type="button" (click)="onBackupNameCancel()" class="btn btn-ghost" [disabled]="isCreatingBackup">Cancel</button>
-      <button type="button" (click)="onBackupNameConfirm()" class="btn btn-ghost" [disabled]="isCreatingBackup">
+      <button type="button" (click)="onBackupNameConfirm()" class="btn btn-primary" [disabled]="isCreatingBackup">
         <span *ngIf="isCreatingBackup" class="material-icons spinner">refresh</span>
         Create Backup
       </button>
@@ -117,9 +149,9 @@
   </app-modal>
 
   <!-- Delete Backup Confirmation Modal -->
-  <app-modal 
-    [title]="'Confirm Delete'" 
-    [show]="showDeleteBackupModal" 
+  <app-modal
+    [title]="'Confirm Delete'"
+    [show]="showDeleteBackupModal"
     (close)="onDeleteBackupCancel()">
     <div class="modal-confirmation">
       <p>Are you sure you want to delete the backup <span class="modal-target">"{{ backupToDelete?.name }}"</span>?</p>
@@ -127,6 +159,7 @@
     </div>
     <div class="action-group-modal">
       <button type="button" (click)="onDeleteBackupCancel()" class="btn">Cancel</button>
-      <button type="button" (click)="onDeleteBackupConfirm()" class="btn btn-ghost">Delete</button>
+      <button type="button" (click)="onDeleteBackupConfirm()" class="btn btn-danger">Delete</button>
     </div>
   </app-modal>
+</ng-container>

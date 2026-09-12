@@ -1,29 +1,28 @@
-<!-- Players Tab Content -->
+<!-- Laid out exactly like Whitelist and Mods: a page intro, then titled sections. -->
 <div class="tab-content">
-  <div class="form-group" style="grid-column: 1 / -1;">
+  <div class="form-group page-intro">
     <h4>Online Player Management</h4>
-    <p class="form-control-label desc">View currently connected players and manage their access. Players must be online and the server running for data to display.</p>
+    <p class="form-control-label desc">
+      Everyone connected right now. The server has to be running for anyone to appear here.
+    </p>
   </div>
 
   <div class="settings-section">
-    <h5>Player List</h5>
-    <p class="section-desc">Monitor active connections and player activity.</p>
+    <h5>Connected Players ({{ players.length }})</h5>
+    <p class="section-desc">The list refreshes when you open this page; Refresh asks again.</p>
 
-    <!-- Refresh Section -->
-    <div class="form-group" style="grid-column: 1 / -1;">
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <button class="btn btn-ghost" (click)="refreshPlayers()" [disabled]="loading || serverInstance?.state !== 'Running'" style="white-space: nowrap;">
-          <i class="material-icons" [class.spin]="loading">refresh</i> Refresh Players
+    <div class="form-group span-all">
+      <div class="settings-input-row">
+        <button class="btn btn-ghost" (click)="refreshPlayers()" [disabled]="loading || !isOnline">
+          <i class="material-icons" [class.spin]="loading">refresh</i> Refresh
         </button>
-        <span class="form-control-label desc" style="margin: 0;" *ngIf="lastUpdated">
-          Last updated: {{ lastUpdated | date:'mediumTime' }}
+        <span class="form-control-label desc" *ngIf="lastUpdated">
+          Updated {{ lastUpdated | date:'mediumTime' }}
         </span>
       </div>
     </div>
 
-    <!-- Player List Section -->
-    <div class="form-group player-table-container" style="grid-column: 1 / -1;">
-      <label class="form-control-label">Online Players ({{ players.length }})</label>
+    <div class="form-group player-table-container span-all">
       <div class="player-list">
         <table class="player-table">
         <thead>
@@ -63,7 +62,6 @@
         </tbody>
       </table>
     </div>
-    <div class="form-control-label desc">Player data refreshes automatically when the tab is opened. Use the refresh button for manual updates.</div>
-  </div>
+    </div>
   </div>
 </div>

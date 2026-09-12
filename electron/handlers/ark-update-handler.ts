@@ -21,6 +21,46 @@ export function setArkUpdateService(service: ArkUpdateService): void {
  * @param payload - The payload received with the message, expected to contain a `requestId`.
  * @param sender - The sender of the message, used to route the response.
  */
+/**
+ * Handles 'get-ark-installation': everything the ARK Installation settings page shows —
+ * whether the server is installed, the installed and latest build ids, where it lives, and
+ * when the two were last compared.
+ */
+messagingService.on('get-ark-installation', async (payload: any, sender: any) => {
+  const { requestId } = payload || {};
+  try {
+    const { isArkServerInstalled, getArkServerDir, getCurrentInstalledVersion } = require('../utils/ark/ark-install.utils');
+    const installed = isArkServerInstalled();
+    const status = arkUpdateService ? arkUpdateService.getStatus() : null;
+
+    // The service caches the installed build at startup; re-read it so the page is accurate
+    // straight after an install without waiting for the next poll.
+    let installedBuildId = status?.installedBuildId ?? null;
+    if (installed) {
+      try {
+        installedBuildId = (await getCurrentInstalledVersion()) ?? installedBuildId;
+      } catch {
+        // keep the cached value
+      }
+    }
+
+    messagingService.sendToOriginator('get-ark-installation', {
+      success: true,
+      installed,
+      installedBuildId,
+      latestBuildId: status?.latestBuildId ?? null,
+      updateAvailable: !!status?.updateAvailable,
+      lastCheckedAt: status?.lastCheckedAt ?? null,
+      installPath: getArkServerDir(),
+      requestId
+    }, sender);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[ark-update-handler] Failed to read installation status:', message);
+    messagingService.sendToOriginator('get-ark-installation', { success: false, error: message, requestId }, sender);
+  }
+});
+
 messagingService.on('check-ark-update', async (payload, sender) => {
   const { requestId } = payload || {};
   

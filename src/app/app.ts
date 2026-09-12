@@ -13,6 +13,11 @@ import { ModalComponent } from './components/modal/modal.component';
 import { ServerInstance } from './core/models/server-instance.model';
 import { UtilityService } from './core/services/utility.service';
 import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
+import { TopbarComponent } from './components/topbar/topbar.component';
+import { SettingsPageComponent } from './pages/settings/settings.component';
+import { TooltipHostComponent } from './components/tooltip/tooltip-host.component';
+import { ActivityService } from './core/services/activity.service';
+import { LiveServersService } from './core/services/live-servers.service';
 
 declare global {
   interface Window {
@@ -23,7 +28,7 @@ declare global {
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, SidebarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, UpdateBannerComponent],
+  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, UpdateBannerComponent, SettingsPageComponent, TooltipHostComponent],
   templateUrl: './app.html'
 })
 
@@ -39,6 +44,7 @@ export class App implements OnInit, OnDestroy {
   isMobile = false;
   isMobileMenuOpen = false;
   private wsCheckInterval: Subscription | null = null;
+  private unauthorizedSub: Subscription | null = null;
   private wsTimeout: any;
   private everConnected = false;
 
@@ -53,7 +59,11 @@ export class App implements OnInit, OnDestroy {
     _notification: NotificationService,
     // Eagerly instantiate ThemeService so the theme applies and keeps following the OS
     // even on screens that never inject it (e.g. the login page)
-    _theme: ThemeService
+    _theme: ThemeService,
+    // Eagerly instantiate the roster and activity feed so events are recorded from the
+    // moment the app connects, not only while the dashboard is open
+    _liveServers: LiveServersService,
+    _activity: ActivityService
   ) {
     this.detectMobile();
     this.setupResizeListener();
@@ -95,6 +105,16 @@ export class App implements OnInit, OnDestroy {
           this.cdr.markForCheck();
         }
       }, 5000);
+      // A socket refused for want of a sign-in is not a lost connection: send the user to
+      // the login page instead of leaving them on the "Connection Lost" screen.
+      this.unauthorizedSub = this.ws.unauthorized$.subscribe(() => {
+        if (this.wsTimeout) clearTimeout(this.wsTimeout);
+        this.connecting = false;
+        this.connectionLost = false;
+        this.cdr.markForCheck();
+        this.router.navigate(['/login']);
+      });
+
       this.wsCheckInterval = this.ws.connected$.subscribe((connected) => {
         if (connected) {
           if (!this.everConnected) {
@@ -140,6 +160,7 @@ export class App implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.wsCheckInterval) this.wsCheckInterval.unsubscribe();
+    if (this.unauthorizedSub) this.unauthorizedSub.unsubscribe();
     if (this.wsTimeout) clearTimeout(this.wsTimeout);
     // Clean up resize listener
     window.removeEventListener('resize', this.onWindowResize);
@@ -156,7 +177,7 @@ export class App implements OnInit, OnDestroy {
 
   // Mobile responsive methods
   private detectMobile(): void {
-    this.isMobile = window.innerWidth <= 700;
+    this.isMobile = window.innerWidth <= 860;
   }
 
   private setupResizeListener(): void {

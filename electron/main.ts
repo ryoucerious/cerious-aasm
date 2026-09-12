@@ -55,7 +55,7 @@ if (isHeadlessMode && isLinux && !hasDisplay) {
 // =========================
 // Core Dependencies
 // =========================
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -125,6 +125,14 @@ import './handlers/config-import-export-handler';
 import './handlers/auto-update-handler';
 import './handlers/ark-api-handler';
 import './handlers/curseforge-handler';
+import './handlers/host-resources-handler';
+import './handlers/user-handler';
+import './handlers/activity-handler';
+import './handlers/player-history-handler';
+import { playerHistoryService } from './services/player-history.service';
+import { userDatabaseService } from './services/auth/user-database.service';
+import { loadGlobalConfig } from './utils/global-config.utils';
+import { platformService } from './services/platform.service';
 
 // =========================
 // Service Initialization
@@ -182,8 +190,14 @@ const cleanup = () => {
 
   try {
     require('./services/server-instance/server-process.service').serverProcessService.cleanupOrphanedProcesses();
+  } catch (e) {}
+  try {
+    // Closing releases the on-disk lock. Without this a hard exit leaves it behind and the
+    // next launch cannot open the database at all.
+    playerHistoryService.stop();
+    userDatabaseService.close();
   } catch (e) {
-    console.error('[main] Error cleaning up orphaned processes:', e);
+    console.error('[main] Error closing the database:', e);
   }
 };
 
@@ -205,6 +219,61 @@ process.on('beforeExit', () => {
 // =========================
 // Window Management
 // =========================
+/**
+ * Wires the custom title bar's buttons to the window.
+ *
+ * Registered per window and torn down with it, so a re-created window (macOS 'activate')
+ * does not stack duplicate listeners. Close goes through win.close() rather than app.exit
+ * so the existing "servers are still running" confirmation still runs.
+ */
+/**
+ * The authentication flags, as given on the command line.
+ *
+ * A headless machine has no window to create the first account from, so the credentials
+ * passed at startup are what seeds it.
+ */
+function readAuthArgs(): { enabled: boolean; username: string; password: string } {
+  const valueOf = (flag: string): string => {
+    const arg = process.argv.find(a => a.startsWith(`${flag}=`));
+    return arg ? arg.slice(flag.length + 1) : '';
+  };
+  return {
+    enabled: process.argv.includes('--auth-enabled'),
+    username: valueOf('--username'),
+    password: valueOf('--password')
+  };
+}
+
+function registerWindowControlHandlers(win: Electron.BrowserWindow) {
+  const send = () => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('window-maximized-changed', win.isMaximized());
+    }
+  };
+
+  const onMinimize = () => { if (!win.isDestroyed()) win.minimize(); };
+  const onMaximizeToggle = () => {
+    if (win.isDestroyed()) return;
+    win.isMaximized() ? win.unmaximize() : win.maximize();
+  };
+  const onClose = () => { if (!win.isDestroyed()) win.close(); };
+
+  ipcMain.on('window-minimize', onMinimize);
+  ipcMain.on('window-maximize-toggle', onMaximizeToggle);
+  ipcMain.on('window-close', onClose);
+  ipcMain.handle('window-is-maximized', () => !win.isDestroyed() && win.isMaximized());
+
+  win.on('maximize', send);
+  win.on('unmaximize', send);
+
+  win.on('closed', () => {
+    ipcMain.removeListener('window-minimize', onMinimize);
+    ipcMain.removeListener('window-maximize-toggle', onMaximizeToggle);
+    ipcMain.removeListener('window-close', onClose);
+    ipcMain.removeHandler('window-is-maximized');
+  });
+}
+
 function createWindow() {
   if (applicationService.isHeadless()) {
     return;
@@ -212,6 +281,12 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1024,
     height: 768,
+    minWidth: 940,
+    minHeight: 600,
+    // The app draws its own title bar (see WindowControlsComponent), so the native frame
+    // is off. The window stays resizable; Electron keeps the invisible resize border.
+    frame: false,
+    backgroundColor: '#161d2b',
     autoHideMenuBar: true, // Hide the menu bar
     icon: path.join(app.getAppPath(), isLinux ? 'logo-square-256.png' : 'logo.png'), // Set app icon
     webPreferences: {
@@ -220,6 +295,7 @@ function createWindow() {
     },
   });
   messagingService.addWebContents(mainWindow.webContents);
+  registerWindowControlHandlers(mainWindow);
   
   // In development, load from the dev server. In production, load from built files.
   const isDev = process.env.NODE_ENV === 'development';
@@ -232,6 +308,13 @@ function createWindow() {
     const indexPath = path.join(appPath, 'dist', 'cerious-aasm', 'browser', 'index.html');
     mainWindow.loadFile(indexPath);
   }
+
+  // A link in the UI opens in the OS browser. The app window is frameless and has no
+  // address bar or way back, so letting one navigate inside it would strand the user.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' as const };
+  });
 
   // Intercept close event for shutdown modal (robust IPC protocol)
   let awaitingCloseResponse = false;
@@ -302,6 +385,48 @@ app.on('ready', async () => {
   initializeBackupSystem().catch(console.error);
   // Initialize automation system
   automationService.initializeAutomation();
+
+  // Accounts: open the database and, on first run, make sure there is a way in. The single
+  // configured web login becomes an Admin account, and on a machine with no screen the
+  // credentials given on the command line do the same — there is no window to create one in.
+  try {
+    userDatabaseService.initialize();
+    const globalConfig = loadGlobalConfig();
+    const cli = readAuthArgs();
+    const authOn = !!globalConfig.authenticationEnabled || cli.enabled;
+    const username = globalConfig.authenticationUsername || cli.username || 'admin';
+    const password = globalConfig.authenticationPassword || cli.password;
+
+    if (!userDatabaseService.hasAnyUser() && authOn) {
+      if (password) {
+        const seeded = await userDatabaseService.seedFirstAdmin(username, password);
+        if (seeded.success && seeded.data) {
+          console.info(`[main] Created the "${seeded.data.username}" admin account from the configured web login.`);
+        } else if (!seeded.success) {
+          console.error(`[main] Could not create the first admin account: ${seeded.error}`);
+        }
+      } else {
+        console.warn(
+          '[main] Authentication is on but this install has no accounts, so nobody can sign in. ' +
+          'Create one in the desktop app under Settings > Users & Roles, or start once with ' +
+          '--auth-enabled --username=<name> --password=<password> to create it here.'
+        );
+      }
+    }
+  } catch (error) {
+    console.error('[main] Failed to initialize the user database:', error);
+  }
+
+  // Record player counts once a minute for the dashboard's 24-hour activity chart
+  playerHistoryService.start(async () => {
+    const { serverManagementService } = require('./services/server-instance/server-management.service');
+    const { instances } = await serverManagementService.getAllInstances();
+    const counts: Record<string, number> = {};
+    for (const instance of instances) {
+      counts[instance.id] = instance.state === 'running' ? (instance.players || 0) : 0;
+    }
+    return counts;
+  });
 
   // Start background poll for Ark server updates once main app is ready
   try {

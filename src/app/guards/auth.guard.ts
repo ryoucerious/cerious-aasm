@@ -1,12 +1,10 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { UtilityService } from '../core/services/utility.service';
-import { GlobalConfigService } from '../core/services/global-config.service';
 
 export const authGuard: CanActivateFn = async (route, state) => {
   const router = inject(Router);
   const utilityService = inject(UtilityService);
-  const globalConfigService = inject(GlobalConfigService);
   
   // Use comprehensive platform detection
   const platform = utilityService.getPlatform();
@@ -22,29 +20,26 @@ export const authGuard: CanActivateFn = async (route, state) => {
   }
 
   try {
-    // First check if authentication is enabled in the configuration
-    const config = await globalConfigService.loadConfig();
-    if (!config.authenticationEnabled) {
-      return true; // Authentication is disabled, allow access
-    }
+    // One question, over HTTP: does this server want a sign-in, and are we signed in?
+    //
+    // It used to ask the message bus for the configuration first, which travels over the
+    // WebSocket — and the socket is still reconnecting in the moment right after signing
+    // in, so the question failed and sent the user straight back to the login page.
+    const response = await fetch('/api/auth-status', { credentials: 'include' });
 
-    // Check if user is authenticated (only for web/browser access when auth is enabled)
-    const response = await fetch('/api/auth-status', {
-      credentials: 'include'
-    });
-    
     if (response.ok) {
       const data = await response.json();
-      if (data.authenticated) {
-        return true; // User is authenticated
+      // Only an explicit "no sign-in needed" lets someone through without a session; a
+      // reply missing the field is treated as needing one.
+      if (data.requiresAuth === false || data.authenticated) {
+        return true;
       }
     }
-    
-    // User is not authenticated, redirect to login
+
     router.navigate(['/login']);
     return false;
   } catch (error) {
-    // Connection error, redirect to login
+    // The server could not be reached at all.
     router.navigate(['/login']);
     return false;
   }

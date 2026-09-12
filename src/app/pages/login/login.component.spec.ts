@@ -42,7 +42,7 @@ describe('LoginComponent', () => {
     component.username = '';
     component.password = 'pass';
     await component.onLogin();
-    expect(component.errorMessage).toBe('Please enter both username and password');
+    expect(component.errorMessage).toBe('Please enter your username and password.');
     expect(component.isLoading).toBeFalse();
   });
 
@@ -50,10 +50,10 @@ describe('LoginComponent', () => {
     component.username = 'user';
     component.password = '   ';
     await component.onLogin();
-    expect(component.errorMessage).toBe('Please enter both username and password');
+    expect(component.errorMessage).toBe('Please enter your username and password.');
   });
 
-  it('should navigate to /server on successful login', async () => {
+  it('should navigate to /dashboard on successful login', async () => {
     component.username = 'admin';
     component.password = 'secret';
     spyOn(window, 'fetch').and.returnValue(Promise.resolve({
@@ -62,7 +62,7 @@ describe('LoginComponent', () => {
     } as Response));
 
     await component.onLogin();
-    expect(mockRouter.navigate).toHaveBeenCalledWith(['/server']);
+    expect(mockRouter.navigate).toHaveBeenCalledWith(['/dashboard']);
   });
 
   it('should set error on login failure with success: false', async () => {
@@ -70,6 +70,7 @@ describe('LoginComponent', () => {
     component.password = 'wrong';
     spyOn(window, 'fetch').and.returnValue(Promise.resolve({
       ok: true,
+      status: 200,
       json: () => Promise.resolve({ success: false, error: 'Bad credentials' })
     } as Response));
 
@@ -83,11 +84,13 @@ describe('LoginComponent', () => {
     component.password = 'wrong';
     spyOn(window, 'fetch').and.returnValue(Promise.resolve({
       ok: false,
+      status: 401,
       json: () => Promise.resolve({ error: 'Invalid credentials' })
     } as Response));
 
     await component.onLogin();
-    expect(component.errorMessage).toBe('Invalid credentials');
+    // The wire says "Invalid credentials"; a person is told what to do about it.
+    expect(component.errorMessage).toBe('Incorrect username or password. Please try again.');
     expect(component.isLoading).toBeFalse();
   });
 
@@ -97,7 +100,7 @@ describe('LoginComponent', () => {
     spyOn(window, 'fetch').and.returnValue(Promise.reject(new Error('Network failure')));
 
     await component.onLogin();
-    expect(component.errorMessage).toBe('Connection error. Please try again.');
+    expect(component.errorMessage).toBe('Unable to reach the server. Please check that it is running and try again.');
     expect(component.isLoading).toBeFalse();
   });
 
@@ -134,11 +137,12 @@ describe('LoginComponent', () => {
     component.password = 'wrong';
     spyOn(window, 'fetch').and.returnValue(Promise.resolve({
       ok: true,
+      status: 200,
       json: () => Promise.resolve({ success: false })
     } as Response));
 
     await component.onLogin();
-    expect(component.errorMessage).toBe('Login failed');
+    expect(component.errorMessage).toBe('Sign-in failed. Please try again.');
   });
 
   it('should use fallback error for non-ok response without error field', async () => {
@@ -146,10 +150,11 @@ describe('LoginComponent', () => {
     component.password = 'wrong';
     spyOn(window, 'fetch').and.returnValue(Promise.resolve({
       ok: false,
+      status: 401,
       json: () => Promise.resolve({})
     } as Response));
 
     await component.onLogin();
-    expect(component.errorMessage).toBe('Invalid credentials');
+    expect(component.errorMessage).toBe('Incorrect username or password. Please try again.');
   });
 });

@@ -26,7 +26,9 @@
   --text-strong: #ffffff;
   --text-emphasis: #e5e7eb;
   --text-primary: #b0b6c1;
-  --text-secondary: #888c94;
+  // Secondary text also lands on raised panels (a kbd hint, a count badge), where the older
+  // grey fell just under 4.5:1. This is a shade lighter so it reads on both.
+  --text-secondary: #9298a3;
   --text-muted: #9ca3af;
   // Additional shades in these families. The dark theme used many
   // near-identical greys; each keeps its own token so dark is unchanged.
@@ -45,43 +47,44 @@
   --text-secondary-4: #8a96a8;
   --text-secondary-5: #8b9dc3;
 
-  // Surfaces, furthest back to closest
-  --surface-base: #1e2228;
-  --surface: #23272f;
-  --surface-raised: #31343c;
+  // Surfaces, furthest back to closest. The UI refresh moved the dark ramp from neutral
+  // grey to a navy tint; every step keeps its original position in the lightness order so
+  // "recessed" and "raised" still read the same way, only the hue changed.
+  --surface-base: #121826;
+  --surface: #161d2b;
+  --surface-raised: #242d3c;
   --surface-overlay: rgba(255, 255, 255, 0.02);
-  // Additional shades in these families. The dark theme used many
-  // near-identical greys; each keeps its own token so dark is unchanged.
-  --surface-1: #23242a;
-  --surface-2: #252a36;
-  --surface-3: #2a2a2e;
-  --surface-base-1: #181a1b;
-  --surface-base-2: #1a1d23;
-  --surface-base-3: #1a1e23;
-  --surface-base-4: #1e1e1e;
-  --surface-base-5: #1e1e22;
-  --surface-raised-1: #2a2f38;
-  --surface-raised-10: #5a5d61;
-  --surface-raised-2: #2d323c;
-  --surface-raised-3: #2d3240;
-  --surface-raised-4: #2d3846;
-  --surface-raised-5: #30363c;
-  --surface-raised-6: #353c42;
-  --surface-raised-7: #3a3e47;
-  --surface-raised-8: #3a3f4b;
-  --surface-raised-9: #3a4060;
+  // Additional shades in these families, kept as separate tokens so each existing rule
+  // still resolves to its own step of the ramp.
+  --surface-1: #151b29;
+  --surface-2: #182031;
+  --surface-3: #1a2131;
+  --surface-base-1: #0c111a;
+  --surface-base-2: #0f1521;
+  --surface-base-3: #101622;
+  --surface-base-4: #0e1320;
+  --surface-base-5: #111724;
+  --surface-raised-1: #1c2434;
+  --surface-raised-10: #4b5568;
+  --surface-raised-2: #1f2838;
+  --surface-raised-3: #20293b;
+  --surface-raised-4: #22303f;
+  --surface-raised-5: #1a2130;
+  --surface-raised-6: #121826;
+  --surface-raised-7: #2b3444;
+  --surface-raised-8: #2d3748;
+  --surface-raised-9: #34405e;
 
   // Borders, most to least prominent
-  --border-strong: #5e6870;
-  --border: #444444;
-  --border-subtle: #44474d;
-  --border-muted: #333333;
-  // Additional shades in these families. The dark theme used many
-  // near-identical greys; each keeps its own token so dark is unchanged.
-  --border-1: #404550;
-  --border-2: #454950;
-  --border-muted-1: #1e2027;
-  --border-strong-1: #495467;
+  --border-strong: #4a5a72;
+  --border: #303a4e;
+  --border-subtle: #2f3a4f;
+  --border-muted: #263043;
+  // Additional shades in these families.
+  --border-1: #35405a;
+  --border-2: #38435a;
+  --border-muted-1: #1f2839;
+  --border-strong-1: #46536b;
 
   // Brand and status
   --primary: #0ea5e9;
@@ -116,6 +119,21 @@
   --warning-4: #fcd34d;
   // Text that sits ON a saturated fill (status pills, badges). Not --text-strong, which
   // follows the theme and would put near-black on a red pill in the light theme.
+  // Filled controls carry white text, and the bright accents above are too light for that
+  // (white on the sky blue is 2.8:1). These are the same hues a step deeper, dark enough for
+  // white to read on them and still light enough to stand out against the panel behind.
+  // Tooltip: a panel that sits above everything, so it is a step lighter than the surfaces
+  // underneath it rather than another shade of the same navy.
+  // Scrollbars: a light thumb on the dark surfaces it rides over.
+  --scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.36);
+  --scrollbar-thumb-active: rgba(255, 255, 255, 0.5);
+  --tooltip-bg: #2b3546;
+  --tooltip-text: #e8ecf3;
+  --tooltip-border: #3c4759;
+  --primary-fill: #1d74b8;
+  --success-fill: #15803d;
+  --danger-fill: #dc2626;
   --text-on-accent: #ffffff;
   // Warning is the exception: its fill is bright yellow here and dark amber in the light
   // theme, so the readable text colour inverts where the others do not.
@@ -123,9 +141,25 @@
 
   // Neutral track behind a switch knob — a UI surface, not text
   --control-track: #b0b6c1;
-  // Panels are separated by background steps alone in this theme, so they need no
-  // outline. Kept transparent rather than absent so the light theme can fill it in.
-  --card-outline: transparent;
+  // Cards on the refreshed pages carry a hairline so they separate from the page even
+  // where the background step is subtle.
+  --card-outline: #1f2839;
+
+  // Translucent tints for icon chips, active nav items and focus rings. These are the
+  // only alpha colours in the palette because Chromium 106 (Electron 21) has no color-mix().
+  --primary-soft: rgba(14, 165, 233, 0.16);
+  --success-soft: rgba(34, 197, 94, 0.16);
+  --danger-soft: rgba(239, 68, 68, 0.16);
+  --warning-soft: rgba(250, 204, 21, 0.16);
+  --info-soft: rgba(21, 161, 187, 0.16);
+  --violet: #a78bfa;
+  --violet-soft: rgba(167, 139, 250, 0.18);
+  // Dashboard hero: the photo is covered by this scrim, opaque behind the text and clearing
+  // towards the right so the artwork shows through.
+  --hero-scrim-from: rgba(22, 29, 43, 0.97);
+  --hero-scrim-mid: rgba(22, 29, 43, 0.82);
+  --hero-scrim-to: rgba(22, 29, 43, 0.32);
+  --surface-glass: rgba(255, 255, 255, 0.04);
 
   // Depth
   --shadow-color: #000a;
@@ -207,38 +241,53 @@
   --border-muted-1: #cbccd0;
   --border-strong-1: #a3a8b1;
 
-  // Brand and status
-  --primary: #0284c7;
-  --primary-hover: #0369a1;
-  --success: #15803d;
-  --danger: #dc2626;
-  --warning: #b45309;
-  --info: #0e7490;
+  // Brand and status. Each is a step darker than its dark-theme counterpart: these colours
+  // are read as text on a pale surface or on their own 12% tint, where the brighter shades
+  // fell below the 4.5:1 the small type needs, and white sits on them as a filled button.
+  --primary: #0369a1;
+  --primary-hover: #075985;
+  --success: #166534;
+  --danger: #b91c1c;
+  --warning: #92400e;
+  --info: #155e75;
   --secondary: #6b7280;
   --focus: #2563eb;
   // Additional shades in these families. The dark theme used many
   // near-identical greys; each keeps its own token so dark is unchanged.
-  --danger-1: #dc2626;
-  --danger-2: #dc2626;
-  --danger-3: #dc2626;
-  --danger-4: #dc2626;
-  --danger-5: #dc2626;
-  --danger-6: #dc2626;
-  --danger-7: #dc2626;
-  --primary-1: #0284c7;
-  --primary-2: #0284c7;
-  --primary-3: #0284c7;
-  --primary-4: #0284c7;
-  --primary-5: #0284c7;
-  --success-1: #15803d;
-  --success-2: #15803d;
-  --success-3: #15803d;
-  --success-4: #15803d;
-  --warning-1: #b45309;
-  --warning-2: #b45309;
-  --warning-3: #b45309;
-  --warning-4: #b45309;
+  --danger-1: #b91c1c;
+  --danger-2: #b91c1c;
+  --danger-3: #b91c1c;
+  --danger-4: #b91c1c;
+  --danger-5: #b91c1c;
+  --danger-6: #b91c1c;
+  --danger-7: #b91c1c;
+  --primary-1: #0369a1;
+  --primary-2: #0369a1;
+  --primary-3: #0369a1;
+  --primary-4: #0369a1;
+  --primary-5: #0369a1;
+  --success-1: #166534;
+  --success-2: #166534;
+  --success-3: #166534;
+  --success-4: #166534;
+  --warning-1: #92400e;
+  --warning-2: #92400e;
+  --warning-3: #92400e;
+  --warning-4: #92400e;
   // Every light-theme fill is darkened, so white reads on all of them — warning included.
+  // The brand colours are already dark enough here, so a filled control uses them as they are.
+  // Tooltip: dark on a light UI, the way every platform draws them, so it reads as an
+  // overlay rather than another panel.
+  // Scrollbars: dark on a pale UI, where a white thumb was invisible.
+  --scrollbar-thumb: rgba(28, 34, 45, 0.32);
+  --scrollbar-thumb-hover: rgba(28, 34, 45, 0.48);
+  --scrollbar-thumb-active: rgba(28, 34, 45, 0.62);
+  --tooltip-bg: #23272f;
+  --tooltip-text: #f4f6fa;
+  --tooltip-border: #3a4150;
+  --primary-fill: #0369a1;
+  --success-fill: #166534;
+  --danger-fill: #b91c1c;
   --text-on-accent: #ffffff;
   --text-on-warning: #ffffff;
 
@@ -247,6 +296,18 @@
   // reproducing the dark theme's steps literally turns the whole UI grey. Light UIs
   // outline their cards instead, so that is what this does.
   --card-outline: #d5dbe1;
+
+  --primary-soft: rgba(3, 105, 161, 0.12);
+  --success-soft: rgba(22, 101, 52, 0.12);
+  --danger-soft: rgba(185, 28, 28, 0.12);
+  --warning-soft: rgba(146, 64, 14, 0.12);
+  --info-soft: rgba(21, 94, 117, 0.12);
+  --violet: #6d28d9;
+  --violet-soft: rgba(109, 40, 217, 0.12);
+  --hero-scrim-from: rgba(245, 246, 250, 0.97);
+  --hero-scrim-mid: rgba(245, 246, 250, 0.86);
+  --hero-scrim-to: rgba(245, 246, 250, 0.38);
+  --surface-glass: rgba(255, 255, 255, 0.55);
 
   --shadow-color: rgba(15, 23, 42, 0.16);
   --shadow-color-soft: rgba(15, 23, 42, 0.08);

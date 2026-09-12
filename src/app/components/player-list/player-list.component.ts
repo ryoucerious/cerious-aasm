@@ -1,8 +1,9 @@
 import { Component, Input, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { IpcService } from '../../core/services/ipc.service';
+import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../core/services/notification.service';
-import { Subscription, interval } from 'rxjs';
+import { Subscription, interval, firstValueFrom, take } from 'rxjs';
+import { isOnlineStatus } from '../../core/utils/server-status';
 
 interface Player {
   name: string;
@@ -20,12 +21,16 @@ export class PlayerListComponent implements OnInit, OnDestroy {
 
   players: Player[] = [];
   loading = false;
+  /** The list only has data while the server is online. */
+  get isOnline(): boolean {
+    return isOnlineStatus(this.serverInstance?.state);
+  }
   lastUpdated: Date | null = null;
   autoRefreshSub: Subscription | null = null;
   error: string | null = null;
 
   constructor(
-    private ipcService: IpcService,
+    private messaging: MessagingService,
     private notificationService: NotificationService
   ) {}
 
@@ -34,7 +39,7 @@ export class PlayerListComponent implements OnInit, OnDestroy {
     
     // Auto refresh every 30 seconds
     this.autoRefreshSub = interval(30000).subscribe(() => {
-        if (this.serverInstance?.state === 'Running') {
+        if (isOnlineStatus(this.serverInstance?.state)) {
             this.refreshPlayers();
         }
     });
@@ -47,9 +52,9 @@ export class PlayerListComponent implements OnInit, OnDestroy {
   }
 
   async refreshPlayers() {
-    if (!this.serverInstance || this.serverInstance.state !== 'Running') {
+    if (!this.serverInstance || !isOnlineStatus(this.serverInstance.state)) {
         this.players = [];
-        this.error = 'Server is not running.';
+        this.error = 'Server is offline.';
         return;
     }
 
@@ -57,9 +62,10 @@ export class PlayerListComponent implements OnInit, OnDestroy {
     this.error = null;
 
     try {
-      const response = await this.ipcService.invoke('get-online-players', {
-        id: this.serverInstance.id
-      });
+      // Messaging works in both the desktop app and the web UI, unlike a raw IPC invoke.
+      const response: any = await firstValueFrom(
+        this.messaging.sendMessage('get-online-players', { id: this.serverInstance.id }).pipe(take(1))
+      );
 
       if (response.success) {
         this.players = response.players || [];

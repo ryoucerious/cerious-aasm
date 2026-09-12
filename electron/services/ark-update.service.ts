@@ -9,6 +9,8 @@ import { loadGlobalConfig } from '../utils/global-config.utils';
 export class ArkUpdateService {
   private lastKnownBuildId: string | null = null;
   private installedBuildId: string | null = null;
+  /** When the background poll last compared the installed build against Steam. */
+  private lastCheckedAt: number | null = null;
   private updateAvailable = false;
   private latestBuildId: string | null = null;
   private updateScheduled = false;
@@ -304,8 +306,28 @@ export class ArkUpdateService {
    * Poll for ARK server updates, notify status, and handle auto-update logic if enabled.
    * @returns Latest build ID if a new update was found, otherwise null
    */
+  /**
+   * A snapshot of the installation for the settings page: what is installed, what Steam has,
+   * and when that was last compared. Never throws — an un-pollable Steam simply leaves the
+   * latest build unknown.
+   */
+  getStatus(): {
+    installedBuildId: string | null;
+    latestBuildId: string | null;
+    updateAvailable: boolean;
+    lastCheckedAt: number | null;
+  } {
+    return {
+      installedBuildId: this.installedBuildId,
+      latestBuildId: this.latestBuildId,
+      updateAvailable: this.updateAvailable,
+      lastCheckedAt: this.lastCheckedAt
+    };
+  }
+
   async pollAndNotify(): Promise<string | null> {
     const result = await this.pollArkServerUpdates();
+    this.lastCheckedAt = Date.now();
     this.messagingService.sendToAll('ark-update-status', { hasUpdate: !!result, buildId: result });
 
     if (result) {

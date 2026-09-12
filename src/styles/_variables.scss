@@ -25,6 +25,10 @@ $breakpoint-xl: 1200px;  // Large desktop
 // to be `lighten($primary, 6%)`.
 
 // Primary brand colors
+// Navigation rows — pages and servers alike — are this tall, so a selected one is the same
+// shape whichever kind it is and the accent mark down its edge is the same length.
+$sidenav-row-height: 2.95rem;
+
 $primary: var(--primary);
 $primary-hover: var(--primary-hover);
 $success: var(--success);

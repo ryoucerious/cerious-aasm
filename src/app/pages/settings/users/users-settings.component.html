@@ -1,0 +1,239 @@
+<div class="users-settings settings-pane">
+  <div class="users-header">
+    <div class="users-toggle" role="group" aria-label="Accounts view">
+      <button type="button" class="users-toggle-btn" [class.active]="view === 'users'" (click)="view = 'users'">
+        <i class="material-icons">group</i> Users <span class="nav-count">{{ users.length }}</span>
+      </button>
+      <button type="button" class="users-toggle-btn" [class.active]="view === 'roles'" (click)="view = 'roles'">
+        <i class="material-icons">badge</i> Roles <span class="nav-count">{{ roles.length }}</span>
+      </button>
+    </div>
+    <div class="users-header-actions">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'users'" (click)="openCreateUser()">
+        <i class="material-icons">person_add</i> Add User
+      </button>
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'roles'" (click)="openCreateRole()">
+        <i class="material-icons">add</i> Add Role
+      </button>
+    </div>
+  </div>
+
+  <p class="settings-card-hint users-intro">
+    Accounts control who can sign in to the web interface and what they may do. The desktop
+    app runs as an administrator on this machine and does not sign in.
+  </p>
+
+  <div class="dash-muted" *ngIf="loading">Loading accounts...</div>
+
+  <!-- Users -->
+  <section class="settings-card users-table-card" *ngIf="!loading && view === 'users'">
+  <div class="users-table-wrap">
+    <div class="users-empty" *ngIf="!users.length">
+      <i class="material-icons">group</i>
+      <p>No accounts yet. Add one to let someone sign in to the web interface.</p>
+      <button type="button" class="btn btn-primary btn-sm" (click)="openCreateUser()">
+        <i class="material-icons">person_add</i> Add User
+      </button>
+    </div>
+
+    <table class="data-table users-table accounts-table" *ngIf="users.length">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Last sign-in</th>
+          <th class="users-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let user of users; trackBy: trackById" class="table-row">
+          <td>
+            <div class="user-cell">
+              <span class="user-avatar">{{ (user.displayName || user.username).charAt(0).toUpperCase() }}</span>
+              <span class="user-cell-text">
+                <span class="user-cell-name">{{ user.username }}</span>
+                <span class="user-cell-sub" *ngIf="user.displayName">{{ user.displayName }}</span>
+              </span>
+            </div>
+          </td>
+          <td>{{ roleName(user.roleId) }}</td>
+          <td>
+            <span class="status-badge" [ngClass]="user.active ? 'status-running' : 'status-stopped'">
+              {{ user.active ? 'Active' : 'Disabled' }}
+            </span>
+          </td>
+          <td class="users-muted">{{ user.lastLoginAt ? (user.lastLoginAt | date:'short') : 'Never' }}</td>
+          <td class="users-actions">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="openEditUser(user)" title="Edit">
+              <i class="material-icons">edit</i>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteUser(user)"
+                    [disabled]="user.id === currentUserId" [title]="user.id === currentUserId ? 'You cannot delete your own account' : 'Delete'">
+              <i class="material-icons">delete</i>
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Roles -->
+  </section>
+
+  <section class="settings-card users-table-card" *ngIf="!loading && view === 'roles'">
+  <div class="users-table-wrap">
+    <table class="data-table users-table roles-table">
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Permissions</th>
+          <th>Users</th>
+          <th class="users-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let role of roles; trackBy: trackById" class="table-row">
+          <td>
+            <span class="user-cell-name">{{ role.name }}</span>
+            <span class="role-builtin" *ngIf="role.builtIn">Built-in</span>
+            <div class="user-cell-sub">{{ role.description }}</div>
+          </td>
+          <td class="users-muted">
+            {{ isAdminRole(role) ? 'Everything' : (role.permissions.length + ' of ' + permissionCatalog.length) }}
+          </td>
+          <td class="users-muted">{{ usersWithRole(role.id) }}</td>
+          <td class="users-actions">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="openEditRole(role)"
+                    [title]="isAdminRole(role) ? 'View permissions' : 'Edit'">
+              <i class="material-icons">{{ isAdminRole(role) ? 'visibility' : 'edit' }}</i>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteRole(role)"
+                    [disabled]="role.builtIn" [title]="role.builtIn ? 'Built-in roles cannot be deleted' : 'Delete'">
+              <i class="material-icons">delete</i>
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  </section>
+</div>
+
+<!-- User editor -->
+<app-modal [title]="editingUser ? 'Edit User' : 'Add User'" [show]="showUserModal" [maxWidth]="'520px'" (close)="closeUserModal()">
+  <div class="modal-form">
+    <div class="form-group">
+      <label class="form-control-label">Username</label>
+      <input type="text" class="form-control" [(ngModel)]="form.username" [disabled]="saving" placeholder="e.g. jamie" />
+      <div class="form-control-label desc">Letters, numbers and . _ @ - only.</div>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Display name</label>
+      <input type="text" class="form-control" [(ngModel)]="form.displayName" [disabled]="saving" placeholder="Optional" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">{{ editingUser ? 'New password' : 'Password' }}</label>
+      <input type="password" class="form-control" [(ngModel)]="form.password" [disabled]="saving"
+             [placeholder]="editingUser ? 'Leave blank to keep the current password' : 'At least 8 characters'" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Role</label>
+      <app-dropdown *ngIf="roleOptions.length" [options]="roleOptions" [(ngModel)]="form.roleId"
+                    [disabled]="saving" placeholder="Select a role..."></app-dropdown>
+      <!-- An empty list means the roles could not be read, not that none exist. -->
+      <div class="ark-install-notice warning" *ngIf="!roleOptions.length">
+        <i class="material-icons">warning</i>
+        The roles could not be loaded, so no role can be assigned. This usually means another
+        copy of the app has the database open.
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving" />
+        <span class="toggle-text">Account is active</span>
+      </label>
+      <div class="form-control-label desc">A disabled account keeps its settings but cannot sign in.</div>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn btn-ghost" (click)="closeUserModal()" [disabled]="saving">Cancel</button>
+    <button type="button" class="btn btn-primary" (click)="saveUser()" [disabled]="!canSaveUser">
+      {{ editingUser ? 'Save' : 'Create' }}
+    </button>
+  </div>
+</app-modal>
+
+<!-- Role editor -->
+<app-modal [title]="editingRole ? (roleEditorLocked ? 'Admin Role' : 'Edit Role') : 'Add Role'"
+           [show]="showRoleModal" [maxWidth]="'680px'" (close)="closeRoleModal()">
+  <div class="modal-form">
+    <div class="form-group" *ngIf="roleEditorLocked">
+      <div class="form-control-label desc">
+        The Admin role always holds every permission, including any added by a future version,
+        so it cannot be edited.
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Name</label>
+      <input type="text" class="form-control" [(ngModel)]="roleForm.name" [disabled]="saving || roleEditorLocked" placeholder="e.g. Moderator" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Description</label>
+      <input type="text" class="form-control" [(ngModel)]="roleForm.description" [disabled]="saving || roleEditorLocked"
+             placeholder="What this role is for" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-control-label">Permissions</label>
+      <div class="permission-groups">
+        <div class="permission-group" *ngFor="let group of permissionGroups; trackBy: trackByGroupName">
+          <div class="permission-group-title">{{ group.name }}</div>
+          <label class="permission-item" *ngFor="let permission of group.permissions; trackBy: trackByPermission"
+                 [title]="permission.description">
+            <input type="checkbox" class="toggle-switch"
+                   [checked]="roleEditorLocked || hasPermission(permission.id)"
+                   [disabled]="saving || roleEditorLocked"
+                   (change)="togglePermission(permission.id, $any($event.target).checked)" />
+            <span class="permission-item-text">
+              <span class="permission-item-label">{{ permission.label }}</span>
+              <span class="permission-item-desc">{{ permission.description }}</span>
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn btn-ghost" (click)="closeRoleModal()" [disabled]="saving">
+      {{ roleEditorLocked ? 'Close' : 'Cancel' }}
+    </button>
+    <button type="button" class="btn btn-primary" *ngIf="!roleEditorLocked" (click)="saveRole()"
+            [disabled]="saving || !roleForm.name.trim()">
+      {{ editingRole ? 'Save' : 'Create' }}
+    </button>
+  </div>
+</app-modal>
+
+<!-- Confirmations -->
+<app-modal [title]="'Delete User'" [show]="!!userToDelete" (close)="userToDelete = null">
+  <div class="modal-confirmation">
+    Delete <span class="modal-target">{{ userToDelete?.username }}</span>?
+    <p class="warning-text">They will be signed out and will no longer be able to sign in.</p>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="userToDelete = null">Cancel</button>
+    <button type="button" class="btn btn-danger" (click)="confirmDeleteUser()">Delete</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Delete Role'" [show]="!!roleToDelete" (close)="roleToDelete = null">
+  <div class="modal-confirmation">
+    Delete the <span class="modal-target">{{ roleToDelete?.name }}</span> role?
+    <p class="warning-text">This cannot be undone. Roles still assigned to a user cannot be deleted.</p>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="roleToDelete = null">Cancel</button>
+    <button type="button" class="btn btn-danger" (click)="confirmDeleteRole()">Delete</button>
+  </div>
+</app-modal>

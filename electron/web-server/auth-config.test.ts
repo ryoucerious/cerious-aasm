@@ -494,22 +494,15 @@ describe('auth-config', () => {
       expect(config.username).toBe('admin');
     });
 
-    it('should not enable auth when password is not provided', async () => {
+    it('enables auth without a password, leaving sign-in to accounts', async () => {
       process.env.AUTH_ENABLED = 'true';
       // No AUTH_PASSWORD set
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
       await initializeAuthFromEnv();
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] ERROR: AUTH_ENABLED is true but AUTH_PASSWORD is not set'
-      );
-
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
-
-      consoleSpy.mockRestore();
+      // Leaving it disabled here would serve the web interface to anyone who can reach it,
+      // even though accounts exist to sign in with.
+      expect(getAuthConfig().enabled).toBe(true);
     });
 
     it('should not override config when AUTH_ENABLED is not true', async () => {

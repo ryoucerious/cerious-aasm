@@ -1,0 +1,93 @@
+<article class="server-card" [class.list-view]="view === 'list'" [class.online]="isOnline" (dblclick)="onConsole($event)">
+  <div class="server-card-hero" [style.background-image]="visual.layered">
+    <div class="server-card-hero-shade"></div>
+    <span class="server-card-drag material-icons" title="Drag to reorder">drag_indicator</span>
+    <div class="server-card-title">
+      <div class="server-card-name-row">
+        <h3 class="server-card-name" [title]="server.name">{{ server.name }}</h3>
+        <span class="status-badge card-status" [ngClass]="status.cssClass">{{ status.label }}</span>
+      </div>
+      <div class="server-card-map">{{ visual.label }}</div>
+    </div>
+  </div>
+
+  <div class="server-card-body">
+    <!-- The name players see in the server browser, when it differs from the one used here. -->
+    <div class="server-card-session" *ngIf="sessionName">
+      <span class="material-icons">public</span>
+      <span class="server-card-session-name">{{ sessionName }}</span>
+    </div>
+
+    <div class="server-card-stats">
+      <div class="server-stat">
+        <span class="material-icons">group</span>
+        <span class="server-stat-text">
+          <span class="server-stat-value">{{ players }}</span>
+          <span class="server-stat-label">Players</span>
+        </span>
+      </div>
+      <div class="server-stat">
+        <span class="material-icons">schedule</span>
+        <span class="server-stat-text">
+          <span class="server-stat-value">{{ uptime }}</span>
+          <span class="server-stat-label">Uptime</span>
+        </span>
+      </div>
+      <div class="server-stat">
+        <span class="material-icons">memory</span>
+        <span class="server-stat-text">
+          <span class="server-stat-value">{{ cpu }}</span>
+          <span class="server-stat-label">CPU</span>
+        </span>
+      </div>
+      <div class="server-stat">
+        <span class="material-icons">storage</span>
+        <span class="server-stat-text">
+          <span class="server-stat-value">{{ memory }}</span>
+          <span class="server-stat-label">{{ memoryTotal || 'Memory' }}</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="server-card-spark" [class.dim]="!isOnline">
+      <app-sparkline [values]="playerHistory" [color]="isOnline ? 'var(--success)' : 'var(--text-secondary)'" [height]="36"></app-sparkline>
+    </div>
+
+    <div class="server-card-actions">
+      <button type="button"
+              class="btn"
+              [class.btn-primary]="!isOnline"
+              [class.btn-danger]="isOnline"
+              [disabled]="!isOnline && !canStart"
+              (click)="onPrimaryAction($event)">
+        <span class="material-icons">{{ isOnline ? 'stop' : 'play_arrow' }}</span>
+        {{ isOnline ? 'Stop' : (isBusy ? status.label : 'Start') }}
+      </button>
+      <button type="button" class="btn btn-ghost" (click)="onConsole($event)">
+        <span class="material-icons">terminal</span> Console
+      </button>
+      <div class="server-card-menu-anchor" #menuAnchor>
+        <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" aria-label="More actions" [attr.aria-expanded]="menuOpen">
+          <span class="material-icons">more_horiz</span>
+        </button>
+        <!-- Positioned against the viewport: the card hides its overflow, which used to clip
+             this to the card's edge. -->
+        <div class="card-menu" *ngIf="menuOpen" #menu role="menu"
+             [style.left.px]="menuPosition.left" [style.top.px]="menuPosition.top">
+          <button type="button" class="card-menu-item" role="menuitem" (click)="onConfigure()">
+            <span class="material-icons">tune</span> Configure
+          </button>
+          <button type="button" class="card-menu-item" role="menuitem" (click)="onBackups()">
+            <span class="material-icons">backup</span> Backups
+          </button>
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="isBusy" (click)="onForceStop()">
+            <span class="material-icons">power_off</span> Force stop
+          </button>
+          <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="canDeleteNow" (click)="onRemove()">
+            <span class="material-icons">delete</span> Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</article>

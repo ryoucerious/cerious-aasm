@@ -1,0 +1,39 @@
+<section class="server-header" *ngIf="server">
+  <div class="server-header-art" [style.background-image]="visual.layered" [class.has-image]="!!visual.image">
+    <span class="material-icons">public</span>
+  </div>
+
+  <div class="server-header-main">
+    <div class="server-header-title-row">
+      <h1 class="server-header-name" [title]="server.name">{{ server.name }}</h1>
+      <span class="status-badge" [ngClass]="statusClass">{{ statusText }}</span>
+      <span class="server-header-page" *ngIf="pageTitle">/ {{ pageTitle }}</span>
+    </div>
+    <div class="server-header-meta">
+      <span class="server-header-map"><span class="material-icons">map</span>{{ visual.label }}</span>
+      <span class="server-header-ports" *ngIf="ports">{{ ports }}</span>
+      <span class="server-header-rcon" [class.connected]="rconConnected" *ngIf="isRunning">
+        <span class="material-icons">{{ rconConnected ? 'link' : 'link_off' }}</span>
+        RCON {{ rconConnected ? 'connected' : 'disconnected' }}
+      </span>
+    </div>
+    <div class="server-header-stats">
+      <span class="server-header-stat" title="Players"><span class="material-icons">group</span>{{ players }}<small>players</small></span>
+      <span class="server-header-stat" title="Uptime"><span class="material-icons">schedule</span>{{ uptime }}<small>uptime</small></span>
+      <span class="server-header-stat" title="CPU"><span class="material-icons">memory</span>{{ cpu }}<small>cpu</small></span>
+      <span class="server-header-stat" title="Memory"><span class="material-icons">storage</span>{{ memory }}<small>memory</small></span>
+    </div>
+  </div>
+
+  <div class="server-header-actions">
+    <button type="button" class="btn btn-primary" (click)="startServer.emit()" [disabled]="!canStart">
+      <span class="material-icons">play_arrow</span> Start
+    </button>
+    <button type="button" class="btn" (click)="stopServer.emit()" [disabled]="!canStop">
+      <span class="material-icons">stop</span> Stop
+    </button>
+    <button type="button" class="btn btn-ghost" (click)="forceStopServer.emit()" [disabled]="!canForceStop" title="Force stop">
+      <span class="material-icons">power_off</span> Force
+    </button>
+  </div>
+</section>

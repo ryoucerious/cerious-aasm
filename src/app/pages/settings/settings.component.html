@@ -1,238 +1,276 @@
-<div class="card">
-  <div class="card-header button-header collapsible-header" (click)="showSettings = !showSettings">
-    <h2>SETTINGS</h2>
-    <div class="button-header-actions">
-      <span class="material-icons">
-        {{ showSettings ? 'expand_more' : 'expand_less' }}
-      </span>
-    </div>
-  </div>
-  <div class="card-body" *ngIf="showSettings">
-    <div class="tabs">
-      <button *ngFor="let tab of tabs" 
-              class="tab"
-              [class.active]="activeTab === tab.id"
-              (click)="selectTab(tab.id)">
-        <i class="material-icons">{{ tab.icon }}</i>
-        {{ tab.label }}
-        <span *ngIf="tab.showUpdateBadge" class="update-badge" title="Update Available">!</span>
-      </button>
-    </div>
-    
+<app-drawer [open]="drawerOpen" [title]="'Settings'" [icon]="'settings'"
+            [subtitle]="activeTabLabel" (closed)="onCloseDrawer()">
+  <div class="settings-shell">
+  <div class="settings-layout">
+    <nav class="settings-rail" aria-label="Settings sections">
+      <div class="settings-rail-group" *ngFor="let group of tabGroups; trackBy: trackByGroupName">
+        <div class="settings-rail-group-title">{{ group.name }}</div>
+        <button *ngFor="let tab of group.tabs; trackBy: trackByTabId"
+                type="button"
+                class="settings-rail-item"
+                [class.active]="activeTab === tab.id"
+                (click)="selectTab(tab.id)">
+          <i class="material-icons">{{ tab.icon }}</i>
+          <span class="settings-rail-label">{{ tab.label }}</span>
+          <span *ngIf="tab.showUpdateBadge" class="update-badge" title="Update available" aria-label="Update available"></span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="settings-content">
+
     <!-- Server Installation Tab -->
-    <div *ngIf="activeTab === 'server-installation'">
-      <div class="action-group-settings">
-        <button class="btn btn-ghost" (click)="onInstallServer()" [disabled]="hasRunningServers" [title]="hasRunningServers ? 'Stop all servers (including any still shutting down) before installing or updating' : ''">
-          <i class="material-icons">download</i>
-          Install/Update Ark Server
-        </button>
+    <div *ngIf="activeTab === 'server-installation'" class="settings-pane ark-install">
+      <!-- Status summary -->
+      <div class="settings-card">
+        <div class="ark-install-head">
+          <span class="ark-install-icon" [ngClass]="arkInstallation?.updateAvailable ? 'tone-warning' : 'tone-primary'">
+            <i class="material-icons">inventory_2</i>
+          </span>
+          <div class="ark-install-head-text">
+            <h3 class="settings-card-title">ARK: Survival Ascended Dedicated Server</h3>
+            <p class="settings-card-hint">Installed once and shared by every server instance you create.</p>
+          </div>
+          <span class="ark-status-badge" [ngClass]="arkStatusClass">{{ arkStatusLabel }}</span>
+        </div>
 
-        <button class="btn btn-ghost" (click)="onOpenConfigDirectory()" *ngIf="isElectron">
-          <i class="material-icons">folder_open</i>
-          Open Config Directory
-        </button>
+        <dl class="ark-install-facts">
+          <div class="ark-fact">
+            <dt>Installed build</dt>
+            <dd>{{ arkInstallation?.installedBuildId || (arkInstallationLoading ? 'Checking...' : 'Not installed') }}</dd>
+          </div>
+          <div class="ark-fact">
+            <dt>Latest build</dt>
+            <dd>{{ arkInstallation?.latestBuildId || 'Unknown' }}</dd>
+          </div>
+          <div class="ark-fact">
+            <dt>Last checked</dt>
+            <dd>{{ arkInstallation?.lastCheckedAt ? (arkInstallation?.lastCheckedAt | date:'short') : 'Never' }}</dd>
+          </div>
+          <div class="ark-fact ark-fact-wide">
+            <dt>Install location</dt>
+            <dd class="ark-path" [title]="arkInstallation?.installPath">{{ arkInstallation?.installPath || 'Unknown' }}</dd>
+          </div>
+        </dl>
 
-        <button class="btn btn-ghost" (click)="onCheckForUpdates()">
-          <i class="material-icons">refresh</i>
-          Check for Updates
-        </button>
+        <div class="ark-install-notice" *ngIf="arkInstallation && !arkInstallation.installed">
+          <i class="material-icons">info</i>
+          The dedicated server is not installed yet. Install it before starting a server.
+        </div>
+        <div class="ark-install-notice warning" *ngIf="arkInstallation?.updateAvailable">
+          <i class="material-icons">system_update_alt</i>
+          Build {{ arkInstallation?.latestBuildId }} is available. Stop your servers before updating.
+        </div>
+        <div class="ark-install-notice warning" *ngIf="hasRunningServers">
+          <i class="material-icons">warning</i>
+          Servers are running. Stop them all before installing or updating.
+        </div>
+
+        <div class="settings-card-actions">
+          <button class="btn btn-primary" (click)="onInstallServer()" [disabled]="hasRunningServers"
+                  [title]="hasRunningServers ? 'Stop all servers (including any still shutting down) before installing or updating' : ''">
+            <i class="material-icons">download</i>
+            {{ arkInstallation && !arkInstallation.installed ? 'Install ARK Server' : 'Update ARK Server' }}
+          </button>
+          <button class="btn btn-ghost" (click)="onOpenConfigDirectory()" *ngIf="isElectron">
+            <i class="material-icons">folder_open</i>
+            Open Config Directory
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- General Settings Tab -->
-    <div *ngIf="activeTab === 'general'">
-      <div class="card sub-card">
-        <div class="card-header instance-card-header-normal">
-          <h2>GENERAL SETTINGS</h2>
-        </div>
-        <div class="card-body">
-
-          <!-- Appearance -->
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Appearance</h4>
-            <div class="form-group">
-              <label class="form-control-label">Theme</label>
-              <div class="theme-options" role="radiogroup" aria-label="Theme">
-                <button *ngFor="let option of themeOptions"
-                        type="button"
-                        role="radio"
-                        class="btn btn-sm"
-                        [class.btn-primary]="themePreference === option.value"
-                        [class.btn-secondary]="themePreference !== option.value"
-                        [attr.aria-checked]="themePreference === option.value"
-                        (click)="onThemeChange(option.value)">
-                  <i class="material-icons">{{ option.icon }}</i>
-                  <span>{{ option.label }}</span>
-                </button>
-              </div>
-              <label class="form-control-label desc">
-                Choose light or dark, or follow your operating system. Saved on this device, so
-                the desktop app and each browser you open the web UI in can differ.
-              </label>
-            </div>
-          </div>
-
-          <!-- Server Data Directory -->
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Storage</h4>
-            <div class="form-group">
-              <label class="form-control-label">Server Data Directory</label>
-              <div style="display: flex; gap: 10px; align-items: center;">
-                <input type="text" [ngModel]="serverDataDir" [disabled]="true" class="form-control input" style="flex: 1;" placeholder="Default path (managed by app)" />
-                <button class="btn btn-sm btn-secondary" (click)="selectServerDataDir()" [disabled]="!isElectron" title="Select Folder">
-                  <i class="material-icons">folder_open</i>
-                </button>
-                <button class="btn btn-sm btn-danger" (click)="clearServerDataDir()" [disabled]="!isElectron || !serverDataDir" title="Reset to Default">
-                  <i class="material-icons">clear</i>
-                </button>
-              </div>
-              <label class="form-control-label desc">Directory where server data (Saved/ShooterGame/etc) is stored. Change requires restart.</label>
-            </div>
-          </div>
-
-          <!-- Auto Update -->
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Automation</h4>
-            <div class="form-group">
-              <div class="form-control-label toggle-label">
-                <input type="checkbox" class="toggle-switch" [checked]="autoUpdateArkServer" (change)="onAutoUpdateArkServerChange($event)" tabindex="0" />
-                <span class="slider"></span>
-                <span class="toggle-text">Auto-Update Ark Server</span>
-              </div>
-              <label class="form-control-label desc">Automatically update the Ark server when an update is available (checks periodically).</label>
-            </div>
-          </div>
-
-          <!-- Update Warning -->
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Update Warning</h4>
-            <div class="form-group">
-              <label class="form-control-label">Update Warning (Minutes)</label>
-              <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
-              <label class="form-control-label desc">How many minutes before an auto-update to broadcast warnings to players (via RCON).</label>
-            </div>
-          </div>
-
-          <!-- Server Start Stagger -->
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Server Start Delay</h4>
-            <div class="form-group">
-              <label class="form-control-label">Delay Between Server Starts (Seconds)</label>
-              <input type="number" [ngModel]="serverStartDelaySeconds" (change)="onServerStartDelaySecondsChange($event.target.value)" class="form-control input" min="10" max="300" />
-              <label class="form-control-label desc">Seconds to wait between starting each server. Applies to Start All, auto-update restarts, and auto-start on launch. Higher values prevent mod download conflicts on shared clusters.</label>
-            </div>
-          </div>
-
-
-        </div>
-      </div>
-    </div>
-    
-    <!-- Web Server Tab -->
-    <div *ngIf="activeTab === 'web-server'">
-      <div class="card sub-card">
-        <div class="card-header button-header">
-          <h2>WEB SERVER STATUS</h2>
-          <div class="button-header-actions">
-            <button class="btn" *ngIf="!webServerRunning" (click)="onStartWebServer()" [disabled]="!isElectron">
-              <i class="material-icons">play_arrow</i> Start
-            </button>
-            <button class="btn" *ngIf="webServerRunning" (click)="onStopWebServer()" [disabled]="!isElectron">
-              <i class="material-icons">stop</i> Stop
+    <!-- Appearance -->
+    <div *ngIf="activeTab === 'appearance'" class="settings-pane">
+      <section class="settings-card">
+        <h3 class="settings-card-title">Theme</h3>
+        <p class="settings-card-hint">
+          Choose light or dark, or follow your operating system. Saved on this device, so the
+          desktop app and each browser you open the web UI in can differ.
+        </p>
+        <div class="form-group">
+          <div class="theme-options" role="radiogroup" aria-label="Theme">
+            <button *ngFor="let option of themeOptions"
+                    type="button"
+                    role="radio"
+                    class="btn btn-sm"
+                    [class.btn-primary]="themePreference === option.value"
+                    [class.btn-secondary]="themePreference !== option.value"
+                    [attr.aria-checked]="themePreference === option.value"
+                    (click)="onThemeChange(option.value)">
+              <i class="material-icons">{{ option.icon }}</i>
+              <span>{{ option.label }}</span>
             </button>
           </div>
         </div>
-        <div class="card-body ">
-          <div>
-            <span>Status:</span>
-            <span class="status-badge" [ngClass]="webServerRunning ? 'status-running' : 'status-stopped'">
-              {{ webServerRunning ? 'Running' : 'Stopped' }}
-            </span>
-          </div>
-          <br />
-          <div *ngIf="!webServerRunning">
-            Web server is not running. Click "Start" to launch the web interface server.
-          </div>
-        </div>
-      </div>
-      <div class="card sub-card">
-        <div class="card-header instance-card-header-normal">
-          <h2>SERVER SETTINGS</h2>
-        </div>
-        <div class="card-body ">
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Port</h4>
-            <div class="form-group">
-              <label class="form-control-label">Port</label>
-              <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (ngModelChange)="onPortChange($event)" [disabled]="webServerRunning" class="form-control input" />
-              <label class="form-control-label desc">Port number for the web server (1024-65535)</label>
-            </div>
-            <div class="form-group">
-              <div class="form-control-label toggle-label">
-                <input type="checkbox" class="toggle-switch" [checked]="startWebServerOnLoad" (change)="onStartOnLoadChange($event.target.checked)" tabindex="0" />
-                <span class="slider"></span>
-                <span class="toggle-text">Start web server on app load</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-section vertical-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Authentication</h4>
-            <div class="form-group">
-              <div class="form-control-label toggle-label">
-                <input type="checkbox" class="toggle-switch" [checked]="authenticationEnabled" (change)="onAuthenticationEnabledChange($event.target.checked)" [disabled]="webServerRunning" tabindex="0" />
-                <span class="slider"></span>
-                <span class="toggle-text">Enable authentication</span>
-              </div>
-              <label class="form-control-label desc">Require username and password to access the web interface</label>
-            </div>
-            <div *ngIf="authenticationEnabled" class="form-group">
-              <label class="form-control-label">Username</label>
-              <input type="text" [ngModel]="authenticationUsername" (input)="authenticationUsername = $event.target.value" (blur)="onAuthenticationUsernameChange($event.target.value)" [disabled]="webServerRunning" class="form-control input" placeholder="Enter username" />
-              <label class="form-control-label desc">Username for web interface login</label>
-            </div>
-            <div *ngIf="authenticationEnabled" class="form-group">
-              <label class="form-control-label">Password</label>
-              <input type="password" [ngModel]="authenticationPassword" (input)="authenticationPassword = $event.target.value" (blur)="onAuthenticationPasswordChange($event.target.value)" [disabled]="webServerRunning" class="form-control input" placeholder="Enter password" />
-              <label class="form-control-label desc">Password for web interface login</label>
-            </div>
-            <div *ngIf="authenticationEnabled && (!authenticationUsername.trim() || !authenticationPassword.trim())" class="form-group">
-              <label class="form-control-label desc" style="color: var(--danger); font-style: italic;">
-                ⚠ Please enter both username and password above to complete authentication setup.
-              </label>
-            </div>
-            <div *ngIf="authenticationEnabled && webServerRunning" class="form-group">
-              <div class="status-info">
-                <i class="material-icons">info</i>
-                <span>Authentication settings cannot be changed while the web server is running. Stop the server to make changes.</span>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Backup Settings Section -->
-          <div class="settings-section">
-            <h4 style="color: var(--primary); margin-bottom: 1rem;">Backup Downloads</h4>
-            <div class="form-group">
-              <label class="form-control-label">Max Download Size (MB)</label>
-              <input type="number" 
-                     [ngModel]="maxBackupDownloadSizeMB" 
-                     (input)="maxBackupDownloadSizeMB = +$event.target.value" 
-                     (blur)="onMaxBackupDownloadSizeChange($event.target.value)" 
-                     class="form-control input" 
-                     min="1" 
-                     max="2048" 
-                     placeholder="100" />
-              <div class="form-control-label desc">
-                Maximum file size for backup downloads in web browsers. Larger backups will show a warning and require desktop app access.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      </section>
     </div>
+
+    <!-- Storage -->
+    <div *ngIf="activeTab === 'storage'" class="settings-pane">
+      <section class="settings-card">
+        <h3 class="settings-card-title">Server Data Directory</h3>
+        <p class="settings-card-hint">
+          Where each server keeps its files: Saved, ShooterGame and the rest. A change takes
+          effect after a restart.
+        </p>
+        <div class="form-group">
+          <div class="settings-input-row">
+            <input type="text" [ngModel]="serverDataDir" [disabled]="true" class="form-control input" placeholder="Default path (managed by app)" />
+            <button class="btn btn-secondary" (click)="selectServerDataDir()" [disabled]="!isElectron" title="Choose a folder">
+              <i class="material-icons">folder_open</i>
+            </button>
+            <button class="btn btn-danger" (click)="clearServerDataDir()" [disabled]="!isElectron || !serverDataDir" title="Reset to the default location">
+              <i class="material-icons">clear</i>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Updates -->
+    <div *ngIf="activeTab === 'updates'" class="settings-pane">
+      <section class="settings-card">
+        <h3 class="settings-card-title">Automatic ARK Updates</h3>
+        <p class="settings-card-hint">
+          When a new build is published, players are warned, the servers stop, the update runs,
+          and the ones that were running start again.
+        </p>
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="autoUpdateArkServer" (change)="onAutoUpdateArkServerChange($event)" tabindex="0" />
+            <span class="slider"></span>
+            <span class="toggle-text">Update the ARK server automatically</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-control-label">Warning time (minutes)</label>
+          <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
+          <label class="form-control-label desc">How long players are warned over RCON before an update begins.</label>
+        </div>
+      </section>
+    </div>
+
+    <!-- Servers -->
+    <div *ngIf="activeTab === 'servers'" class="settings-pane">
+      <section class="settings-card">
+        <h3 class="settings-card-title">Starting Servers</h3>
+        <p class="settings-card-hint">
+          Applies wherever servers start together: Start All, restarts after an update, and
+          auto-start when the app launches.
+        </p>
+        <div class="form-group">
+          <label class="form-control-label">Delay between starts (seconds)</label>
+          <input type="number" [ngModel]="serverStartDelaySeconds" (change)="onServerStartDelaySecondsChange($event.target.value)" class="form-control input" min="10" max="300" />
+          <label class="form-control-label desc">A longer wait keeps servers on a shared cluster from downloading the same mods at once.</label>
+        </div>
+      </section>
+    </div>
+
+    <div *ngIf="activeTab === 'web-server'" class="settings-pane">
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div class="settings-card-head-text">
+            <h3 class="settings-card-title">Web Interface</h3>
+            <p class="settings-card-hint">
+              Serves this same interface to a browser on your network, so a server can be
+              managed from another machine.
+            </p>
+          </div>
+          <span class="ark-status-badge" [ngClass]="webServerRunning ? 'tone-success' : 'tone-muted'">
+            {{ webServerRunning ? 'Running' : 'Stopped' }}
+          </span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-control-label">Port</label>
+          <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (ngModelChange)="onPortChange($event)"
+                 [disabled]="webServerRunning" class="form-control input" />
+          <label class="form-control-label desc">Between 1024 and 65535. The server has to be stopped to change it.</label>
+        </div>
+
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="startWebServerOnLoad"
+                   (change)="onStartOnLoadChange($event.target.checked)" tabindex="0" />
+            <span class="slider"></span>
+            <span class="toggle-text">Start it when the app launches</span>
+          </div>
+        </div>
+
+        <div class="settings-card-actions">
+          <button class="btn btn-primary" *ngIf="!webServerRunning" (click)="onStartWebServer()" [disabled]="!isElectron">
+            <i class="material-icons">play_arrow</i> Start
+          </button>
+          <button class="btn btn-danger" *ngIf="webServerRunning" (click)="onStopWebServer()" [disabled]="!isElectron">
+            <i class="material-icons">stop</i> Stop
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3 class="settings-card-title">Authentication</h3>
+        <p class="settings-card-hint">
+          Who may open the web interface. The desktop app runs as the owner of this machine and
+          never signs in.
+        </p>
+
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="authenticationEnabled"
+                   (change)="onAuthenticationEnabledChange($event.target.checked)"
+                   [disabled]="webServerRunning" tabindex="0" />
+            <span class="slider"></span>
+            <span class="toggle-text">Require an account to sign in</span>
+          </div>
+        </div>
+
+        <div *ngIf="authenticationEnabled && accountsInUse" class="ark-install-notice">
+          <i class="material-icons">group</i>
+          Accounts are managed under
+          <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
+          Give each person their own; what they may do follows their role.
+        </div>
+        <div *ngIf="authenticationEnabled && !accountsInUse" class="ark-install-notice warning">
+          <i class="material-icons">warning</i>
+          There are no accounts yet, so nobody can sign in. Add one under
+          <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
+        </div>
+        <div *ngIf="authenticationEnabled && webServerRunning" class="ark-install-notice">
+          <i class="material-icons">info</i>
+          Stop the web server to change these settings.
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3 class="settings-card-title">Backup Downloads</h3>
+        <p class="settings-card-hint">
+          Backups larger than this are not sent to a browser; they are collected from the
+          desktop app instead.
+        </p>
+        <div class="form-group">
+          <label class="form-control-label">Largest download (MB)</label>
+          <input type="number"
+                 [ngModel]="maxBackupDownloadSizeMB"
+                 (input)="maxBackupDownloadSizeMB = +$event.target.value"
+                 (blur)="onMaxBackupDownloadSizeChange($event.target.value)"
+                 class="form-control input"
+                 min="1"
+                 max="2048"
+                 placeholder="100" />
+        </div>
+      </section>
+    </div>
+
+    <!-- My Account -->
+    <app-profile-settings *ngIf="activeTab === 'profile'"></app-profile-settings>
+
+    <!-- Users & Roles -->
+    <app-users-settings *ngIf="activeTab === 'users'"></app-users-settings>
 
     <!-- About Tab -->
-    <div *ngIf="activeTab === 'about'">
+    <div *ngIf="activeTab === 'about'" class="settings-pane">
       <div class="about-container">
         <!-- Header Section -->
         <div class="about-header">
@@ -246,40 +284,9 @@
 
         <!-- Content Grid -->
         <div class="about-content-grid">
-          <!-- Features Section -->
-          <div class="about-section features-section">
-            <h2 class="section-title">Features</h2>
-            <div class="features-list">
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">Multi-server management</span>
-              </div>
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">Automatic server installation</span>
-              </div>
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">RCON integration</span>
-              </div>
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">Mod management</span>
-              </div>
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">Backup system</span>
-              </div>
-              <div class="feature-item">
-                <i class="material-icons feature-check">check_circle</i>
-                <span class="feature-text">Real-time monitoring</span>
-              </div>
-            </div>
-          </div>
-
           <!-- System Info Section -->
-          <div class="about-section system-info-section">
-            <h2 class="section-title">System Info</h2>
+          <div class="about-section system-info-section settings-card">
+            <h3 class="settings-card-title">System</h3>
             <div class="system-info-list">
               <div class="system-info-item">
                 <i class="material-icons system-icon">computer</i>
@@ -301,18 +308,28 @@
           </div>
         </div>
 
-        <!-- Footer -->
-        <div class="about-footer">
-          <p>&copy; 2025 r YOU cerious. All rights reserved.</p>
-        </div>
       </div>
     </div>
+    </div>
   </div>
-</div>
 
-<app-modal 
-  [title]="'Installing Ark Ascended Server'" 
-  [show]="showInstallModal" 
+    <!-- Foot of the whole panel, on every section rather than only About. -->
+    <footer class="settings-footer">
+      <a class="about-discord" href="https://discord.gg/8PJsyVvTp" target="_blank" rel="noopener noreferrer"
+         title="Join the Cerious-AASM Discord">
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18">
+          <path fill="currentColor" d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.25.5c1.6.4 2.9 1 4.15 1.9a13.9 13.9 0 0 0-4.3-1.35 15.5 15.5 0 0 0-3.9 0A14.3 14.3 0 0 0 6.8 5.4 13 13 0 0 1 10.9 3.5L10.6 3a19.8 19.8 0 0 0-4.9 1.4C2.8 8.7 2 12.9 2.4 17a20 20 0 0 0 6 3l1.2-1.7c-1-.35-1.85-.8-2.6-1.35l.5-.4a14 14 0 0 0 12 0l.5.4c-.75.55-1.65 1-2.6 1.35L18.6 20a20 20 0 0 0 6-3c.5-4.75-.8-8.9-4.3-12.6ZM9.35 14.7c-1.15 0-2.1-1.05-2.1-2.35s.9-2.35 2.1-2.35 2.1 1.05 2.1 2.35-.9 2.35-2.1 2.35Zm5.3 0c-1.15 0-2.1-1.05-2.1-2.35s.9-2.35 2.1-2.35 2.1 1.05 2.1 2.35-.9 2.35-2.1 2.35Z" />
+        </svg>
+        <span>Join the Discord</span>
+      </a>
+      <p class="settings-footer-copy">&copy; {{ copyrightYears }} r YOU cerious. All rights reserved.</p>
+    </footer>
+  </div>
+</app-drawer>
+
+<app-modal
+  [title]="'Installing Ark Ascended Server'"
+  [show]="showInstallModal"
   (close)="onCancelInstall()">
   <div class="install-phase">
     <div class="install-phase-header"
@@ -334,18 +351,18 @@
   </div>
 </app-modal>
 
-<app-modal 
-  [title]="'Sudo Password Required'" 
-  [show]="showSudoPasswordModal" 
+<app-modal
+  [title]="'Sudo Password Required'"
+  [show]="showSudoPasswordModal"
   (close)="onSudoPasswordCancel()">
   <div class="sudo-password-content">
     <p>Linux dependencies need to be installed. Please enter your sudo password to continue:</p>
     <div class="form-group">
       <label for="sudoPassword">Sudo Password:</label>
-      <input 
-        type="password" 
+      <input
+        type="password"
         id="sudoPassword"
-        [(ngModel)]="sudoPassword" 
+        [(ngModel)]="sudoPassword"
         placeholder="Enter your sudo password"
         class="form-control"
         (keyup.enter)="onSudoPasswordConfirm()" />

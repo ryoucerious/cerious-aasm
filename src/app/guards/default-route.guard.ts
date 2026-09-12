@@ -1,12 +1,10 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { UtilityService } from '../core/services/utility.service';
-import { GlobalConfigService } from '../core/services/global-config.service';
 
 export const defaultRouteGuard: CanActivateFn = async (route, state) => {
   const router = inject(Router);
   const utilityService = inject(UtilityService);
-  const globalConfigService = inject(GlobalConfigService);
   
   // Use comprehensive platform detection
   const platform = utilityService.getPlatform();
@@ -17,43 +15,28 @@ export const defaultRouteGuard: CanActivateFn = async (route, state) => {
   const isElectronEnvironment = isElectronApp || isFileProtocol;
   
   if (isElectronEnvironment) {
-    // In desktop Electron mode, go directly to server page
-    router.navigate(['/server']);
+    // In desktop Electron mode, go directly to the dashboard
+    router.navigate(['/dashboard']);
     return false;
   }
 
-  // In web mode, check authentication configuration and status
+  // In web mode, ask the server over HTTP whether a sign-in is needed and whether we have
+  // one. Asking the message bus for the configuration first meant this depended on the
+  // WebSocket, which is not up yet in the moment right after signing in.
   try {
-    const config = await globalConfigService.loadConfig();
-    
-    if (!config.authenticationEnabled) {
-      // Authentication is disabled, go directly to server page
-      router.navigate(['/server']);
+    const response = await fetch('/api/auth-status', { credentials: 'include' });
+
+    if (response.ok) {
+      const data = await response.json();
+      const allowed = data.requiresAuth === false || data.authenticated;
+      router.navigate([allowed ? '/dashboard' : '/login']);
       return false;
     }
 
-    // Authentication is enabled, check auth status
-    const response = await fetch('/api/auth-status', {
-      credentials: 'include'
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      if (data.authenticated) {
-        // User is authenticated, go to server page
-        router.navigate(['/server']);
-      } else {
-        // User is not authenticated, go to login page
-        router.navigate(['/login']);
-      }
-    } else {
-      // User is not authenticated, go to login page
-      router.navigate(['/login']);
-    }
-  } catch (error) {
-    // Connection error, go to login page
     router.navigate(['/login']);
+    return false;
+  } catch (error) {
+    router.navigate(['/login']);
+    return false;
   }
-  
-  return false; // Always return false since we're redirecting
 };

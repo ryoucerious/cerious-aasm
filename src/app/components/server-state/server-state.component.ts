@@ -1,10 +1,11 @@
 import { Component, Input, Output, EventEmitter, ViewChild, ElementRef, OnChanges, SimpleChanges } from '@angular/core';
-import { NgIf, NgClass, NgFor } from '@angular/common';
+import { NgIf, NgFor } from '@angular/common';
+import { serverStatusKey, serverStatusLabel, serverStatusClass } from '../../core/utils/server-status';
 
 @Component({
   selector: 'app-server-state',
   standalone: true,
-  imports: [NgIf, NgClass, NgFor],
+  imports: [NgIf, NgFor],
   templateUrl: './server-state.component.html'
 })
 export class ServerStateComponent implements OnChanges {
@@ -13,7 +14,6 @@ export class ServerStateComponent implements OnChanges {
   // Input properties
   @Input() serverInstance: any;
   @Input() logs: string[] = [];
-  @Input() isVisible: boolean = true;
   
   // Track the actual logs to detect real changes vs reference changes
   private lastLogCount: number = 0;
@@ -22,7 +22,6 @@ export class ServerStateComponent implements OnChanges {
   @Output() startServer = new EventEmitter<void>();
   @Output() stopServer = new EventEmitter<void>();
   @Output() forceStopServer = new EventEmitter<void>();
-  @Output() visibilityToggled = new EventEmitter<boolean>();
 
   ngOnChanges(changes: SimpleChanges) {
     // Only scroll when log count actually changes (prevents infinite loop)
@@ -63,19 +62,11 @@ export class ServerStateComponent implements OnChanges {
 
   // Computed properties for template
   get statusText(): string {
-    return this.mapServerState(this.serverInstance?.state);
+    return serverStatusLabel(this.serverInstance?.state);
   }
 
   get statusClasses(): Record<string, boolean> {
-    const state = this.mapServerState(this.serverInstance?.state);
-    return {
-      'status-running': state === 'Running',
-      'status-stopped': state === 'Stopped',
-      'status-starting': state === 'Starting' || state === 'Preparing to start',
-      'status-stopping': state === 'Stopping',
-      'status-error': state === 'Error' || state === 'Crashed',
-      'status-unknown': !this.serverInstance?.state
-    };
+    return { [serverStatusClass(this.serverInstance?.state)]: true };
   }
 
   get currentPlayers(): number {
@@ -96,28 +87,23 @@ export class ServerStateComponent implements OnChanges {
   }
 
   get canStart(): boolean {
-    const state = this.mapServerState(this.serverInstance?.state);
+    const key = serverStatusKey(this.serverInstance?.state);
     // Only allow start when server is truly stopped or in error state
-    return state === 'Stopped' || state === 'Error' || state === 'Crashed' || state === 'Unknown';
+    return key === 'stopped' || key === 'error' || key === 'crashed';
   }
 
   get canStop(): boolean {
-    const state = this.mapServerState(this.serverInstance?.state);
     // Only allow stop when server is running (not during stopping transition)
-    return state === 'Running';
+    return serverStatusKey(this.serverInstance?.state) === 'running';
   }
 
   get canForceStop(): boolean {
-    const state = this.mapServerState(this.serverInstance?.state);
-    // Keep Force button available during Running, Starting, Stopping, and Queued states
-    return state === 'Running' || state === 'Starting' || state === 'Stopping' || state === 'Preparing to start';
+    const key = serverStatusKey(this.serverInstance?.state);
+    // Keep Force available during Running, Starting, Stopping, and Queued states
+    return key === 'running' || key === 'starting' || key === 'stopping' || key === 'queued';
   }
 
   // Event handlers
-  toggleVisibility(): void {
-    this.isVisible = !this.isVisible;
-    this.visibilityToggled.emit(this.isVisible);
-  }
 
   onStartServer(event: Event): void {
     event.stopPropagation();

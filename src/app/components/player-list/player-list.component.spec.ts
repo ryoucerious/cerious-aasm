@@ -1,29 +1,30 @@
-import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { Subject, of, throwError } from 'rxjs';
 import { PlayerListComponent } from './player-list.component';
-import { IpcService } from '../../core/services/ipc.service';
+import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('PlayerListComponent', () => {
   let component: PlayerListComponent;
   let fixture: ComponentFixture<PlayerListComponent>;
-  let mockIpcService: jasmine.SpyObj<IpcService>;
+  let mockMessaging: jasmine.SpyObj<MessagingService>;
   let mockNotification: MockNotificationService;
 
   beforeEach(async () => {
-    mockIpcService = jasmine.createSpyObj('IpcService', ['invoke']);
+    mockMessaging = jasmine.createSpyObj('MessagingService', ['sendMessage']);
     mockNotification = new MockNotificationService();
 
     await TestBed.configureTestingModule({
       imports: [PlayerListComponent],
       providers: [
-        { provide: IpcService, useValue: mockIpcService },
+        { provide: MessagingService, useValue: mockMessaging },
         { provide: NotificationService, useValue: mockNotification }
       ]
     }).compileComponents();
 
     // Default: resolve with empty players so ngOnInit doesn't throw
-    mockIpcService.invoke.and.returnValue(Promise.resolve({ success: true, players: [] }));
+    mockMessaging.sendMessage.and.returnValue(of({ success: true, players: [] }));
 
     fixture = TestBed.createComponent(PlayerListComponent);
     component = fixture.componentInstance;
@@ -40,12 +41,12 @@ describe('PlayerListComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should call refreshPlayers on init', () => {
-    expect(mockIpcService.invoke).toHaveBeenCalledWith('get-online-players', { id: 'test-1' });
+  it('should request the player list over messaging on init', () => {
+    expect(mockMessaging.sendMessage).toHaveBeenCalledWith('get-online-players', { id: 'test-1' });
   });
 
   it('should populate players on successful response', async () => {
-    mockIpcService.invoke.and.returnValue(Promise.resolve({
+    mockMessaging.sendMessage.and.returnValue(of({
       success: true,
       players: [{ name: 'Player1', steamId: '123' }, { name: 'Player2', steamId: '456' }]
     }));
@@ -57,57 +58,55 @@ describe('PlayerListComponent', () => {
   });
 
   it('should set error on failed response', async () => {
-    mockIpcService.invoke.and.returnValue(Promise.resolve({
-      success: false,
-      error: 'RCON timeout'
-    }));
+    mockMessaging.sendMessage.and.returnValue(of({ success: false, error: 'RCON timeout' }));
     await component.refreshPlayers();
     expect(component.error).toBe('RCON timeout');
     expect(component.players.length).toBe(0);
   });
 
   it('should set error on exception', async () => {
-    mockIpcService.invoke.and.returnValue(Promise.reject(new Error('IPC error')));
+    mockMessaging.sendMessage.and.returnValue(throwError(() => new Error('transport error')));
     await component.refreshPlayers();
     expect(component.error).toBe('Communication error.');
     expect(component.loading).toBeFalse();
   });
 
-  it('should clear players and set error when server is not running', async () => {
+  it('should clear players and set error when the server is offline', async () => {
     component.serverInstance = { id: 'test-1', state: 'Stopped' };
     await component.refreshPlayers();
     expect(component.players.length).toBe(0);
-    expect(component.error).toBe('Server is not running.');
+    expect(component.error).toBe('Server is offline.');
+    expect(component.isOnline).toBeFalse();
   });
 
   it('should clear players when serverInstance is null', async () => {
     component.serverInstance = null;
     await component.refreshPlayers();
     expect(component.players.length).toBe(0);
-    expect(component.error).toBe('Server is not running.');
+    expect(component.error).toBe('Server is offline.');
   });
 
   it('should set loading true during refresh and false after', async () => {
-    let resolveInvoke: Function;
-    mockIpcService.invoke.and.returnValue(new Promise(r => resolveInvoke = r));
+    const response$ = new Subject<any>();
+    mockMessaging.sendMessage.and.returnValue(response$.asObservable());
 
     component.serverInstance = { id: 'test-1', state: 'Running' };
     const refreshPromise = component.refreshPlayers();
     expect(component.loading).toBeTrue();
 
-    resolveInvoke!({ success: true, players: [] });
+    response$.next({ success: true, players: [] });
     await refreshPromise;
     expect(component.loading).toBeFalse();
   });
 
   it('should handle response with missing players array', async () => {
-    mockIpcService.invoke.and.returnValue(Promise.resolve({ success: true }));
+    mockMessaging.sendMessage.and.returnValue(of({ success: true }));
     await component.refreshPlayers();
     expect(component.players).toEqual([]);
   });
 
   it('should use fallback error message when response has no error field', async () => {
-    mockIpcService.invoke.and.returnValue(Promise.resolve({ success: false }));
+    mockMessaging.sendMessage.and.returnValue(of({ success: false }));
     await component.refreshPlayers();
     expect(component.error).toBe('Failed to retrieve player list.');
   });
@@ -117,17 +116,5 @@ describe('PlayerListComponent', () => {
     spyOn(mockNotification, 'success');
     await component.copySteamId('12345');
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('12345');
-  });
-
-  it('should unsubscribe auto-refresh on destroy', () => {
-    expect(component.autoRefreshSub).toBeTruthy();
-    const unsubSpy = spyOn(component.autoRefreshSub!, 'unsubscribe');
-    component.ngOnDestroy();
-    expect(unsubSpy).toHaveBeenCalled();
-  });
-
-  it('should handle destroy when autoRefreshSub is null', () => {
-    component.autoRefreshSub = null;
-    expect(() => component.ngOnDestroy()).not.toThrow();
   });
 });

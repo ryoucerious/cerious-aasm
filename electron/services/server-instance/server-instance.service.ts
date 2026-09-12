@@ -49,7 +49,11 @@ export class ServerInstanceService {
             messagingService.sendToAll('server-instance-memory', { instanceId, memory });
           });
           serverMonitoringService.startPlayerPolling(instanceId, (instanceId: string, count: number) => {
-            messagingService.sendToAll('server-instance-players', { instanceId, count });
+            // The renderer reads `players`; `count` is kept for anything already listening to it.
+            messagingService.sendToAll('server-instance-players', { instanceId, players: count, count });
+          });
+          serverMonitoringService.startCpuPolling(instanceId, (instanceId: string, cpu: number) => {
+            messagingService.sendToAll('server-instance-cpu', { instanceId, cpu });
           });
           
           // Establish RCON connection when server is running
@@ -74,6 +78,7 @@ export class ServerInstanceService {
         } else {
           serverMonitoringService.stopMemoryPolling(instanceId);
           serverMonitoringService.stopPlayerPolling(instanceId);
+          serverMonitoringService.stopCpuPolling(instanceId);
         }
       }
     };

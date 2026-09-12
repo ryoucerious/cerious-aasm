@@ -1,0 +1,267 @@
+<div class="dashboard">
+  <!-- Welcome banner -->
+  <section class="dash-hero" [style.background-image]="heroBackground">
+    <div class="dash-hero-art" aria-hidden="true"></div>
+    <div class="dash-hero-content">
+      <h1 class="dash-hero-title">Welcome back, {{ userName }}</h1>
+      <p class="dash-hero-subtitle">{{ statusLine }}</p>
+      <div class="dash-stat-tiles">
+        <div class="dash-stat-tile">
+          <span class="dash-stat-icon tone-primary"><span class="material-icons">dns</span></span>
+          <span class="dash-stat-text"><span class="dash-stat-value">{{ summary.total }}</span><span class="dash-stat-label">Total Servers</span></span>
+        </div>
+        <div class="dash-stat-tile">
+          <span class="dash-stat-icon tone-success"><span class="dash-dot online"></span></span>
+          <span class="dash-stat-text"><span class="dash-stat-value">{{ summary.online }}</span><span class="dash-stat-label tone-success-text">Online</span></span>
+        </div>
+        <div class="dash-stat-tile">
+          <span class="dash-stat-icon tone-muted"><span class="dash-dot offline"></span></span>
+          <span class="dash-stat-text"><span class="dash-stat-value">{{ summary.offline }}</span><span class="dash-stat-label">Offline</span></span>
+        </div>
+        <div class="dash-stat-tile">
+          <span class="dash-stat-icon tone-info"><span class="material-icons">groups</span></span>
+          <span class="dash-stat-text"><span class="dash-stat-value">{{ summary.players }} / {{ summary.maxPlayers }}</span><span class="dash-stat-label">Total Players</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="dash-hero-quote">
+      <span class="dash-hero-quote-text">"Survive. Explore. Ascend."</span>
+      <span class="dash-hero-quote-by">— Cerious-AASM</span>
+    </div>
+  </section>
+
+  <div class="dash-grid">
+    <!-- Main column -->
+    <div class="dash-main">
+      <div class="dash-section-header">
+        <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
+        <div class="dash-toolbar">
+          <div class="dash-view-toggle" role="group" aria-label="View">
+            <button type="button" class="dash-toggle-btn" [class.active]="view === 'grid'" (click)="setView('grid')" title="Grid view"><span class="material-icons">grid_view</span></button>
+            <button type="button" class="dash-toggle-btn" [class.active]="view === 'list'" (click)="setView('list')" title="List view"><span class="material-icons">view_list</span></button>
+          </div>
+          <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
+          <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
+          <button type="button" class="btn btn-primary" (click)="openAddServer()">
+            <span class="material-icons">add</span> Add Server
+          </button>
+        </div>
+      </div>
+
+      <div class="server-grid" [class.list-view]="view === 'list'" appAnimateReflow
+           cdkDropList [cdkDropListDisabled]="!canReorder"
+           cdkDropListOrientation="mixed" (cdkDropListDropped)="onCardDrop($event)">
+        <app-server-card *ngFor="let server of visibleServers; trackBy: trackByServerId"
+                         cdkDrag
+                         [cdkDragDisabled]="!canReorder"
+                         [server]="server"
+                         [history]="historyFor(server)"
+                         [now]="now"
+                         [view]="view"
+                         [canDelete]="servers.length > 1"
+                         [hostMemoryTotalBytes]="hostMemoryTotal"
+                         (start)="startServer($event)"
+                         (stop)="stopServer($event)"
+                         (forceStop)="forceStopServer($event)"
+                         (openConsole)="openConsole($event)"
+                         (configure)="configureServer($event)"
+                         (openBackups)="openBackups($event)"
+                         (remove)="requestDelete($event)">
+        </app-server-card>
+        <div class="dash-empty" *ngIf="!visibleServers.length">
+          <span class="material-icons">dns</span>
+          <p *ngIf="!servers.length">No servers yet. Create your first ARK: Survival Ascended server.</p>
+          <p *ngIf="servers.length">No servers match this filter.</p>
+          <button type="button" class="btn btn-primary" *ngIf="!servers.length" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
+        </div>
+      </div>
+
+      <div class="dash-bottom">
+        <div class="dash-card dash-chart-card">
+          <div class="dash-card-header">
+            <h3>Player Activity <span class="dash-card-sub">(Last 24 Hours)</span></h3>
+            <div class="dash-chart-stats">
+              <span><small>Peak Players</small><strong>{{ playerPeak }}</strong></span>
+              <span><small>Average Players</small><strong>{{ playerAverage }}</strong></span>
+            </div>
+          </div>
+          <div class="dash-chart" *ngIf="hasPlayerHistory; else noPlayerHistory">
+            <svg class="dash-chart-svg" [attr.viewBox]="'0 0 ' + chartWidth + ' ' + chartHeight" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="dash-players-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.45" />
+                  <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.03" />
+                </linearGradient>
+              </defs>
+              <line *ngFor="let tick of playerChartTicks" x1="0" [attr.y1]="tick.y" [attr.x2]="chartWidth" [attr.y2]="tick.y"
+                    class="dash-chart-gridline" [class.baseline]="tick.baseline" />
+              <path *ngIf="playerChartArea" [attr.d]="playerChartArea" fill="url(#dash-players-fill)" />
+              <path *ngIf="playerChartLine" [attr.d]="playerChartLine" class="dash-chart-line" />
+            </svg>
+            <div class="dash-chart-yaxis"><span *ngFor="let tick of playerChartTicks">{{ tick.text }}</span></div>
+            <div class="dash-chart-xaxis">
+              <span *ngFor="let label of playerChartLabels" [style.left.%]="(label.x / chartWidth) * 100">{{ label.text }}</span>
+            </div>
+          </div>
+          <ng-template #noPlayerHistory>
+            <div class="dash-chart-empty">
+              <span class="material-icons">show_chart</span>
+              <p>No player counts recorded yet.</p>
+              <p class="dash-muted">Counts are taken every minute while a server is running.</p>
+            </div>
+          </ng-template>
+        </div>
+
+        <div class="dash-card dash-uptime-card">
+          <div class="dash-card-header"><h3>Server Uptime</h3></div>
+          <div class="dash-uptime-bars" *ngIf="servers.length; else noUptime">
+            <div class="dash-uptime-bar" *ngFor="let bar of uptimeBars; trackBy: trackByUptimeBar">
+              <span class="dash-uptime-value">{{ bar.label }}</span>
+              <span class="dash-uptime-track"><span class="dash-uptime-fill" [class.empty]="bar.percent === 0" [style.height.%]="bar.percent"></span></span>
+              <span class="dash-uptime-name" [title]="bar.server.name">{{ bar.server.name }}</span>
+            </div>
+          </div>
+          <ng-template #noUptime><div class="dash-muted">No servers to report.</div></ng-template>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Side column -->
+    <aside class="dash-side">
+      <div class="dash-card">
+        <div class="dash-card-header"><h3>Quick Actions</h3></div>
+        <div class="dash-quick-actions">
+          <button type="button" class="dash-action" (click)="showConfirmStartAll = true" [disabled]="!servers.length">
+            <span class="dash-action-icon tone-success"><span class="material-icons">play_arrow</span></span> Start All Servers
+          </button>
+          <button type="button" class="dash-action" (click)="showConfirmStopAll = true" [disabled]="!summary.online">
+            <span class="dash-action-icon tone-danger"><span class="material-icons">stop</span></span> Stop All Servers
+          </button>
+          <button type="button" class="dash-action" (click)="openBackupModal()" [disabled]="!servers.length">
+            <span class="dash-action-icon tone-primary"><span class="material-icons">backup</span></span> Create Backup
+          </button>
+          <button type="button" class="dash-action" (click)="goToServerInstall()">
+            <span class="dash-action-icon tone-warning"><span class="material-icons">system_update_alt</span></span> Update ARK Server
+          </button>
+          <button type="button" class="dash-action" (click)="openAddServer()">
+            <span class="dash-action-icon tone-info"><span class="material-icons">add</span></span> Add Server
+          </button>
+          <button type="button" class="dash-action" (click)="goToSettings()">
+            <span class="dash-action-icon tone-muted"><span class="material-icons">settings</span></span> Settings
+          </button>
+        </div>
+      </div>
+
+      <div class="dash-card">
+        <div class="dash-card-header"><h3>System Resources</h3></div>
+        <div class="dash-resources">
+          <div class="dash-resource">
+            <span class="dash-resource-icon tone-primary"><span class="material-icons">memory</span></span>
+            <div class="dash-resource-body">
+              <div class="dash-resource-row"><span class="dash-resource-name">CPU</span><span class="dash-resource-detail">{{ hostResourcesError ? 'Unavailable' : '' }}</span></div>
+              <div class="dash-resource-row"><span class="dash-resource-value">{{ cpuLabel }}</span><span class="meter"><span class="meter-fill tone-primary" [style.width.%]="cpuPercent"></span></span></div>
+            </div>
+          </div>
+          <div class="dash-resource">
+            <span class="dash-resource-icon tone-violet"><span class="material-icons">developer_board</span></span>
+            <div class="dash-resource-body">
+              <div class="dash-resource-row"><span class="dash-resource-name">Memory</span><span class="dash-resource-detail">{{ memoryLabel }}</span></div>
+              <div class="dash-resource-row"><span class="dash-resource-value">{{ hostResources ? (memoryPercent | number:'1.0-0') + '%' : '--' }}</span><span class="meter"><span class="meter-fill tone-violet" [style.width.%]="memoryPercent"></span></span></div>
+            </div>
+          </div>
+          <div class="dash-resource">
+            <span class="dash-resource-icon tone-success"><span class="material-icons">storage</span></span>
+            <div class="dash-resource-body">
+              <div class="dash-resource-row"><span class="dash-resource-name">Disk</span><span class="dash-resource-detail">{{ diskLabel }}</span></div>
+              <div class="dash-resource-row"><span class="dash-resource-value">{{ hostResources?.disk ? (diskPercent | number:'1.0-0') + '%' : '--' }}</span><span class="meter"><span class="meter-fill tone-success" [style.width.%]="diskPercent"></span></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-card" id="activity">
+        <div class="dash-card-header">
+          <h3>Recent Activity</h3>
+          <button type="button" class="link-btn" (click)="openAllActivity()" [disabled]="!activity.length">View All</button>
+        </div>
+        <div class="dash-activity">
+          <div class="dash-muted" *ngIf="!recentActivity.length">No activity yet. Server starts, stops, backups and player joins will show up here.</div>
+          <div class="activity-row" *ngFor="let item of recentActivity; trackBy: trackActivity">
+            <span class="activity-icon" [ngClass]="'tone-' + activityIcons[item.kind].tone"><span class="material-icons">{{ activityIcons[item.kind].icon }}</span></span>
+            <span class="activity-text">
+              <span class="activity-message">{{ item.message }}</span>
+              <span class="activity-time">{{ relativeTime(item) }}<span class="activity-by" *ngIf="item.username"> · by {{ item.username }}</span></span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<app-add-server-modal [show]="showAddModal" [servers]="servers" (closed)="onAddModalClosed()"></app-add-server-modal>
+
+<app-modal [title]="'Start All Servers'" [show]="showConfirmStartAll" (close)="showConfirmStartAll = false">
+  <div class="modal-confirmation">Start all servers?</div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="showConfirmStartAll = false">Cancel</button>
+    <button type="button" class="btn btn-primary" (click)="confirmStartAll()">Start All</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Stop All Servers'" [show]="showConfirmStopAll" (close)="showConfirmStopAll = false">
+  <div class="modal-confirmation">Stop all running servers?</div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="showConfirmStopAll = false">Cancel</button>
+    <button type="button" class="btn btn-danger" (click)="confirmStopAll()">Stop All</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Create Backup'" [show]="showBackupModal" (close)="closeBackupModal()">
+  <div class="modal-form">
+    <div class="form-group">
+      <label class="form-control-label">Server</label>
+      <app-dropdown [options]="serverOptions" [(ngModel)]="backupServerId" [disabled]="creatingBackup" placeholder="Select a server..."></app-dropdown>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label">Backup Name</label>
+      <input type="text" class="form-control" [(ngModel)]="backupName" maxlength="50" [disabled]="creatingBackup" placeholder="Enter backup name..." />
+      <div class="form-control-label desc">Modify the name or keep the default timestamp</div>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn btn-ghost" (click)="closeBackupModal()" [disabled]="creatingBackup">Cancel</button>
+    <button type="button" class="btn btn-primary" (click)="createBackup()" [disabled]="creatingBackup || !backupServerId">
+      <span *ngIf="creatingBackup" class="material-icons spinner">refresh</span> Create Backup
+    </button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Confirm Delete'" [show]="!!serverToDelete" (close)="cancelDelete()">
+  <div class="modal-confirmation">
+    Are you sure you want to delete <span class="modal-target">{{ serverToDelete?.name }}</span>?
+    <p class="warning-text">This action cannot be undone.</p>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="cancelDelete()">Cancel</button>
+    <button type="button" class="btn btn-danger" (click)="confirmDelete()">Delete</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Recent Activity'" [show]="showAllActivity" [maxWidth]="'640px'" (close)="closeAllActivity()">
+  <div class="dash-activity dash-activity-all">
+    <div class="dash-muted" *ngIf="!activity.length">No activity recorded.</div>
+    <div class="activity-row" *ngFor="let item of activity; trackBy: trackActivity">
+      <span class="activity-icon" [ngClass]="'tone-' + activityIcons[item.kind].tone"><span class="material-icons">{{ activityIcons[item.kind].icon }}</span></span>
+      <span class="activity-text">
+        <span class="activity-message">{{ item.message }}</span>
+        <span class="activity-time">{{ relativeTime(item) }}<span class="activity-by" *ngIf="item.username"> · by {{ item.username }}</span></span>
+      </span>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn btn-ghost" (click)="clearActivity()" [disabled]="!activity.length">Clear</button>
+    <button type="button" class="btn" (click)="closeAllActivity()">Close</button>
+  </div>
+</app-modal>

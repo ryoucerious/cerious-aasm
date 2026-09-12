@@ -1,6 +1,6 @@
 <!-- Cluster Tab Content -->
 <div class="tab-content">
-  <div class="form-group" style="grid-column: 1 / -1;">
+  <div class="form-group page-intro">
     <h4>Server Cluster Configuration</h4>
     <p class="form-control-label desc">Configure this server to be part of an ARK cluster for cross-server character and item transfers.</p>
   </div>
@@ -10,7 +10,7 @@
     <p class="section-desc">Configure cluster directory, ID, and basic cluster properties.</p>
 
     <!-- Cluster Directory -->
-  <div class="form-group" style="grid-column: 1 / -1;">
+  <div class="form-group span-all">
     <label class="form-control-label">Cluster Directory Path</label>
     <input
       type="text"
@@ -61,7 +61,7 @@
   </div>
 
   <!-- Test Connection Button -->
-  <div class="form-group" style="grid-column: 1 / -1;" *ngIf="serverInstance.clusterDirOverride">
+  <div class="form-group span-all" *ngIf="serverInstance.clusterDirOverride">
     <div>
       <button
         type="button"

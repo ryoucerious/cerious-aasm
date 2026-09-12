@@ -3,6 +3,7 @@ import { loginHandler, logoutHandler, authStatusHandler } from './auth-routes';
 import { validateAuthInput, sanitizeString } from '../utils/validation.utils';
 import { getAuthConfig, verifyPassword } from './auth-config';
 import { createSession, destroySession, isAuthenticated } from './auth-middleware';
+import { verifyWithUserDatabase } from './user-bridge';
 import httpMocks from 'node-mocks-http';
 
 // Use jest.mock with factory to override all relevant exports with jest.fn mocks
@@ -22,6 +23,11 @@ jest.mock('../web-server/auth-config', () => {
     verifyPassword: jest.fn(() => Promise.resolve(true)),
   };
 });
+// The account check talks to the main process over IPC, which no test has.
+jest.mock('../web-server/user-bridge', () => ({
+  verifyWithUserDatabase: jest.fn(async () => null)
+}));
+
 jest.mock('../web-server/auth-middleware', () => {
   const actual = jest.requireActual('../web-server/auth-middleware');
   return {
@@ -66,14 +72,36 @@ describe('auth-routes', () => {
       expect(res._getJSONData()).toEqual({ success: true, message: 'Authentication not required' });
     });
 
-    it('should return 500 if config is missing', async () => {
+    it('signs in an account when no single login is configured', async () => {
+      // An install that only uses accounts has no legacy username or password hash, which
+      // used to be refused as a configuration error before the account was ever checked.
       (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
       (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'user', password: 'pass' } });
+      (verifyWithUserDatabase as jest.Mock).mockResolvedValue({
+        id: 'u1', username: 'jared', displayName: 'Jared', roleId: 'operator',
+        roleName: 'Operator', permissions: ['servers.view'], active: true
+      });
+      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'jared', password: 'pass' } });
       const res = httpMocks.createResponse();
+
       await loginHandler(req, res);
-      expect(res.statusCode).toBe(500);
-      expect(res._getJSONData()).toEqual({ success: false, error: 'Authentication configuration error' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res._getJSONData().success).toBeTruthy();
+      expect(createSession).toHaveBeenCalled();
+    });
+
+    it('refuses an unknown account when no single login is configured', async () => {
+      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
+      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
+      (verifyWithUserDatabase as jest.Mock).mockResolvedValue(null);
+      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'nobody', password: 'pass' } });
+      const res = httpMocks.createResponse();
+
+      await loginHandler(req, res);
+
+      expect(res.statusCode).toBe(401);
+      expect(res._getJSONData()).toEqual({ success: false, error: 'Invalid credentials' });
     });
 
     it('should return 401 if credentials are invalid', async () => {

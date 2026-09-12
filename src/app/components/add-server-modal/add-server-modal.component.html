@@ -1,0 +1,72 @@
+<app-modal [title]="'Add Server'" [show]="show" (close)="onCancel()">
+  <!-- Mode Selection -->
+  <div class="form-group">
+    <div class="tabs import-mode-selector">
+      <button type="button" class="btn tab" [class.active]="importMode === 'create'" (click)="setImportMode('create')">
+        <i class="material-icons">add</i>
+        Create New Server
+      </button>
+      <button type="button" class="btn tab" [class.active]="importMode === 'import'" (click)="setImportMode('import')">
+        <i class="material-icons">file_upload</i>
+        Import from Backup
+      </button>
+      <button type="button" class="btn tab" [class.active]="importMode === 'clone'" (click)="setImportMode('clone')">
+        <i class="material-icons">content_copy</i>
+        Clone Existing Server
+      </button>
+    </div>
+  </div>
+
+  <div class="modal-form-content">
+    <!-- Create New Server Form -->
+    <div *ngIf="importMode === 'create'" class="form-group">
+      <label class="form-control-label">Server Name</label>
+      <input #serverNameInput
+             class="form-control"
+             [(ngModel)]="serverName"
+             name="serverName"
+             required
+             placeholder="Enter server name"
+             (keyup.enter)="onAddServer()" />
+    </div>
+
+    <!-- Import from Backup Form -->
+    <div *ngIf="importMode === 'import'">
+      <div class="form-group">
+        <label class="form-control-label">Server Name</label>
+        <input class="form-control" [(ngModel)]="serverName" name="serverName" required placeholder="Enter server name" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Backup File</label>
+        <div class="file-input-wrapper">
+          <input type="text" class="form-control" [(ngModel)]="selectedBackupFilePath"
+                 placeholder="Enter file path or click Browse" style="flex: 1;" />
+          <button type="button" class="btn btn-ghost" (click)="selectBackupFile()" style="margin-left: 8px;">Browse</button>
+        </div>
+        <input type="file" accept=".zip" style="display: none;" (change)="onBackupFileSelect($event)" #backupFileInput />
+        <div class="form-control-label desc">Select a backup ZIP file to restore. You can type the path directly or click Browse.</div>
+      </div>
+    </div>
+
+    <!-- Clone Existing Server Form -->
+    <div *ngIf="importMode === 'clone'">
+      <div class="form-group">
+        <label class="form-control-label">New Server Name</label>
+        <input class="form-control" [(ngModel)]="serverName" name="serverName" required placeholder="Enter name for cloned server" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Clone From</label>
+        <app-dropdown [options]="cloneOptions" [(ngModel)]="selectedServerToClone" name="selectedServerToClone" placeholder="Select a server to clone..."></app-dropdown>
+        <div class="form-control-label desc">Choose an existing server to copy all settings from. The new server will have identical configuration but a different name.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-group-modal" style="margin-top: 10px;">
+    <button type="button" (click)="onCancel()" class="btn btn-ghost" [disabled]="busy">Cancel</button>
+    <button type="button" (click)="onAddServer()" [disabled]="!canAddServer()" class="btn btn-primary">
+      <span *ngIf="busy" class="material-icons spinner">refresh</span>
+      {{ importMode === 'create' ? 'Add' : importMode === 'import' ? 'Import' : 'Clone' }}
+    </button>
+  </div>
+</app-modal>

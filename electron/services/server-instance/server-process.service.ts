@@ -45,6 +45,14 @@ export class ServerProcessService {
   }
 
   /**
+   * Epoch milliseconds at which the tracked process for this instance was spawned, or null
+   * when no process is tracked. Drives the uptime shown on the dashboard.
+   */
+  getProcessStartTime(instanceId: string): number | null {
+    return this.processStartTimes[instanceId] ?? null;
+  }
+
+  /**
    * Get the number of active (tracked) server processes
    */
   getActiveProcessCount(): number {
@@ -304,7 +312,7 @@ export class ServerProcessService {
         const instanceName = instanceConfig?.name || instanceId;
         messagingService.sendToAll('notification', {
           type: 'error',
-          message: `Server "${instanceName}" crashed during startup (exit code ${code}). Check logs for details.`
+          message: `${instanceName} crashed during startup (exit code ${code}). Check the logs for details.`
         });
         if (stderrContents) {
           messagingService.sendToAll('server-instance-log', {

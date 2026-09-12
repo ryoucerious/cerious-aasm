@@ -1,244 +1,141 @@
-<div class="sidebar" style="display:flex;flex-direction:column;">
-  <div class="sidebar-header" (click)="showServers = !showServers">
-    <h3 style="margin:0;">Servers</h3>
-    <span class="material-icons" style="font-size:20px;user-select:none;">
-      {{ showServers ? 'expand_more' : 'chevron_right' }}
-    </span>
-    <div style="display:flex;gap:4px;margin-left:auto;" *ngIf="servers.length > 0" (click)="$event.stopPropagation()">
-      <button class="btn btn-ghost" title="Start All Servers" (click)="startAllServers()">
-        <i class="material-icons">play_arrow</i>
-      </button>
-      <button class="btn btn-ghost" title="Stop All Servers" (click)="stopAllServers()">
-        <i class="material-icons">stop</i>
-      </button>
-    </div>
-  </div>
-  
-  <div class="sidebar-content" *ngIf="showServers">
-    <div class="server-list" cdkDropList (cdkDropListDropped)="onDrop($event)">
-      <div 
-        *ngFor="let server of servers; trackBy: trackByServerId" 
-        class="server-item" cdkDrag
-        [class.selected]="selectedServerId === server.id"
-        (click)="onServerClick(server)">
-        <span class="server-status-icon" [ngClass]="getServerStatusClass(server)">
-          <i class="material-icons">{{ getServerStatusIcon(server) }}</i>
+<nav class="sidenav" aria-label="Main navigation">
+  <div class="sidenav-scroll">
+    <button type="button" class="nav-item" [class.active]="isRouteActive('/dashboard')" (click)="goToDashboard()">
+      <span class="material-icons">home</span>
+      <span class="nav-item-label">Dashboard</span>
+    </button>
+
+    <!-- Server list -->
+    <div class="nav-section">
+      <div class="nav-section-header" (click)="showServers = !showServers">
+        <span class="nav-section-title">
+          Servers <span class="nav-count" *ngIf="servers.length">{{ servers.length }}</span>
         </span>
-        <span 
-          *ngIf="editingServerId !== server.id"
-          class="server-name" 
-          [class.editable]="!isServerBusy(server)"
-          (dblclick)="onServerNameDoubleClick(server, $event)">
-          {{ server.name }}
-        </span>
-        <input 
-          *ngIf="editingServerId === server.id"
-          type="text"
-          class="form-control editing-server-name"
-          [(ngModel)]="editingServerName"
-          (keydown)="onServerNameKeydown($event, server)"
-          (blur)="onServerNameBlur(server)">
-        <button 
-          *ngIf="servers.length > 1 && editingServerId !== server.id && (server.state || '').toLowerCase() === 'stopped'"
-          class="delete-server-btn" 
-          title="Delete Server"
-          (click)="onDeleteServer(server, $event)">
-          &#10006;
-        </button>
-      </div>
-    </div>
-  </div>
-  
-  <div class="sidebar-footer">
-    <button 
-      class="btn btn-ghost" 
-      (click)="onAddServerClick()"
-      title="Add Server">
-      <i class="material-icons">add</i>
-      Add Server
-    </button>
-    <button 
-      class="btn btn-ghost" 
-      (click)="onSettingsClick()"
-      title="Settings">
-      <i class="material-icons">settings</i>
-    </button>
-    <!-- Logout button for web mode when authentication is enabled -->
-    <button 
-      *ngIf="isWebMode && authenticationEnabled"
-      class="btn btn-ghost" 
-      (click)="onLogoutClick()"
-      title="Logout">
-      <i class="material-icons">logout</i>
-    </button>
-  </div>
-</div>
-
-<app-modal 
-  [title]="'Add Server'" 
-  [show]="showAddModal" 
-  (close)="onCancelAdd()">
-  
-  <!-- Mode Selection -->
-  <div class="form-group">
-    <div class="tabs import-mode-selector">
-      <button 
-        type="button" 
-        class="btn tab" 
-        [class.active]="importMode === 'create'"
-        (click)="setImportMode('create')">
-        <i class="material-icons">add</i>
-        Create New Server
-      </button>
-      <button 
-        type="button" 
-        class="btn tab" 
-        [class.active]="importMode === 'import'"
-        (click)="setImportMode('import')">
-        <i class="material-icons">file_upload</i>
-        Import from Backup
-      </button>
-      <button 
-        type="button" 
-        class="btn tab" 
-        [class.active]="importMode === 'clone'"
-        (click)="setImportMode('clone')">
-        <i class="material-icons">content_copy</i>
-        Clone Existing Server
-      </button>
-    </div>
-  </div>
-
-  <!-- Fixed height container for form content -->
-  <div class="modal-form-content">
-    <!-- Create New Server Form -->
-    <div *ngIf="importMode === 'create'" class="form-group">
-      <label class="form-control-label">Server Name</label>
-      <input 
-        #serverNameInput 
-        class="form-control" 
-        [(ngModel)]="serverName" 
-        name="serverName" 
-        required 
-        placeholder="Enter server name" 
-        (keyup.enter)="onAddServer()"/>
-    </div>
-
-    <!-- Import from Backup Form -->
-    <div *ngIf="importMode === 'import'">
-      <div class="form-group">
-        <label class="form-control-label">Server Name</label>
-        <input 
-          class="form-control" 
-          [(ngModel)]="serverName" 
-          name="serverName" 
-          required 
-          placeholder="Enter server name"/>
-      </div>
-      <div class="form-group">
-        <label class="form-control-label">Backup File</label>
-        <div class="file-input-wrapper">
-          <input 
-            type="text" 
-            class="form-control" 
-            [(ngModel)]="selectedBackupFilePath"
-            placeholder="Enter file path or click Browse"
-            style="flex: 1;"/>
-          <button 
-            type="button" 
-            class="btn btn-ghost" 
-            (click)="selectBackupFile()"
-            style="margin-left: 8px;">
-            Browse
+        <div class="nav-section-actions" (click)="$event.stopPropagation()">
+          <button type="button" class="nav-mini-btn" title="Start all servers" *ngIf="servers.length" (click)="startAllServers()">
+            <span class="material-icons">play_arrow</span>
+          </button>
+          <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" (click)="stopAllServers()">
+            <span class="material-icons">stop</span>
+          </button>
+          <button type="button" class="nav-mini-btn" title="Add server" (click)="onAddServerClick()">
+            <span class="material-icons">add</span>
           </button>
         </div>
-        <!-- Hidden file input for fallback -->
-        <input 
-          type="file" 
-          accept=".zip"
-          style="display: none;"
-          (change)="onBackupFileSelect($event)"
-          #backupFileInput/>
-        <div class="form-control-label desc">Select a backup ZIP file to restore. You can type the path directly or click Browse.</div>
+        <span class="material-icons nav-section-chevron">{{ showServers ? 'expand_more' : 'chevron_right' }}</span>
+      </div>
+
+      <div class="server-list" *ngIf="showServers" cdkDropList (cdkDropListDropped)="onDrop($event)">
+        <div *ngFor="let server of servers; trackBy: trackByServerId"
+             class="server-item"
+             cdkDrag
+             [class.selected]="selectedServerId === server.id"
+             (click)="onServerClick(server)">
+          <span class="server-status-dot" [ngClass]="getServerStatusClass(server)" [title]="getServerStatusLabel(server)"></span>
+          <span *ngIf="editingServerId !== server.id"
+                class="server-name"
+                [title]="server.name"
+                (dblclick)="onServerNameDoubleClick(server, $event)">
+            {{ server.name }}
+          </span>
+          <input *ngIf="editingServerId === server.id"
+                 type="text"
+                 class="form-control editing-server-name"
+                 [(ngModel)]="editingServerName"
+                 (click)="$event.stopPropagation()"
+                 (keydown)="onServerNameKeydown($event, server)"
+                 (blur)="onServerNameBlur(server)" />
+          <span class="server-item-players" *ngIf="isServerRunning(server) && editingServerId !== server.id">{{ server.players || 0 }}</span>
+          <button *ngIf="servers.length > 1 && editingServerId !== server.id && isServerStopped(server)"
+                  type="button"
+                  class="delete-server-btn"
+                  title="Delete Server"
+                  (click)="onDeleteServer(server, $event)">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <div class="server-list-empty" *ngIf="!servers.length">
+          No servers yet.
+          <button type="button" class="link-btn" (click)="onAddServerClick()">Add one</button>
+        </div>
       </div>
     </div>
 
-    <!-- Clone Existing Server Form -->
-    <div *ngIf="importMode === 'clone'">
-      <div class="form-group">
-        <label class="form-control-label">New Server Name</label>
-        <input 
-          class="form-control" 
-          [(ngModel)]="serverName" 
-          name="serverName" 
-          required 
-          placeholder="Enter name for cloned server"/>
+    <!-- Selected server pages -->
+    <div class="nav-section" *ngIf="selectedServer">
+      <div class="nav-section-header static">
+        <span class="nav-section-title nav-section-server" [title]="selectedServer.name">{{ selectedServer.name }}</span>
       </div>
-      <div class="form-group">
-        <label class="form-control-label">Clone From</label>
-        <select 
-          class="form-control" 
-          [(ngModel)]="selectedServerToClone" 
-          name="selectedServerToClone" 
-          required>
-          <option [ngValue]="null">Select a server to clone...</option>
-          <option *ngFor="let server of servers" [ngValue]="server">
-            {{ server.name }}
-          </option>
-        </select>
-        <div class="form-control-label desc">Choose an existing server to copy all settings from. The new server will have identical configuration but a different name.</div>
+
+      <button type="button" class="nav-item" *ngFor="let tab of overviewTabs; trackBy: trackByTabId"
+              [class.active]="isTabActive(tab)" (click)="openTab(tab)">
+        <span class="material-icons">{{ tab.icon }}</span>
+        <span class="nav-item-label">{{ tab.label }}</span>
+      </button>
+
+      <div class="nav-group" [class.open]="configOpen">
+        <button type="button" class="nav-item nav-group-toggle" [class.active]="configGroupActive && !configOpen" (click)="toggleConfig()"
+                [attr.aria-expanded]="configOpen">
+          <span class="material-icons">{{ expertMode ? 'code' : 'tune' }}</span>
+          <span class="nav-item-label">{{ expertMode ? 'INI Files' : 'Configuration' }}</span>
+          <span class="nav-item-hint" *ngIf="!configOpen && configGroupActive">{{ activeConfigLabel }}</span>
+          <span class="material-icons nav-group-chevron">{{ configOpen ? 'expand_more' : 'chevron_right' }}</span>
+        </button>
+        <div class="nav-group-items" *ngIf="configOpen">
+          <button type="button" class="nav-item nav-sub-item" *ngFor="let tab of configTabs; trackBy: trackByTabId"
+                  [class.active]="isTabActive(tab)" (click)="openTab(tab)">
+            <span class="material-icons">{{ tab.icon }}</span>
+            <span class="nav-item-label">{{ tab.label }}</span>
+          </button>
+        </div>
       </div>
+
+      <button type="button" class="nav-item" *ngFor="let tab of featureTabs; trackBy: trackByTabId"
+              [class.active]="isTabActive(tab)" (click)="openTab(tab)">
+        <span class="material-icons">{{ tab.icon }}</span>
+        <span class="nav-item-label">{{ tab.label }}</span>
+      </button>
     </div>
+
   </div>
 
-  <div class="action-group-modal" style="margin-top: 10px;">
-    <button type="button" (click)="onCancelAdd()" class="btn btn-ghost">Cancel</button>
-    <button 
-      type="button" 
-      (click)="onAddServer()" 
-      [disabled]="!canAddServer()" 
-      class="btn btn-ghost">
-      {{ importMode === 'create' ? 'Add' : importMode === 'import' ? 'Import' : 'Clone' }}
+  <!-- Settings lives at the foot of the navigation, where it is always reachable without
+       scrolling past the server list. -->
+  <div class="sidenav-footer">
+    <button type="button" class="nav-item sidenav-footer-item" (click)="onSettingsClick()">
+      <span class="material-icons">settings</span>
+      <span class="nav-item-label">Settings</span>
+      <span class="sidenav-footer-version">v{{ version }}</span>
+      <span class="material-icons sidenav-update-icon" *ngIf="appUpdatePending" [title]="appUpdateTitle">download</span>
     </button>
   </div>
-</app-modal>
+</nav>
 
-<app-modal 
-  [title]="'Confirm Delete'" 
-  [show]="showConfirmDeleteModal" 
-  (close)="onCancelDelete()">
+<app-add-server-modal [show]="showAddModal" [servers]="servers" (closed)="onAddModalClosed()" (created)="onServerCreated($event)"></app-add-server-modal>
+
+<app-modal [title]="'Confirm Delete'" [show]="showConfirmDeleteModal" (close)="onCancelDelete()">
   <div class="modal-confirmation">
     Are you sure you want to delete <span class="modal-target">{{ serverToDelete?.name }}</span>?
     <p class="warning-text">This action cannot be undone.</p>
   </div>
   <div class="action-group-modal">
     <button type="button" (click)="onCancelDelete()" class="btn">Cancel</button>
-    <button type="button" (click)="onConfirmDelete()" class="btn btn-ghost">Delete</button>
+    <button type="button" (click)="onConfirmDelete()" class="btn btn-danger">Delete</button>
   </div>
 </app-modal>
 
-<app-modal
-  [title]="'Start All Servers'"
-  [show]="showConfirmStartAllModal"
-  (close)="showConfirmStartAllModal = false">
-  <div class="modal-confirmation">
-    Start all servers?
-  </div>
+<app-modal [title]="'Start All Servers'" [show]="showConfirmStartAllModal" (close)="showConfirmStartAllModal = false">
+  <div class="modal-confirmation">Start all servers?</div>
   <div class="action-group-modal">
     <button type="button" (click)="showConfirmStartAllModal = false" class="btn">Cancel</button>
-    <button type="button" (click)="onConfirmStartAll()" class="btn btn-ghost">Start All</button>
+    <button type="button" (click)="onConfirmStartAll()" class="btn btn-primary">Start All</button>
   </div>
 </app-modal>
 
-<app-modal
-  [title]="'Stop All Servers'"
-  [show]="showConfirmStopAllModal"
-  (close)="showConfirmStopAllModal = false">
-  <div class="modal-confirmation">
-    Stop all running servers?
-  </div>
+<app-modal [title]="'Stop All Servers'" [show]="showConfirmStopAllModal" (close)="showConfirmStopAllModal = false">
+  <div class="modal-confirmation">Stop all running servers?</div>
   <div class="action-group-modal">
     <button type="button" (click)="showConfirmStopAllModal = false" class="btn">Cancel</button>
-    <button type="button" (click)="onConfirmStopAll()" class="btn btn-ghost">Stop All</button>
+    <button type="button" (click)="onConfirmStopAll()" class="btn btn-danger">Stop All</button>
   </div>
 </app-modal>

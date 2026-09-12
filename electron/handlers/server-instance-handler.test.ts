@@ -186,7 +186,7 @@ describe('Server Instance Handler', () => {
       expect(mockAutomationService.setManuallyStopped).toHaveBeenCalledWith('instance-1', true);
       expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('notification', {
         type: 'warning',
-        message: 'Server Test Server force stopped.'
+        message: 'Test Server force stopped.'
       });
       expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('force-stop-server-instance', {
         ...expectedResult,

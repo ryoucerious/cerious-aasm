@@ -23,6 +23,14 @@ export class ServerInstanceService {
     private ws: WebSocketService,
     private util: UtilityService
   ) {
+    // The list is asked for once as the app starts. In the web UI that request can be made
+    // before the socket carrying it is open — the moment just after signing in, or while a
+    // dropped connection is coming back — and it simply goes nowhere, leaving the app empty
+    // until a reload. Ask again each time the connection comes up.
+    this.subs.push(
+      this.ws.connected$.pipe(filter((connected: boolean) => connected)).subscribe(() => this.refresh())
+    );
+
     // Listen for backend push updates (if any)
     this.subs.push(this.messaging.receiveMessage<ServerInstance[]>('server-instances').subscribe(instances => {
       const list = Array.isArray(instances) ? instances : [];

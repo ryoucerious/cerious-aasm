@@ -76,6 +76,10 @@ export class WebServerService {
 
     // Prepare environment variables for authentication
     const env = { ...process.env };
+    // Tells the child that this process answers credential checks against the user database.
+    // Set for every start, not just the headless one, because the GUI starts the server
+    // without authOptions and its logins go through the same database.
+    env.AASM_USER_DB = '1';
     if (authOptions) {
       env.AUTH_ENABLED = authOptions.enabled.toString();
       env.AUTH_USERNAME = authOptions.username;
@@ -98,6 +102,20 @@ export class WebServerService {
 
     return new Promise((resolve) => {
       // Handle server ready/error messages
+      const verifyCredentialsForChild = async (message: any) => {
+        // The child owns sessions but not the database, so credential checks come here.
+        // Never returns a password hash.
+        const { requestId, username, password } = message || {};
+        let user = null;
+        try {
+          const { userDatabaseService } = require('./auth/user-database.service');
+          user = await userDatabaseService.verifyCredentials(username, password);
+        } catch (error) {
+          console.error('[web-server-service] Credential check failed:', error);
+        }
+        this.apiProcess?.send({ type: 'auth-verify-result', requestId, user });
+      };
+
       const handleServerMessage = (message: any) => {
         if (message.type === 'server-ready') {
           this.webServerRunning = true;
@@ -128,14 +146,21 @@ export class WebServerService {
           this.webServerStarting = false;
           resolve({ success: false, message: message.error, port: message.port });
         } else if (message.type === 'messaging-event') {
-          // Forward to main process handlers, then respond to API process with cid
+          // Forward to main process handlers, then respond to API process with cid.
+          // `user` is the account the child resolved from the session cookie; it is what
+          // MessagingService.emit checks permissions against.
           messagingService.emit(message.channel, message.payload, {
             type: 'api-process',
             cid: message.cid, // Pass cid for exclusion logic
+            user: message.user || null,
+            authEnabled: message.authEnabled !== false,
             send: (channel: string, data: any) => {
               this.apiProcess?.send({ type: 'messaging-response', channel, data, cid: message.cid });
             }
           });
+        } else if (message.type === 'auth-verify') {
+          // The child owns sessions but not the database, so credential checks come here.
+          verifyCredentialsForChild(message);
         }
       };
 

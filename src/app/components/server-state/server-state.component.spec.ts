@@ -48,7 +48,7 @@ describe('ServerStateComponent', () => {
 
   it('should handle statusClasses for all states', () => {
     const states = ['running', 'stopped', 'starting', 'stopping', 'error', undefined];
-    const expected = ['status-running', 'status-stopped', 'status-starting', 'status-stopping', 'status-error', 'status-unknown'];
+    const expected = ['status-running', 'status-stopped', 'status-starting', 'status-stopping', 'status-error', 'status-stopped'];
     states.forEach((state, i) => {
       component.serverInstance = { state };
       const classes = component.statusClasses;
@@ -58,7 +58,7 @@ describe('ServerStateComponent', () => {
 
   it('should handle edge cases for computed properties', () => {
     component.serverInstance = undefined;
-    expect(component.statusText).toBe('Unknown');
+    expect(component.statusText).toBe('Offline');
     expect(component.currentPlayers).toBe(0);
     expect(component.maxPlayers).toBe(70);
     expect(component.serverMessage).toBeNull();
@@ -97,12 +97,11 @@ describe('ServerStateComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should emit visibilityToggled on toggleVisibility', () => {
-    spyOn(component.visibilityToggled, 'emit');
-    component.isVisible = true;
-    component.toggleVisibility();
-    expect(component.isVisible).toBeFalse();
-    expect(component.visibilityToggled.emit).toHaveBeenCalledWith(false);
+  it('always shows its output, with no header to fold it away', () => {
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('.console-log-container')).toBeTruthy();
+    expect(el.querySelector('.collapsible-header')).toBeNull();
   });
 
   it('should emit startServer on onStartServer', () => {
@@ -131,11 +130,14 @@ describe('ServerStateComponent', () => {
 
   it('should compute statusText and statusClasses', () => {
     component.serverInstance = { state: 'running' };
-    expect(component.statusText).toBe('Running');
+    expect(component.statusText).toBe('Online');
     expect(component.statusClasses['status-running']).toBeTrue();
     component.serverInstance = { state: 'stopped' };
-    expect(component.statusText).toBe('Stopped');
+    expect(component.statusText).toBe('Offline');
     expect(component.statusClasses['status-stopped']).toBeTrue();
+    component.serverInstance = { state: 'Preparing to start' };
+    expect(component.statusText).toBe('Queued');
+    expect(component.statusClasses['status-starting']).toBeTrue();
   });
 
   it('should compute currentPlayers and maxPlayers', () => {

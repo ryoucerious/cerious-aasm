@@ -36,10 +36,21 @@ export class ServerManagementService {
           memory = getProcessMemoryUsage(process.pid);
         }
 
+        // Uptime and CPU only make sense while the process is alive; null otherwise so the
+        // UI can show a dash rather than a stale value.
+        const startedAt = currentState === 'running' && process
+          ? (typeof processService.getProcessStartTime === 'function' ? processService.getProcessStartTime(instance.id) : null)
+          : null;
+        const cpu = currentState === 'running'
+          ? (typeof monitoringService.getLatestCpuPercent === 'function' ? monitoringService.getLatestCpuPercent(instance.id) : null)
+          : null;
+
         return {
           ...instance,
           state: currentState,
           memory,
+          cpu,
+          startedAt,
           players: monitoringService.getLatestPlayerCount(instance.id)
         };
       });

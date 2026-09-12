@@ -298,3 +298,28 @@ describe('Platform Utils', () => {
     });
   });
 });
+describe('Platform Utils - CPU sampling helpers', () => {
+  const { cpuPercentFromSamples, processCpuPercent } = require('./platform.utils');
+
+  it('cpuPercentFromSamples derives busy percentage from two aggregate samples', () => {
+    expect(cpuPercentFromSamples({ idle: 100, total: 200 }, { idle: 150, total: 300 })).toBe(50);
+    expect(cpuPercentFromSamples({ idle: 0, total: 0 }, { idle: 0, total: 100 })).toBe(100);
+  });
+
+  it('cpuPercentFromSamples returns 0 when no time elapsed', () => {
+    expect(cpuPercentFromSamples({ idle: 5, total: 10 }, { idle: 5, total: 10 })).toBe(0);
+  });
+
+  it('processCpuPercent scales the delta by elapsed time and core count', () => {
+    // 2 CPU-seconds over 10 wall seconds on 4 cores = 5%
+    expect(processCpuPercent(10, 12, 10_000, 4)).toBe(5);
+    // Saturating one core on a 2-core box = 50%
+    expect(processCpuPercent(0, 10, 10_000, 2)).toBe(50);
+  });
+
+  it('processCpuPercent clamps to 0-100 and handles zero elapsed', () => {
+    expect(processCpuPercent(5, 1, 1000, 1)).toBe(0);
+    expect(processCpuPercent(0, 1000, 1000, 1)).toBe(100);
+    expect(processCpuPercent(0, 1, 0, 1)).toBe(0);
+  });
+});

@@ -79,6 +79,7 @@ jest.mock('fs', () => ({
   statSync: jest.fn(),
   unlinkSync: jest.fn(),
   rmdirSync: jest.fn(),
+  rmSync: jest.fn(),
   renameSync: jest.fn(),
   copyFileSync: jest.fn(),
   // Async versions

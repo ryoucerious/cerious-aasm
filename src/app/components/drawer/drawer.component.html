@@ -1,0 +1,19 @@
+<div class="drawer-backdrop" *ngIf="open" (click)="close()"></div>
+
+<aside class="drawer" [class.open]="open" [class.narrow]="size === 'narrow'"
+       role="dialog" aria-modal="true" [attr.aria-label]="title || 'Panel'" [attr.aria-hidden]="!open">
+  <header class="drawer-header">
+    <span class="drawer-header-icon material-icons" *ngIf="icon">{{ icon }}</span>
+    <div class="drawer-header-text">
+      <h2 class="drawer-title">{{ title }}</h2>
+      <p class="drawer-subtitle" *ngIf="subtitle">{{ subtitle }}</p>
+    </div>
+    <button type="button" class="drawer-close" (click)="close()" aria-label="Close">
+      <span class="material-icons">close</span>
+    </button>
+  </header>
+
+  <div class="drawer-body" *ngIf="open">
+    <ng-content></ng-content>
+  </div>
+</aside>
