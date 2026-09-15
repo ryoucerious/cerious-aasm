@@ -98,6 +98,19 @@ const INI_KEY_TO_CONFIG: { [iniKeyLower: string]: string } = {
   'supplycratelootqualitymultiplier': 'supplyCrateLootQualityMultiplier',
   'fishinglootqualitymultiplier': 'fishingLootQualityMultiplier',
   'dinocountmultiplier': 'dinoCountMultiplier',
+  // Correct ARK spellings for keys the app previously wrote under other names
+  'playerdamagemultiplier': 'playerCharacterDamageMultiplier',
+  'playerresistancemultiplier': 'playerCharacterResistanceMultiplier',
+  'dinodamagemultiplier': 'dinoCharacterDamageMultiplier',
+  'dinoresistancemultiplier': 'dinoCharacterResistanceMultiplier',
+  'disableweatherfog': 'bDisableWeatherFog',
+  'disablestructuredecaypve': 'bDisableStructureDecayPvE',
+  'enableextrastructurepreventionvolumes': 'bEnableExtraStructurePreventionVolumes',
+  'themaxstructuresinrange': 'maxStructuresInRange',
+  'maxstructuresinrange': 'maxStructuresInRange',
+  'ballowcustomrecipes': 'allowCustomRecipes',
+  'preventmateboost': 'preventMateBoost',
+  'forceallowcaveflyers': 'forceAllowCaveFlyers',
 
   // GameUserSettings.ini [SessionSettings]
   'sessionname': 'sessionName',

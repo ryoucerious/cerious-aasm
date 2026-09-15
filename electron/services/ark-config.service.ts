@@ -24,6 +24,13 @@ export class ArkConfigService {
    * 
    * Each entry maps a config property (camelCase) to its correct ARK INI key (PascalCase).
    * Organized by destination file and section.
+   *
+   * File placement matters: ARK only reads a key from the file/section it belongs to.
+   * [ServerSettings] keys live in GameUserSettings.ini; ShooterGameMode properties
+   * (breeding, crops, spoiling, custom recipes, the b* PvE/creative flags, ...) live in
+   * Game.ini [/script/shootergame.shootergamemode]. A key written to the wrong file is
+   * silently ignored, which is how CropGrowthSpeedMultiplier ended up doing nothing.
+   * Placement follows https://ark.wiki.gg/wiki/Server_configuration.
    */
   private readonly asaSettingsMapping: SettingsMapping[] = [
     // =====================================================
@@ -38,24 +45,24 @@ export class ArkConfigService {
     { key: "difficultyOffset",                         iniKey: "DifficultyOffset",                           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "tamingSpeedMultiplier",                    iniKey: "TamingSpeedMultiplier",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "harvestAmountMultiplier",                  iniKey: "HarvestAmountMultiplier",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "dinoHarvestingDamageMultiplier",           iniKey: "DinoHarvestingDamageMultiplier",             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "playerHarvestingDamageMultiplier",         iniKey: "PlayerHarvestingDamageMultiplier",           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "dinoHarvestingDamageMultiplier",           iniKey: "DinoHarvestingDamageMultiplier",             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "playerHarvestingDamageMultiplier",         iniKey: "PlayerHarvestingDamageMultiplier",           destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "resourcesRespawnPeriodMultiplier",         iniKey: "ResourcesRespawnPeriodMultiplier",           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "cropGrowthSpeedMultiplier",                iniKey: "CropGrowthSpeedMultiplier",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "cropDecaySpeedMultiplier",                 iniKey: "CropDecaySpeedMultiplier",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "cropGrowthSpeedMultiplier",                iniKey: "CropGrowthSpeedMultiplier",                  destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "cropDecaySpeedMultiplier",                 iniKey: "CropDecaySpeedMultiplier",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "playerCharacterFoodDrainMultiplier",       iniKey: "PlayerCharacterFoodDrainMultiplier",         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "playerCharacterWaterDrainMultiplier",      iniKey: "PlayerCharacterWaterDrainMultiplier",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "playerCharacterStaminaDrainMultiplier",    iniKey: "PlayerCharacterStaminaDrainMultiplier",      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "playerCharacterHealthRecoveryMultiplier",  iniKey: "PlayerCharacterHealthRecoveryMultiplier",    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "playerCharacterDamageMultiplier",          iniKey: "PlayerCharacterDamageMultiplier",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "playerCharacterResistanceMultiplier",      iniKey: "PlayerCharacterResistanceMultiplier",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "playerCharacterDamageMultiplier",          iniKey: "PlayerDamageMultiplier",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "playerCharacterResistanceMultiplier",      iniKey: "PlayerResistanceMultiplier",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dinoCharacterFoodDrainMultiplier",         iniKey: "DinoCharacterFoodDrainMultiplier",           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dinoCharacterStaminaDrainMultiplier",      iniKey: "DinoCharacterStaminaDrainMultiplier",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dinoCharacterHealthRecoveryMultiplier",    iniKey: "DinoCharacterHealthRecoveryMultiplier",      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "dinoCharacterDamageMultiplier",            iniKey: "DinoCharacterDamageMultiplier",              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "dinoCharacterResistanceMultiplier",        iniKey: "DinoCharacterResistanceMultiplier",          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "tamedDinoCharacterFoodDrainMultiplier",    iniKey: "TamedDinoCharacterFoodDrainMultiplier",      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "tamedDinoTorporDrainMultiplier",           iniKey: "TamedDinoTorporDrainMultiplier",             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "dinoCharacterDamageMultiplier",            iniKey: "DinoDamageMultiplier",              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "dinoCharacterResistanceMultiplier",        iniKey: "DinoResistanceMultiplier",          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "tamedDinoCharacterFoodDrainMultiplier",    iniKey: "TamedDinoCharacterFoodDrainMultiplier",      destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "tamedDinoTorporDrainMultiplier",           iniKey: "TamedDinoTorporDrainMultiplier",             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "dayCycleSpeedScale",                       iniKey: "DayCycleSpeedScale",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dayTimeSpeedScale",                        iniKey: "DayTimeSpeedScale",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "nightTimeSpeedScale",                      iniKey: "NightTimeSpeedScale",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -63,20 +70,19 @@ export class ArkConfigService {
     { key: "structureResistanceMultiplier",            iniKey: "StructureResistanceMultiplier",              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "overrideStructurePlatformPrevention",      iniKey: "OverrideStructurePlatformPrevention",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "forceAllStructureLocking",                 iniKey: "ForceAllStructureLocking",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bPvE",                                     iniKey: "bPvE",                                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bPvEDisableFriendlyFire",                  iniKey: "bPvEDisableFriendlyFire",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bPvEAllowTribeWar",                        iniKey: "bPvEAllowTribeWar",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bPvEAllowTribeWarCancel",                  iniKey: "bPvEAllowTribeWarCancel",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bPvEDisableFriendlyFire",                  iniKey: "bPvEDisableFriendlyFire",                    destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bPvEAllowTribeWar",                        iniKey: "bPvEAllowTribeWar",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bPvEAllowTribeWarCancel",                  iniKey: "bPvEAllowTribeWarCancel",                    destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "allowThirdPersonPlayer",                   iniKey: "AllowThirdPersonPlayer",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "disableImprintDinoBuff",                   iniKey: "DisableImprintDinoBuff",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowAnyoneBabyImprintCuddle",             iniKey: "AllowAnyoneBabyImprintCuddle",               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "useOptimizedHarvestingHealth",             iniKey: "UseOptimizedHarvestingHealth",               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowRaidDinoFeeding",                     iniKey: "AllowRaidDinoFeeding",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bDisableFriendlyFire",                     iniKey: "bDisableFriendlyFire",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bIncreasePvPRespawnInterval",              iniKey: "bIncreasePvPRespawnInterval",                destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "allowCustomRecipes",                       iniKey: "AllowCustomRecipes",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "customRecipeEffectivenessMultiplier",      iniKey: "CustomRecipeEffectivenessMultiplier",        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "customRecipeSkillMultiplier",              iniKey: "CustomRecipeSkillMultiplier",                destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bDisableFriendlyFire",                     iniKey: "bDisableFriendlyFire",                       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bIncreasePvPRespawnInterval",              iniKey: "bIncreasePvPRespawnInterval",                destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "allowCustomRecipes",                       iniKey: "bAllowCustomRecipes",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "customRecipeEffectivenessMultiplier",      iniKey: "CustomRecipeEffectivenessMultiplier",        destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "customRecipeSkillMultiplier",              iniKey: "CustomRecipeSkillMultiplier",                destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "autoSavePeriodMinutes",                    iniKey: "AutoSavePeriodMinutes",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "showMapPlayerLocation",                    iniKey: "ShowMapPlayerLocation",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "noTributeDownloads",                       iniKey: "NoTributeDownloads",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -91,11 +97,11 @@ export class ArkConfigService {
     { key: "allowCaveBuildingPvE",                     iniKey: "AllowCaveBuildingPvE",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "preventOfflinePvP",                        iniKey: "PreventOfflinePvP",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "preventOfflinePvPInterval",                iniKey: "PreventOfflinePvPInterval",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bShowCreativeMode",                        iniKey: "bShowCreativeMode",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bAllowUnlimitedRespecs",                   iniKey: "bAllowUnlimitedRespecs",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bAllowPlatformSaddleMultiFloors",          iniKey: "bAllowPlatformSaddleMultiFloors",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bUseCorpseLocator",                        iniKey: "bUseCorpseLocator",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bUseSingleplayerSettings",                 iniKey: "bUseSingleplayerSettings",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bShowCreativeMode",                        iniKey: "bShowCreativeMode",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bAllowUnlimitedRespecs",                   iniKey: "bAllowUnlimitedRespecs",                    destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bAllowPlatformSaddleMultiFloors",          iniKey: "bAllowPlatformSaddleMultiFloors",            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bUseCorpseLocator",                        iniKey: "bUseCorpseLocator",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bUseSingleplayerSettings",                 iniKey: "bUseSingleplayerSettings",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "useExclusiveList",                         iniKey: "UseExclusiveList",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverCrosshair",                          iniKey: "ServerCrosshair",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "showFloatingDamageText",                   iniKey: "ShowFloatingDamageText",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -108,15 +114,13 @@ export class ArkConfigService {
     { key: "preventJoinEvents",                        iniKey: "PreventJoinEvents",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "preventLeaveEvents",                       iniKey: "PreventLeaveEvents",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "autoDestroyOldStructuresMultiplier",       iniKey: "AutoDestroyOldStructuresMultiplier",         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bDisableStructureDecayPvE",                iniKey: "bDisableStructureDecayPvE",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bDisableStructureDecayPvE",                iniKey: "DisableStructureDecayPvE",                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "pveStructureDecayPeriodMultiplier",        iniKey: "PvEStructureDecayPeriodMultiplier",          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "pveStructureDecayDelay",                   iniKey: "PvEStructureDecayDelay",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bDisableLootCrates",                       iniKey: "bDisableLootCrates",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bDisableWeatherFog",                       iniKey: "bDisableWeatherFog",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "bEnableExtraStructurePreventionVolumes",   iniKey: "bEnableExtraStructurePreventionVolumes",     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bDisableLootCrates",                       iniKey: "bDisableLootCrates",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "bDisableWeatherFog",                       iniKey: "DisableWeatherFog",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "bEnableExtraStructurePreventionVolumes",   iniKey: "EnableExtraStructurePreventionVolumes",     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "bAllowPlatformSaddleStacking",             iniKey: "bAllowPlatformSaddleStacking",               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "supplyCrateLootQualityMultiplier",         iniKey: "SupplyCrateLootQualityMultiplier",           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "fishingLootQualityMultiplier",             iniKey: "FishingLootQualityMultiplier",               destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "dinoCountMultiplier",                      iniKey: "DinoCountMultiplier",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "perPlatformMaxStructuresMultiplier",       iniKey: "PerPlatformMaxStructuresMultiplier",         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "platformSaddleBuildAreaBoundsMultiplier",   iniKey: "PlatformSaddleBuildAreaBoundsMultiplier",    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -124,7 +128,7 @@ export class ArkConfigService {
     { key: "maxGateFrameOnSaddles",                    iniKey: "MaxGateFrameOnSaddles",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "structurePreventResourceRadiusMultiplier",  iniKey: "StructurePreventResourceRadiusMultiplier",   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "itemStackSizeMultiplier",                  iniKey: "ItemStackSizeMultiplier",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-    { key: "maxStructuresInRange",                     iniKey: "MaxStructuresInRange",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "maxStructuresInRange",                     iniKey: "TheMaxStructuresInRange",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "disableCryopodFridgeRequirement",          iniKey: "DisableCryopodFridgeRequirement",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "disableCryopodEnemyCheck",                 iniKey: "DisableCryopodEnemyCheck",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowCryoFridgeOnSaddle",                  iniKey: "AllowCryoFridgeOnSaddle",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -148,29 +152,28 @@ export class ArkConfigService {
     { key: "bDisableStructurePlacementCollision",      iniKey: "bDisableStructurePlacementCollision",        destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bDisableGenesis",                          iniKey: "bDisableGenesis",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bAutoUnlockAllEngrams",                    iniKey: "bAutoUnlockAllEngrams",                     destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "globalVoiceChat",                          iniKey: "GlobalVoiceChat",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "proximityChat",                            iniKey: "ProximityChat",                              destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "serverPVE",                                iniKey: "ServerPVE",                                  destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "serverHardcore",                           iniKey: "ServerHardcore",                             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "serverForceNoHUD",                         iniKey: "ServerForceNoHUD",                           destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "mapPlayerLocation",                        iniKey: "MapPlayerLocation",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "enablePVPGamma",                           iniKey: "EnablePVPGamma",                             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "disablePvEGamma",                          iniKey: "DisablePvEGamma",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "allowFlyerCarryPvE",                       iniKey: "AllowFlyerCarryPvE",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "globalVoiceChat",                          iniKey: "GlobalVoiceChat",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "proximityChat",                            iniKey: "ProximityChat",                              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "serverPVE",                                iniKey: "ServerPVE",                                  destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "serverHardcore",                           iniKey: "ServerHardcore",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "serverForceNoHUD",                         iniKey: "ServerForceNoHUD",                           destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "mapPlayerLocation",                        iniKey: "MapPlayerLocation",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "enablePVPGamma",                           iniKey: "EnablePVPGamma",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "disablePvEGamma",                          iniKey: "DisablePvEGamma",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "allowFlyerCarryPvE",                       iniKey: "AllowFlyerCarryPvE",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "passiveDefensesDamageRiderlessDinos",      iniKey: "bPassiveDefensesDamageRiderlessDinos",       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "maxTamedDinos",                            iniKey: "MaxTamedDinos",                              destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "maxTamedDinos",                            iniKey: "MaxTamedDinos",                              destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "overrideMaxExperiencePointsPlayer",        iniKey: "OverrideMaxExperiencePointsPlayer",         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "overrideMaxExperiencePointsDino",          iniKey: "OverrideMaxExperiencePointsDino",            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "maxNumberOfPlayersInTribe",                iniKey: "MaxNumberOfPlayersInTribe",                  destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventDownloadSurvivors",                 iniKey: "PreventDownloadSurvivors",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventDownloadItems",                     iniKey: "PreventDownloadItems",                       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventDownloadDinos",                     iniKey: "PreventDownloadDinos",                       destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventUploadSurvivors",                   iniKey: "PreventUploadSurvivors",                     destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventUploadItems",                       iniKey: "PreventUploadItems",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventUploadDinos",                       iniKey: "PreventUploadDinos",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "crossArkAllowForeignDinoDownloads",        iniKey: "CrossArkAllowForeignDinoDownloads",          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "preventDownloadSurvivors",                 iniKey: "PreventDownloadSurvivors",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "preventDownloadItems",                     iniKey: "PreventDownloadItems",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "preventDownloadDinos",                     iniKey: "PreventDownloadDinos",                       destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "preventUploadSurvivors",                   iniKey: "PreventUploadSurvivors",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "preventUploadItems",                       iniKey: "PreventUploadItems",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "preventUploadDinos",                       iniKey: "PreventUploadDinos",                         destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "crossArkAllowForeignDinoDownloads",        iniKey: "CrossARKAllowForeignDinoDownloads",          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "disableImprinting",                        iniKey: "DisableImprinting",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "allowAnyoneBabyImprintCuddle",             iniKey: "AllowAnyoneBabyImprintCuddle",               destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "babyImprintingStatScaleMultiplier",        iniKey: "BabyImprintingStatScaleMultiplier",          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "babyImprintAmountMultiplier",              iniKey: "BabyImprintAmountMultiplier",                destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "babyCuddleIntervalMultiplier",             iniKey: "BabyCuddleIntervalMultiplier",               destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
@@ -178,8 +181,8 @@ export class ArkConfigService {
     { key: "babyCuddleLoseImprintQualitySpeedMultiplier", iniKey: "BabyCuddleLoseImprintQualitySpeedMultiplier", destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "babyFoodConsumptionSpeedMultiplier",       iniKey: "BabyFoodConsumptionSpeedMultiplier",         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "dinoTurretDamageMultiplier",               iniKey: "DinoTurretDamageMultiplier",                 destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "preventMateBoost",                         iniKey: "bPreventMateBoost",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "enableExtraStructurePreventionVolumes",    iniKey: "bEnableExtraStructurePreventionVolumes",     destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+    { key: "preventMateBoost",                         iniKey: "PreventMateBoost",                          destination: "GameUserSettings.ini", section: "[ServerSettings]" },
+    { key: "enableExtraStructurePreventionVolumes",    iniKey: "EnableExtraStructurePreventionVolumes",     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "eggHatchSpeedMultiplier",                  iniKey: "EggHatchSpeedMultiplier",                    destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "babyMatureSpeedMultiplier",                iniKey: "BabyMatureSpeedMultiplier",                  destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "matingIntervalMultiplier",                 iniKey: "MatingIntervalMultiplier",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
@@ -192,7 +195,6 @@ export class ArkConfigService {
     { key: "fuelConsumptionIntervalMultiplier",        iniKey: "FuelConsumptionIntervalMultiplier",          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bAllowFlyerSpeedLeveling",                 iniKey: "bAllowFlyerSpeedLeveling",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bAllowSpeedLeveling",                      iniKey: "bAllowSpeedLeveling",                        destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "forceAllowCaveFlyers",                     iniKey: "bForceAllowCaveFlyers",                      destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bDisableDinoRiding",                       iniKey: "bDisableDinoRiding",                         destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "onlyAllowSpecifiedEngrams",                iniKey: "bOnlyAllowSpecifiedEngrams",                 destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "passiveTameIntervalMultiplier",            iniKey: "PassiveTameIntervalMultiplier",              destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
@@ -201,6 +203,18 @@ export class ArkConfigService {
     { key: "bUseDinoLevelToCreateCharacter",           iniKey: "bUseDinoLevelToCreateCharacter",             destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "supplyCrateLootQualityMultiplier",         iniKey: "SupplyCrateLootQualityMultiplier",           destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "fishingLootQualityMultiplier",             iniKey: "FishingLootQualityMultiplier",               destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
+  ];
+
+  /**
+   * INI keys this app used to write under a wrong name or file, or that are not ARK keys at all.
+   * They are treated as managed so stale lines from earlier versions are dropped on rewrite
+   * instead of being preserved as "custom" lines forever.
+   */
+  private readonly legacyManagedIniKeys: string[] = [
+    'PlayerCharacterDamageMultiplier', 'PlayerCharacterResistanceMultiplier',
+    'DinoCharacterDamageMultiplier', 'DinoCharacterResistanceMultiplier',
+    'bDisableWeatherFog', 'bDisableStructureDecayPvE', 'bEnableExtraStructurePreventionVolumes',
+    'MaxStructuresInRange', 'bForceAllowCaveFlyers', 'bPreventMateBoost', 'AllowCustomRecipes', 'bPvE',
   ];
 
   /**
@@ -254,7 +268,26 @@ export class ArkConfigService {
         }
       });
 
-      // Write RCONEnabled=True when an RCON port is configured.
+      // bPvE ("PvE Mode") is not an ARK INI key; ARK reads ServerPVE. Honour it the same way
+    // the launch args do, without duplicating a ServerPVE line when serverPVE already set it.
+    const toBool = (val: any) => val === true || val === 'true';
+    if (toBool(config.bPvE) && !toBool(config.serverPVE)) {
+      if (!iniFiles['GameUserSettings.ini']) {
+        iniFiles['GameUserSettings.ini'] = {};
+      }
+      if (!iniFiles['GameUserSettings.ini']['[ServerSettings]']) {
+        iniFiles['GameUserSettings.ini']['[ServerSettings]'] = [];
+      }
+      const serverSettings = iniFiles['GameUserSettings.ini']['[ServerSettings]'];
+      const idx = serverSettings.findIndex(l => l.toLowerCase().startsWith('serverpve='));
+      if (idx >= 0) {
+        serverSettings[idx] = 'ServerPVE=True';
+      } else {
+        serverSettings.push('ServerPVE=True');
+      }
+    }
+
+    // Write RCONEnabled=True when an RCON port is configured.
       // Without this, ARK derives RCONEnabled from the command-line ?-params and
       // concatenates it onto the ServerAdminPassword line in the INI file.
       if (config.rconPort) {
@@ -456,6 +489,11 @@ export class ArkConfigService {
     // All keys from the settings mapping
     for (const m of this.asaSettingsMapping) {
       keys.add(m.iniKey.toLowerCase());
+    }
+
+    // Keys written by earlier versions under a wrong name/file: never preserve as custom
+    for (const k of this.legacyManagedIniKeys) {
+      keys.add(k.toLowerCase());
     }
 
     // Stat multiplier prefixes — match keys like PerLevelStatsMultiplier_Player[0]

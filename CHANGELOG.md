@@ -2,6 +2,15 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.1.1] - 2026-09-15
+
+### Bug Fixes
+
+- **Crop Growth Speed and Other Rates Were Never Applied**: `CropGrowthSpeedMultiplier`, `CropDecaySpeedMultiplier`, `DinoHarvestingDamageMultiplier`, `PlayerHarvestingDamageMultiplier`, tamed-creature food/torpor drain, custom recipe settings and the `b*` PvE, creative, respec, corpse-locator and singleplayer-settings toggles were written to `GameUserSettings.ini`, where ARK ignores them. They now go to `Game.ini [/script/shootergame.shootergamemode]`. In the other direction, Server PvE, Hardcore, No HUD, voice/proximity chat, gamma, flyer carry, max tames, mate boost and the transfer prevention flags were misfiled in `Game.ini` and now go to `GameUserSettings.ini [ServerSettings]`.
+- **Misspelled INI Keys**: Player/Dino Damage and Resistance were written as `PlayerCharacterDamageMultiplier` etc.; ARK reads `PlayerDamageMultiplier`, `PlayerResistanceMultiplier`, `DinoDamageMultiplier` and `DinoResistanceMultiplier`. Disable Weather Fog, Disable Structure Decay PvE and Extra Structure Prevention Volumes lost their bogus `b` prefix, and Max Structures In Range now writes `TheMaxStructuresInRange`. Stale lines under the old names are removed from existing INI files on the next start.
+- **Flyers Ridable In Caves**: this is a launch flag, not an INI key, so the server is now started with `-ForceAllowCaveFlyers` when it is on.
+- **PvE Mode Toggle**: `bPvE` is not an ARK key; it now writes `ServerPVE=True`, matching what the launch arguments already did.
+
 ## [1.1.0] - 2026-09-12
 
 A rebuilt interface and real accounts. The app opens on a Dashboard showing every server at

@@ -102,6 +102,8 @@ export function buildArkServerArgs(config: any): string[] {
   // Add standard flags
   if (isFalse(config.battleEye)) args.push('-NoBattlEye');
   if (isTrue(config.useExclusiveList)) args.push('-exclusivejoin');
+  // ARK only honours this as a launch flag; it is not a GameUserSettings/Game.ini key.
+  if (isTrue(config.forceAllowCaveFlyers)) args.push('-ForceAllowCaveFlyers');
   
   // Wine/Proton compatibility flags (required for ARK Server v83.21+ on Linux)
   // These Unreal Engine flags prevent crashes and hangs when running under Wine:
