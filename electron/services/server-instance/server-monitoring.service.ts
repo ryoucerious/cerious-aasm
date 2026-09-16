@@ -162,7 +162,7 @@ export class ServerMonitoringService {
         const process = serverProcessService.getServerProcess(instanceId);
 
         if (process && process.pid) {
-          const memoryUsage = getProcessMemoryUsage(process.pid);
+          const memoryUsage = await getProcessMemoryUsage(process.pid);
           if (memoryUsage !== null) {
             callback(instanceId, memoryUsage);
           }
@@ -195,13 +195,13 @@ export class ServerMonitoringService {
   startCpuPolling(instanceId: string, callback: (instanceId: string, cpuPercent: number) => void, intervalMs = 10000): void {
     this.stopCpuPolling(instanceId);
 
-    this.cpuPollingIntervals[instanceId] = setInterval(() => {
+    this.cpuPollingIntervals[instanceId] = setInterval(async () => {
       try {
         const { serverProcessService } = require('./server-process.service');
         const process = serverProcessService.getServerProcess(instanceId);
         if (!process || !process.pid) return;
 
-        const seconds = getProcessCpuSeconds(process.pid);
+        const seconds = await getProcessCpuSeconds(process.pid);
         if (seconds === null) return;
 
         const now = Date.now();

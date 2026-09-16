@@ -13,6 +13,10 @@ import {
   getTotalMemory,
   getFreeMemory,
   getProcessMemoryUsage,
+  getProcessCpuSeconds,
+  parseTasklistVerbose,
+  parseDirFreeBytes,
+  clearProcessStatsCache,
   getCpuInfo,
   getUptime,
   getNetworkInterfaces,
@@ -30,10 +34,26 @@ jest.mock('electron', () => ({
 
 // Mock child_process module
 jest.mock('child_process', () => ({
-  execSync: jest.fn()
+  execSync: jest.fn(),
+  execFile: jest.fn()
 }));
 
 const mockExecSync = require('child_process').execSync as jest.Mock;
+const mockExecFile = require('child_process').execFile as jest.Mock;
+
+/** Make the next execFile call succeed with `stdout`. */
+function mockExecFileStdout(stdout: string): void {
+  mockExecFile.mockImplementation((_file: string, _args: string[], _options: object, callback: any) =>
+    callback(null, stdout, '')
+  );
+}
+
+/** Make the next execFile call fail. */
+function mockExecFileFailure(error: Error): void {
+  mockExecFile.mockImplementation((_file: string, _args: string[], _options: object, callback: any) =>
+    callback(error)
+  );
+}
 
 const mockOs = os as jest.Mocked<typeof os>;
 const mockPath = path as jest.Mocked<typeof path>;
@@ -241,9 +261,69 @@ describe('Platform Utils', () => {
     });
   });
 
+  describe('parseDirFreeBytes', () => {
+    // Real `dir /-c C:\` tail, which is what every disk refresh parses once capacity is known.
+    const englishOutput = [
+      '09/07/2026  01:27 PM    <DIR>          XboxGames',
+      '               3 File(s)         190744 bytes',
+      '              13 Dir(s)    236041076736 bytes free'
+    ].join('\r\n');
+
+    it('should read free bytes from dir output', () => {
+      expect(parseDirFreeBytes(englishOutput)).toBe(236041076736);
+    });
+
+    it('should work on localised Windows, where only the trailing text is translated', () => {
+      const german = '              13 Verzeichnis(se), 236041076736 Bytes frei';
+      expect(parseDirFreeBytes(german)).toBe(236041076736);
+    });
+
+    it('should ignore trailing blank lines', () => {
+      expect(parseDirFreeBytes(englishOutput + '\r\n\r\n')).toBe(236041076736);
+    });
+
+    it('should return null when dir reported an error instead of a listing', () => {
+      expect(parseDirFreeBytes('The system cannot find the path specified.')).toBeNull();
+    });
+
+    it('should return null for empty output', () => {
+      expect(parseDirFreeBytes('   ')).toBeNull();
+    });
+  });
+
+  describe('parseTasklistVerbose', () => {
+    const row = '"ShooterGameServer.exe","1234","Console","1","15,234 K","Running","HOST\\user","0:02:03","N/A"';
+
+    it('should read memory and CPU time from a verbose row', () => {
+      expect(parseTasklistVerbose(row)).toEqual({ memoryMb: 15, cpuSeconds: 123 });
+    });
+
+    it('should tolerate a localised thousands separator in the memory field', () => {
+      const german = '"ShooterGameServer.exe","1234","Console","1","15.234 K","Running","HOST\\user","0:00:00","N/A"';
+      expect(parseTasklistVerbose(german)?.memoryMb).toBe(15);
+    });
+
+    it('should accumulate CPU hours past 24', () => {
+      const longRunning = '"ShooterGameServer.exe","1234","Console","1","1 K","Running","HOST\\user","30:00:01","N/A"';
+      expect(parseTasklistVerbose(longRunning)?.cpuSeconds).toBe(108001);
+    });
+
+    it('should return null when the process is gone', () => {
+      expect(parseTasklistVerbose('INFO: No tasks are running which match the specified criteria.')).toBeNull();
+    });
+
+    it('should return null for a row missing the verbose columns', () => {
+      expect(parseTasklistVerbose('"ShooterGameServer.exe","1234","Console","1","15,234 K"')).toBeNull();
+    });
+  });
+
   describe('getProcessMemoryUsage', () => {
+    const verboseRow = '"ShooterGameServer.exe","1234","Console","1","15,234 K","Running","HOST\\user","0:02:03","N/A"';
+
     beforeEach(() => {
       mockExecSync.mockClear();
+      mockExecFile.mockClear();
+      clearProcessStatsCache();
     });
 
     describe('on Windows', () => {
@@ -251,28 +331,44 @@ describe('Platform Utils', () => {
         (process as any).platform = 'win32';
       });
 
-      it('should return memory usage in MB for valid Windows tasklist output', () => {
-        mockExecSync.mockReturnValue('"ShooterGameServer.exe","1234","Console","1","15,234 K"');
+      it('should return memory usage in MB for valid Windows tasklist output', async () => {
+        mockExecFileStdout(verboseRow);
 
-        const result = getProcessMemoryUsage(1234);
-        expect(result).toBe(15); // 15,234 KB = 15 MB (rounded)
-        expect(mockExecSync).toHaveBeenCalledWith('tasklist /FI "PID eq 1234" /FO CSV /NH', { encoding: 'utf8' });
+        await expect(getProcessMemoryUsage(1234)).resolves.toBe(15); // 15,234 KB = 15 MB (rounded)
+        expect(mockExecFile).toHaveBeenCalledWith(
+          'tasklist',
+          ['/FI', 'PID eq 1234', '/FO', 'CSV', '/NH', '/V'],
+          expect.objectContaining({ windowsHide: true }),
+          expect.any(Function)
+        );
       });
 
-      it('should return null when process not found', () => {
-        mockExecSync.mockReturnValue('INFO: No tasks are running which match the specified criteria.');
+      it('should not shell out to PowerShell', async () => {
+        mockExecFileStdout(verboseRow);
 
-        const result = getProcessMemoryUsage(9999);
-        expect(result).toBeNull();
+        await getProcessMemoryUsage(1234);
+        expect(mockExecFile.mock.calls[0][0]).toBe('tasklist');
+        expect(mockExecSync).not.toHaveBeenCalled();
       });
 
-      it('should return null when execSync throws an error', () => {
-        mockExecSync.mockImplementation(() => {
-          throw new Error('Command failed');
-        });
+      it('should reuse one lookup for the memory and CPU pollers', async () => {
+        mockExecFileStdout(verboseRow);
 
-        const result = getProcessMemoryUsage(1234);
-        expect(result).toBeNull();
+        await expect(getProcessMemoryUsage(1234)).resolves.toBe(15);
+        await expect(getProcessCpuSeconds(1234)).resolves.toBe(123);
+        expect(mockExecFile).toHaveBeenCalledTimes(1);
+      });
+
+      it('should return null when process not found', async () => {
+        mockExecFileStdout('INFO: No tasks are running which match the specified criteria.');
+
+        await expect(getProcessMemoryUsage(9999)).resolves.toBeNull();
+      });
+
+      it('should return null when the command fails', async () => {
+        mockExecFileFailure(new Error('Command failed'));
+
+        await expect(getProcessMemoryUsage(1234)).resolves.toBeNull();
       });
     });
 
@@ -281,19 +377,17 @@ describe('Platform Utils', () => {
         (process as any).platform = 'linux';
       });
 
-      it('should return null for Linux (memory monitoring not supported)', () => {
-        const result = getProcessMemoryUsage(1234);
-        expect(result).toBeNull();
+      it('should return null for Linux (memory monitoring not supported)', async () => {
+        await expect(getProcessMemoryUsage(1234)).resolves.toBeNull();
+        expect(mockExecFile).not.toHaveBeenCalled();
         expect(mockExecSync).not.toHaveBeenCalled();
       });
 
-      it('should return null when ps command fails', () => {
-        mockExecSync.mockImplementation(() => {
-          throw new Error('Command failed');
-        });
-
-        const result = getProcessMemoryUsage(1234);
-        expect(result).toBeNull();
+      it('should never invoke Windows tooling to read CPU time', async () => {
+        // /proc/1234/stat does not exist on the test host, so this exercises the failure path
+        // while proving no subprocess is spawned for it.
+        await expect(getProcessCpuSeconds(1234)).resolves.toBeNull();
+        expect(mockExecFile).not.toHaveBeenCalled();
       });
     });
   });

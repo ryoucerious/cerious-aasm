@@ -25,7 +25,10 @@ export class ServerManagementService {
       const processService = require('./server-process.service').serverProcessService;
       const monitoringService = require('./server-monitoring.service').serverMonitoringService;
 
-      const enhancedInstances = instances.map((instance: any) => {
+      // Memory is read off-thread now, so the instances are enhanced in parallel rather than in
+      // a synchronous map. Readings are briefly cached in platform.utils, so listing several
+      // running instances back to back does not spawn a lookup per instance per call.
+      const enhancedInstances = await Promise.all(instances.map(async (instance: any) => {
         const currentState = processService.getNormalizedInstanceState(instance.id);
         const process = processService.getServerProcess(instance.id);
         let memory: number | undefined;
@@ -33,7 +36,7 @@ export class ServerManagementService {
         // Get memory usage if server is running and we have a process
         if (currentState === 'running' && process && process.pid) {
           const { getProcessMemoryUsage } = require('../../utils/platform.utils');
-          memory = getProcessMemoryUsage(process.pid);
+          memory = (await getProcessMemoryUsage(process.pid)) ?? undefined;
         }
 
         // Uptime and CPU only make sense while the process is alive; null otherwise so the
@@ -53,7 +56,7 @@ export class ServerManagementService {
           startedAt,
           players: monitoringService.getLatestPlayerCount(instance.id)
         };
-      });
+      }));
 
       return {
         instances: enhancedInstances

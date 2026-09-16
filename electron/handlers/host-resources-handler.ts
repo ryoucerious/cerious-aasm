@@ -39,7 +39,7 @@ messagingService.on('get-host-resources', async (payload: any, sender: any) => {
     } catch {
       diskPath = '';
     }
-    const disk = getDiskUsage(diskPath);
+    const disk = await getDiskUsage(diskPath);
 
     messagingService.sendToOriginator('get-host-resources', {
       cpuPercent,

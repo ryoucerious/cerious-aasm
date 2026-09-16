@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -149,7 +149,13 @@
       "icon": "./logo.ico",
       "target": "nsis",
       "requestedExecutionLevel": "asInvoker",
-      "artifactName": "Cerious-AASM-Setup-${version}.${ext}"
+      "artifactName": "Cerious-AASM-Setup-${version}.${ext}",
+      "extraResources": [
+        {
+          "from": "resources/diskinfo.js",
+          "to": "scripts/diskinfo.js"
+        }
+      ]
     },
     "linux": {
       "executableName": "cerious-aasm",

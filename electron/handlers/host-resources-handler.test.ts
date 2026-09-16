@@ -53,7 +53,7 @@ describe('host-resources-handler', () => {
     utils.cpuPercentFromSamples.mockReturnValue(50);
     utils.getTotalMemory.mockReturnValue(32_000);
     utils.getFreeMemory.mockReturnValue(12_000);
-    utils.getDiskUsage.mockReturnValue({ total: 1000, free: 400 });
+    utils.getDiskUsage.mockResolvedValue({ total: 1000, free: 400 });
 
     await handler({ requestId: 'r1' }, sender);
 
@@ -72,7 +72,7 @@ describe('host-resources-handler', () => {
     utils.cpuPercentFromSamples.mockReturnValue(0);
     utils.getTotalMemory.mockReturnValue(10);
     utils.getFreeMemory.mockReturnValue(4);
-    utils.getDiskUsage.mockReturnValue(null);
+    utils.getDiskUsage.mockResolvedValue(null);
 
     await handler({ requestId: 'r2' }, sender);
 
@@ -87,7 +87,7 @@ describe('host-resources-handler', () => {
     utils.cpuPercentFromSamples.mockReturnValue(0);
     utils.getTotalMemory.mockReturnValue(10);
     utils.getFreeMemory.mockReturnValue(4);
-    utils.getDiskUsage.mockReturnValue({ total: 10, free: 5 });
+    utils.getDiskUsage.mockResolvedValue({ total: 10, free: 5 });
 
     await handler({ requestId: 'r3' }, sender);
 

@@ -2,6 +2,14 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.1.2] - 2026-09-16
+
+### Bug Fixes
+
+- **The Dashboard Could Lock the App Up on Mechanical Drives**: The System Resources panel read disk usage by starting PowerShell every five seconds, and each reading held up everything else the app was doing until Windows had finished starting it — a few hundred milliseconds on an SSD, and seconds on a mechanical drive with a server running on it. Nothing waits on these readings any more, and none of them start PowerShell: capacity is read once and free space comes from `dir` after that, so a running app no longer starts some seven hundred PowerShell processes an hour. A reading that fails is left alone for a minute rather than retried every five seconds, so a struggling drive is not asked again while it is still busy. The disk figure now refreshes once a minute; processor and memory continue to update every five seconds.
+- **Per-Server Processor and Memory Took Two Lookups**: Processor time was read through PowerShell and memory through `tasklist`, on separate timers. Both now come from one `tasklist` call — about seven times cheaper than the PowerShell it replaces — so a running server is measured with half as many processes as before.
+- **Memory Readings on Non-English Windows**: A server's memory use was read assuming a comma between the thousands, so on Windows set to a language that groups digits differently the figure could come out wrong or missing. Any grouping is now accepted, as is any display language for the disk readings.
+
 ## [1.1.1] - 2026-09-15
 
 ### Bug Fixes
