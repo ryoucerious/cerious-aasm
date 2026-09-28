@@ -44,7 +44,15 @@ describe('PlatformService', () => {
 
   it('getPlatform returns Linux', () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
+    delete process.env.AASM_DOCKER;
+    jest.spyOn(service, 'isRunningInDocker').mockReturnValue(false);
     expect(service.getPlatform()).toBe('Linux');
+  });
+
+  it('getPlatform returns Linux (Docker) when running in the container', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    jest.spyOn(service, 'isRunningInDocker').mockReturnValue(true);
+    expect(service.getPlatform()).toBe('Linux (Docker)');
   });
 
   it('getPlatform returns unknown for other', () => {

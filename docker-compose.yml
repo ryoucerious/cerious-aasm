@@ -1,16 +1,76 @@
 # =============================================================================
-# Cerious AASM — Docker Compose for Linux Development & Testing
+# Cerious AASM — Docker Compose
 # =============================================================================
-# Usage:
-#   docker compose run test              # Run electron jest tests in Linux
-#   docker compose up headless           # Start headless app on port 3000
-#   docker compose run --rm shell        # Interactive Linux shell for debugging
-#   docker compose up headless-dev       # Headless with source mounted (live reload)
+# Start (pulls the release image; builds from source if it can't be pulled):
+#   docker compose up -d
+#   Open http://localhost:3000
+#
+# Update to the latest release:
+#   docker compose pull && docker compose up -d
+#
+# Build from source instead (optional CurseForge key baked in at build time):
+#   AASM_IMAGE=cerious-aasm:local CURSEFORGE_API_KEY=... docker compose up -d --build
+#
+# Port ranges (published below and passed to the app's Firewall page):
+#   AASM_GAME_PORTS=7777-7900 AASM_QUERY_PORTS=27015-27030 AASM_RCON_PORTS=27020-27050
+#   Set them in a .env file next to this one, then: docker compose up -d
+#
+# Linux server with host networking (no ranges; the host firewall decides):
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+#
+# Other services:
+#   docker compose --profile test run --rm test
+#   docker compose --profile dev up headless-dev
+#   docker compose --profile debug run --rm shell
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # test — Run electron-side jest tests in a Linux environment
+  # aasm — headless app (web UI, SteamCMD, Proton, ARK servers)
+  # ---------------------------------------------------------------------------
+  aasm:
+    build:
+      context: .
+      target: runtime
+      args:
+        CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
+    # The release image. `docker compose pull` updates it; set AASM_IMAGE to a local
+    # name (e.g. cerious-aasm:local) when building from source so a pull can't replace it.
+    image: ${AASM_IMAGE:-ghcr.io/ryoucerious/cerious-aasm:latest}
+    # Only the ports listed here reach the container. Ports set in the app must
+    # fall inside these ranges, including the peer port (game port + 1). The same
+    # variables are passed to the app below, so its Firewall page shows the ranges.
+    # Query stops at 27030 because the Steam client binds UDP 27031-27036.
+    # On a Linux server, docker-compose.host.yml switches to host networking.
+    ports:
+      - "${AASM_PORT:-3000}:${AASM_PORT:-3000}"
+      - "${AASM_GAME_PORTS:-7777-7900}:${AASM_GAME_PORTS:-7777-7900}/udp"
+      - "${AASM_QUERY_PORTS:-27015-27030}:${AASM_QUERY_PORTS:-27015-27030}/udp"
+      - "${AASM_RCON_PORTS:-27020-27050}:${AASM_RCON_PORTS:-27020-27050}/tcp"
+    shm_size: "2gb"
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    # privileged: true  # fallback if Proton still cannot create user namespaces
+    volumes:
+      - aasm-data:/home/aasm/.local/share/cerious-aasm
+      - aasm-config:/home/aasm/.config
+    environment:
+      NODE_ENV: production
+      AASM_PORT: ${AASM_PORT:-3000}
+      AASM_AUTH_ENABLED: ${AASM_AUTH_ENABLED:-false}
+      AASM_USERNAME: ${AASM_USERNAME:-admin}
+      AASM_PASSWORD: ${AASM_PASSWORD:-}
+      AASM_GAME_PORTS: ${AASM_GAME_PORTS:-7777-7900}
+      AASM_QUERY_PORTS: ${AASM_QUERY_PORTS:-27015-27030}
+      AASM_RCON_PORTS: ${AASM_RCON_PORTS:-27020-27050}
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # test — electron Jest tests
   # ---------------------------------------------------------------------------
   test:
     build:
@@ -18,63 +78,57 @@ services:
       target: test
     environment:
       - NODE_ENV=test
-    # Override to run specific tests:
-    #   docker compose run test npx jest --testPathPatterns="proton"
+    # docker compose --profile test run --rm test npx jest --testPathPatterns="proton"
     profiles: ["test"]
 
   # ---------------------------------------------------------------------------
-  # headless — Full headless Electron app with web UI
-  # ---------------------------------------------------------------------------
-  headless:
-    build:
-      context: .
-      target: headless
-    ports:
-      - "3000:3000"
-    volumes:
-      # Persist server data and config between container restarts
-      - aasm-data:/home/aasm/.local/share/cerious-aasm
-      - aasm-config:/home/aasm/.config/Cerious AASM
-    environment:
-      - NODE_ENV=production
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # headless-dev — Development mode with source code mounted
+  # headless-dev — source mounted, Angular and Electron rebuilt on start
   # ---------------------------------------------------------------------------
   headless-dev:
     build:
       context: .
-      target: headless
+      target: build
     ports:
       - "3000:3000"
+      - "${AASM_GAME_PORTS:-7777-7900}:${AASM_GAME_PORTS:-7777-7900}/udp"
+      - "${AASM_QUERY_PORTS:-27015-27030}:${AASM_QUERY_PORTS:-27015-27030}/udp"
+      - "${AASM_RCON_PORTS:-27020-27050}:${AASM_RCON_PORTS:-27020-27050}/tcp"
+    shm_size: "2gb"
     volumes:
-      # Mount source for live changes (rebuild TS manually or via watch)
       - .:/app
-      - /app/node_modules  # Preserve Linux node_modules, don't use Windows ones
+      - /app/node_modules
       - aasm-data-dev:/home/aasm/.local/share/cerious-aasm
-      - aasm-config-dev:/home/aasm/.config/Cerious AASM
+      - aasm-config-dev:/home/aasm/.config
     environment:
       - NODE_ENV=development
-    # Recompile TS then launch
+      - HOME=/home/aasm
+      - ELECTRON_DISABLE_SANDBOX=1
+      - AASM_DOCKER=1
+      - AASM_PORT=3000
+      - AASM_GAME_PORTS=${AASM_GAME_PORTS:-7777-7900}
+      - AASM_QUERY_PORTS=${AASM_QUERY_PORTS:-27015-27030}
+      - AASM_RCON_PORTS=${AASM_RCON_PORTS:-27020-27050}
     command: >
-      sh -c "npx tsc -p tsconfig.electron.json &&
+      sh -c "npm run build &&
+             npx tsc -p tsconfig.electron.json &&
              Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
              sleep 1 &&
-             npx electron electron/main.js --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --port=3000"
+             npx electron electron/main.js --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-audio-output --port=3000"
+    profiles: ["dev"]
 
   # ---------------------------------------------------------------------------
-  # shell — Interactive shell for debugging Linux environment
+  # shell — interactive shell with Linux node_modules from the build stage
   # ---------------------------------------------------------------------------
   shell:
     build:
       context: .
-      target: base
+      target: build
     volumes:
       - .:/app
       - /app/node_modules
     environment:
       - DISPLAY=:99
+      - HOME=/home/aasm
     entrypoint: /bin/bash
     stdin_open: true
     tty: true

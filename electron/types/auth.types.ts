@@ -80,6 +80,8 @@ export interface User {
   displayName: string;
   roleId: string;
   active: boolean;
+  /** Set when this account's password comes from the process command line. */
+  cliLocked: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt: number | null;

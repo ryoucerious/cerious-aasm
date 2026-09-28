@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { runInstaller } from '../../installer.utils';
-import { getDefaultInstallDir } from '../../platform.utils';
+import { getDefaultInstallDir, getPlatform } from '../../platform.utils';
 import { getSteamCmdDir, isSteamCmdInstalled } from '../../steamcmd.utils';
 import { ArkPathUtils } from '../ark-path.utils';
 
@@ -10,6 +10,37 @@ import { ArkPathUtils } from '../ark-path.utils';
 const ARK_APP_ID = '2430930';
 const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 let lastKnownBuildId: string | null = null;
+
+function arkUpdateArgs(installDir: string): string[] {
+  const args = [
+    '+force_install_dir', installDir,
+    '+login', 'anonymous',
+    '+app_update', ARK_APP_ID, 'validate',
+    '+quit',
+  ];
+  if (getPlatform() === 'linux') {
+    args.unshift('+@sSteamCmdForcePlatformType', 'windows');
+  }
+  return args;
+}
+
+function clearStuckArkManifest(installDir: string): void {
+  const manifestPath = path.join(installDir, 'steamapps', `appmanifest_${ARK_APP_ID}.acf`);
+  if (!fs.existsSync(manifestPath)) return;
+  let content = '';
+  try {
+    content = fs.readFileSync(manifestPath, 'utf8');
+  } catch {
+    return;
+  }
+  if (!/"UpdateResult"\s+"6"/.test(content)) return;
+  try {
+    fs.unlinkSync(manifestPath);
+    console.warn('[ark-server] Removed stuck Steam appmanifest so the server download can start again.');
+  } catch (error) {
+    console.warn('[ark-server] Could not remove stuck Steam appmanifest:', error);
+  }
+}
 
 // --- Utility Functions ---
 // Delegates to ArkPathUtils so the custom Server Data Directory setting is respected.
@@ -71,15 +102,11 @@ export function installArkServer(
     return;
   }
   const installDir = getArkServerDir();
+  clearStuckArkManifest(installDir);
   let arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };
   const installerOptions = {
     command: steamcmdExecutable,
-    args: [
-      '+force_install_dir', installDir,
-      '+login', 'anonymous',
-      '+app_update', ARK_APP_ID, 'validate',
-      '+quit'
-    ],
+    args: arkUpdateArgs(installDir),
     cwd: steamcmdPath,
     estimatedTotal: 100,
     phaseSplit: 80,
@@ -138,12 +165,7 @@ export function installArkServer(
     },
     validatePhase: () => ({
       command: steamcmdExecutable,
-      args: [
-        '+force_install_dir', `"${installDir}"`,
-        '+login', 'anonymous',
-        '+app_update', ARK_APP_ID, 'validate',
-        '+quit'
-      ],
+      args: arkUpdateArgs(installDir),
       cwd: steamcmdPath,
     })
   };

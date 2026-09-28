@@ -21,6 +21,7 @@ import { ServerInstance } from '../../core/models/server-instance.model';
 import { formatRelativeTime, initialOf } from '../../core/utils/format.utils';
 import { mapDisplayName } from '../../core/utils/map-visuals';
 import { WindowControlsComponent } from '../window-controls/window-controls.component';
+import { ModalComponent } from '../modal/modal.component';
 
 /** One row in the search dropdown: a server or a page. */
 export interface SearchResult {
@@ -51,7 +52,7 @@ export const ACTIVITY_ICONS: Record<ActivityKind, { icon: string; tone: string }
 @Component({
   selector: 'app-topbar',
   standalone: true,
-  imports: [NgIf, NgFor, NgClass, FormsModule, WindowControlsComponent],
+  imports: [NgIf, NgFor, NgClass, FormsModule, WindowControlsComponent, ModalComponent],
   templateUrl: './topbar.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
@@ -68,7 +69,10 @@ export class TopbarComponent implements OnInit, OnDestroy {
 
   notificationsOpen = false;
   userMenuOpen = false;
+  showAllActivity = false;
   unreadCount = 0;
+  /** Full feed, shown in the modal. The bell dropdown only uses the latest few. */
+  activity: ActivityItem[] = [];
   recentActivity: ActivityItem[] = [];
   theme: ResolvedTheme = 'dark';
 
@@ -111,6 +115,7 @@ export class TopbarComponent implements OnInit, OnDestroy {
       this.cdr.markForCheck();
     }));
     this.subs.push(this.activityService.items$.subscribe(items => {
+      this.activity = items;
       this.recentActivity = items.slice(0, 8);
       this.unreadCount = this.activityService.unreadCount;
       this.cdr.markForCheck();
@@ -348,7 +353,17 @@ export class TopbarComponent implements OnInit, OnDestroy {
 
   viewAllActivity(): void {
     this.closeAll();
-    this.router.navigate(['/dashboard'], { fragment: 'activity' });
+    this.showAllActivity = true;
+    this.cdr.markForCheck();
+  }
+
+  closeAllActivity(): void {
+    this.showAllActivity = false;
+    this.cdr.markForCheck();
+  }
+
+  clearActivity(): void {
+    this.activityService.clear();
   }
 
   relativeTime(item: ActivityItem): string {

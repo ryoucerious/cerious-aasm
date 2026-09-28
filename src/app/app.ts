@@ -12,7 +12,6 @@ import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { ModalComponent } from './components/modal/modal.component';
 import { ServerInstance } from './core/models/server-instance.model';
 import { UtilityService } from './core/services/utility.service';
-import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
 import { TopbarComponent } from './components/topbar/topbar.component';
 import { SettingsPageComponent } from './pages/settings/settings.component';
 import { TooltipHostComponent } from './components/tooltip/tooltip-host.component';
@@ -28,7 +27,7 @@ declare global {
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, UpdateBannerComponent, SettingsPageComponent, TooltipHostComponent],
+  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent],
   templateUrl: './app.html'
 })
 

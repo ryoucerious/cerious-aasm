@@ -2,3 +2,74 @@
   list-style: none;
   padding-left: 1rem;
 }
+
+.mono {
+  font-family: 'Courier New', monospace;
+}
+
+// Published port ranges, when the app runs in Docker.
+.docker-ports {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.5rem 0 1rem;
+
+  th,
+  td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-muted);
+    color: var(--text-primary);
+  }
+
+  th {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+
+  // Keep "7777–7900" together on a narrow screen; the description column wraps instead.
+  td.mono {
+    white-space: nowrap;
+  }
+}
+
+.docker-port-checks {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.6rem;
+    padding: 0.3rem 0;
+    color: var(--text-primary);
+  }
+
+  .material-icons {
+    font-size: 18px;
+    color: var(--success);
+  }
+
+  .docker-port-verdict {
+    color: var(--text-secondary);
+  }
+
+  li.out-of-range {
+    .material-icons,
+    .docker-port-verdict {
+      color: var(--danger);
+    }
+  }
+}

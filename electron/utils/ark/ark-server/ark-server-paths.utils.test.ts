@@ -223,21 +223,44 @@ describe('ark-server-paths.utils', () => {
       expect(() => prepareArkServerCommand('exe', ['-arg'])).toThrow('instanceId is required to isolate the Proton prefix on Linux');
     });
     it('returns xvfb-run command for Linux with a per-instance Proton prefix', () => {
+      const previousDisplay = process.env.DISPLAY;
+      delete process.env.DISPLAY;
       getPlatform.mockReturnValue('linux');
       isProtonInstalled.mockReturnValue(true);
       ensureProtonPrefixExists.mockImplementation(() => {});
       getProtonBinaryPath.mockReturnValue('/proton');
       getDefaultInstallDir.mockReturnValue('/default');
       getProtonPrefixDir.mockReturnValue('/default/proton-prefix/inst-1');
-      const result = prepareArkServerCommand('exe', ['-arg'], 'inst-1');
+      const result = prepareArkServerCommand('/srv/exe', ['-arg'], 'inst-1');
+      if (previousDisplay === undefined) delete process.env.DISPLAY;
+      else process.env.DISPLAY = previousDisplay;
       expect(result.command).toBe('xvfb-run');
       expect(result.args).toContain('/proton');
-      expect(result.args).toContain('exe');
+      expect(result.args).toContain('waitforexitandrun');
+      expect(result.args).toContain('Z:\\srv\\exe');
       expect(result.env.WINEDLLOVERRIDES).toBe('mshtml=d;winhttp=n,b;bcrypt=n,b;crypt32=n,b');
+      expect(result.env.UMU_ID).toBe('2430930');
       expect(result.env.WINEPREFIX).toBe('/default/proton-prefix/inst-1');
       expect(result.env.STEAM_COMPAT_DATA_PATH).toBe('/default/proton-prefix/inst-1');
       expect(ensureProtonPrefixExists).toHaveBeenCalledWith('inst-1');
       expect(getProtonPrefixDir).toHaveBeenCalledWith('inst-1');
+    });
+    it('uses the existing display instead of a second xvfb-run', () => {
+      const previousDisplay = process.env.DISPLAY;
+      process.env.DISPLAY = ':99';
+      getPlatform.mockReturnValue('linux');
+      isProtonInstalled.mockReturnValue(true);
+      ensureProtonPrefixExists.mockImplementation(() => {});
+      getProtonBinaryPath.mockReturnValue('/proton');
+      getDefaultInstallDir.mockReturnValue('/default');
+      getProtonPrefixDir.mockReturnValue('/default/proton-prefix/inst-1');
+      const result = prepareArkServerCommand('/srv/exe', ['-arg'], 'inst-1');
+      if (previousDisplay === undefined) delete process.env.DISPLAY;
+      else process.env.DISPLAY = previousDisplay;
+      expect(result.command).toBe('/proton');
+      expect(result.args[0]).toBe('waitforexitandrun');
+      expect(result.args).toContain('Z:\\srv\\exe');
+      expect(result.env.UMU_ID).toBe('2430930');
     });
   });
   // A restore that walked junctions used to delete the shared install's game folders.

@@ -20,6 +20,7 @@ interface UserRow {
   display_name: string;
   role_id: string;
   active: number;
+  cli_locked: number;
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
@@ -213,6 +214,7 @@ export class UserDatabaseService {
         display_name TEXT NOT NULL DEFAULT '',
         role_id TEXT NOT NULL REFERENCES roles(id),
         active INTEGER NOT NULL DEFAULT 1,
+        cli_locked INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_login_at INTEGER
@@ -236,6 +238,11 @@ export class UserDatabaseService {
       CREATE INDEX IF NOT EXISTS idx_player_history_time ON player_history(created_at);
     `);
     this.db.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ['schema_version', String(SCHEMA_VERSION)]);
+    // Existing installs were created before the command-line admin flag existed.
+    const columns = this.db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+    if (!columns.some(column => column.name === 'cli_locked')) {
+      this.db.run('ALTER TABLE users ADD COLUMN cli_locked INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   private seedBuiltInRoles(): void {
@@ -492,6 +499,15 @@ export class UserDatabaseService {
       return { success: false, error: 'This is the only active admin. Promote another user first.' };
     }
 
+    if (existing.cliLocked) {
+      if (input.password !== undefined) {
+        return { success: false, error: 'This password is set on the command line and cannot be changed in the app.' };
+      }
+      if (username !== existing.username || roleId !== existing.roleId || active !== existing.active) {
+        return { success: false, error: 'This account is provided by the command line and cannot be changed in the app.' };
+      }
+    }
+
     if (input.password !== undefined) {
       const validation = this.validateCredentials(username, input.password);
       if (validation) return { success: false, error: validation };
@@ -515,6 +531,9 @@ export class UserDatabaseService {
     this.ensureOpen();
     const user = this.getUser(id);
     if (!user) return { success: false, error: 'User not found.' };
+    if (user.cliLocked) {
+      return { success: false, error: 'This account is provided by the command line and cannot be deleted.' };
+    }
     if (user.roleId === ROLE_IDS.ADMIN && this.countOtherActiveAdmins(id) === 0) {
       return { success: false, error: 'This is the only active admin and cannot be deleted.' };
     }
@@ -556,6 +575,10 @@ export class UserDatabaseService {
     const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
     if (!row) return { success: false, error: 'User not found.' };
 
+    if (row.cli_locked) {
+      return { success: false, error: 'This password is set on the command line and cannot be changed in the app.' };
+    }
+
     const ok = await bcrypt.compare(currentPassword || '', row.password_hash).catch(() => false);
     if (!ok) return { success: false, error: 'Current password is incorrect.' };
 
@@ -579,6 +602,37 @@ export class UserDatabaseService {
     if (!password) return { success: false, error: 'Cannot create the first admin without a password.' };
 
     return this.createUser({ username: name, password, displayName: name, roleId: ROLE_IDS.ADMIN, active: true });
+  }
+
+  /**
+   * Keep the command-line admin signed in with the password the process was started with.
+   * Re-applied on every start, so a change made in the app does not stick.
+   */
+  async syncCliAdmin(username: string, password: string): Promise<Result<User>> {
+    this.ensureOpen();
+    const name = (username || '').trim() || 'admin';
+    const validation = this.validateCredentials(name, password);
+    if (validation) return { success: false, error: validation };
+
+    this.db.run('UPDATE users SET cli_locked = 0 WHERE username != ? COLLATE NOCASE', [name]);
+    const existing = this.db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get(name) as { id: string } | undefined;
+    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    const now = Date.now();
+    if (!existing) {
+      const id = this.newId();
+      this.db.run(
+        `INSERT INTO users (id, username, password_hash, display_name, role_id, active, cli_locked, created_at, updated_at, last_login_at)
+         VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, NULL)`,
+        [id, name, hash, name, ROLE_IDS.ADMIN, now, now]
+      );
+      return { success: true, data: this.getUser(id)! };
+    }
+
+    this.db.run(
+      'UPDATE users SET password_hash = ?, role_id = ?, active = 1, cli_locked = 1, updated_at = ? WHERE id = ?',
+      [hash, ROLE_IDS.ADMIN, now, existing.id]
+    );
+    return { success: true, data: this.getUser(existing.id)! };
   }
 
   // -------------------- Helpers --------------------
@@ -646,6 +700,7 @@ export class UserDatabaseService {
       displayName: row.display_name,
       roleId: row.role_id,
       active: !!row.active,
+      cliLocked: !!row.cli_locked,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       lastLoginAt: row.last_login_at
@@ -668,7 +723,10 @@ export class UserDatabaseService {
    */
   private claimOwnership(): void {
     try {
-      fs.writeFileSync(this.pidPath, String(process.pid), { mode: 0o600 });
+      // With the start time a later run can tell this process from one that reuses its pid.
+      const startTicks = this.readProcessIdentity(process.pid)?.startTicks;
+      const claim = startTicks ? `${process.pid} ${startTicks}` : String(process.pid);
+      fs.writeFileSync(this.pidPath, claim, { mode: 0o600 });
     } catch (error) {
       console.debug('[user-database] Could not record database ownership:', error);
     }
@@ -678,14 +736,45 @@ export class UserDatabaseService {
   private ownerIsAlive(): boolean {
     try {
       if (!fs.existsSync(this.pidPath)) return false;
-      const pid = Number(fs.readFileSync(this.pidPath, 'utf8').trim());
-      if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+      // "<pid>" or "<pid> <start ticks>"; older runs wrote only the pid.
+      const [pidField, startField, ...rest] = fs.readFileSync(this.pidPath, 'utf8').trim().split(/\s+/);
+      const pid = Number(pidField);
+      if (rest.length || !Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+
+      // Where /proc exists, check identity rather than bare existence. PIDs restart from 1 in
+      // every container, so after a restart the recorded id can name a different process, or a
+      // thread — which kill(id, 0) also accepts — and a stale lock would never be cleared.
+      const identity = this.readProcessIdentity(pid);
+      if (identity) {
+        if (identity.tgid !== pid) return false;
+        return !startField || identity.startTicks === startField;
+      }
+
       // Signal 0 checks for existence without touching the process.
       process.kill(pid, 0);
       return true;
     } catch {
       // ESRCH (no such process) or an unreadable pid file: treat the owner as gone.
       return false;
+    }
+  }
+
+  /**
+   * The thread-group id and start time (clock ticks since boot) of `id` from /proc, or null
+   * where /proc is unavailable (Windows) or has no such entry.
+   */
+  private readProcessIdentity(id: number): { tgid: number; startTicks: string } | null {
+    try {
+      const status = fs.readFileSync(`/proc/${id}/status`, 'utf8');
+      const tgid = Number(/^Tgid:\s*(\d+)/m.exec(status)?.[1]);
+      // The name in parentheses can itself contain spaces or ')', so count fields from the
+      // last ')'. What follows starts at field 3; starttime is field 22.
+      const stat = fs.readFileSync(`/proc/${id}/stat`, 'utf8');
+      const startTicks = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)[19];
+      if (!Number.isInteger(tgid) || !startTicks) return null;
+      return { tgid, startTicks };
+    } catch {
+      return null;
     }
   }
 

@@ -1585,10 +1585,33 @@ app-window-controls {
 }
 
 // A new version of the app is waiting. Amber, next to the version it would replace.
+.update-help-text {
+  white-space: pre-line;
+  margin: 0 0 1rem;
+}
+
+.sidenav-update-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &:disabled { cursor: default; }
+}
+
 .sidenav-update-icon {
   font-size: 16px !important;
   color: var(--warning);
   flex-shrink: 0;
+}
+
+.sidenav-update-percent {
+  font-size: 0.7rem;
+  color: var(--warning);
 }
 
 .topbar-menu-note {

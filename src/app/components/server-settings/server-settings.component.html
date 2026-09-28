@@ -188,7 +188,8 @@
     <!-- Firewall Tab Content -->
     <app-firewall-tab
       *ngIf="activeTab === 'firewall'"
-      [serverInstance]="serverInstance">
+      [serverInstance]="serverInstance"
+      [firewallStatus]="firewallStatus">
     </app-firewall-tab>
 
     <!-- Discord Tab Content -->

@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
-import { Router, ActivatedRoute } from '@angular/router';
+import { Router } from '@angular/router';
 import { BehaviorSubject, of } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
 import { LiveServersService } from '../../core/services/live-servers.service';
@@ -65,7 +65,6 @@ describe('DashboardComponent', () => {
       imports: [DashboardComponent],
       providers: [
         { provide: Router, useValue: router },
-        { provide: ActivatedRoute, useValue: { fragment: of(null) } },
         { provide: LiveServersService, useValue: liveServers },
         { provide: ServerInstanceService, useValue: serverInstanceService },
         { provide: ServerLifecycleService, useValue: lifecycle },

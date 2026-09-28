@@ -19,8 +19,9 @@
   </div>
 
   <p class="settings-card-hint users-intro">
-    Accounts control who can sign in to the web interface and what they may do. The desktop
-    app runs as an administrator on this machine and does not sign in.
+    Accounts control who can sign in and what they may do. Add users and set their passwords
+    here, including when the app is running headless. An admin password passed on the command
+    line stays in force and cannot be changed on this page.
   </p>
 
   <div class="dash-muted" *ngIf="loading">Loading accounts...</div>
@@ -53,6 +54,7 @@
               <span class="user-avatar">{{ (user.displayName || user.username).charAt(0).toUpperCase() }}</span>
               <span class="user-cell-text">
                 <span class="user-cell-name">{{ user.username }}</span>
+                <span class="user-cell-sub" *ngIf="user.cliLocked">Password is set on the command line</span>
                 <span class="user-cell-sub" *ngIf="user.displayName">{{ user.displayName }}</span>
               </span>
             </div>
@@ -69,7 +71,8 @@
               <i class="material-icons">edit</i>
             </button>
             <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteUser(user)"
-                    [disabled]="user.id === currentUserId" [title]="user.id === currentUserId ? 'You cannot delete your own account' : 'Delete'">
+                    [disabled]="user.id === currentUserId || user.cliLocked"
+                    [title]="user.cliLocked ? 'This account is provided by the command line' : (user.id === currentUserId ? 'You cannot delete your own account' : 'Delete')">
               <i class="material-icons">delete</i>
             </button>
           </td>
@@ -125,22 +128,25 @@
   <div class="modal-form">
     <div class="form-group">
       <label class="form-control-label">Username</label>
-      <input type="text" class="form-control" [(ngModel)]="form.username" [disabled]="saving" placeholder="e.g. jamie" />
+      <input type="text" class="form-control" [(ngModel)]="form.username" [disabled]="saving || !!editingUser?.cliLocked" placeholder="e.g. jamie" />
       <div class="form-control-label desc">Letters, numbers and . _ @ - only.</div>
     </div>
     <div class="form-group">
       <label class="form-control-label">Display name</label>
       <input type="text" class="form-control" [(ngModel)]="form.displayName" [disabled]="saving" placeholder="Optional" />
     </div>
-    <div class="form-group">
+    <div class="form-group" *ngIf="!editingUser?.cliLocked">
       <label class="form-control-label">{{ editingUser ? 'New password' : 'Password' }}</label>
       <input type="password" class="form-control" [(ngModel)]="form.password" [disabled]="saving"
              [placeholder]="editingUser ? 'Leave blank to keep the current password' : 'At least 8 characters'" />
     </div>
+    <div class="ark-install-notice" *ngIf="editingUser?.cliLocked">
+      This password is set with <span class="mono">--password</span> (or <span class="mono">AASM_PASSWORD</span> in Docker) and cannot be changed here. Other accounts can still be added and given their own passwords.
+    </div>
     <div class="form-group">
       <label class="form-control-label">Role</label>
       <app-dropdown *ngIf="roleOptions.length" [options]="roleOptions" [(ngModel)]="form.roleId"
-                    [disabled]="saving" placeholder="Select a role..."></app-dropdown>
+                    [disabled]="saving || !!editingUser?.cliLocked" placeholder="Select a role..."></app-dropdown>
       <!-- An empty list means the roles could not be read, not that none exist. -->
       <div class="ark-install-notice warning" *ngIf="!roleOptions.length">
         <i class="material-icons">warning</i>
@@ -150,7 +156,7 @@
     </div>
     <div class="form-group">
       <label class="form-control-label toggle-label">
-        <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving" />
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving || !!editingUser?.cliLocked" />
         <span class="toggle-text">Account is active</span>
       </label>
       <div class="form-control-label desc">A disabled account keeps its settings but cannot sign in.</div>

@@ -42,12 +42,22 @@ export class ArkCommandUtils {
         STEAM_COMPAT_CLIENT_INSTALL_PATH: path.join(getDefaultInstallDir(), '.steam'),
         WINEDLLOVERRIDES: 'mshtml=d',
         SteamAppId: ARK_APP_ID,
+        SteamGameId: ARK_APP_ID,
+        UMU_ID: ARK_APP_ID,
         ...env
       };
 
+      const protonExe = arkExecutable.startsWith('/')
+        ? 'Z:' + arkExecutable.replace(/\//g, '\\')
+        : arkExecutable;
+      const protonArgs = ['waitforexitandrun', protonExe, ...arkArgs];
+      if (process.env.DISPLAY) {
+        return { command: protonBinary, args: protonArgs, env: protonEnv, cwd: workingDir };
+      }
+
       return {
         command: 'xvfb-run',
-        args: ['-a', '--server-args=-screen 0 1024x768x24', protonBinary, 'run', arkExecutable, ...arkArgs],
+        args: ['-a', '--server-args=-screen 0 1024x768x24', protonBinary, ...protonArgs],
         env: protonEnv,
         cwd: workingDir
       };

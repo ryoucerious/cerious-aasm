@@ -100,3 +100,24 @@
     <app-window-controls></app-window-controls>
   </div>
 </header>
+
+<app-modal [title]="'Recent Activity'" [show]="showAllActivity" [maxWidth]="'640px'" (close)="closeAllActivity()">
+  <div class="dash-activity dash-activity-all">
+    <div class="topbar-empty" *ngIf="!activity.length">Nothing has happened yet.</div>
+    <div class="activity-row" *ngFor="let item of activity; trackBy: trackActivity">
+      <span class="activity-icon" [ngClass]="'tone-' + activityIcons[item.kind].tone">
+        <span class="material-icons">{{ activityIcons[item.kind].icon }}</span>
+      </span>
+      <span class="activity-text">
+        <span class="activity-message">{{ item.message }}</span>
+        <span class="activity-time">
+          {{ relativeTime(item) }}<span class="activity-by" *ngIf="item.username"> · by {{ item.username }}</span>
+        </span>
+      </span>
+    </div>
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn btn-ghost" (click)="clearActivity()" [disabled]="!activity.length">Clear</button>
+    <button type="button" class="btn" (click)="closeAllActivity()">Close</button>
+  </div>
+</app-modal>

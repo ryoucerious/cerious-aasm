@@ -397,7 +397,17 @@ app.on('ready', async () => {
     const username = globalConfig.authenticationUsername || cli.username || 'admin';
     const password = globalConfig.authenticationPassword || cli.password;
 
-    if (!userDatabaseService.hasAnyUser() && authOn) {
+    // A password on the command line is the admin login for this process. It is
+    // reapplied on every start and cannot be changed from the app. Other accounts
+    // are created under Settings → Users & Roles.
+    if (cli.password) {
+      const synced = await userDatabaseService.syncCliAdmin(cli.username || 'admin', cli.password);
+      if (synced.success && synced.data) {
+        console.info(`[main] Command-line admin "${synced.data.username}" is ready.`);
+      } else if (!synced.success) {
+        console.error(`[main] Could not apply the command-line admin password: ${synced.error}`);
+      }
+    } else if (!userDatabaseService.hasAnyUser() && authOn) {
       if (password) {
         const seeded = await userDatabaseService.seedFirstAdmin(username, password);
         if (seeded.success && seeded.data) {

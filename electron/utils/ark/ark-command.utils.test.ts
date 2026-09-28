@@ -48,14 +48,18 @@ describe('ArkCommandUtils', () => {
     });
 
     it('should prepare command for Linux with a per-instance Proton prefix', () => {
+      const previousDisplay = process.env.DISPLAY;
+      delete process.env.DISPLAY;
       getPlatform.mockReturnValue('linux');
       isProtonInstalled.mockReturnValue(true);
       const result = ArkCommandUtils.prepareArkServerCommand('/ark/ark.exe', ['-foo', '-bar'], { TEST: '2' }, 'inst-1');
+      if (previousDisplay === undefined) delete process.env.DISPLAY;
+      else process.env.DISPLAY = previousDisplay;
       expect(result.command).toBe('xvfb-run');
       expect(result.args[0]).toBe('-a');
       expect(result.args).toContain('/fake/proton');
-      expect(result.args).toContain('run');
-      expect(result.args).toContain('/ark/ark.exe');
+      expect(result.args).toContain('waitforexitandrun');
+      expect(result.args).toContain('Z:\\ark\\ark.exe');
       expect(result.args).toContain('-foo');
       expect(result.args).toContain('-bar');
       expect(result.env).toMatchObject({
@@ -64,11 +68,24 @@ describe('ArkCommandUtils', () => {
         STEAM_COMPAT_CLIENT_INSTALL_PATH: expect.any(String),
         WINEDLLOVERRIDES: 'mshtml=d',
         SteamAppId: ARK_APP_ID,
+        UMU_ID: ARK_APP_ID,
         TEST: '2'
       });
       expect(result.cwd).toBe('/ark');
       expect(ensureProtonPrefixExists).toHaveBeenCalledWith('inst-1');
       expect(getProtonPrefixDir).toHaveBeenCalledWith('inst-1');
+    });
+    it('uses the existing display instead of a second xvfb-run', () => {
+      const previousDisplay = process.env.DISPLAY;
+      process.env.DISPLAY = ':99';
+      getPlatform.mockReturnValue('linux');
+      isProtonInstalled.mockReturnValue(true);
+      const result = ArkCommandUtils.prepareArkServerCommand('/ark/ark.exe', ['-foo'], undefined, 'inst-1');
+      if (previousDisplay === undefined) delete process.env.DISPLAY;
+      else process.env.DISPLAY = previousDisplay;
+      expect(result.command).toBe('/fake/proton');
+      expect(result.args[0]).toBe('waitforexitandrun');
+      expect(result.args).toContain('Z:\\ark\\ark.exe');
     });
   });
 });

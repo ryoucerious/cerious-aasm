@@ -4,6 +4,48 @@ import * as fs from 'fs';
 import { getSteamCmdDir } from '../steamcmd.utils';
 import { runInstaller } from '../installer.utils';
 import { ArkPathUtils, ARK_APP_ID } from './ark-path.utils';
+import { getPlatform } from '../platform.utils';
+
+/**
+ * ASA's dedicated server depot is Windows-only. On Linux, SteamCMD must request
+ * that depot before login or the anonymous session is denied a manifest code.
+ */
+function arkUpdateArgs(installDir: string): string[] {
+  const args = [
+    '+force_install_dir', installDir,
+    '+login', 'anonymous',
+    '+app_update', ARK_APP_ID, 'validate',
+    '+quit',
+  ];
+  if (getPlatform() === 'linux') {
+    args.unshift('+@sSteamCmdForcePlatformType', 'windows');
+  }
+  return args;
+}
+
+/**
+ * A failed update leaves UpdateResult 6 ("no connection") in the app manifest.
+ * SteamCMD then keeps requesting that old manifest, which the CDN rejects with
+ * Access Denied, and every retry dies in a few seconds. Removing the manifest
+ * lets the next run fetch the current public build. Installed files stay put.
+ */
+function clearStuckArkManifest(installDir: string): void {
+  const manifestPath = path.join(installDir, 'steamapps', `appmanifest_${ARK_APP_ID}.acf`);
+  if (!fs.existsSync(manifestPath)) return;
+  let content = '';
+  try {
+    content = fs.readFileSync(manifestPath, 'utf8');
+  } catch {
+    return;
+  }
+  if (!/"UpdateResult"\s+"6"/.test(content)) return;
+  try {
+    fs.unlinkSync(manifestPath);
+    console.warn('[ark-install] Removed stuck Steam appmanifest so the server download can start again.');
+  } catch (error) {
+    console.warn('[ark-install] Could not remove stuck Steam appmanifest:', error);
+  }
+}
 
 // --- Installation Utilities ---
 
@@ -70,12 +112,7 @@ export function installArkServer(
   let arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };
   const installerOptions = {
     command: steamcmdExecutable,
-    args: [
-      '+force_install_dir', installDir,
-      '+login', 'anonymous',
-      '+app_update', ARK_APP_ID, 'validate',
-      '+quit'
-    ],
+    args: arkUpdateArgs(installDir),
     cwd: steamcmdPath,
     estimatedTotal: 100,
     phaseSplit: 80,
@@ -134,12 +171,7 @@ export function installArkServer(
     },
     validatePhase: () => ({
       command: steamcmdExecutable,
-      args: [
-        '+force_install_dir', `"${installDir}"`,
-        '+login', 'anonymous',
-        '+app_update', ARK_APP_ID, 'validate',
-        '+quit'
-      ],
+      args: arkUpdateArgs(installDir),
       cwd: steamcmdPath,
     })
   };
@@ -148,6 +180,7 @@ export function installArkServer(
 
   function attemptInstall() {
     attempts++;
+    clearStuckArkManifest(installDir);
     // Reset progress state for retries so progress reporting works correctly
     if (attempts > 1) {
       arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };

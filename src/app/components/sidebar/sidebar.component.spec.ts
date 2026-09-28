@@ -11,6 +11,7 @@ import { GlobalConfigService } from '../../core/services/global-config.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
+import { AppUpdateService } from '../../core/services/app-update.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
@@ -163,6 +164,43 @@ describe('SidebarComponent', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/dashboard']);
     component.onSettingsClick();
     expect(settingsDrawer.open).toHaveBeenCalled();
+  });
+
+  it('downloads an app update from the version icon without opening settings', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'download');
+    spyOn((component as any).utility, 'getPlatform').and.returnValue('Electron');
+    (component as any).appUpdateExplain = false;
+    (component as any).appUpdateState = 'available';
+    component.onAppUpdateClick();
+    expect(appUpdate.download).toHaveBeenCalled();
+    expect(settingsDrawer.open).not.toHaveBeenCalled();
+    expect(component.showUpdateHelp).toBeFalse();
+  });
+
+  it('explains how to update in the browser instead of installing', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'download');
+    spyOn(appUpdate, 'install');
+    (component as any).appUpdateExplain = true;
+    (component as any).appUpdateInstructions = 'docker compose pull';
+    (component as any).appUpdateState = 'available';
+    component.onAppUpdateClick();
+    expect(component.showUpdateHelp).toBeTrue();
+    expect(component.updateHelpText).toBe('docker compose pull');
+    expect(appUpdate.download).not.toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(settingsDrawer.open).not.toHaveBeenCalled();
+  });
+
+  it('installs an app update that has already been downloaded', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'install');
+    spyOn((component as any).utility, 'getPlatform').and.returnValue('Electron');
+    (component as any).appUpdateExplain = false;
+    (component as any).appUpdateState = 'downloaded';
+    component.onAppUpdateClick();
+    expect(appUpdate.install).toHaveBeenCalled();
   });
 
   it('should not allow editing server name if busy', () => {

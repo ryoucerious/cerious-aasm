@@ -1,96 +1,105 @@
 # =============================================================================
-# Cerious AASM — Linux Development & Testing Dockerfile
+# Cerious AASM — Linux Docker image
 # =============================================================================
-# Provides a Debian-based Linux environment with all dependencies needed to
-# run, test, and debug the headless Electron app (xvfb + web server mode).
-#
 # Targets:
-#   base    — System deps + Node.js + npm install (cached layer)
-#   test    — Run jest electron tests in Linux
-#   headless — Run the full headless Electron app with xvfb
+#   base    — Debian Bookworm system packages (Electron, xvfb, SteamCMD i386)
+#   build   — npm ci, Angular production build, Electron TypeScript, native rebuild
+#   runtime — Headless app with the web UI, launched as a non-root user
+#   test    — Electron Jest tests
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Stage: base — system dependencies + node modules
+# Stage: base — system dependencies
 # ---------------------------------------------------------------------------
 FROM node:22-bookworm AS base
 
-# Avoid interactive prompts during apt-get
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Electron runtime deps, xvfb (virtual display), and SteamCMD 32-bit libs
+# Electron runtime libs, xvfb, SteamCMD 32-bit libs, and native-module build tools.
+# libasound2 is the real ALSA library on Bookworm (there is no libasound2t64).
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
-    # Core tools
-    curl wget tar gzip unzip p7zip-full \
-    # xvfb — required for headless Electron (Chromium needs a display)
-    xvfb \
-    # Electron / Chromium runtime dependencies
+    curl wget tar gzip unzip p7zip-full ca-certificates \
+    python3 python-is-python3 build-essential \
+    xvfb xauth \
+    fontconfig fonts-dejavu-core \
+    procps \
     libasound2 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
     libpango-1.0-0 libcairo2 libgtk-3-0 libx11-xcb1 libxss1 \
-    # SteamCMD 32-bit dependencies
-    libc6:i386 libstdc++6:i386 \
-    # Useful for debugging
-    procps htop strace \
-    && rm -rf /var/lib/apt/lists/*
+    libc6:i386 libstdc++6:i386 lib32gcc-s1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f
 
-# Create a non-root user (Electron refuses to run as root without --no-sandbox)
-RUN groupadd -r aasm && useradd -r -g aasm -m -d /home/aasm aasm
+RUN groupadd -r aasm && useradd -r -g aasm -m -d /home/aasm -s /bin/bash aasm
+
+ENV PYTHON=/usr/bin/python3 \
+    npm_config_python=/usr/bin/python3 \
+    ELECTRON_DISABLE_SANDBOX=1 \
+    HOME=/home/aasm
 
 WORKDIR /app
 
-# Copy package files first for layer caching
-COPY package.json package-lock.json* ./
+# ---------------------------------------------------------------------------
+# Stage: build — application compile and native modules
+# ---------------------------------------------------------------------------
+FROM base AS build
 
-# Skip lifecycle scripts (electron-builder postinstall needs a display),
-# then manually run Electron's own install script to download the binary.
-RUN npm install --ignore-scripts \
-    && node node_modules/electron/install.js \
-    && npx electron-rebuild 2>/dev/null || true
+COPY package.json package-lock.json ./
+# npm ci runs preinstall/postinstall before the rest of the source is copied.
+COPY scripts/check-platform.js scripts/safe-postinstall.js scripts/
 
-# Copy the rest of the source code
+# Lifecycle scripts download Electron and attempt a native rebuild. The explicit
+# electron-rebuild below is what must succeed; safe-postinstall exits 0 on failure.
+RUN npm ci
+
 COPY . .
 
-# Ensure electron directory JS artifacts are clean (we compile from TS)
-RUN find electron/ -name "*.js" -delete 2>/dev/null || true
+# Optional. Leave the placeholder when unset so the image still builds.
+ARG CURSEFORGE_API_KEY=
+RUN if [ -n "$CURSEFORGE_API_KEY" ]; then \
+      node -e "const fs=require('fs'); const p='src/environments/environment.prod.ts'; const key=process.env.CURSEFORGE_API_KEY; fs.writeFileSync(p, fs.readFileSync(p,'utf8').replaceAll('CURSEFORGE_KEY_PLACEHOLDER', key));"; \
+    fi
 
-# Compile TypeScript for the electron layer
-RUN npx tsc -p tsconfig.electron.json
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build \
+    && find electron -name '*.js' -delete \
+    && npx tsc -p tsconfig.electron.json \
+    && npx electron-rebuild --force --only node-pty,bcrypt
 
-# Fix permissions
 RUN chown -R aasm:aasm /app /home/aasm
 
 # ---------------------------------------------------------------------------
-# Stage: test — run electron-side jest tests in Linux
+# Stage: test — electron-side Jest tests
 # ---------------------------------------------------------------------------
-FROM base AS test
+FROM build AS test
 
 USER aasm
 
-# Default: run electron tests
 CMD ["npx", "jest", "--config", "jest.config.js", "--testPathPatterns", "\\.test\\.ts$", "--forceExit"]
 
 # ---------------------------------------------------------------------------
-# Stage: headless — run the full headless app via xvfb
+# Stage: runtime — headless web UI
 # ---------------------------------------------------------------------------
-FROM base AS headless
+FROM base AS runtime
 
-# Headless mode environment
 ENV NODE_ENV=production
-ENV DISPLAY=:99
-ENV ELECTRON_DISABLE_SANDBOX=1
+ENV AASM_DOCKER=1
 
-# Xvfb needs /tmp/.X11-unix — create it before dropping to non-root
-RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+RUN mkdir -p /tmp/.X11-unix /home/aasm/.local/share/cerious-aasm /home/aasm/.config \
+    && chmod 1777 /tmp/.X11-unix \
+    && chown -R aasm:aasm /home/aasm
 
-# Expose the web server port (default 3000)
+COPY --from=build --chown=aasm:aasm /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=aasm:aasm /app/node_modules ./node_modules
+COPY --from=build --chown=aasm:aasm /app/dist ./dist
+COPY --from=build --chown=aasm:aasm /app/electron ./electron
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod 755 /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 3000
+
+VOLUME ["/home/aasm/.local/share/cerious-aasm", "/home/aasm/.config"]
 
 USER aasm
 
-# Data directory for server instances, configs, etc.
-VOLUME ["/home/aasm/.local/share/cerious-aasm", "/home/aasm/.config/Cerious AASM"]
-
-# Start xvfb, then launch the headless Electron app
-# --no-sandbox is required in Docker (no user namespace support)
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1024x768x24 -nolisten tcp & sleep 1 && npx electron electron/main.js --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --port=3000"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -6,9 +6,6 @@
 <!-- Main app layout - top bar, sidebar, content -->
 <ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
   <div class="app-root-wrapper">
-    <!-- App Update Banner - full width above everything -->
-    <app-update-banner *ngIf="isElectron"></app-update-banner>
-
     <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
     <div class="app-container">

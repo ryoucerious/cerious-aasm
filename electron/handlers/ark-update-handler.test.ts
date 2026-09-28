@@ -1,6 +1,11 @@
 // Mock the services
 jest.mock('../services/messaging.service');
 jest.mock('../services/ark-update.service');
+jest.mock('../utils/ark/ark-install.utils', () => ({
+  isArkServerInstalled: jest.fn().mockReturnValue(true),
+  getArkServerDir: jest.fn().mockReturnValue('/ark'),
+  getCurrentInstalledVersion: jest.fn().mockResolvedValue('999')
+}));
 
 import { messagingService } from '../services/messaging.service';
 import { ArkUpdateService } from '../services/ark-update.service';
@@ -11,11 +16,13 @@ const mockArkUpdateService = ArkUpdateService as jest.MockedClass<typeof ArkUpda
 
 // Create a mock instance that will be returned by the constructor
 const mockServiceInstance = {
-  checkForUpdate: jest.fn()
+  checkForUpdate: jest.fn(),
+  refreshInstalledBuild: jest.fn()
 };
 
-// Store handler function for testing
+// Store handler functions for testing
 let checkArkUpdateHandler: Function;
+let getArkInstallationHandler: Function;
 
 describe('ARK Update Handler', () => {
   let mockSender: any;
@@ -35,6 +42,9 @@ describe('ARK Update Handler', () => {
     mockOn.mock.calls.forEach(([event, handler]) => {
       if (event === 'check-ark-update') {
         checkArkUpdateHandler = handler;
+      }
+      if (event === 'get-ark-installation') {
+        getArkInstallationHandler = handler;
       }
     });
   });
@@ -194,6 +204,33 @@ describe('ARK Update Handler', () => {
         message: 'No update available',
         error: undefined,
         requestId: undefined
+      }, mockSender);
+    });
+  });
+
+  describe('get-ark-installation event', () => {
+    // The page must show one consistent picture: the installed build and the update flag
+    // have to come from the same comparison, or a finished update still reads "Update available".
+    it('reports the refreshed build and update flag together', async () => {
+      mockServiceInstance.refreshInstalledBuild.mockResolvedValue({
+        installedBuildId: '25535041',
+        latestBuildId: '25535041',
+        updateAvailable: false,
+        lastCheckedAt: 1790562909000
+      });
+
+      await getArkInstallationHandler({ requestId: 'r1' }, mockSender);
+
+      expect(mockServiceInstance.refreshInstalledBuild).toHaveBeenCalled();
+      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-ark-installation', {
+        success: true,
+        installed: true,
+        installedBuildId: '25535041',
+        latestBuildId: '25535041',
+        updateAvailable: false,
+        lastCheckedAt: 1790562909000,
+        installPath: '/ark',
+        requestId: 'r1'
       }, mockSender);
     });
   });

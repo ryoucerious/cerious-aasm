@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 let app: any = undefined;
@@ -25,11 +26,24 @@ export class PlatformService {
    * Get the operating system platform.
    * @returns The operating system platform (Windows, macOS, Linux, etc.)
    */
+  /**
+   * True when this process is the Docker image. The image sets AASM_DOCKER.
+   * /.dockerenv covers a container started without that variable.
+   */
+  isRunningInDocker(): boolean {
+    if (process.env.AASM_DOCKER === '1') return true;
+    try {
+      return fs.existsSync('/.dockerenv');
+    } catch {
+      return false;
+    }
+  }
+
   getPlatform(): string {
     const platform = process.platform || 'unknown';
     if (platform === 'win32') return 'Windows';
     if (platform === 'darwin') return 'macOS';
-    if (platform === 'linux') return 'Linux';
+    if (platform === 'linux') return this.isRunningInDocker() ? 'Linux (Docker)' : 'Linux';
     return platform;
   }
 

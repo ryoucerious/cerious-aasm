@@ -110,6 +110,35 @@ jobs:
           name: electron-linux-rpm
           path: dist-electron/*.rpm
 
+  build-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          tags: |
+            ghcr.io/ryoucerious/cerious-aasm:${{ github.ref_name }}
+            ghcr.io/ryoucerious/cerious-aasm:latest
+          build-args: |
+            CURSEFORGE_API_KEY=${{ secrets.CURSEFORGE_API_KEY }}
+
   create-release:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest

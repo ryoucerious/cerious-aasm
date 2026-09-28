@@ -106,12 +106,25 @@
       <span class="material-icons">settings</span>
       <span class="nav-item-label">Settings</span>
       <span class="sidenav-footer-version">v{{ version }}</span>
-      <span class="material-icons sidenav-update-icon" *ngIf="appUpdatePending" [title]="appUpdateTitle">download</span>
+    </button>
+    <button type="button" class="sidenav-update-btn" *ngIf="appUpdatePending"
+            [title]="appUpdateTitle" [disabled]="appUpdateBusy"
+            (click)="onAppUpdateClick()">
+      <span class="material-icons sidenav-update-icon">{{ appUpdateIcon }}</span>
+      <span class="sidenav-update-percent" *ngIf="appUpdateBusy">{{ appUpdatePercent }}%</span>
     </button>
   </div>
 </nav>
 
 <app-add-server-modal [show]="showAddModal" [servers]="servers" (closed)="onAddModalClosed()" (created)="onServerCreated($event)"></app-add-server-modal>
+
+<app-modal [title]="'Update the app'" [show]="showUpdateHelp" [maxWidth]="'520px'" (close)="closeUpdateHelp()">
+  <p class="update-help-text">{{ updateHelpText }}</p>
+  <p *ngIf="appUpdateInstructionsUrl"><a [href]="appUpdateInstructionsUrl" target="_blank" rel="noopener">Open the releases page</a></p>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="closeUpdateHelp()">Close</button>
+  </div>
+</app-modal>
 
 <app-modal [title]="'Confirm Delete'" [show]="showConfirmDeleteModal" (close)="onCancelDelete()">
   <div class="modal-confirmation">

@@ -87,18 +87,28 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
     // Ubuntu 23.04+ renamed libasound2 → libasound2t64 (64-bit time_t transition).
     // Try libasound2t64 first; fall back to libasound2 for older distros.
     aptAlternatives: ['libasound2t64', 'libasound2'],
-    // Verify the critical symbol exists — not just that the .so file is present.
-    // On Ubuntu 24.04, a transitional libasound2 stub can satisfy ldconfig without
-    // providing snd_device_name_get_hint, causing a symbol-lookup crash at startup.
+    // Verify the real ALSA library is installed, not just a package name.
+    // On Ubuntu 24.04, a transitional libasound2 stub can show as installed without
+    // providing snd_device_name_get_hint, which crashes Electron at startup.
     //
-    // On apt systems: check directly whether libasound2t64 is fully installed via dpkg.
-    //   - Ubuntu 24.04: transitional libasound2 stub shows as 'ii' but libasound2t64
-    //     is the real package; if it's missing this check correctly fails and
-    //     aptAlternatives will install libasound2t64.
-    //   - Ubuntu 22.04: libasound2t64 doesn't exist, so this fails; aptAlternatives
-    //     falls back to libasound2, which apt reports as already installed (no-op).
+    // On apt systems:
+    //   - Pass when libasound2t64 is installed (Ubuntu 24.04+).
+    //   - Fail when that package is in the apt cache but not installed. The
+    //     transitional libasound2 stub must not count.
+    //   - Pass when libasound2t64 is not in the apt cache and libasound2 ships
+    //     libasound.so.2 (Debian Bookworm, Ubuntu 22.04). dpkg -L rejects the
+    //     Ubuntu 24.04 stub, which does not contain the shared library, including
+    //     when apt lists have been removed and apt-cache cannot see t64.
     // On non-apt systems: fall back to checking ldconfig for the .so presence.
-    checkCommand: 'if command -v dpkg >/dev/null 2>&1; then dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; else ldconfig -p | grep -q \'libasound\\.so\\.2\'; fi',
+    checkCommand: [
+      'if command -v dpkg >/dev/null 2>&1; then',
+      '  if dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; then exit 0; fi',
+      '  if apt-cache show libasound2t64 >/dev/null 2>&1; then exit 1; fi',
+      '  dpkg -L libasound2 2>/dev/null | grep -q \'libasound\\.so\\.2\'',
+      'else',
+      '  ldconfig -p | grep -q \'libasound\\.so\\.2\'',
+      'fi'
+    ].join('\n'),
     description: 'ALSA audio library required by Electron (audio output is disabled at runtime)',
     required: true
   },

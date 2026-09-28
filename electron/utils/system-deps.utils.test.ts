@@ -50,6 +50,29 @@ describe('system-deps.utils', () => {
       expect(LINUX_DEPENDENCIES[6].name).toBe('Font Configuration');
     });
 
+    it('should accept libasound2t64, accept real libasound2 when t64 is not packaged, and reject the Ubuntu 24.04 stub', () => {
+      const cmd = LINUX_DEPENDENCIES[5].checkCommand;
+
+      // Ubuntu 24.04: installed libasound2t64 passes before any other branch.
+      expect(cmd).toContain("dpkg -l libasound2t64");
+      expect(cmd).toContain('exit 0');
+
+      // t64 is in the apt cache but not installed: the transitional stub fails.
+      expect(cmd).toContain('apt-cache show libasound2t64');
+      expect(cmd).toContain('exit 1');
+
+      // Debian Bookworm / Ubuntu 22.04: no t64 package, and libasound2 ships the .so.
+      expect(cmd).toContain('dpkg -L libasound2');
+      expect(cmd).toContain('libasound\\.so\\.2');
+
+      const t64Install = cmd.indexOf('dpkg -l libasound2t64');
+      const t64InCache = cmd.indexOf('apt-cache show libasound2t64');
+      const realLibasound2 = cmd.indexOf('dpkg -L libasound2');
+      expect(t64Install).toBeGreaterThanOrEqual(0);
+      expect(t64Install).toBeLessThan(t64InCache);
+      expect(t64InCache).toBeLessThan(realLibasound2);
+    });
+
     it('should have correct structure for each dependency', () => {
       LINUX_DEPENDENCIES.forEach(dep => {
         expect(typeof dep.name).toBe('string');

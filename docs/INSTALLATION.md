@@ -155,6 +155,17 @@
    npm run electron:package:linux
    ```
 
+### Method 5: Docker Compose
+
+The Docker image runs the headless app, managed from your browser, on a Linux server or on Windows and Mac with Docker Desktop. Download the Compose file and start it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ryoucerious/cerious-aasm/main/docker-compose.yml
+docker compose up -d
+```
+
+Then open `http://localhost:3000`. The [Docker guide](DOCKER.md) covers the rest: installing the ARK server, turning on sign-in, which ports your servers can use, host networking on Linux, updating, and troubleshooting.
+
 ## Post-Installation Setup
 
 ### Initial Configuration
@@ -199,7 +210,8 @@ cerious-aasm --no-sandbox --headless
 # With custom port
 cerious-aasm --no-sandbox --headless --port=8080
 
-# With authentication
+# With authentication. --password is the admin login: it is applied on every
+# start and cannot be changed in the app. Add other users under Settings → Users & Roles.
 cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
 
 # Full example

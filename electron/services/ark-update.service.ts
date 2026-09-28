@@ -325,6 +325,30 @@ export class ArkUpdateService {
     };
   }
 
+  /**
+   * Re-read the installed build and compare it against the last build Steam reported, without
+   * another SteamCMD call. An install or update started from the settings page runs through the
+   * installer rather than performClusterUpdate, so without this the update flag stays set until
+   * the next poll. Broadcasts only when the answer changes, so repeated calls stay quiet.
+   */
+  async refreshInstalledBuild(): Promise<ReturnType<ArkUpdateService['getStatus']>> {
+    // Keep the last known build if the manifest is briefly missing mid-install.
+    this.installedBuildId = (await getCurrentInstalledVersion()) ?? this.installedBuildId;
+
+    if (this.installedBuildId && this.latestBuildId) {
+      const hasUpdate = this.installedBuildId !== this.latestBuildId;
+      if (hasUpdate !== this.updateAvailable) {
+        this.updateAvailable = hasUpdate;
+        this.messagingService.sendToAll('ark-update-status', {
+          hasUpdate,
+          buildId: hasUpdate ? this.latestBuildId : null
+        });
+      }
+    }
+
+    return this.getStatus();
+  }
+
   async pollAndNotify(): Promise<string | null> {
     const result = await this.pollArkServerUpdates();
     this.lastCheckedAt = Date.now();

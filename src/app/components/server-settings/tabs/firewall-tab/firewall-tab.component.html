@@ -9,63 +9,132 @@
         <p class="section-desc">Current firewall status and required port configuration.</p>
 
         <!-- Firewall Status -->
-      <div class="form-group page-intro">
-        <h4>Firewall Status</h4>
-        <div class="automation-status-row">
-          <div class="status-item-inline">
-            <span class="status-label">Firewall Status:</span>
-            <span class="status-badge status-stopping">
-              Manual Configuration Required
-            </span>
-          </div>
-          <div class="status-item-inline">
-            <span class="status-label">Platform:</span>
-            <span class="status-badge status-stopping">Linux</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Port Information -->
-      <div class="form-group page-intro">
-        <h4>Server Port Configuration</h4>
-        <div class="port-info">
-          <div class="port-item">
-            <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
-          </div>
-          <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
-            <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Steam server discovery
-          </div>
-          <div class="port-item" *ngIf="serverInstance?.rconPort">
-            <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
+        <div class="form-group page-intro">
+          <h4>Firewall Status</h4>
+          <div class="automation-status-row">
+            <div class="status-item-inline">
+              <span class="status-label">Firewall Status:</span>
+              <span class="status-badge" [ngClass]="dockerPublished ? 'status-running' : 'status-stopping'">
+                {{ dockerPublished ? 'Managed by Docker' : 'Manual Configuration Required' }}
+              </span>
+            </div>
+            <div class="status-item-inline">
+              <span class="status-label">Platform:</span>
+              <span class="status-badge status-stopping">
+                {{ dockerPublished ? 'Linux (Docker)' : dockerHost ? 'Linux (Docker, Host Networking)' : 'Linux' }}
+              </span>
+            </div>
           </div>
         </div>
-        <div class="form-control-label desc">These ports need to be accessible through your firewall for players to connect and for server management.</div>
-      </div>
 
-      <!-- Linux Firewall Configuration -->
-      <div class="form-group page-intro">
-        <h4>Linux Firewall Configuration</h4>
-        <div class="linux-firewall-instructions">
-          <p><strong>Manual firewall configuration is required on Linux.</strong> Use one of the following methods:</p>
+        <!-- Docker, published ports: Docker decides what is reachable, so show the ranges and
+             check this server's ports against them instead of ufw commands. -->
+        <ng-container *ngIf="dockerPublished && docker as d">
+          <div class="form-group page-intro">
+            <h4>Ports Published by Docker</h4>
+            <p class="form-control-label desc">
+              This server runs in the Cerious AASM Docker container. Only the port ranges below are published
+              on the host. A port outside them can't be reached, whatever it is set to here.
+            </p>
+            <table class="docker-ports">
+              <thead>
+                <tr><th>Port</th><th>Protocol</th><th>Available range</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Game port, and the peer port (game port + 1)</td><td>UDP</td><td class="mono">{{ formatRange(d.gamePorts) }}</td></tr>
+                <tr><td>Query port</td><td>UDP</td><td class="mono">{{ formatRange(d.queryPorts) }}</td></tr>
+                <tr><td>RCON port</td><td>TCP</td><td class="mono">{{ formatRange(d.rconPorts) }}</td></tr>
+                <tr><td>Web UI</td><td>TCP</td><td class="mono">{{ d.webPort }}</td></tr>
+              </tbody>
+            </table>
+          </div>
 
-          <h5>UFW (Ubuntu/Debian):</h5>
-          <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
+          <div class="form-group page-intro">
+            <h4>This Server's Ports</h4>
+            <ul class="docker-port-checks">
+              <li *ngFor="let check of portChecks" [class.out-of-range]="!check.ok">
+                <i class="material-icons">{{ check.ok ? 'check_circle' : 'error' }}</i>
+                <!-- Angular drops the whitespace between elements, so the space lives inside the text. -->
+                <span><strong>{{ check.label }}: </strong><span class="mono">{{ check.port }}</span> ({{ check.protocol }})</span>
+                <span class="docker-port-verdict" *ngIf="check.ok">inside {{ formatRange(check.range) }}</span>
+                <span class="docker-port-verdict" *ngIf="!check.ok">
+                  outside the published range {{ formatRange(check.range) }}, so players can't reach it
+                </span>
+              </li>
+            </ul>
+            <div class="form-control-label desc" *ngIf="portsOutOfRange > 0">
+              Change the port in this server's settings to one inside the range, or widen the range below.
+              <span *ngIf="!(portChecks[0]?.ok) || !(portChecks[1]?.ok)">The peer port is always the game port + 1, so both must fit inside the game range.</span>
+            </div>
+          </div>
+
+          <div class="form-group page-intro">
+            <h4>Changing the Ranges</h4>
+            <p class="form-control-label desc">
+              Set the ranges in a <span class="mono">.env</span> file next to <span class="mono">docker-compose.yml</span>,
+              then recreate the container. Compose publishes the same ranges it passes to the app, so this page follows.
+            </p>
+            <pre class="firewall-commands">AASM_GAME_PORTS={{ composeRange(d.gamePorts) }}
+AASM_QUERY_PORTS={{ composeRange(d.queryPorts) }}
+AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
+            <pre class="firewall-commands">docker compose up -d</pre>
+          </div>
+
+          <div class="form-group page-intro">
+            <h4>Host Firewall</h4>
+            <ul class="firewall-notes">
+              <li><strong>Linux host:</strong> Docker opens published ports with its own firewall rules, which run before ufw. They are reachable whether or not ufw allows them, and ufw rules can't close them.</li>
+              <li><strong>Docker Desktop (Windows or macOS):</strong> the traffic arrives through Docker Desktop. If Windows Firewall or the macOS firewall asks, allow Docker Desktop.</li>
+              <li><strong>Dedicated Linux server:</strong> host networking removes the ranges altogether. Start with <span class="mono">docker-compose.host.yml</span> (see <span class="mono">docs/DOCKER.md</span>) and manage ports with the host firewall.</li>
+            </ul>
+          </div>
+        </ng-container>
+
+        <!-- Port Information -->
+        <div class="form-group page-intro" *ngIf="!dockerPublished">
+          <h4>Server Port Configuration</h4>
+          <div class="port-info">
+            <div class="port-item">
+              <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
+            </div>
+            <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
+              <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Steam server discovery
+            </div>
+            <div class="port-item" *ngIf="serverInstance?.rconPort">
+              <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
+            </div>
+          </div>
+          <div class="form-control-label desc">These ports need to be accessible through your firewall for players to connect and for server management.</div>
+        </div>
+
+        <!-- Linux Firewall Configuration (native Linux, or Docker sharing the host network) -->
+        <div class="form-group page-intro" *ngIf="!dockerPublished">
+          <h4>{{ dockerHost ? 'Host Firewall Configuration' : 'Linux Firewall Configuration' }}</h4>
+          <div class="linux-firewall-instructions">
+            <p *ngIf="dockerHost">
+              <strong>This container uses host networking</strong>, so it listens directly on the host's ports.
+              Run these commands on the Docker host, not inside the container.
+            </p>
+            <p><strong>Manual firewall configuration is required on Linux.</strong> Use one of the following methods:</p>
+
+            <h5>UFW (Ubuntu/Debian):</h5>
+            <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
 <span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port (Steam discovery)</span>
 <span *ngIf="serverInstance?.rconPort">sudo ufw allow {{ serverInstance.rconPort }}/tcp  # RCON port</span></pre>
 
-          <h5>Firewalld (CentOS/RHEL/Fedora):</h5>
-          <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ serverInstance?.gamePort || 7777 }}/udp
+            <h5>Firewalld (CentOS/RHEL/Fedora):</h5>
+            <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ serverInstance?.gamePort || 7777 }}/udp
 <span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo firewall-cmd --permanent --add-port={{ serverInstance.queryPort }}/udp</span>
 <span *ngIf="serverInstance?.rconPort">sudo firewall-cmd --permanent --add-port={{ serverInstance.rconPort }}/tcp</span>
 sudo firewall-cmd --reload</pre>
 
-          <h5>Iptables (Advanced users):</h5>
-          <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ serverInstance?.gamePort || 7777 }} -j ACCEPT
+            <h5>Iptables (Advanced users):</h5>
+            <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ serverInstance?.gamePort || 7777 }} -j ACCEPT
 <span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span>
 <span *ngIf="serverInstance?.rconPort">sudo iptables -A INPUT -p tcp --dport {{ serverInstance.rconPort }} -j ACCEPT</span></pre>
+          </div>
+          <div class="form-control-label desc">Remember to save your iptables rules if using the iptables method.</div>
         </div>
-        <div class="form-control-label desc">Remember to save your iptables rules if using the iptables method.</div>
-      </div>
       </div>
 
       <div class="settings-section">
@@ -73,18 +142,19 @@ sudo firewall-cmd --reload</pre>
         <p class="section-desc">Additional network setup for external access.</p>
 
         <!-- Router/NAT Information -->
-      <div class="form-group page-intro">
-        <h4>Router & NAT Configuration</h4>
-        <p class="form-control-label desc">
-          <strong>Important:</strong> If your server is behind a router/NAT, you'll also need to configure port forwarding:
-        </p>
-        <ul class="firewall-notes">
-          <li>Forward Game Port {{ serverInstance?.gamePort || 7777 }} (UDP) to your server's internal IP</li>
-          <li *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
-          <li *ngIf="serverInstance?.rconPort">Forward RCON Port {{ serverInstance.rconPort }} (TCP) to your server's internal IP (if remote access needed)</li>
-          <li>Set your server's IP to static or use DHCP reservation</li>
-          <li>Configure UPnP if supported by your router for automatic port forwarding</li>
-        </ul>
+        <div class="form-group page-intro">
+          <h4>Router & NAT Configuration</h4>
+          <p class="form-control-label desc">
+            <strong>Important:</strong> If your server is behind a router/NAT, you'll also need to configure port forwarding:
+          </p>
+          <ul class="firewall-notes">
+            <li>Forward Game Port {{ serverInstance?.gamePort || 7777 }} (UDP) to your server's internal IP</li>
+            <li *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
+            <li *ngIf="serverInstance?.rconPort">Forward RCON Port {{ serverInstance.rconPort }} (TCP) to your server's internal IP (if remote access needed)</li>
+            <li>Set your server's IP to static or use DHCP reservation</li>
+            <li>Configure UPnP if supported by your router for automatic port forwarding</li>
+          </ul>
+        </div>
       </div>
 
       <div class="settings-section">
@@ -92,11 +162,12 @@ sudo firewall-cmd --reload</pre>
         <p class="section-desc">Common issues and solutions for network connectivity.</p>
 
         <ul class="firewall-notes">
+          <li *ngIf="dockerPublished"><strong>Players can't connect (Docker):</strong> Check every port above is inside its published range</li>
           <li><strong>Players can't connect:</strong> Check firewall rules and router port forwarding</li>
           <li><strong>Server not visible in browser:</strong> Ensure Query Port is properly forwarded</li>
           <li><strong>RCON not working:</strong> Check RCON port firewall rule and forwarding</li>
-          <li><strong>Commands not working:</strong> Ensure you have sudo privileges for firewall commands</li>
-          <li><strong>Rules not persisting:</strong> Some distributions require saving firewall rules manually</li>
+          <li *ngIf="!dockerPublished"><strong>Commands not working:</strong> Ensure you have sudo privileges for firewall commands</li>
+          <li *ngIf="!dockerPublished"><strong>Rules not persisting:</strong> Some distributions require saving firewall rules manually</li>
         </ul>
       </div>
     </div>

@@ -1,14 +1,29 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject, Observable } from 'rxjs';
 import { MessagingService } from './messaging/messaging.service';
-import { AppUpdateStatus } from '../../components/update-banner/update-banner.component';
+
+export interface AppUpdateStatus {
+  status: 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error';
+  version?: string;
+  percent?: number;
+  bytesPerSecond?: number;
+  transferred?: number;
+  total?: number;
+  releaseNotes?: string;
+  releaseDate?: string;
+  error?: string;
+  /** Set when this client must be updated outside the app. */
+  manual?: boolean;
+  /** How to apply the update. Shown instead of downloading. */
+  instructions?: string;
+  instructionsUrl?: string;
+}
 
 /**
  * Whether a new version of the app itself is waiting.
  *
- * The banner across the top is the place to act on it; this exists so anything else that
- * wants to show it — the version in the sidebar, for one — reads the same state instead of
- * opening its own subscription and missing the message that arrived before it loaded.
+ * The sidebar version mark is the place to download and install it. This keeps that state
+ * in one subscription so a late listener still sees an update found before it loaded.
  */
 @Injectable({ providedIn: 'root' })
 export class AppUpdateService {
@@ -34,6 +49,15 @@ export class AppUpdateService {
   static isPending(status: AppUpdateStatus | null): boolean {
     return status?.status === 'available'
       || status?.status === 'downloading'
-      || status?.status === 'downloaded';
+      || status?.status === 'downloaded'
+      || status?.status === 'error';
+  }
+
+  download(): void {
+    this.messaging.sendNotification('download-app-update', {});
+  }
+
+  install(): void {
+    this.messaging.sendNotification('install-app-update', {});
   }
 }

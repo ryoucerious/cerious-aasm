@@ -115,6 +115,7 @@ export class ServerProcessService {
 
     delete this.arkServerProcesses[instanceId];
     delete this.processStartTimes[instanceId];
+    this.releaseInstancePorts(instanceId);
     this.setInstanceState(instanceId, 'stopped');
 
     if (broadcast) {
@@ -125,6 +126,27 @@ export class ServerProcessService {
       } catch (e) {
         console.warn(`[server-process-service] Failed to broadcast stopped state for ${instanceId}:`, e);
       }
+    }
+  }
+
+  /**
+   * Kill leftover Wine/ARK processes for this instance so the RCON listen port
+   * is released after a crash or a launcher that exits before the game does.
+   */
+  releaseInstancePorts(instanceId: string): void {
+    if (!validateInstanceId(instanceId)) return;
+    const { getPlatform } = require('../../utils/platform.utils');
+    try {
+      if (getPlatform() === 'linux') {
+        execSync(`pkill -f ${instanceId}`, { stdio: 'ignore' });
+      } else {
+        execSync(
+          `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${instanceId}*' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
+          { stdio: 'ignore' }
+        );
+      }
+    } catch {
+      // pkill/Stop-Process exit non-zero when nothing matched
     }
   }
 
@@ -272,7 +294,7 @@ export class ServerProcessService {
       const uptimeMs = this.processStartTimes[instanceId] ? Date.now() - this.processStartTimes[instanceId] : 0;
       const uptimeSec = Math.round(uptimeMs / 1000);
       const previousState = this.getInstanceState(instanceId);
-      const isRapidCrash = previousState === 'starting' && uptimeSec < 60;
+      const isRapidCrash = previousState === 'starting' && uptimeSec < 60 && code !== 0 && code !== null;
 
       // Log exit details for diagnostics
       console.log(`[server-process-service] Server ${instanceId} exited — code=${code}, signal=${signal}, uptime=${uptimeSec}s, previousState=${previousState}`);
@@ -332,6 +354,9 @@ export class ServerProcessService {
       discordService.sendNotification(instanceId, finalState === 'crashed' ? 'crash' : 'stop',
         finalState === 'crashed' ? `Server crashed during startup (exit code ${code})` : 'Server has stopped');
 
+      // The tracked launcher can exit while Wine/ARK is still bound to the RCON port.
+      this.releaseInstancePorts(instanceId);
+
       // Disconnect RCON connection since server has exited
       try {
         const rconService = require('../rcon.service').rconService;
@@ -355,6 +380,8 @@ export class ServerProcessService {
       const { discordService } = require('../discord.service');
       discordService.sendNotification(instanceId, 'crash', `Server Process Error: ${err.message || err}`);
       
+      this.releaseInstancePorts(instanceId);
+
       // Disconnect RCON connection since server has errored
       try {
         const rconService = require('../rcon.service').rconService;

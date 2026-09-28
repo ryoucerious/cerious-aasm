@@ -2,6 +2,7 @@
 import { messagingService } from '../services/messaging.service';
 import { firewallService } from '../services/firewall.service';
 import * as platformUtils from '../utils/platform.utils';
+import * as dockerNetworkUtils from '../utils/docker-network.utils';
 
 // Mock the services
 jest.mock('../services/messaging.service');
@@ -25,6 +26,8 @@ describe('Firewall Handler', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.restoreAllMocks();
+    // Not in Docker unless a test says so, even when the suite itself runs in a container.
+    jest.spyOn(dockerNetworkUtils, 'getDockerNetworkInfo').mockReturnValue(null);
   });
 
   describe('setup-ark-server-firewall event', () => {
@@ -603,6 +606,28 @@ describe('Firewall Handler', () => {
     });
   });
   describe('check-firewall-enabled event', () => {
+    it('adds the Docker port ranges when running in Docker', async () => {
+      const docker = {
+        mode: 'published' as const,
+        gamePorts: { start: 7777, end: 7900 },
+        queryPorts: { start: 27015, end: 27030 },
+        rconPorts: { start: 27020, end: 27050 },
+        webPort: 3000
+      };
+      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
+      (dockerNetworkUtils.getDockerNetworkInfo as jest.Mock).mockReturnValue(docker);
+
+      await checkFirewallEnabledHandler({ requestId: 'd1' }, mockSender);
+
+      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
+        success: true,
+        platform: 'linux',
+        enabled: true,
+        message: 'Firewall management available on Linux',
+        docker,
+        requestId: 'd1'
+      }, mockSender);
+    });
     it('should handle undefined payload (payload || {})', async () => {
       jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
       await checkFirewallEnabledHandler(undefined, mockSender);

@@ -35,7 +35,7 @@ describe('TopbarComponent', () => {
     router.navigate.and.returnValue(Promise.resolve(true));
     theme = { resolved$: new BehaviorSubject('dark'), toggle: jasmine.createSpy('toggle') };
     items$ = new BehaviorSubject<any[]>([]);
-    activity = { items$: items$.asObservable(), unreadCount: 0, markAllSeen: jasmine.createSpy('markAllSeen') };
+    activity = { items$: items$.asObservable(), unreadCount: 0, markAllSeen: jasmine.createSpy('markAllSeen'), clear: jasmine.createSpy('clear') };
     servers$ = new BehaviorSubject<any[]>([
       { id: 'a', name: 'Aberration', mapName: 'Aberration_WP', state: 'running' },
       { id: 'b', name: 'Ragnarok', mapName: 'Ragnarok_WP', state: 'stopped' }
@@ -161,7 +161,7 @@ describe('TopbarComponent', () => {
     expect(component.searchOpen).toBeTrue();
   });
 
-  it('opens settings and navigates to the dashboard and activity list', () => {
+  it('opens settings and the dashboard without leaving the page for activity', () => {
     component.goToSettings();
     expect(settingsDrawer.open).toHaveBeenCalled();
     // "User Settings" lands on the account section rather than the drawer's default.
@@ -169,8 +169,12 @@ describe('TopbarComponent', () => {
     expect(settingsDrawer.open).toHaveBeenCalledWith('profile');
     component.goToDashboard();
     expect(router.navigate).toHaveBeenCalledWith(['/dashboard']);
+    router.navigate.calls.reset();
     component.viewAllActivity();
-    expect(router.navigate).toHaveBeenCalledWith(['/dashboard'], { fragment: 'activity' });
+    expect(component.showAllActivity).toBeTrue();
+    expect(router.navigate).not.toHaveBeenCalled();
+    component.closeAllActivity();
+    expect(component.showAllActivity).toBeFalse();
   });
 
   it('shows the signed-in account in place of the configured username', () => {

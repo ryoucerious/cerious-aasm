@@ -124,6 +124,44 @@ describe('ArkUpdateService', () => {
     expect(result).toBeNull();
   });
 
+  describe('refreshInstalledBuild', () => {
+    // An install from the settings page goes through the installer, not performClusterUpdate,
+    // so the service only learns about the new build by re-reading it.
+    it('clears a stale update flag once the latest build is installed', async () => {
+      (arkServerUtils.getCurrentInstalledVersion as jest.Mock).mockResolvedValueOnce('old-build');
+      jest.spyOn(service as any, 'getLatestServerVersion').mockResolvedValue('new-build');
+      await service.pollArkServerUpdates();
+      expect(service.getStatus().updateAvailable).toBe(true);
+
+      (arkServerUtils.getCurrentInstalledVersion as jest.Mock).mockResolvedValueOnce('new-build');
+      const status = await service.refreshInstalledBuild();
+
+      expect(status.installedBuildId).toBe('new-build');
+      expect(status.latestBuildId).toBe('new-build');
+      expect(status.updateAvailable).toBe(false);
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('ark-update-status', { hasUpdate: false, buildId: null });
+    });
+
+    it('does not re-announce an update that is still pending', async () => {
+      (arkServerUtils.getCurrentInstalledVersion as jest.Mock).mockResolvedValue('old-build');
+      jest.spyOn(service as any, 'getLatestServerVersion').mockResolvedValue('new-build');
+      await service.pollArkServerUpdates();
+
+      const status = await service.refreshInstalledBuild();
+
+      expect(status.updateAvailable).toBe(true);
+      expect(messagingService.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('does not report an update before Steam has been polled', async () => {
+      const status = await service.refreshInstalledBuild();
+
+      expect(status.installedBuildId).toBe('12345');
+      expect(status.latestBuildId).toBeNull();
+      expect(status.updateAvailable).toBe(false);
+    });
+  });
+
   describe('auto-update cycle prevention', () => {
     it('pollArkServerUpdates re-reads installedBuildId from disk on each poll', async () => {
       // Reset the mock and configure sequential return values

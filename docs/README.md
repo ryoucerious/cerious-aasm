@@ -6,6 +6,7 @@ Welcome to the Cerious AASM documentation! This index provides an overview of al
 
 ### Quick Start
 - **[Installation Guide](INSTALLATION.md)** - Complete installation instructions for Windows and Linux
+- **[Docker](DOCKER.md)** - Run the Linux headless app with Docker Compose
 - **[User Manual](USER_MANUAL.md)** - Comprehensive guide to using all features
 - **[System Requirements](SYSTEM_REQUIREMENTS.md)** - Hardware and software requirements
 
@@ -30,7 +31,7 @@ Welcome to the Cerious AASM documentation! This index provides an overview of al
 Complete installation and setup instructions including:
 - System requirements overview
 - Windows installation methods (installer and build from source)
-- Linux installation methods (AppImage, DEB, RPM packages)
+- Linux installation methods (AppImage, DEB, RPM packages, Docker Compose)
 - Post-installation configuration
 - Firewall setup
 - Update procedures

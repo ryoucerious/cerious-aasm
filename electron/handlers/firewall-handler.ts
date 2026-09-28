@@ -1,6 +1,7 @@
 import { messagingService } from '../services/messaging.service';
 import { firewallService } from '../services/firewall.service';
 import { getPlatform } from '../utils/platform.utils';
+import { getDockerNetworkInfo } from '../utils/docker-network.utils';
 
 /**
  * Handles the 'setup-ark-server-firewall' message event from the messaging service.
@@ -135,14 +136,17 @@ messagingService.on('check-firewall-enabled', async (payload, sender) => {
   try {
     const platform = getPlatform();
     const isEnabled = platform === 'linux'; // Firewall management is only relevant on Linux
-    
+    // In Docker the ports are decided by how the container is networked, not by ufw inside it.
+    const docker = getDockerNetworkInfo();
+
     messagingService.sendToOriginator('check-firewall-enabled', {
       success: true,
       platform,
       enabled: isEnabled,
-      message: platform === 'linux' 
+      message: platform === 'linux'
         ? 'Firewall management available on Linux'
         : 'Firewall management not available on this platform',
+      ...(docker ? { docker } : {}),
       requestId
     }, sender);
   } catch (error) {

@@ -435,6 +435,8 @@ export class SettingsPageComponent {
             phase: progress.phase || '',
             success: isComplete ? true : undefined
         };
+        // Show the new build straight away rather than the pre-install "Update available".
+        if (isComplete) this.loadArkInstallation();
         this.cdr.markForCheck();
       }
     });
@@ -482,7 +484,7 @@ export class SettingsPageComponent {
   }
 
   getAppVersion() {
-    return environment.version || '1.1.2';
+    return environment.version || '1.2.0';
   }
 
   getPlatform() {

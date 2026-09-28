@@ -47,6 +47,8 @@ export interface User {
   displayName: string;
   roleId: string;
   active: boolean;
+  /** Password is supplied on the command line and cannot be changed in the app. */
+  cliLocked?: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt: number | null;

@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 import { NgIf, NgFor, NgClass, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, ActivatedRoute } from '@angular/router';
+import { Router } from '@angular/router';
 import { Subscription, interval, take } from 'rxjs';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
@@ -128,7 +128,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
     private router: Router,
-    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -151,13 +150,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     this.subs.push(this.serverInstanceService.getActiveServer().subscribe(server => {
       this.activeServerId = server?.id || null;
-    }));
-
-    this.subs.push(this.route.fragment.subscribe(fragment => {
-      if (fragment === 'activity') {
-        this.showAllActivity = true;
-        this.cdr.markForCheck();
-      }
     }));
 
     // Greet whoever is actually signed in. The legacy single username is the fallback for

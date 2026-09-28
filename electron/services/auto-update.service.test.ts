@@ -14,6 +14,11 @@ jest.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: { get: jest.fn() },
+}));
+
 jest.mock('./messaging.service', () => ({
   messagingService: {
     sendToAllRenderers: jest.fn(),
@@ -63,18 +68,39 @@ describe('AutoUpdateService', () => {
   });
 
   describe('constructor', () => {
-    it('should disable auto-update in headless mode', () => {
+    it('reports a newer release in headless mode without installing it', async () => {
       const origArgv = process.argv;
+      const origDocker = process.env.AASM_DOCKER;
       process.argv = [...origArgv, '--headless'];
+      process.env.AASM_DOCKER = '1';
 
-      // Re-require to trigger constructor with headless flag
-      jest.isolateModules(() => {
+      await jest.isolateModulesAsync(async () => {
+        const axios = require('axios').default;
+        const { app } = require('electron');
+        // Unpackaged Electron reports its own runtime version. The check must
+        // use the app version from package.json instead.
+        app.getVersion.mockReturnValue('21.4.4');
+        app.isPackaged = false;
+        axios.get.mockResolvedValue({ data: { tag_name: 'v9.0.0', body: 'notes', published_at: '2026-01-01' } });
         const mod = require('./auto-update.service');
+        const { messagingService: bus } = require('./messaging.service');
         const service = new mod.AutoUpdateService();
+        await service.checkForUpdates();
         expect(service.isUpdateReady()).toBe(false);
+        expect(mockAutoUpdater.downloadUpdate).not.toHaveBeenCalled();
+        expect(mockAutoUpdater.quitAndInstall).not.toHaveBeenCalled();
+        expect(bus.sendToAllRenderers).toHaveBeenCalledWith('app-update-status', expect.objectContaining({
+          status: 'available',
+          version: '9.0.0',
+          manual: true,
+        }));
+        const payload = bus.sendToAllRenderers.mock.calls.find((call: any[]) => call[1]?.status === 'available')[1];
+        expect(payload.instructions).toContain('docker compose pull');
       });
 
       process.argv = origArgv;
+      if (origDocker === undefined) delete process.env.AASM_DOCKER;
+      else process.env.AASM_DOCKER = origDocker;
     });
 
     it('should set autoDownload to false', () => {

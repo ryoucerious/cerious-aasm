@@ -2,6 +2,39 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.2.0] - 2026-09-27
+
+Cerious AASM now runs in Docker. The image serves the same web interface as a headless Linux
+install, works on a Linux server or on Windows and Mac with Docker Desktop, and keeps every
+server, save and account in Docker volumes so it can be updated without losing anything. The
+Firewall page understands the container's networking, and headless and browser installs are
+now told when a new version is out.
+
+> **Upgrading — headless installs started with `--password`.** The password given on the
+> command line (or `AASM_PASSWORD` in Docker) is now the admin login for that install, and it
+> is applied again every time the app starts. It used to create the first account once and
+> then step aside. That account can no longer have its password changed or be deleted from the
+> app, so the command line is always a way back in. Everyone else can still be given their own
+> account, with its own password, under Settings → Users & Roles.
+
+### New Features & Improvements
+
+- **Docker Image**: Tagged releases now publish `ghcr.io/ryoucerious/cerious-aasm`, with the CurseForge key for mod browsing built in. Download `docker-compose.yml`, run `docker compose up -d`, and open the web interface on port 3000; the ARK server files, SteamCMD and Proton are installed into a volume the first time you install the dedicated server. Sign-in, the web port and the port ranges are all set in a `.env` file next to the Compose file, and updating is `docker compose pull` followed by `docker compose up -d`. The About page reports the platform as Linux (Docker). The new [Docker guide](docs/DOCKER.md) covers installing, configuring, networking, updating and troubleshooting.
+- **The Firewall Page Knows About Docker**: Inside the container, ufw commands do nothing, so the page no longer offers them. With the default published ports it lists the ranges Docker opens for game, query and RCON ports, checks each of the server's ports against them, and flags any that fall outside, including the peer port, which is always the game port plus one and is easy to push out of range by accident. It also explains that Docker's own firewall rules take precedence over ufw on a Linux host. The ranges come from `AASM_GAME_PORTS`, `AASM_QUERY_PORTS` and `AASM_RCON_PORTS`, which Compose uses both to publish the ports and to tell the app, so the page always matches what is actually open. On a Linux server, `docker-compose.host.yml` switches to host networking instead, and the page goes back to host firewall commands with a note to run them on the host.
+- **Headless and Browser Installs Hear About New Versions**: A headless install used to skip update checks altogether. It now asks GitHub for the latest release, and when there is a newer one the version mark in the sidebar opens the steps to apply it: pull the new image in Docker, or install the new package on a Linux server. Neither downloads or restarts anything on its own.
+- **Updating the Desktop App from the Sidebar**: The banner across the top of the window is gone. The version mark at the foot of the sidebar is now where an app update happens: click it to download, watch the percentage while it downloads, and click again to install. If a download fails, the mark says why and a click tries again. In a browser, where the app cannot update itself, the same mark explains where to do it instead.
+- **Recent Activity Opens Where You Are**: Asking the notifications bell for the full activity feed used to navigate away to the Dashboard. It now opens in a panel over the current page, with a button to clear the feed.
+
+### Bug Fixes
+
+- **"Update Available" After Updating the ARK Server**: Updating the dedicated server from Settings went through the installer, which never told the update checker the installed build had changed. The ARK Installation page then showed the new build next to "Update available" for up to fifteen minutes, until the next check. The page now compares the installed build against Steam's every time it opens, and again the moment an install finishes, and the update badge on ARK Installation clears at the same time.
+- **The Install Window Opened Behind Settings**: Starting an ARK server install or update from the settings panel opened its progress window underneath the panel, where it could not be seen. Windows like it now open above the panel.
+- **Sign-In Failed After Restarting the Container**: After the container restarted, signing in could fail with "The user database is in use by another running instance" and keep failing on every later restart. The database records which process owns it, and process numbers start over in every container, so the old owner's number came back as a different process, or even a thread of the Electron launcher, and the app refused to clear a lock nobody held. Ownership is now checked by the process's start time as well as its number, so a restart clears the stale lock by itself.
+- **Downloading the ARK Server on Linux**: SteamCMD on Linux could be refused the download outright, because ARK's dedicated server only exists for Windows and SteamCMD asks for the Linux version by default. It now asks for the Windows depot. A failed download could also leave Steam's manifest marked as broken, after which every retry failed within seconds; that manifest is now cleared before the next attempt, and the files already downloaded stay put.
+- **Servers Exiting Right After Launch on Linux**: Under GE-Proton, a server could start and exit a moment later. Proton launched it through the Steam client, which is not there on a server or in a container, and a second temporary display was torn down while the game was still starting. Servers now launch through Wine directly, on the display that is already running, and Proton waits for the server to exit.
+- **RCON Port Left in Use After a Crash**: When a server crashed, or its launcher exited before the game did, Wine and ARK processes could keep running in the background and hold the RCON port, so the next start could not connect. Those leftover processes are now stopped whenever a server exits. A server that exits cleanly while still starting is also no longer reported as a crash.
+- **Missing Sound Library Reported on Debian and Ubuntu 22.04**: The system requirements check looked specifically for Ubuntu 24.04's renamed sound library, so it failed on Debian Bookworm and Ubuntu 22.04 even though the library was installed. It now accepts either name, while still catching the empty placeholder package on Ubuntu 24.04 that caused the original startup crash.
+
 ## [1.1.2] - 2026-09-16
 
 ### Bug Fixes

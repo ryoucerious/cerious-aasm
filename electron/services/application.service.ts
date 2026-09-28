@@ -27,10 +27,10 @@ export class ApplicationService {
       console.log('  --port=<port>                Set web server port (default: 3000)');
       console.log('  --auth-enabled                Enable authentication for web interface');
       console.log('  --username=<username>         Set authentication username (default: admin)');
-      console.log('  --password=<password>         Set authentication password (required with --auth-enabled)');
+      console.log('  --password=<password>         Admin password (reapplied every start, not changeable in the app)');
       console.log('\nExamples:');
       console.log('  electron main.js --headless --port=8080');
-      console.log('  electron main.js --headless --auth-enabled --username=user --password=secret');
+      console.log('  electron main.js --headless --auth-enabled --username=user --password=change-me');
       console.log('  electron main.js --headless --port=3000 --auth-enabled --password=mypassword\n');
       process.exit(0);
     }

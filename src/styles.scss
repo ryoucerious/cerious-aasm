@@ -1537,7 +1537,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  // Above the drawer (1300/1301): the settings panel opens its install modal as a sibling,
+  // not inside the panel. Below tooltips (2000) and toasts (9999).
+  z-index: 1400;
 }
 
 .modal {

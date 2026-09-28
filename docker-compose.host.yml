@@ -1,0 +1,21 @@
+# =============================================================================
+# Cerious AASM — host networking override (Linux hosts)
+# =============================================================================
+# The container shares the host's network: every port a server listens on is a
+# port on the host, with no ranges to stay inside. Open ports with the host
+# firewall (ufw, firewalld) as on a native Linux install.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+#
+# Docker Desktop (Windows, macOS) runs containers in a VM, so use the default
+# published ports there instead.
+# =============================================================================
+
+services:
+  aasm:
+    network_mode: host
+    # Published ports do not apply with host networking. Needs Compose 2.24+.
+    ports: !reset []
+    environment:
+      # Tells the Firewall page to show host firewall commands instead of ranges.
+      AASM_NETWORK: host

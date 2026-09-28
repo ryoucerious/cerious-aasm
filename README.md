@@ -66,7 +66,7 @@ cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin
 - `--port=<port>` - Set web server port (default: 3000)
 - `--auth-enabled` - Enable authentication for web interface
 - `--username=<username>` - Set authentication username (default: admin)
-- `--password=<password>` - Set authentication password (required with --auth-enabled)
+- `--password=<password>` - Admin password (at least 8 characters). Applied on every start and not changeable in the app. Other users are added under Settings → Users & Roles.
 - `--help` or `-h` - Show help message
 
 #### Examples
@@ -147,7 +147,7 @@ npm run headless -- --port=8080
 With authentication enabled:  
 
 ```bash
-npm run headless -- --auth-enabled --username=admin --password=secret
+npm run headless -- --auth-enabled --username=admin --password=change-me
 ```
 
 ---
@@ -166,10 +166,13 @@ npm run headless -- --auth-enabled --username=admin --password=secret
 3. Configure your server via the UI or configs  
 4. Launch in desktop or headless mode  
 
+To run it in Docker, on a Linux server or with Docker Desktop on Windows or Mac, see [docs/DOCKER.md](docs/DOCKER.md).
+
 ---
 
 ## 📚 Documentation  
 
+- [Docker](docs/DOCKER.md) — install, configure, and update the Docker setup  
 - Use [GitHub Issues](https://github.com/ryoucerious/cerious-aasm/issues) for bugs & feature requests  
 - Guides for Mods, Backups, and Automation (coming soon in Wiki)  
 - Community support via ARK forums & subreddits  

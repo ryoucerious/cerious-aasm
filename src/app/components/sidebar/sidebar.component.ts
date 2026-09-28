@@ -15,6 +15,7 @@ import { AddServerModalComponent } from '../add-server-modal/add-server-modal.co
 import { NotificationService } from '../../core/services/notification.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AppUpdateService } from '../../core/services/app-update.service';
+import { UtilityService } from '../../core/services/utility.service';
 import { environment } from '../../../environments/environment';
 
 /**
@@ -45,6 +46,15 @@ export class SidebarComponent implements OnInit, OnDestroy {
   /** A new version of the app is waiting, shown as a download mark beside the version. */
   appUpdatePending = false;
   appUpdateTitle = '';
+  appUpdateIcon = 'download';
+  appUpdateBusy = false;
+  appUpdatePercent = 0;
+  /** Browser and headless installs explain the update instead of applying it. */
+  appUpdateExplain = false;
+  appUpdateInstructions = '';
+  appUpdateInstructionsUrl = '';
+  showUpdateHelp = false;
+  private appUpdateState: string | null = null;
 
   overviewTabs: ServerTabDef[] = [];
   configTabs: ServerTabDef[] = [];
@@ -73,15 +83,26 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private notificationService: NotificationService,
     private settingsDrawer: SettingsDrawerService,
     private appUpdate: AppUpdateService,
+    private utility: UtilityService,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit(): void {
     this.subs.push(this.appUpdate.status$.subscribe(status => {
+      this.appUpdateState = status?.status ?? null;
       this.appUpdatePending = AppUpdateService.isPending(status);
-      this.appUpdateTitle = status?.version
-        ? `Version ${status.version} is ready to install`
-        : 'An update is available';
+      this.appUpdateExplain = this.utility.getPlatform() === 'Web' || !!status?.manual;
+      this.appUpdateInstructions = status?.instructions || '';
+      this.appUpdateInstructionsUrl = status?.instructionsUrl || '';
+      this.appUpdateBusy = !this.appUpdateExplain && status?.status === 'downloading';
+      this.appUpdatePercent = Math.round(status?.percent ?? 0);
+      this.appUpdateIcon = this.appUpdateExplain ? 'info' : (status?.status === 'downloaded' ? 'system_update_alt' : 'download');
+      const version = status?.version ? `v${status.version}` : 'the update';
+      if (this.appUpdateExplain) this.appUpdateTitle = `How to update to ${version}`;
+      else if (status?.status === 'downloaded') this.appUpdateTitle = `Install ${version}`;
+      else if (status?.status === 'downloading') this.appUpdateTitle = `Downloading ${version}… ${this.appUpdatePercent}%`;
+      else if (status?.status === 'error') this.appUpdateTitle = status.error ? `Update failed: ${status.error}. Click to retry.` : 'Update failed. Click to retry.';
+      else this.appUpdateTitle = `Download ${version}`;
       this.cdr.markForCheck();
     }));
 
@@ -173,6 +194,28 @@ export class SidebarComponent implements OnInit, OnDestroy {
   onSettingsClick(): void {
     this.settingsDrawer.open();
     this.closeMobileMenu.emit();
+  }
+
+  /** Download or install the app itself. This is not the ARK server update in Settings. */
+  onAppUpdateClick(): void {
+    if (this.appUpdateExplain) {
+      this.showUpdateHelp = true;
+      this.cdr.markForCheck();
+      return;
+    }
+    if (this.appUpdateState === 'downloaded') this.appUpdate.install();
+    else if (this.appUpdateState === 'available' || this.appUpdateState === 'error') this.appUpdate.download();
+  }
+
+  closeUpdateHelp(): void {
+    this.showUpdateHelp = false;
+    this.cdr.markForCheck();
+  }
+
+  /** Shown when this page cannot install the update itself. */
+  get updateHelpText(): string {
+    if (this.appUpdateInstructions) return this.appUpdateInstructions;
+    return 'This page cannot install the update. Use the Cerious AASM window on the computer that runs the app, and click the update button next to the version there.';
   }
 
 

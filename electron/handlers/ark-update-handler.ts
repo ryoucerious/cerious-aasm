@@ -29,25 +29,17 @@ export function setArkUpdateService(service: ArkUpdateService): void {
 messagingService.on('get-ark-installation', async (payload: any, sender: any) => {
   const { requestId } = payload || {};
   try {
-    const { isArkServerInstalled, getArkServerDir, getCurrentInstalledVersion } = require('../utils/ark/ark-install.utils');
+    const { isArkServerInstalled, getArkServerDir } = require('../utils/ark/ark-install.utils');
     const installed = isArkServerInstalled();
-    const status = arkUpdateService ? arkUpdateService.getStatus() : null;
-
-    // The service caches the installed build at startup; re-read it so the page is accurate
-    // straight after an install without waiting for the next poll.
-    let installedBuildId = status?.installedBuildId ?? null;
-    if (installed) {
-      try {
-        installedBuildId = (await getCurrentInstalledVersion()) ?? installedBuildId;
-      } catch {
-        // keep the cached value
-      }
-    }
+    // Re-read the installed build through the service so the build shown and the update flag
+    // come from one comparison. Straight after an install the disk has the new build while the
+    // last poll still says an update is pending.
+    const status = arkUpdateService ? await arkUpdateService.refreshInstalledBuild() : null;
 
     messagingService.sendToOriginator('get-ark-installation', {
       success: true,
       installed,
-      installedBuildId,
+      installedBuildId: status?.installedBuildId ?? null,
       latestBuildId: status?.latestBuildId ?? null,
       updateAvailable: !!status?.updateAvailable,
       lastCheckedAt: status?.lastCheckedAt ?? null,

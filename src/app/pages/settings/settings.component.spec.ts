@@ -11,7 +11,7 @@ import { MockMessagingService } from '../../../../test/mocks/mock-messaging.serv
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
 import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
-import { of } from 'rxjs';
+import { of, Subject } from 'rxjs';
 
 describe('SettingsPageComponent', () => {
   let component: SettingsPageComponent;
@@ -140,6 +140,22 @@ describe('SettingsPageComponent', () => {
     component.showInstallModal = true;
     component.onCloseInstall();
     expect(component.showInstallModal).toBeFalse();
+  });
+
+  it('reloads the installation status once an install completes', () => {
+    const installEvents = new Subject<any>();
+    (mockMessaging.receiveMessage as jasmine.Spy).and.callFake((channel: string) =>
+      channel === 'install' ? installEvents : of(null));
+
+    (component as any).startInstallation('server');
+    (mockMessaging.sendMessage as jasmine.Spy).calls.reset();
+
+    installEvents.next({ data: { step: 'Downloading', phase: 'download', overallPhase: 'Downloading', phasePercent: 40 } });
+    (expect(mockMessaging.sendMessage) as any).not.toHaveBeenCalledWith('get-ark-installation', jasmine.anything());
+
+    installEvents.next({ data: { step: 'done', phase: 'validation', overallPhase: 'Installation Complete' } });
+    expect(component.installProgress?.success).toBeTrue();
+    (expect(mockMessaging.sendMessage) as any).toHaveBeenCalledWith('get-ark-installation', {});
   });
 
   it('should reset installProgress on onCancelInstall', () => {

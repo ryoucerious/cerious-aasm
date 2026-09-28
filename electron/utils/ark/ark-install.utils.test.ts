@@ -4,6 +4,7 @@ import * as path from 'path';
 import { ArkPathUtils, ARK_APP_ID } from './ark-path.utils';
 import * as steamcmdUtils from '../steamcmd.utils';
 import * as installerUtils from '../installer.utils';
+import * as platformUtils from '../platform.utils';
 import {
   getArkServerDir,
   isArkServerInstalled,
@@ -15,10 +16,16 @@ jest.mock('node-pty', () => ({
   spawn: jest.fn(),
 }));
 
+jest.mock('../platform.utils', () => ({
+  ...jest.requireActual('../platform.utils'),
+  getPlatform: jest.fn(() => 'windows'),
+}));
+
 jest.mock('fs', () => ({
   ...jest.requireActual('fs'),
   existsSync: jest.fn(),
   readFileSync: jest.fn(),
+  unlinkSync: jest.fn(),
 }));
 
 jest.mock('path', () => ({
@@ -93,7 +100,26 @@ describe('ark-install.utils', () => {
       installArkServer(cb, onData);
       expect(installerUtils.runInstaller).toHaveBeenCalled();
       expect(cb).toHaveBeenCalledWith(null, 'done');
-  expect(onData).toHaveBeenCalledWith({ percent: 50, step: 'downloading', message: 'Mock progress' });
+      expect(onData).toHaveBeenCalledWith({ percent: 50, step: 'downloading', message: 'Mock progress' });
+    });
+
+    it('should request the Windows depot on Linux and remove a stuck appmanifest', () => {
+      (platformUtils.getPlatform as jest.Mock).mockReturnValue('linux');
+      jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
+      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
+      (fs.existsSync as jest.Mock).mockImplementation((file: string) =>
+        String(file).endsWith(steamcmdExe) || String(file).endsWith(`appmanifest_${ARK_APP_ID}.acf`)
+      );
+      (fs.readFileSync as jest.Mock).mockReturnValue('"UpdateResult"\t\t"6"');
+      jest.spyOn(installerUtils, 'runInstaller').mockImplementation((_opts, _onProgress, onDone) => {
+        onDone(null, 'done');
+      });
+
+      installArkServer(jest.fn());
+
+      expect(fs.unlinkSync).toHaveBeenCalledWith(`/ark/server/steamapps/appmanifest_${ARK_APP_ID}.acf`);
+      const opts = (installerUtils.runInstaller as jest.Mock).mock.calls[0][0];
+      expect(opts.args.slice(0, 2)).toEqual(['+@sSteamCmdForcePlatformType', 'windows']);
     });
   });
 });

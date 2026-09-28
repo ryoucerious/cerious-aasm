@@ -19,6 +19,17 @@ describe('UserDatabaseService lock ownership', () => {
   /** Files that "exist", and what the pid file holds. */
   let present: Set<string>;
   let pidContents: string;
+  /** Fake /proc entries, keyed by path, for the Linux identity checks. */
+  let procFiles: Map<string, string>;
+
+  /** A /proc/<id>/stat line: comm in parentheses, then fields 3.., with starttime at 22. */
+  const procStat = (id: number, startTicks: number, comm = 'electron') =>
+    `${id} (${comm}) S ${Array(18).fill('0').join(' ')} ${startTicks} 0 0`;
+  /** A running task as Linux reports it: `tgid` differs from `id` for a thread. */
+  const addTask = (id: number, tgid: number, startTicks: number, comm?: string) => {
+    procFiles.set(`/proc/${id}/stat`, procStat(id, startTicks, comm));
+    procFiles.set(`/proc/${id}/status`, `Name:\t${comm || 'electron'}\nTgid:\t${tgid}\nPid:\t${id}\n`);
+  };
   /** Paths the service asked to delete. */
   let removedPaths: () => string[];
 
@@ -26,6 +37,7 @@ describe('UserDatabaseService lock ownership', () => {
     jest.clearAllMocks();
     present = new Set<string>();
     pidContents = '';
+    procFiles = new Map<string, string>();
 
     // The shared fs mock in test/setup.ts does not cover every call this service makes.
     for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'rmSync', 'mkdirSync'] as const) {
@@ -37,6 +49,8 @@ describe('UserDatabaseService lock ownership', () => {
     (mockFs.existsSync as jest.Mock).mockImplementation((p: any) => present.has(String(p)));
     (mockFs.readFileSync as jest.Mock).mockImplementation((p: any) => {
       if (String(p) === PID) return pidContents;
+      const proc = procFiles.get(String(p).replace(/\\/g, '/'));
+      if (proc !== undefined) return proc;
       throw new Error('ENOENT');
     });
     (mockFs.writeFileSync as jest.Mock).mockImplementation((p: any, data: any) => {
@@ -80,6 +94,46 @@ describe('UserDatabaseService lock ownership', () => {
       pidContents = 'not-a-pid';
       expect(service.ownerIsAlive()).toBe(false);
     });
+
+    // Linux: kill(id, 0) also succeeds for a thread id. In a container every restart hands
+    // out the same ids, so an old owner's pid came back as a thread of the Electron launcher
+    // and the stale lock was never cleared.
+    it('is false when the recorded pid is now a thread of another process', () => {
+      present.add(PID);
+      pidContents = '32';
+      addTask(32, 26, 500, 'node');
+      jest.spyOn(process, 'kill').mockImplementation(() => true as any);
+      expect(service.ownerIsAlive()).toBe(false);
+    });
+
+    it('is false when the recorded pid now belongs to a different process', () => {
+      present.add(PID);
+      pidContents = '4242 1000';
+      addTask(4242, 4242, 5000);
+      jest.spyOn(process, 'kill').mockImplementation(() => true as any);
+      expect(service.ownerIsAlive()).toBe(false);
+    });
+
+    it('is true when the recorded process is the same one still running', () => {
+      present.add(PID);
+      pidContents = '4242 1000';
+      addTask(4242, 4242, 1000);
+      expect(service.ownerIsAlive()).toBe(true);
+    });
+
+    it('reads the start time after the last parenthesis of the process name', () => {
+      present.add(PID);
+      pidContents = '4242 1000';
+      addTask(4242, 4242, 1000, 'odd ) name');
+      expect(service.ownerIsAlive()).toBe(true);
+    });
+
+    it('is false when the recorded process has exited and /proc has no entry', () => {
+      present.add(PID);
+      pidContents = '4242 1000';
+      jest.spyOn(process, 'kill').mockImplementation(() => { const e: any = new Error('ESRCH'); e.code = 'ESRCH'; throw e; });
+      expect(service.ownerIsAlive()).toBe(false);
+    });
   });
 
   describe('releaseStaleLock', () => {
@@ -93,6 +147,17 @@ describe('UserDatabaseService lock ownership', () => {
       present.add(PID);
       pidContents = '999999';
       jest.spyOn(process, 'kill').mockImplementation(() => { const e: any = new Error('ESRCH'); e.code = 'ESRCH'; throw e; });
+
+      expect(service.releaseStaleLock()).toBe(true);
+      expect(removedPaths()).toContain(LOCK);
+    });
+
+    it('clears the lock after a container restart reuses the old pid for a thread', () => {
+      present.add(LOCK);
+      present.add(PID);
+      pidContents = '32';
+      addTask(32, 26, 500, 'node');
+      jest.spyOn(process, 'kill').mockImplementation(() => true as any);
 
       expect(service.releaseStaleLock()).toBe(true);
       expect(removedPaths()).toContain(LOCK);
@@ -113,6 +178,12 @@ describe('UserDatabaseService lock ownership', () => {
     it('records this process when the database is free', () => {
       service.claimOwnership();
       expect(pidContents).toBe(String(process.pid));
+    });
+
+    it('records the start time too where /proc can tell processes apart', () => {
+      addTask(process.pid, process.pid, 777);
+      service.claimOwnership();
+      expect(pidContents).toBe(`${process.pid} 777`);
     });
 
     it('takes over a claim left by an earlier run', () => {

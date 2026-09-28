@@ -7,6 +7,7 @@ import { getPlatform } from '../../platform.utils';
 import { getArkServerDir } from './ark-server-install.utils';
 import { isProtonInstalled, getProtonBinaryPath, ensureProtonPrefixExists, getProtonPrefixDir } from '../../proton.utils';
 import { getDefaultInstallDir } from '../../platform.utils';
+import { ARK_APP_ID } from '../ark-path.utils';
 
 export const ASA_API_LOADER_EXE = 'AsaApiLoader.exe';
 export const ARK_SERVER_EXE = 'ArkAscendedServer.exe';
@@ -265,12 +266,16 @@ export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[]
   // Set up Proton environment with Wine/Proton compatibility fixes.
   // WINEPREFIX and STEAM_COMPAT_DATA_PATH must be per-instance — sharing them
   // across servers causes wineserver lock contention and crashes under load.
-  const { ARK_APP_ID } = require('./ark-server-install.utils');
   const protonEnv = {
     WINEPREFIX: prefixDir,
     STEAM_COMPAT_DATA_PATH: prefixDir,
     STEAM_COMPAT_CLIENT_INSTALL_PATH: path.join(getDefaultInstallDir(), '.steam'),
     SteamAppId: ARK_APP_ID,
+    // SteamGameId lets Proton write a per-game log. UMU_ID makes GE-Proton launch
+    // the dedicated server with wine directly. Without it Proton starts steam.exe,
+    // which exits in a container that has no Steam client and takes the server with it.
+    SteamGameId: ARK_APP_ID,
+    UMU_ID: ARK_APP_ID,
     // Wine DLL overrides for compatibility:
     // - mshtml=d: Disable IE/HTML rendering components (not needed for dedicated server)
     // - winhttp/bcrypt/crypt32=n,b: Use native Wine implementations for networking/crypto
@@ -278,9 +283,26 @@ export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[]
     WINEDLLOVERRIDES: 'mshtml=d;winhttp=n,b;bcrypt=n,b;crypt32=n,b'
   };
 
+  // waitforexitandrun is the verb Steam uses. It also lets protonfixes see a real
+  // game launch (`run` is treated as a unit test and skipped).
+  // A leading '/' makes GE-Proton run `start.exe /unix`, which returns as soon as
+  // the process is created. Wine's Z: drive is the Linux root, so a Z: path is
+  // launched with wine64 and Proton waits until the server exits.
+  const protonExe = arkExecutable.startsWith('/')
+    ? 'Z:' + arkExecutable.replace(/\//g, '\\')
+    : arkExecutable;
+  const protonArgs = ['waitforexitandrun', protonExe, ...arkArgs];
+
+  // Docker (and any host that already has a display) keeps a persistent Xvfb.
+  // A second xvfb-run display is torn down when Proton's launcher returns, which
+  // kills Wine with "X connection to :100 broken" before ShooterGame.log exists.
+  if (process.env.DISPLAY) {
+    return { command: protonBinary, args: protonArgs, env: protonEnv };
+  }
+
   return {
     command: 'xvfb-run',
-    args: ['-a', '--server-args=-screen 0 1024x768x24', protonBinary, 'run', arkExecutable, ...arkArgs],
+    args: ['-a', '--server-args=-screen 0 1024x768x24', protonBinary, ...protonArgs],
     env: protonEnv
   };
 }

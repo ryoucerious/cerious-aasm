@@ -42,8 +42,13 @@
     </span>
   </div>
 
+  <section class="settings-card" *ngIf="hasAccount && identity?.user?.cliLocked">
+    <h3 class="settings-card-title">Password</h3>
+    <p class="settings-card-hint">This password is set on the command line and cannot be changed here. Other people can still be given their own accounts under Users &amp; Roles.</p>
+  </section>
+
   <!-- Change your own password -->
-  <section class="settings-card" *ngIf="hasAccount">
+  <section class="settings-card" *ngIf="hasAccount && !identity?.user?.cliLocked">
     <h3 class="settings-card-title">Change your password</h3>
     <p class="settings-card-hint">Signing in elsewhere continues until those sessions end.</p>
 

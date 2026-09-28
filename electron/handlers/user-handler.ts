@@ -21,10 +21,17 @@ messagingService.on('get-current-user', (payload: any, sender: any) => {
   const { requestId } = payload || {};
   try {
     const identity = identifySender(sender);
+    // The session snapshot does not carry the command-line lock, and it can change on
+    // the next process start, so read it from the database for this response.
+    const user = identity.user ? { ...identity.user } : null;
+    if (user && user.id !== 'legacy-admin') {
+      const fresh = userDatabaseService.getUser(user.id);
+      if (fresh) user.cliLocked = fresh.cliLocked;
+    }
     reply('get-current-user', payload, sender, requestId, {
       success: true,
       // The desktop window has no account; it is simply the owner of the machine.
-      user: identity.user,
+      user,
       isLocalDesktop: identity.isLocalDesktop,
       isAdmin: identity.isAdmin,
       permissions: identity.isAdmin ? [...ALL_PERMISSIONS] : identity.permissions,
