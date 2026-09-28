@@ -70,6 +70,10 @@ services:
       AASM_GAME_PORTS: ${AASM_GAME_PORTS:-7777-7900}
       AASM_QUERY_PORTS: ${AASM_QUERY_PORTS:-27015-27030}
       AASM_RCON_PORTS: ${AASM_RCON_PORTS:-27020-27050}
+      # Only needed when the volumes above are swapped for host folders.
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
+      UMASK: ${UMASK:-}
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------

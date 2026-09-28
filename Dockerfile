@@ -100,6 +100,6 @@ EXPOSE 3000
 
 VOLUME ["/home/aasm/.local/share/cerious-aasm", "/home/aasm/.config"]
 
-USER aasm
-
+# Starts as root so the entrypoint can apply PUID/PGID and fix folder ownership;
+# it then runs the app as aasm.
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
