@@ -2,6 +2,16 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.2.1] - 2026-09-28
+
+### New Features & Improvements
+
+- **Docker on Apple Silicon Macs**: A new `docker-compose.arm64.yml`, used alongside `docker-compose.yml`, runs the image on an Apple Silicon Mac through Docker Desktop's Rosetta emulation. The ARK server, SteamCMD and Proton are Intel and AMD only, so the override asks for the Intel image explicitly and has SteamCMD use its 64-bit build; the 32-bit one crashes under emulation. The container also switches to the 64-bit build by itself when it detects Rosetta. The [Docker guide](docs/DOCKER.md) has the steps.
+
+### Bug Fixes
+
+- **Installing the ARK Server Failed on Linux and in Docker**: The SteamCMD download Valve publishes for Linux contains a 2018 bootstrapper, and on first run that bootstrapper updates itself from `client-download.steampowered.com` and nowhere else. That host no longer resolves, so SteamCMD never finished setting itself up, and every attempt to download the ARK server failed with "Failed to download." When the first-time update does not complete, the app now downloads SteamCMD's current packages from the host the updated SteamCMD uses, checks each one against Steam's published checksum, and unpacks them itself. If that fails too, the install stops with a message saying why, instead of reporting SteamCMD as installed.
+
 ## [1.2.0] - 2026-09-27
 
 Cerious AASM now runs in Docker. The image serves the same web interface as a headless Linux

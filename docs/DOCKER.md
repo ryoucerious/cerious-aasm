@@ -12,6 +12,19 @@ ARK: Survival Ascended is heavy. Plan for about 20 GB of disk before you create 
 
 On Windows, Docker Desktop runs containers inside a WSL 2 virtual machine, and by default that VM only gets half of your computer's memory. If your servers crash or stall during startup, raise the limit by adding a `memory=` line under `[wsl2]` in `%UserProfile%\.wslconfig`, then restart Docker Desktop.
 
+On a Mac, Docker Desktop's virtual machine has its own memory limit too, under Settings → Resources. Give it at least 12 GB for one server.
+
+### Apple Silicon Macs
+
+The ARK server, SteamCMD, and Proton only exist for Intel and AMD processors, so on an Apple Silicon Mac the container runs under emulation. Before you start, open Docker Desktop's settings and, under General, turn on **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**. Then use the ARM override file alongside the main one:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ryoucerious/cerious-aasm/main/docker-compose.arm64.yml
+docker compose -f docker-compose.yml -f docker-compose.arm64.yml up -d
+```
+
+Pass both files to every Compose command, including `pull` and `down`. The override asks for the Intel image explicitly and tells SteamCMD to use its 64-bit build, because the 32-bit one crashes under emulation. Expect everything to be slower than on an Intel or AMD machine.
+
 ## Installing
 
 Make a folder for Cerious AASM and download the Compose file into it. If you plan to run on a Linux server with host networking (explained below), grab the second file as well.
@@ -156,6 +169,8 @@ docker compose logs -f aasm
 Each ARK server writes its own log too. It's inside the data volume at `AASMServer/ShooterGame/Saved/Logs/ShooterGame.log`, and the Proton output for a server is in `AASMServer/ShooterGame/Saved/Servers/<server id>/stderr.log`.
 
 **A server fails to start with a namespace error from Proton.** Proton needs to create user namespaces, which some hosts don't allow a container to do. The Compose file already gives the container the permissions that usually covers. If it still fails, uncomment `privileged: true` on the `aasm` service and run `docker compose up -d`.
+
+**Installing the ARK server fails with "Failed to download."** The log shows `[steamcmd] Init attempt 1 exited with code 1` several times first. SteamCMD could not finish its first-time update. The app then fetches SteamCMD's update itself, and if that fails too, the install stops with a message saying why. Check that the container can reach `client-update.steamstatic.com` and try again. On an Apple Silicon Mac, also check that you started it with `docker-compose.arm64.yml`.
 
 **Players can't connect.** Check the Firewall page for that server. In the default setup, a port outside the published ranges is the usual cause. After that, check the port forwarding on your router.
 

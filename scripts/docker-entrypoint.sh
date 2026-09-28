@@ -39,6 +39,13 @@ if [ "${AASM_AUTH_ENABLED:-false}" = "true" ]; then
   )
 fi
 
+# Docker Desktop on Apple Silicon runs this amd64 image under Rosetta, and 32-bit x86
+# through qemu, where SteamCMD's 32-bit build segfaults loading the Steam API.
+# steamcmd.sh runs the 64-bit build instead when STEAM_PLATFORM names it.
+if [ -z "${STEAM_PLATFORM:-}" ] && grep -q VirtualApple /proc/cpuinfo 2>/dev/null; then
+  export STEAM_PLATFORM=linux64
+fi
+
 export DISPLAY="${DISPLAY:-:99}"
 display_num="${DISPLAY#:}"
 rm -f "/tmp/.X${display_num}-lock"

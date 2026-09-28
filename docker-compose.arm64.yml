@@ -1,0 +1,19 @@
+# =============================================================================
+# Cerious AASM — ARM64 override (Apple Silicon Macs, ARM Linux)
+# =============================================================================
+# SteamCMD, Proton, and the ARK server are x86-64 only, so the image is amd64 and
+# runs under emulation. On a Mac, turn on "Use Rosetta for x86_64/amd64 emulation
+# on Apple Silicon" in Docker Desktop's General settings first.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.arm64.yml up -d
+#
+# Pass both files to every Compose command, including pull and down.
+# =============================================================================
+
+services:
+  aasm:
+    # Pull and build the amd64 image; there is no native arm64 one.
+    platform: linux/amd64
+    environment:
+      # SteamCMD's 32-bit build crashes under emulation; run its 64-bit build.
+      STEAM_PLATFORM: linux64

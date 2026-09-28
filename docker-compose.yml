@@ -18,6 +18,9 @@
 # Linux server with host networking (no ranges; the host firewall decides):
 #   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
 #
+# Apple Silicon Mac or other ARM64 host (turn on Rosetta in Docker Desktop first):
+#   docker compose -f docker-compose.yml -f docker-compose.arm64.yml up -d
+#
 # Other services:
 #   docker compose --profile test run --rm test
 #   docker compose --profile dev up headless-dev

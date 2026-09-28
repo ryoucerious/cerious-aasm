@@ -5,6 +5,7 @@ import axios from 'axios';
 import { getDefaultInstallDir } from './platform.utils';
 import { setCurrentAbort } from './installer.utils';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 
 
@@ -18,7 +19,10 @@ export function isSteamCmdInstalled(): boolean {
   if (process.platform === 'win32') {
     return fs.existsSync(path.join(dir, 'steamcmd.exe'));
   } else {
-    return fs.existsSync(path.join(dir, 'steamcmd.sh'));
+    // An install whose first-time update failed has steamcmd.sh but can't download
+    // anything; report it missing so the installer runs again and repairs it.
+    return fs.existsSync(path.join(dir, 'steamcmd.sh'))
+      && (process.platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir));
   }
 }
 
@@ -160,7 +164,22 @@ export function installSteamCmd(callback: (err: Error | null, output?: string) =
       // SteamCMD must self-update on first run before it can process commands.
       // Run it once with +quit to complete the self-update.
       initializeSteamCmd(dir, onData, () => {
-        callback(null, 'SteamCMD installed');
+        if (process.platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir)) {
+          callback(null, 'SteamCMD installed');
+          return;
+        }
+
+        console.warn('[steamcmd] First-time update did not complete; installing the SteamCMD packages directly.');
+        report(95, 'init', 'Downloading SteamCMD update...');
+        installLinuxPackages(dir).then(
+          () => initializeSteamCmd(dir, onData, () => callback(null, 'SteamCMD installed')),
+          (err: any) => {
+            const message = `SteamCMD could not finish its first-time update: ${err?.message || err}`;
+            console.error('[steamcmd]', message);
+            report(95, 'error', message);
+            callback(new Error(message));
+          }
+        );
       });
     },
     (err: any) => {
@@ -171,6 +190,94 @@ export function installSteamCmd(callback: (err: Error | null, output?: string) =
       callback(err instanceof Error ? err : new Error(message));
     }
   );
+}
+
+/**
+ * steamcmd_linux.tar.gz holds a bootstrapper from 2018 that takes its first update only
+ * from client-download.steampowered.com. When that host doesn't resolve, the bootstrap
+ * exits 1 in under a second and SteamCMD never becomes usable. The current packages are
+ * still published on the host the updated client uses, so install them from there.
+ */
+const LINUX_PACKAGE_HOSTS = [
+  'https://client-update.steamstatic.com',
+  'https://media.steampowered.com/client',
+];
+
+/** The bootstrapper ships without steamclient.so; the first update adds it. */
+function isLinuxSteamCmdBootstrapped(dir: string): boolean {
+  return fs.existsSync(path.join(dir, 'linux32', 'steamclient.so'));
+}
+
+/** The "file" and "sha2" of each package block in a steam_cmd_linux manifest. */
+function parsePackageManifest(text: string): { file: string; sha2: string }[] {
+  const packages: { file: string; sha2: string }[] = [];
+  // Package blocks are the innermost braces; the outer "linux" block wraps them.
+  for (const block of text.match(/\{[^{}]*\}/g) ?? []) {
+    const file = /"file"\s+"([^"]+)"/.exec(block)?.[1];
+    const sha2 = /"sha2"\s+"([0-9a-f]{64})"/i.exec(block)?.[1];
+    if (file && sha2) {
+      packages.push({ file, sha2: sha2.toLowerCase() });
+    }
+  }
+  return packages;
+}
+
+async function installLinuxPackagesFrom(host: string, dir: string): Promise<void> {
+  const abort = new AbortController();
+  setCurrentAbort(abort);
+  try {
+    const manifest = await axios.get(`${host}/steam_cmd_linux`, { responseType: 'text', signal: abort.signal });
+    const packages = parsePackageManifest(String(manifest.data));
+    if (packages.length === 0) {
+      throw new Error(`no packages listed in ${host}/steam_cmd_linux`);
+    }
+
+    const packageDir = path.join(dir, 'package');
+    fs.mkdirSync(packageDir, { recursive: true });
+    for (const { file, sha2 } of packages) {
+      const zipPath = path.join(packageDir, file);
+      await downloadFile(`${host}/${file}`, zipPath, abort.signal, () => {});
+      const actual = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
+      if (actual !== sha2) {
+        throw new Error(`checksum mismatch for ${file}`);
+      }
+      const AdmZip = require('adm-zip');
+      new AdmZip(zipPath).extractAllTo(dir, true);
+    }
+
+    // The zips store DOS attributes, so nothing comes out executable.
+    const executables = [path.join(dir, 'steamcmd.sh')];
+    for (const platformDir of ['linux32', 'linux64']) {
+      try {
+        for (const name of fs.readdirSync(path.join(dir, platformDir)) ?? []) {
+          executables.push(path.join(dir, platformDir, name));
+        }
+      } catch {
+        // A package set without this platform is fine.
+      }
+    }
+    for (const file of executables) {
+      try { fs.chmodSync(file, 0o755); } catch (e) {
+        console.warn(`[steamcmd] Could not chmod ${file}:`, e);
+      }
+    }
+  } finally {
+    setCurrentAbort(null);
+  }
+}
+
+async function installLinuxPackages(dir: string): Promise<void> {
+  let lastError: any;
+  for (const host of LINUX_PACKAGE_HOSTS) {
+    try {
+      await installLinuxPackagesFrom(host, dir);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[steamcmd] Could not install packages from ${host}:`, err?.message || err);
+    }
+  }
+  throw lastError;
 }
 
 const MAX_INIT_ATTEMPTS = 5;
