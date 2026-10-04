@@ -370,7 +370,9 @@ export class ArkConfigService {
         // user edited that file directly (outside of expert mode).  Merge any
         // lines that aren't already captured from the instance file.
         const mainFilePath = path.join(mainConfigDir, filename);
-        if (mainFilePath !== filePath) {
+        // The shared install has one ini folder for every server. Pulling custom
+        // lines out of it makes a new server inherit the previous server's edits.
+        if (mainFilePath !== filePath && !this.usesSharedRuntimeConfig(mainConfigDir)) {
           const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
           for (const [sectionKey, mainEntry] of mainCustom) {
             const existing = customSections.get(sectionKey);
@@ -430,7 +432,7 @@ export class ArkConfigService {
           const filePath = path.join(configDir, filename);
           const customSections = this.collectUnmappedLines(filePath, managedKeys);
           const mainFilePath = path.join(mainConfigDir, filename);
-          if (mainFilePath !== filePath) {
+          if (mainFilePath !== filePath && !this.usesSharedRuntimeConfig(mainConfigDir)) {
             const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
             for (const [sectionKey, mainEntry] of mainCustom) {
               const existing = customSections.get(sectionKey);
@@ -462,15 +464,19 @@ export class ArkConfigService {
         }
       }
 
-      // Copy config files to main ARK config directory
-      if (!fs.existsSync(mainConfigDir)) {
-        fs.mkdirSync(mainConfigDir, { recursive: true });
-      }
-      for (const file of configFiles) {
-        const src = path.join(configDir, file);
-        const dest = path.join(mainConfigDir, file);
-        if (fs.existsSync(src)) {
-          fs.copyFileSync(src, dest);
+      // An isolated instance reads a different tree than the file we just wrote.
+      // A shared-loader server reads its own file through a private mount, so copying
+      // it onto the shared folder would replace every other server's settings.
+      if (!this.usesSharedRuntimeConfig(mainConfigDir)) {
+        if (!fs.existsSync(mainConfigDir)) {
+          fs.mkdirSync(mainConfigDir, { recursive: true });
+        }
+        for (const file of configFiles) {
+          const src = path.join(configDir, file);
+          const dest = path.join(mainConfigDir, file);
+          if (fs.existsSync(src)) {
+            fs.copyFileSync(src, dest);
+          }
         }
       }
     } catch (error) {
@@ -628,6 +634,11 @@ export class ArkConfigService {
       }
     }
     return this.getArkConfigDir();
+  }
+
+  /** True when this path is the one shared install folder, not one server's copy. */
+  private usesSharedRuntimeConfig(configDir: string): boolean {
+    return !configDir.replace(/\\/g, '/').includes('/Saved/Servers/');
   }
 
   private getArkConfigDir(): string {

@@ -47,6 +47,7 @@ describe('ServerLifecycleService', () => {
 
     isPortInUseMock = jest.fn();
     jest.mocked(require('../../utils/network.utils')).isPortInUse = isPortInUseMock;
+    jest.mocked(require('../../utils/network.utils')).isUdpPortInUse = isPortInUseMock;
 
     getPlatformMock = jest.fn();
     jest.mocked(require('../../utils/platform.utils')).getPlatform = getPlatformMock;

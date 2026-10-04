@@ -4,7 +4,8 @@ import * as fs from 'fs';
 import { validateInstanceId } from '../../utils/validation.utils';
 import { ArkPathUtils, buildArkServerArgs, ARK_APP_ID } from '../../utils/ark.utils';
 import { ServerInstanceResult } from '../../types/server-instance.types';
-import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile } from '../../utils/ark/ark-server/ark-server-logging.utils';
+import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile, registerLogFile } from '../../utils/ark/ark-server/ark-server-logging.utils';
+import { withInstancePlugins } from '../../utils/ark/ark-server/plugin-view.utils';
 
 /**
  * Server Process Service - Handles low-level process management and state tracking
@@ -167,11 +168,29 @@ export class ServerProcessService {
     // root differs between isolated and shared-install instances — resolving it here keeps
     // worlds in the instance's own SavedArks folder either way instead of nesting a second
     // Servers/<id>/ level inside the instance.
-    const { getInstanceAltSaveDirName, getInstanceLogsDir } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+    const {
+      getInstanceAltSaveDirName,
+      getInstanceLogsDir,
+      isInstanceIsolated,
+      getInstanceConsoleLogPath,
+      toGameAbsolutePath
+    } = require('../../utils/ark/ark-server/ark-server-paths.utils');
     const saveDir = getInstanceAltSaveDirName(instanceId);
     const formattedSaveDir = saveDir.replace(/\\/g, '/');
     const formattedConfigDir = instanceDir.replace(/\\/g, '/');
     const formattedLogDir = getInstanceLogsDir(instanceId).replace(/\\/g, '/');
+
+    // Shared installs have one engine log. Give this server a file of its own and
+    // tell the game to write there so the panel can tail it.
+    let absLogPath: string | undefined;
+    if (!isInstanceIsolated(instanceId)) {
+      const hostLog = getInstanceConsoleLogPath(instanceId);
+      fs.mkdirSync(path.dirname(hostLog), { recursive: true });
+      fs.writeFileSync(hostLog, '');
+      absLogPath = toGameAbsolutePath(hostLog);
+      registerLogFile(instanceId, hostLog);
+      console.log(`[server-process-service] Console log for ${instanceId}: ${hostLog}`);
+    }
     
     // Build the ARK server command arguments
     const args = buildArkServerArgs({
@@ -179,7 +198,8 @@ export class ServerProcessService {
       saveDir: formattedSaveDir,
       configDir: formattedConfigDir,
       logDir: formattedLogDir,
-      altSaveDirName: saveDir
+      altSaveDirName: saveDir,
+      absLogPath
     });
 
     // Prefer AsaApiLoader.exe when installed for this instance; otherwise ArkAscendedServer.exe.
@@ -187,6 +207,8 @@ export class ServerProcessService {
     const { prepareArkServerCommand, resolveServerLaunch } = require('../../utils/ark/ark-server/ark-server-paths.utils');
     const launch = resolveServerLaunch(instanceId);
     const commandInfo = prepareArkServerCommand(launch.executable, args, instanceId);
+    const sharedLoader = launch.usesAsaApiLoader && !isInstanceIsolated(instanceId);
+    const launched = withInstancePlugins(commandInfo.command, commandInfo.args, instanceId, sharedLoader);
 
     if (launch.usesAsaApiLoader) {
       console.log(`[server-process-service] Launching instance ${instanceId} via AsaApiLoader: ${launch.executable}`);
@@ -249,7 +271,7 @@ export class ServerProcessService {
     // Start the server process
     let serverProcess;
     try {
-      serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
+      serverProcess = spawn(launched.command, launched.args, spawnOptions);
     } finally {
       // The child has inherited the descriptor by the time spawn() returns, so release the
       // parent's copy. Without this every start/restart leaks an fd for the app's lifetime.

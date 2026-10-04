@@ -76,8 +76,18 @@ export function resolveServerLaunch(instanceId: string): ResolvedServerLaunch {
     };
   }
 
-  // Linux / Proton: AsaApi is a Windows-native loader; use the shared ARK install.
-  // If a Proton-friendly loader layout is present under the instance, prefer it.
+  // Linux / Proton. This install already runs from the shared Win64 folder, so the
+  // loader has to live there too. A loader inside the instance folder would make
+  // ARK look for the world in a different place.
+  const sharedLoader = path.join(sharedWin64, ASA_API_LOADER_EXE);
+  if (fs.existsSync(sharedLoader)) {
+    return {
+      executable: sharedLoader,
+      cwd: getArkServerDir(),
+      usesAsaApiLoader: true
+    };
+  }
+
   if (fs.existsSync(asaApiLoader) && fs.existsSync(instanceExe)) {
     return {
       executable: asaApiLoader,
@@ -129,6 +139,30 @@ export function getInstanceConfigDir(instanceId: string): string {
  */
 export function getInstanceLogsDir(instanceId: string): string {
   return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Logs');
+}
+
+/**
+ * Log file the panel tails for this server.
+ *
+ * A shared install has one ShooterGame/Saved/Logs/ShooterGame.log, so a second
+ * server would otherwise have no console. This path lives in the instance folder
+ * and is passed to the game with -AbsLog.
+ */
+export function getInstanceConsoleLogPath(instanceId: string): string {
+  const { getInstancesBaseDir } = require('../../ark/instance.utils');
+  return path.join(getInstancesBaseDir(), instanceId, 'Logs', 'ShooterGame.log');
+}
+
+/**
+ * Turn a host path into a path the game can open.
+ * On Linux the game runs under Wine, where Z: is the Linux root.
+ */
+export function toGameAbsolutePath(hostPath: string): string {
+  const abs = path.resolve(hostPath);
+  if (getPlatform() === 'linux') {
+    return 'Z:' + abs.replace(/\//g, '\\');
+  }
+  return abs;
 }
 
 /**
@@ -225,7 +259,9 @@ export function isAsaApiLoaderInstalled(instanceId: string): boolean {
       'Win64',
       ASA_API_LOADER_EXE
     );
-    return fs.existsSync(loader);
+    if (fs.existsSync(loader)) return true;
+    const sharedLoader = path.join(path.dirname(getArkExecutablePath()), ASA_API_LOADER_EXE);
+    return fs.existsSync(sharedLoader);
   } catch {
     return false;
   }

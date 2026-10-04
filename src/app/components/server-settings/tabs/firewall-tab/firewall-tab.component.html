@@ -95,16 +95,19 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
           <h4>Server Port Configuration</h4>
           <div class="port-info">
             <div class="port-item">
-              <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
+              <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Player connections
+            </div>
+            <div class="port-item">
+              <strong>Peer Port:</strong> {{ (serverInstance?.gamePort || 7777) + 1 }} (UDP) - Always the game port plus one
             </div>
             <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
-              <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Steam server discovery
+              <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Server discovery
             </div>
             <div class="port-item" *ngIf="serverInstance?.rconPort">
-              <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
+              <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Used by the panel on this machine, not opened publicly
             </div>
           </div>
-          <div class="form-control-label desc">These ports need to be accessible through your firewall for players to connect and for server management.</div>
+          <div class="form-control-label desc">Game, peer, and query must be reachable. The remote console stays on this machine.</div>
         </div>
 
         <!-- Linux Firewall Configuration (native Linux, or Docker sharing the host network) -->
@@ -119,19 +122,19 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
 
             <h5>UFW (Ubuntu/Debian):</h5>
             <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port (Steam discovery)</span>
-<span *ngIf="serverInstance?.rconPort">sudo ufw allow {{ serverInstance.rconPort }}/tcp  # RCON port</span></pre>
+sudo ufw allow {{ (serverInstance?.gamePort || 7777) + 1 }}/udp  # Peer port
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port</span></pre>
 
             <h5>Firewalld (CentOS/RHEL/Fedora):</h5>
             <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ serverInstance?.gamePort || 7777 }}/udp
+sudo firewall-cmd --permanent --add-port={{ (serverInstance?.gamePort || 7777) + 1 }}/udp
 <span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo firewall-cmd --permanent --add-port={{ serverInstance.queryPort }}/udp</span>
-<span *ngIf="serverInstance?.rconPort">sudo firewall-cmd --permanent --add-port={{ serverInstance.rconPort }}/tcp</span>
 sudo firewall-cmd --reload</pre>
 
             <h5>Iptables (Advanced users):</h5>
             <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ serverInstance?.gamePort || 7777 }} -j ACCEPT
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span>
-<span *ngIf="serverInstance?.rconPort">sudo iptables -A INPUT -p tcp --dport {{ serverInstance.rconPort }} -j ACCEPT</span></pre>
+sudo iptables -A INPUT -p udp --dport {{ (serverInstance?.gamePort || 7777) + 1 }} -j ACCEPT
+<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span></pre>
           </div>
           <div class="form-control-label desc">Remember to save your iptables rules if using the iptables method.</div>
         </div>
@@ -149,8 +152,8 @@ sudo firewall-cmd --reload</pre>
           </p>
           <ul class="firewall-notes">
             <li>Forward Game Port {{ serverInstance?.gamePort || 7777 }} (UDP) to your server's internal IP</li>
+            <li>Forward Peer Port {{ (serverInstance?.gamePort || 7777) + 1 }} (UDP) to your server's internal IP</li>
             <li *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
-            <li *ngIf="serverInstance?.rconPort">Forward RCON Port {{ serverInstance.rconPort }} (TCP) to your server's internal IP (if remote access needed)</li>
             <li>Set your server's IP to static or use DHCP reservation</li>
             <li>Configure UPnP if supported by your router for automatic port forwarding</li>
           </ul>

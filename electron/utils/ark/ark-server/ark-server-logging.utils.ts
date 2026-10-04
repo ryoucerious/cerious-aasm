@@ -16,6 +16,31 @@ const instanceLogFileMap: Record<string, string> = {};
 // Stores path→mtime at the moment just before server start so we can detect
 // which log file (new OR overwritten) belongs to this instance.
 const instanceSnapshotMap: Record<string, Map<string, number>> = {};
+const explicitLogFiles = new Set<string>();
+
+/**
+ * Decode an ARK log chunk. The engine file is UTF-16 LE; a UTF-8 read leaves a
+ * NUL between every character, so startup lines never match and the console
+ * looks empty.
+ */
+export function decodeArkLogBytes(buf: Buffer): string {
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return buf.toString('utf16le');
+  }
+  if (buf.length >= 4 && buf.length % 2 === 0 && buf[1] === 0 && buf[3] === 0) {
+    return buf.toString('utf16le');
+  }
+  return buf.toString('utf8');
+}
+
+/**
+ * Remember the exact log file this server writes. Detection must not replace it
+ * with the shared ShooterGame.log.
+ */
+export function registerLogFile(instanceId: string, logPath: string): void {
+  instanceLogFileMap[instanceId] = logPath;
+  explicitLogFiles.add(instanceId);
+}
 
 /**
  * Get the shared ARK server Logs directory path.
@@ -96,6 +121,11 @@ export function detectAndRegisterLogFile(
   preStartSnapshot: Map<string, number>,
   maxAttempts = 30
 ): void {
+  if (explicitLogFiles.has(instanceId)) {
+    console.log(`[ark-logging] Console log already assigned for ${instanceId}: ${path.basename(instanceLogFileMap[instanceId])}`);
+    return;
+  }
+
   // Store snapshot so setupLogTailing can use the same detection strategy
   instanceSnapshotMap[instanceId] = preStartSnapshot;
 
@@ -159,6 +189,7 @@ export function getRegisteredLogFile(instanceId: string): string | null {
 export function unregisterLogFile(instanceId: string): void {
   delete instanceLogFileMap[instanceId];
   delete instanceSnapshotMap[instanceId];
+  explicitLogFiles.delete(instanceId);
 }
 
 /**
@@ -228,7 +259,7 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
   const buf = Buffer.alloc(Math.min(TAIL_BYTES, fileStat.size));
   fs.readSync(fd, buf, 0, buf.length, offset);
   fs.closeSync(fd);
-  const lines = buf.toString('utf8').split(/\r?\n/).filter(line => line.trim().length > 0);
+  const lines = decodeArkLogBytes(buf).split(/\r?\n/).filter(line => line.trim().length > 0);
   return lines.slice(-maxLines);
 }
 
@@ -283,7 +314,7 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
       logFilePosition = currentSize;
 
       // Parse and emit new lines
-      const newContent = buffer.toString('utf8');
+      const newContent = decodeArkLogBytes(buffer);
       const lines = newContent.split(/\r?\n/).filter(line => line.trim().length > 0);
       for (const line of lines) {
         onLog(line);
@@ -297,7 +328,8 @@ export function startArkLogTailing(instanceDir: string, onLog?: (data: string) =
   function tryAttachWatcher() {
     if (closed) return;
     attempts++;
-    if (!logsDirs.some(dir => fs.existsSync(dir))) {
+    const forcedReady = !!(forceLogFile && fs.existsSync(forceLogFile));
+    if (!forcedReady && !logsDirs.some(dir => fs.existsSync(dir))) {
       if (attempts < maxAttempts) setTimeout(tryAttachWatcher, 1000);
       return;
     }

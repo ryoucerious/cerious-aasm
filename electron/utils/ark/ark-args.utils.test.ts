@@ -171,6 +171,16 @@ describe('ark-args.utils', () => {
       });
     });
 
+    it('should pass AbsLog when a private log path is assigned', () => {
+      const args = buildArkServerArgs({ absLogPath: 'Z:\\servers\\inst\\Logs\\ShooterGame.log' });
+      expect(args).toContain('-AbsLog=Z:\\servers\\inst\\Logs\\ShooterGame.log');
+    });
+
+    it('should ignore an AbsLog path that contains a space', () => {
+      const args = buildArkServerArgs({ absLogPath: 'Z:\\Program Files\\ShooterGame.log' });
+      expect(args.join('\n')).not.toContain('AbsLog');
+    });
+
     it('should use serverPlatform if set', () => {
       const args = buildArkServerArgs({ serverPlatform: 'XSX' });
       expect(args).toContain('-ServerPlatform=XSX');

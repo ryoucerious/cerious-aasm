@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getDefaultInstallDir } from '../platform.utils';
+import { nextPortSet, portsMatchSet, reconcilePortSets } from './port-sets';
 
 let uuidv4: (() => string) | null = null;
 
@@ -126,9 +127,46 @@ export function getInstance(id: string) {
   return JSON.parse(fs.readFileSync(configPath, 'utf8'));
 }
 
-export async function saveInstance(instance: any) {
-  // Check for duplicate name (case-insensitive)
+/**
+ * Move every server that is not already on a canonical port set onto the lowest
+ * free set. Name order decides who gets the earlier set. Safe to call again.
+ */
+export async function migratePortSets(): Promise<string[]> {
   const all = await getAllInstances();
+  const ordered = [...all].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  const { instances, changedIds } = reconcilePortSets(ordered);
+  for (const inst of instances) {
+    if (!inst.id || !changedIds.includes(inst.id)) continue;
+    const current = getInstance(inst.id);
+    if (!current) continue;
+    current.gamePort = inst.gamePort;
+    current.queryPort = inst.queryPort;
+    current.rconPort = inst.rconPort;
+    fs.writeFileSync(getInstanceConfigPath(inst.id), JSON.stringify({ ...current, id: inst.id }, null, 2));
+    console.log(`[port-sets] ${current.name || inst.id} -> game ${inst.gamePort}, query ${inst.queryPort}, rcon ${inst.rconPort}`);
+  }
+  return changedIds;
+}
+
+export async function saveInstance(instance: any) {
+  await migratePortSets();
+  const all = await getAllInstances();
+  const existing = instance.id ? all.find((inst: any) => inst.id === instance.id) : undefined;
+  if (existing && portsMatchSet(existing.gamePort, existing.queryPort, existing.rconPort)) {
+    instance.gamePort = existing.gamePort;
+    instance.queryPort = existing.queryPort;
+    instance.rconPort = existing.rconPort;
+  } else {
+    const assigned = nextPortSet(all.filter((inst: any) => inst.id !== instance.id).map((inst: any) => inst.gamePort));
+    if (!assigned) {
+      return { error: 'All 25 port sets are already in use.' };
+    }
+    instance.gamePort = assigned.gamePort;
+    instance.queryPort = assigned.queryPort;
+    instance.rconPort = assigned.rconPort;
+  }
+
+  // Check for duplicate name (case-insensitive)
   const name = (instance.name || '').trim().toLowerCase();
   if (all.some(inst => inst.name && inst.name.trim().toLowerCase() === name && inst.id !== instance.id)) {
     // Duplicate name found

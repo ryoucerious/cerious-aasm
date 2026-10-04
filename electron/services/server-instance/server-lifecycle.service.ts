@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { validateInstanceId } from '../../utils/validation.utils';
 import { ArkPathUtils, ArkCommandUtils, buildArkServerArgs } from '../../utils/ark.utils';
-import { isPortInUse } from '../../utils/network.utils';
+import { isPortInUse, isUdpPortInUse } from '../../utils/network.utils';
 import { getPlatform } from '../../utils/platform.utils';
 import { rconService } from '../rcon.service';
 import { ServerInstanceResult } from '../../types/server-instance.types';
@@ -144,7 +144,7 @@ export class ServerLifecycleService {
     const rconPort = parseInt(instance.rconPort);
     const queryPort = parseInt(instance.queryPort || 27015);
 
-    if (await isPortInUse(gamePort)) {
+    if (await isUdpPortInUse(gamePort)) {
       return {
         success: false,
         error: `Game port ${gamePort} is already in use`,
@@ -158,7 +158,7 @@ export class ServerLifecycleService {
         instanceId
       };
     }
-    if (await isPortInUse(queryPort)) {
+    if (await isUdpPortInUse(queryPort)) {
       return {
         success: false,
         error: `Query port ${queryPort} (Steam discovery) is already in use`,

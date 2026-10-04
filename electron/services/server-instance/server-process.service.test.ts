@@ -47,6 +47,7 @@ jest.mock('../../utils/ark/ark-server/ark-server-logging.utils', () => ({
   snapshotLogFiles: jest.fn(() => []),
   detectAndRegisterLogFile: jest.fn(),
   unregisterLogFile: jest.fn(),
+  registerLogFile: jest.fn(),
 }));
 
 jest.mock('../../utils/ark/instance.utils', () => ({
@@ -74,10 +75,17 @@ jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({
   getInstanceRuntimeRoot: jest.fn(() => '/mock/instances/inst1'),
   getInstanceAltSaveDirName: jest.fn(() => 'SavedArks'),
   getInstanceLogsDir: jest.fn(() => '/mock/instances/inst1/ShooterGame/Saved/Logs'),
+  isInstanceIsolated: jest.fn(() => true),
+  getInstanceConsoleLogPath: jest.fn(() => '/mock/instances/inst1/Logs/ShooterGame.log'),
+  toGameAbsolutePath: jest.fn((p: string) => p),
 }));
 
 jest.mock('../../utils/platform.utils', () => ({
   getPlatform: jest.fn(() => 'windows'),
+}));
+
+jest.mock('../../utils/ark/ark-server/plugin-view.utils', () => ({
+  withInstancePlugins: jest.fn((command: string, args: string[]) => ({ command, args })),
 }));
 
 jest.mock('../discord.service', () => ({
@@ -228,6 +236,23 @@ describe('ServerProcessService', () => {
         'start',
         expect.any(String)
       );
+    });
+
+    it('should assign a private log when the server shares the install', async () => {
+      const paths = require('../../utils/ark/ark-server/ark-server-paths.utils');
+      (paths.isInstanceIsolated as jest.Mock).mockReturnValue(false);
+      const { buildArkServerArgs } = require('../../utils/ark.utils');
+      const logUtils = require('../../utils/ark/ark-server/ark-server-logging.utils');
+
+      await service.startServerProcess('inst1', { sessionName: 'TestServer' });
+
+      expect(logUtils.registerLogFile).toHaveBeenCalledWith(
+        'inst1',
+        '/mock/instances/inst1/Logs/ShooterGame.log'
+      );
+      expect(buildArkServerArgs).toHaveBeenCalledWith(expect.objectContaining({
+        absLogPath: '/mock/instances/inst1/Logs/ShooterGame.log',
+      }));
     });
 
     it('should snapshot and register log files', async () => {

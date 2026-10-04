@@ -16,6 +16,7 @@ import {
   getProcessCpuSeconds,
   parseTasklistVerbose,
   parseDirFreeBytes,
+  parseDfKilobytes,
   clearProcessStatsCache,
   getCpuInfo,
   getUptime,
@@ -288,6 +289,36 @@ describe('Platform Utils', () => {
 
     it('should return null for empty output', () => {
       expect(parseDirFreeBytes('   ')).toBeNull();
+    });
+  });
+
+  describe('parseDfKilobytes', () => {
+    const hostOutput = [
+      'Filesystem           1024-blocks     Used  Available Capacity Mounted on',
+      '/dev/mapper/vg0-data  3744299096 22340216 3531684116       1% /srv'
+    ].join('\n');
+
+    it('should read total and used bytes from df -kP', () => {
+      expect(parseDfKilobytes(hostOutput)).toEqual({
+        total: 3744299096 * 1024,
+        free: (3744299096 - 22340216) * 1024
+      });
+    });
+
+    it('should read a line where the filesystem name wrapped', () => {
+      const wrapped = [
+        'Filesystem     1024-blocks      Used Available Capacity Mounted on',
+        '/dev/mapper/very-long-name',
+        '               1000000 200000 700000  20% /data'
+      ].join('\n');
+      expect(parseDfKilobytes(wrapped)).toEqual({
+        total: 1000000 * 1024,
+        free: (1000000 - 200000) * 1024
+      });
+    });
+
+    it('should return null when df only printed an error', () => {
+      expect(parseDfKilobytes('df: /missing: No such file or directory')).toBeNull();
     });
   });
 

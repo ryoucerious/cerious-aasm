@@ -83,6 +83,12 @@ export class AutomationService {
   // Auto-start on app launch
   async handleAutoStartOnAppLaunch(): Promise<void> {
     try {
+      const { migratePortSets } = require('../../utils/ark/instance.utils');
+      await migratePortSets();
+    } catch (error) {
+      console.error('[port-sets] Failed to assign port sets:', error);
+    }
+    try {
       // Load configurable stagger delay
       let startDelayMs = 60000;
       try {

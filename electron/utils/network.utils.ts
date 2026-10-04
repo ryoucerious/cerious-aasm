@@ -1,5 +1,33 @@
 import * as net from 'net';
 import * as http from 'http';
+import * as dgram from 'dgram';
+
+/**
+ * True when another process already has this UDP port. Game and query ports are UDP.
+ * A TCP listener on the same number, including ARK's localhost HTTP socket on 8888,
+ * does not count.
+ */
+export function isUdpPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket('udp4');
+    const finish = (inUse: boolean) => {
+      socket.removeAllListeners();
+      try {
+        socket.close();
+      } catch {
+        // The socket is already closed after a bind error.
+      }
+      resolve(inUse);
+    };
+    socket.once('error', () => finish(true));
+    socket.once('listening', () => finish(false));
+    try {
+      socket.bind({ port, exclusive: true });
+    } catch {
+      finish(true);
+    }
+  });
+}
 
 export function isPortInUse(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {

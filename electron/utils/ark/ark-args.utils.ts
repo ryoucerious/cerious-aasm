@@ -96,6 +96,15 @@ export function buildArkServerArgs(config: any): string[] {
 
   args.push(mainArg);
 
+  // Unreal writes the engine log to this exact file instead of the shared
+  // ShooterGame/Saved/Logs/ShooterGame.log. FParse reads ABSLOG up to the next
+  // space, so a path that contains one cannot be passed safely.
+  if (typeof config.absLogPath === 'string' && config.absLogPath && !/\s/.test(config.absLogPath)) {
+    args.push(`-AbsLog=${config.absLogPath}`);
+  } else if (typeof config.absLogPath === 'string' && /\s/.test(config.absLogPath)) {
+    console.warn(`[ark-args] Ignoring AbsLog path because it contains a space: ${config.absLogPath}`);
+  }
+
   const isTrue = (val: any) => val === true || val === 'true';
   const isFalse = (val: any) => val === false || val === 'false';
 

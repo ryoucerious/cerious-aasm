@@ -115,18 +115,15 @@
   <!-- Network Settings -->
   <div class="settings-section">
     <h5>Network Settings</h5>
-    <p class="section-desc">Configure network ports and connectivity options.</p>
+    <p class="section-desc">Ports are assigned from the next free set. They cannot be edited.</p>
 
     <div class="form-group">
       <label class="form-control-label">Game Port</label>
       <input class="form-control input"
              type="number"
-             min="1024"
-             max="65535"
              [(ngModel)]="serverInstance.gamePort"
-             (blur)="onSaveSettings(); onValidateField('gamePort', serverInstance.gamePort)"
-             [disabled]="isLocked" />
-      <div class="form-control-label desc">UDP port for player connections (default: 7777). This is the main port players use to connect to your server.</div>
+             readonly />
+      <div class="form-control-label desc">UDP port for player connections. The next port carries peer traffic. Both are opened with the set.</div>
       <div *ngIf="hasFieldError('gamePort')" class="validation-error">{{ getFieldError('gamePort') }}</div>
       <div *ngIf="hasFieldWarning('gamePort')" class="validation-warning">{{ getFieldWarning('gamePort') }}</div>
     </div>
@@ -135,12 +132,9 @@
       <label class="form-control-label">Query Port</label>
       <input class="form-control input"
              type="number"
-             min="1024"
-             max="65535"
              [(ngModel)]="serverInstance.queryPort"
-             (blur)="onSaveSettings(); onValidateField('queryPort', serverInstance.queryPort)"
-             [disabled]="isLocked" />
-      <div class="form-control-label desc">UDP port for Steam server discovery (default: 27015). Each server instance must use a unique query port.</div>
+             readonly />
+      <div class="form-control-label desc">UDP port for server discovery. Assigned with the game port.</div>
       <div *ngIf="hasFieldError('queryPort')" class="validation-error">{{ getFieldError('queryPort') }}</div>
       <div *ngIf="hasFieldWarning('queryPort')" class="validation-warning">{{ getFieldWarning('queryPort') }}</div>
     </div>
@@ -162,12 +156,9 @@
       <label class="form-control-label">RCON Port</label>
       <input class="form-control input"
              type="number"
-             min="1024"
-             max="65535"
              [(ngModel)]="serverInstance.rconPort"
-             (blur)="onSaveSettings(); onValidateField('rconPort', serverInstance.rconPort)"
-             [disabled]="isLocked" />
-      <div class="form-control-label desc">TCP port for remote console access (required). Default: 27020. Used for server administration and management.</div>
+             readonly />
+      <div class="form-control-label desc">TCP port the panel uses on this machine. It is not opened on the public firewall.</div>
       <div *ngIf="hasFieldError('rconPort')" class="validation-error">{{ getFieldError('rconPort') }}</div>
       <div *ngIf="hasFieldWarning('rconPort')" class="validation-warning">{{ getFieldWarning('rconPort') }}</div>
     </div>

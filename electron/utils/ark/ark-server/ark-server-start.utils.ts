@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { getPlatform, getDefaultInstallDir } from '../../platform.utils';
 import { buildArkServerArgs } from '../ark-args.utils';
-import { isPortInUse } from '../../network.utils';
+import { isPortInUse, isUdpPortInUse } from '../../network.utils';
 import { getDefaultInstancesBaseDir, getInstancesBaseDir, loadInstanceConfig } from '../../ark/instance.utils';
 import { getArkServerDir } from './ark-server-install.utils';
 import { getArkExecutablePath, getArkConfigDir, prepareArkServerCommand } from './ark-server-paths.utils';
@@ -35,7 +35,7 @@ async function validateServerPorts(config: any, onLog?: (data: string) => void):
   const gamePort = config.gamePort || 7777;
   const rconPort = config.rconPort || 27020;
 
-  const gamePortInUse = await isPortInUse(gamePort);
+  const gamePortInUse = await isUdpPortInUse(gamePort);
   if (gamePortInUse) {
     const error = `Game port ${gamePort} is already in use.`;
     if (onLog) onLog(`[ERROR] ${error}`);
@@ -50,7 +50,7 @@ async function validateServerPorts(config: any, onLog?: (data: string) => void):
   }
 
   const queryPort = config.queryPort || 27015;
-  const queryPortInUse = await isPortInUse(queryPort);
+  const queryPortInUse = await isUdpPortInUse(queryPort);
   if (queryPortInUse) {
     const error = `Query port ${queryPort} (Steam discovery) is already in use.`;
     if (onLog) onLog(`[ERROR] ${error}`);

@@ -26,6 +26,19 @@ const fs = require('fs');
 const logUtils = require('./ark-server-logging.utils');
 
 describe('ark-server-logging.utils', () => {
+  describe('decodeArkLogBytes', () => {
+    it('decodes a UTF-16 LE engine log that has no BOM', () => {
+      const text = 'Server has completed startup and is now advertising for join.';
+      const buf = Buffer.from(text, 'utf16le');
+      expect(logUtils.decodeArkLogBytes(buf)).toBe(text);
+    });
+
+    it('decodes a UTF-8 log', () => {
+      const buf = Buffer.from('hello\n', 'utf8');
+      expect(logUtils.decodeArkLogBytes(buf)).toBe('hello\n');
+    });
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
   });

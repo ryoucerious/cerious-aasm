@@ -58,6 +58,8 @@ const {
   isInstanceIsolated,
   getInstanceConfigDir,
   getInstanceLogsDir,
+  getInstanceConsoleLogPath,
+  toGameAbsolutePath,
   getInstanceWhitelistPath,
   getInstanceAltSaveDirName,
   validateInstanceRuntimeTree
@@ -352,6 +354,24 @@ describe('ark-server-paths.utils', () => {
       expect(result.valid).toBe(false);
       expect(result.missing).toEqual(['ShooterGame/Binaries/Win64/RedpointEOS']);
       expect(result.sharedInstallBroken).toBe(false);
+    });
+  });
+
+  describe('private console log', () => {
+    it('keeps the console log inside the instance folder', () => {
+      expect(getInstanceConsoleLogPath('inst1')).toBe('/instances/inst1/Logs/ShooterGame.log');
+    });
+
+    it('maps a Linux path onto the Wine Z: drive', () => {
+      getPlatform.mockReturnValue('linux');
+      expect(toGameAbsolutePath('/instances/inst1/Logs/ShooterGame.log'))
+        .toBe('Z:\\instances\\inst1\\Logs\\ShooterGame.log');
+    });
+
+    it('leaves a Windows path as a host path', () => {
+      getPlatform.mockReturnValue('windows');
+      expect(toGameAbsolutePath('C:/instances/inst1/Logs/ShooterGame.log'))
+        .toBe('C:/instances/inst1/Logs/ShooterGame.log');
     });
   });
 });

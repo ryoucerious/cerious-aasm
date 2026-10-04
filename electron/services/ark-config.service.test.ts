@@ -212,8 +212,9 @@ describe('ArkConfigService', () => {
     });
   });
 
-  it('writeArkConfigFiles writes files and copies them', () => {
-    // Simulate that source files exist so copyFileSync is called for both
+  it('writeArkConfigFiles writes files without copying them onto the shared install', () => {
+    // The shared install is one folder for every server. Copying a new server's ini
+    // there is what made the next server inherit the previous one's settings.
     (fs.existsSync as jest.Mock).mockImplementation((filePath) => {
       if (filePath.includes('Config/WindowsServer/GameUserSettings.ini') || filePath.includes('Config/WindowsServer/Game.ini')) {
         return true;
@@ -230,6 +231,6 @@ describe('ArkConfigService', () => {
     expect(() => service.writeArkConfigFiles('INSTANCE_DIR', configWithCopy)).not.toThrow();
     expect(fs.mkdirSync).toHaveBeenCalled();
     expect(fs.writeFileSync).toHaveBeenCalled();
-    expect(fs.copyFileSync).toHaveBeenCalled();
+    expect(fs.copyFileSync).not.toHaveBeenCalled();
   });
 });

@@ -413,17 +413,55 @@ async function readDiskUsage(targetPath: string): Promise<DiskUsage | null> {
   return { total, free };
 }
 
+/**
+ * `df` refuses a path that does not exist. The config directory name the panel asks for
+ * ("Cerious AASM") is not the directory Electron actually created, so walk up to the nearest
+ * real folder. That is still the volume the missing path would have lived on.
+ */
+function existingPathForDisk(targetPath: string): string {
+  let current = path.resolve(targetPath || os.homedir());
+  const root = path.parse(current).root || path.sep;
+  while (true) {
+    try {
+      if (fs.existsSync(current)) return current;
+    } catch {
+      // Unreadable. The parent may still name the right volume.
+    }
+    if (current === root) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return os.homedir();
+}
+
+/**
+ * Parse `df -kP` output into byte counts.
+ * A long filesystem name can land on its own line, so the numbers are found wherever
+ * they sit rather than assumed to be columns 2 and 4. Used comes from df's Used column,
+ * not from capacity minus Available, which also counts blocks reserved for root.
+ */
+export function parseDfKilobytes(output: string): DiskUsage | null {
+  const lines = output.trim().split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const cols = lines[i].trim().split(/\s+/);
+    const numericAt = cols.findIndex(col => /^\d+$/.test(col));
+    if (numericAt < 0 || cols.length < numericAt + 2) continue;
+    const totalKb = Number(cols[numericAt]);
+    const usedKb = Number(cols[numericAt + 1]);
+    if (!Number.isFinite(totalKb) || !Number.isFinite(usedKb) || totalKb <= 0) continue;
+    const total = totalKb * 1024;
+    const used = usedKb * 1024;
+    return { total, free: Math.max(0, total - used) };
+  }
+  return null;
+}
+
 /** Linux: POSIX df output in 1K blocks. */
 async function readDiskUsageLinux(targetPath: string): Promise<DiskUsage | null> {
-  const output = await execFileAsync('df', ['-kP', targetPath || os.homedir()], { encoding: 'utf8', timeout: 5000 });
-  const lines = output.trim().split(/\r?\n/);
-  if (lines.length < 2) return null;
-  const cols = lines[lines.length - 1].trim().split(/\s+/);
-  // Filesystem 1K-blocks Used Available Use% Mounted
-  const totalKb = Number(cols[1]);
-  const availKb = Number(cols[3]);
-  if (!Number.isFinite(totalKb) || !Number.isFinite(availKb) || totalKb <= 0) return null;
-  return { total: totalKb * 1024, free: availKb * 1024 };
+  const target = existingPathForDisk(targetPath);
+  const output = await execFileAsync('df', ['-kP', target], { encoding: 'utf8', timeout: 5000 });
+  return parseDfKilobytes(output);
 }
 
 /**
