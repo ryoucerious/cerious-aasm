@@ -29,7 +29,7 @@ export interface ServerInstance {
   modSettings?: Record<string, ModSettings>;
 
   // Whitelist/Exclusive Join configuration
-  useExclusiveList?: boolean; // Enable exclusive join mode (UseExclusiveList=true)
+  useExclusiveList?: boolean; // Enable exclusive join mode (the -exclusivejoin launch flag)
   exclusiveJoinPlayerIds?: string[]; // Array of EOS/Player IDs allowed to join
   exclusiveJoinPlayers?: Array<{playerId: string, playerName?: string, dateAdded?: string}>; // Player objects with names
   whitelistKickMessage?: string; // Custom message when non-whitelisted players are kicked

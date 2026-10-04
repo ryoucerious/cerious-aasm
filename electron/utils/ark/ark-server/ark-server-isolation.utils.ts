@@ -30,6 +30,20 @@ export const INSTANCE_OWNED_SHOOTERGAME_SUBDIRS = [
 ];
 
 /**
+ * Loose Win64 files each instance writes for itself. The per-instance binary copy must never carry
+ * them over from the shared install: a whitelist written there by a server that runs the shared
+ * executable would otherwise land in every isolated instance's folder.
+ */
+export const INSTANCE_OWNED_WIN64_FILES = [
+  'playersjoinnochecklist.txt',
+  'playersexclusivejoinlist.txt'
+];
+
+export function isInstanceOwnedWin64File(fileName: string): boolean {
+  return INSTANCE_OWNED_WIN64_FILES.includes(fileName.toLowerCase());
+}
+
+/**
  * Links the shared install's subfolders of `sourceDir` into an instance's `destDir`, skipping any
  * name in `instanceOwned` (case-insensitive). Returns the names linked (or copied).
  *

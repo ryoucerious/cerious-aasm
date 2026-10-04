@@ -51,9 +51,15 @@ export function resolveServerLaunch(instanceId: string): ResolvedServerLaunch {
     return { executable: sharedExe, cwd: path.dirname(sharedExe), usesAsaApiLoader: false };
   }
 
-  // Under Proton the loader is only used when the instance has its own full binary layout.
+  // Under Proton too, the instance's own copy of the binaries runs when it has one: ARK resolves
+  // config, logs and the whitelist against the tree that owns the executable, so instances that
+  // ran the shared executable shared one PlayersJoinNoCheckList.txt. The loader needs the full
+  // layout beside it.
   if (fs.existsSync(asaApiLoader) && fs.existsSync(instanceExe)) {
     return { executable: asaApiLoader, cwd: getArkServerDir(), usesAsaApiLoader: true };
+  }
+  if (fs.existsSync(instanceExe)) {
+    return { executable: instanceExe, cwd: getArkServerDir(), usesAsaApiLoader: false };
   }
   return { executable: sharedExe, cwd: getArkServerDir(), usesAsaApiLoader: false };
 }
@@ -82,9 +88,9 @@ export function getInstanceLogsDir(instanceId: string): string {
   return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Logs');
 }
 
-/** ARK reads the exclusive-join list from the Win64 folder next to the executable. */
+/** The whitelist the dedicated server reads: PlayersJoinNoCheckList.txt in the Win64 folder next to the executable (not PlayersExclusiveJoinList.txt, which the panel keeps). */
 export function getInstanceWhitelistPath(instanceId: string): string {
-  return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
+  return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Binaries', 'Win64', 'PlayersJoinNoCheckList.txt');
 }
 
 /**

@@ -12,6 +12,7 @@ jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({
   getInstanceRuntimeRoot: jest.fn((id: string) => `/instances/${id}`)
 }));
 jest.mock('../../utils/ark/ark-server/ark-server-isolation.utils', () => ({
+  isInstanceOwnedWin64File: jest.fn(() => false),
   linkInstanceSaveDir: jest.fn(async () => false),
   linkSharedShooterGameSubdirs: jest.fn(async () => []),
   linkSharedWin64Subdirs: jest.fn(async () => [])

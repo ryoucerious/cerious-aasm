@@ -37,7 +37,8 @@ describe('WhitelistService', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whitelist test-'));
     instanceDir = path.join(tmpDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers', 'instance1');
-    runtimeList = path.join(tmpDir, 'AASMServer', 'ShooterGame', 'Binaries', 'Win64', LIST);
+    // The dedicated server opens PlayersJoinNoCheckList.txt, not PlayersExclusiveJoinList.txt.
+    runtimeList = path.join(tmpDir, 'AASMServer', 'ShooterGame', 'Binaries', 'Win64', 'PlayersJoinNoCheckList.txt');
     fs.mkdirSync(instanceDir, { recursive: true });
     jest.mocked(loadGlobalConfig).mockReturnValue({ serverDataDir: tmpDir } as GlobalConfig);
     jest.mocked(getInstanceWhitelistPath).mockReturnValue(runtimeList);
@@ -89,14 +90,15 @@ describe('WhitelistService', () => {
   });
 
   describe('writeWhitelistFile', () => {
-    it('writes the list to the instance folder and to the copy ARK reads', () => {
+    // ARK reads one id per line and takes a '#' line as an id, so the copy it reads carries no header.
+    it('writes the list to the instance folder and, as bare ids, to the file ARK reads', () => {
       const result = service.writeWhitelistFile('instance1', ['player1', 'player2']);
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1', 'player2']);
       expect(getInstanceWhitelistPath).toHaveBeenCalledWith('instance1');
       expect(instanceList()).toBe(`${HEADER}\nplayer1\nplayer2`);
-      expect(fs.readFileSync(runtimeList, 'utf8')).toBe(instanceList());
+      expect(fs.readFileSync(runtimeList, 'utf8')).toBe('player1\nplayer2\n');
     });
 
     it('should filter out empty player IDs', () => {
@@ -185,17 +187,17 @@ describe('WhitelistService', () => {
   });
 
   describe('copyWhitelistToMainDir', () => {
-    it('writes an empty list, header only, when the instance has none', () => {
+    it('writes an empty file ARK reads when the instance has no list', () => {
       const result = service.copyWhitelistToMainDir('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual([]);
       expect(result.message).toContain('empty whitelist');
-      expect(fs.readFileSync(runtimeList, 'utf8')).toBe(HEADER);
+      expect(fs.readFileSync(runtimeList, 'utf8')).toBe('');
     });
 
-    it('should copy existing whitelist to main dir', () => {
-      fs.writeFileSync(path.join(instanceDir, LIST), 'player1\nplayer2\n', 'utf8');
+    it('rewrites the instance list as bare ids, dropping comments and blank lines', () => {
+      fs.writeFileSync(path.join(instanceDir, LIST), `${HEADER}\r\nplayer1\r\n\r\n# note\r\nplayer2\r\n`, 'utf8');
 
       const result = service.copyWhitelistToMainDir('instance1');
 

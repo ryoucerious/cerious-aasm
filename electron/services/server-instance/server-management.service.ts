@@ -7,6 +7,7 @@ import { generateRandomPassword } from '../../utils/crypto.utils';
 import { getProcessMemoryUsage } from '../../utils/platform.utils';
 import { getArkServerDir, getInstanceRuntimeRoot } from '../../utils/ark/ark-server/ark-server-paths.utils';
 import {
+  isInstanceOwnedWin64File,
   linkInstanceSaveDir,
   linkSharedShooterGameSubdirs,
   linkSharedWin64Subdirs
@@ -286,8 +287,10 @@ export class ServerManagementService {
     if (await fsExtra.pathExists(sourceBinaries)) {
       await fsExtra.ensureDir(destBinaries);
       // Files only: the ArkApi folder and other per-instance folders in dest must stay the
-      // instance's own, so directories are never bulk-copied.
+      // instance's own, so directories are never bulk-copied. The whitelist files are the
+      // instance's own too, written after this step.
       for (const file of await fsExtra.readdir(sourceBinaries)) {
+        if (isInstanceOwnedWin64File(file)) continue;
         const srcFile = path.join(sourceBinaries, file);
         const destFile = path.join(destBinaries, file);
         const stat = await fsExtra.stat(srcFile);

@@ -11,11 +11,28 @@ import {
   linkSharedWin64Subdirs,
   linkSharedShooterGameSubdirs,
   INSTANCE_OWNED_WIN64_SUBDIRS,
-  INSTANCE_OWNED_SHOOTERGAME_SUBDIRS
+  INSTANCE_OWNED_SHOOTERGAME_SUBDIRS,
+  isInstanceOwnedWin64File
 } from './ark-server-isolation.utils';
 
 const fs: typeof import('fs') = jest.requireActual('fs');
 const fsExtra: typeof import('fs-extra') = jest.requireActual('fs-extra');
+
+describe('isInstanceOwnedWin64File', () => {
+  // The whitelist ARK reads is written per instance; the binary copy must not bring the shared
+  // install's over, whatever case the filesystem reports.
+  it('names the whitelist files, in any case', () => {
+    expect(isInstanceOwnedWin64File('PlayersJoinNoCheckList.txt')).toBe(true);
+    expect(isInstanceOwnedWin64File('PLAYERSJOINNOCHECKLIST.TXT')).toBe(true);
+    expect(isInstanceOwnedWin64File('PlayersExclusiveJoinList.txt')).toBe(true);
+  });
+
+  it('leaves the binaries alone', () => {
+    expect(isInstanceOwnedWin64File('ArkAscendedServer.exe')).toBe(false);
+    expect(isInstanceOwnedWin64File('AsaApiLoader.exe')).toBe(false);
+    expect(isInstanceOwnedWin64File('steam_api64.dll')).toBe(false);
+  });
+});
 
 describe('linkSharedWin64Subdirs', () => {
   let tmpDir: string;

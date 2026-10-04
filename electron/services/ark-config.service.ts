@@ -157,7 +157,6 @@ export class ArkConfigService {
     { key: "bAllowPlatformSaddleMultiFloors",          iniKey: "bAllowPlatformSaddleMultiFloors",            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bUseCorpseLocator",                        iniKey: "bUseCorpseLocator",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bUseSingleplayerSettings",                 iniKey: "bUseSingleplayerSettings",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "useExclusiveList",                         iniKey: "UseExclusiveList",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverCrosshair",                          iniKey: "ServerCrosshair",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "showFloatingDamageText",                   iniKey: "ShowFloatingDamageText",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowHitMarkers",                          iniKey: "AllowHitMarkers",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -265,6 +264,9 @@ export class ArkConfigService {
     bPreventMateBoost: 'preventMateBoost',
     AllowCustomRecipes: 'allowCustomRecipes',
     bPvE: 'bPvE',
+    // Not a key ARK reads: the whitelist is enabled by the -exclusivejoin launch flag alone, and
+    // with this key written the server refused even listed players. Dropped from existing files.
+    UseExclusiveList: 'useExclusiveList',
   };
 
   /** Twelve-entry per-level stat arrays, written to Game.ini as `<prefix>[i]=value`. */

@@ -179,6 +179,18 @@ describe('ArkConfigService', () => {
       expect(writes[GAME]).toContain('CropGrowthSpeedMultiplier=3');
     });
 
+    // ARK reads the whitelist switch only from the -exclusivejoin launch flag. Writing
+    // UseExclusiveList=true as well made the server refuse even listed players, so the key is
+    // never written and a copy left by an earlier version is dropped rather than kept as custom.
+    it('never writes UseExclusiveList, and drops one an earlier version wrote', () => {
+      existing[GUS] = '[ServerSettings]\nUseExclusiveList=true\nMyCustomKey=keepme\n';
+
+      service.writeArkConfigFiles('INSTANCE_DIR', { useExclusiveList: true, sessionName: 'Test' });
+
+      expect(writes[GUS]).not.toMatch(/useexclusivelist/i);
+      expect(writes[GUS]).toContain('MyCustomKey=keepme');
+    });
+
     it('maps the bPvE toggle to a single ServerPVE=True line', () => {
       service.writeArkConfigFiles('INSTANCE_DIR', { bPvE: true });
       expect(writes[GUS]).toContain('ServerPVE=True');
@@ -455,6 +467,13 @@ describe('ArkConfigService', () => {
         .toEqual({ playerCharacterDamageMultiplier: 2, bPvE: true });
       expect(service.readIniSettings('[ServerSettings]\nPlayerDamageMultiplier=3\nPlayerCharacterDamageMultiplier=2').config)
         .toEqual({ playerCharacterDamageMultiplier: 3 });
+    });
+
+    // Imported files from earlier versions still turn the whitelist switch on, though the key is
+    // no longer written back.
+    it('reads UseExclusiveList into the whitelist switch', () => {
+      expect(service.readIniSettings('[ServerSettings]\nUseExclusiveList=True', { filename: 'GameUserSettings.ini' }).config)
+        .toEqual({ useExclusiveList: true });
     });
 
     it('takes extra key mappings from the caller', () => {

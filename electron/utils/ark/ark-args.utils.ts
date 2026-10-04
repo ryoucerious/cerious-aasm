@@ -119,8 +119,15 @@ export function buildArkServerArgs(config: LaunchConfig): string[] {
 
   args.push(`${mapArg}?${paramParts.join('?')}`);
 
+  const launchParameters = getArkLaunchParameters(config);
+
   if (isFalse(config.battleEye)) args.push('-NoBattlEye');
-  if (isTrue(config.useExclusiveList)) args.push('-exclusivejoin');
+  // ARK honours the whitelist only through this flag: UseExclusiveList is not an INI key, and
+  // writing it made the server refuse even listed players. Users who typed the flag into their
+  // launch parameters while the switch did not work keep a single copy.
+  if (isTrue(config.useExclusiveList) && !launchParameters.some(param => param.toLowerCase() === '-exclusivejoin')) {
+    args.push('-exclusivejoin');
+  }
   // ARK only honours this as a launch flag; it is not a GameUserSettings/Game.ini key.
   if (isTrue(config.forceAllowCaveFlyers)) args.push('-ForceAllowCaveFlyers');
 
@@ -152,7 +159,7 @@ export function buildArkServerArgs(config: LaunchConfig): string[] {
   const winLiveMaxPlayers = config.winLiveMaxPlayers || config.maxPlayers;
   if (winLiveMaxPlayers) args.push(`-WinLiveMaxPlayers=${winLiveMaxPlayers}`);
 
-  args.push(...getArkLaunchParameters(config));
+  args.push(...launchParameters);
 
   if (isTrue(config.noTransferFromFiltering)) args.push('-NoTransferFromFiltering');
   if (isTrue(config.preventDownloadSurvivors)) args.push('-PreventDownloadSurvivors');

@@ -102,14 +102,14 @@ describe('ark-server-paths.utils', () => {
       useIsolatedInstance();
       expect(getInstanceConfigDir('inst1')).toBe(`${INSTANCE}/ShooterGame/Saved/Config/WindowsServer`);
       expect(getInstanceLogsDir('inst1')).toBe(`${INSTANCE}/ShooterGame/Saved/Logs`);
-      expect(getInstanceWhitelistPath('inst1')).toBe(`${INSTANCE}/ShooterGame/Binaries/Win64/PlayersExclusiveJoinList.txt`);
+      expect(getInstanceWhitelistPath('inst1')).toBe(`${INSTANCE}/ShooterGame/Binaries/Win64/PlayersJoinNoCheckList.txt`);
     });
 
     it('points config, logs and whitelist at the shared install otherwise', () => {
       useSharedInstall();
       expect(getInstanceConfigDir('inst1')).toBe(`${ARK}/ShooterGame/Saved/Config/WindowsServer`);
       expect(getInstanceLogsDir('inst1')).toBe(`${ARK}/ShooterGame/Saved/Logs`);
-      expect(getInstanceWhitelistPath('inst1')).toBe(`${ARK}/ShooterGame/Binaries/Win64/PlayersExclusiveJoinList.txt`);
+      expect(getInstanceWhitelistPath('inst1')).toBe(`${ARK}/ShooterGame/Binaries/Win64/PlayersJoinNoCheckList.txt`);
     });
 
     // Both forms must land on <instance>/SavedArks once ARK appends them to
@@ -214,6 +214,43 @@ describe('ark-server-paths.utils', () => {
 
       expect(launch.usesAsaApiLoader).toBe(false);
       expect(launch.executable).toBe(`${ARK}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
+    });
+
+    // ARK reads the whitelist, config and logs from the tree that owns the executable, so a Linux
+    // instance that ran the shared executable shared its PlayersJoinNoCheckList.txt with every
+    // other instance. Each instance has its own copy of the binaries; Proton runs that one.
+    it('runs the instance ArkAscendedServer.exe under Proton when the loader is missing', () => {
+      getPlatform.mockReturnValue('linux');
+      fs.existsSync.mockImplementation((p: string) => String(p).endsWith('ArkAscendedServer.exe'));
+
+      const launch = resolveServerLaunch('inst-1');
+
+      expect(launch.usesAsaApiLoader).toBe(false);
+      expect(launch.executable).toBe('/instances/inst-1/ShooterGame/Binaries/Win64/ArkAscendedServer.exe');
+      expect(launch.cwd).toBe(ARK);
+    });
+
+    it('prefers AsaApiLoader.exe under Proton when the instance has the full layout', () => {
+      getPlatform.mockReturnValue('linux');
+      fs.existsSync.mockImplementation((p: string) =>
+        String(p).endsWith('AsaApiLoader.exe') || String(p).endsWith('ArkAscendedServer.exe')
+      );
+
+      const launch = resolveServerLaunch('inst-1');
+
+      expect(launch.usesAsaApiLoader).toBe(true);
+      expect(launch.executable).toBe('/instances/inst-1/ShooterGame/Binaries/Win64/AsaApiLoader.exe');
+    });
+
+    it('falls back to the shared install under Proton when the instance has no binaries', () => {
+      getPlatform.mockReturnValue('linux');
+      fs.existsSync.mockReturnValue(false);
+
+      const launch = resolveServerLaunch('inst-1');
+
+      expect(launch.usesAsaApiLoader).toBe(false);
+      expect(launch.executable).toBe(`${ARK}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
+      expect(launch.cwd).toBe(ARK);
     });
   });
 

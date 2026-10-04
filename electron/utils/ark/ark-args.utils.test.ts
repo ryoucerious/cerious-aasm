@@ -280,6 +280,28 @@ describe('ark-args.utils', () => {
     });
   });
 
+  // ARK honours the whitelist only through -exclusivejoin. UseExclusiveList=true in
+  // GameUserSettings.ini is not a key the server reads, and with it set even listed players
+  // were refused (see ark-config.service.ts), so the launch flag is the only place it is set.
+  describe('exclusive join', () => {
+    it('adds -exclusivejoin once when the whitelist is on', () => {
+      expect(buildArkServerArgs({ useExclusiveList: true }).filter(arg => arg === '-exclusivejoin')).toHaveLength(1);
+      expect(buildArkServerArgs({ useExclusiveList: 'true' as any })).toContain('-exclusivejoin');
+    });
+
+    it('does not add -exclusivejoin when the whitelist is off', () => {
+      expect(buildArkServerArgs({})).not.toContain('-exclusivejoin');
+      expect(buildArkServerArgs({ useExclusiveList: false })).not.toContain('-exclusivejoin');
+    });
+
+    // Users who added the flag by hand while the switch did not work keep a single copy.
+    it('does not duplicate a -exclusivejoin the user typed into the launch parameters', () => {
+      const args = buildArkServerArgs({ useExclusiveList: true, launchParameters: '-foo -ExclusiveJoin' });
+      expect(args.filter(arg => arg.toLowerCase() === '-exclusivejoin')).toHaveLength(1);
+      expect(args).toContain('-foo');
+    });
+  });
+
   describe('getArkMapName', () => {
     it('should return mapName from config', () => {
       expect(getArkMapName({ mapName: 'Valguero_P' })).toBe('Valguero_P');

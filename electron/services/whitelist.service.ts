@@ -10,7 +10,10 @@ export interface WhitelistResult {
   error?: string;
 }
 
+/** The panel's copy, in the instance folder. */
 const LIST_FILE = 'PlayersExclusiveJoinList.txt';
+/** The file the dedicated server reads, next to the executable; see getInstanceWhitelistPath. */
+const RUNTIME_LIST_FILE = 'PlayersJoinNoCheckList.txt';
 const HEADER_LINES = [
   '# ARK: Survival Ascended Exclusive Join List',
   '# One EOS/Player ID per line',
@@ -22,13 +25,20 @@ function renderList(playerIds: string[]): string {
   return [...HEADER_LINES, '', ...playerIds].join('\n');
 }
 
+/** One EOS id per line and nothing else: ARK takes every line, a '#' comment included, as an id. */
+function renderRuntimeList(playerIds: string[]): string {
+  return playerIds.map(id => `${id}\n`).join('');
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * The exclusive-join list. The instance folder holds the user's copy; ARK reads another copy next
- * to the executable it runs, which is refreshed on every save and before every start.
+ * The exclusive-join list. The instance folder holds the panel's copy, PlayersExclusiveJoinList.txt
+ * with a comment header. The server reads a different file, PlayersJoinNoCheckList.txt next to the
+ * executable it runs, as bare ids and only at startup, so that one is rewritten on every save and
+ * before every start.
  */
 export class WhitelistService {
   private getListPath(instanceId: string): string {
@@ -44,22 +54,23 @@ export class WhitelistService {
       return getInstanceWhitelistPath(instanceId);
     } catch (error) {
       console.warn(`[whitelist] Could not resolve the whitelist path ARK reads for ${instanceId}; using the shared one:`, error);
-      return path.join(getArkServerDir(), 'ShooterGame', 'Binaries', 'Win64', LIST_FILE);
+      return path.join(getArkServerDir(), 'ShooterGame', 'Binaries', 'Win64', RUNTIME_LIST_FILE);
     }
   }
 
-  private writeRuntimeList(instanceId: string, write: (runtimePath: string) => void): void {
+  private writeRuntimeList(instanceId: string, playerIds: string[]): void {
     const runtimePath = this.getRuntimeListPath(instanceId);
     fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
-    write(runtimePath);
+    fs.writeFileSync(runtimePath, renderRuntimeList(playerIds), 'utf8');
   }
 
   /** Replaces the list. Fails, creating nothing, when the instance folder does not exist. */
   writeWhitelistFile(instanceId: string, playerIds: string[]): WhitelistResult {
     try {
       const listPath = this.getListPath(instanceId);
-      fs.writeFileSync(listPath, renderList(playerIds.filter(id => id && id.trim().length > 0)), 'utf8');
-      this.writeRuntimeList(instanceId, runtimePath => fs.copyFileSync(listPath, runtimePath));
+      const ids = playerIds.filter(id => id && id.trim().length > 0);
+      fs.writeFileSync(listPath, renderList(ids), 'utf8');
+      this.writeRuntimeList(instanceId, ids);
       return { success: true, playerIds, message: `Saved ${playerIds.length} whitelisted players` };
     } catch (error) {
       return { success: false, error: `Failed to write whitelist file: ${describeError(error)}` };
@@ -109,18 +120,21 @@ export class WhitelistService {
     return this.writeWhitelistFile(instanceId, []);
   }
 
-  /** Puts the instance's list where ARK reads it before a start: an empty one when it has none. */
+  /**
+   * Writes the instance's list where ARK reads it before a start, as bare ids: an empty file when
+   * the instance has none. ARK reads the file only at startup.
+   */
   copyWhitelistToMainDir(instanceId: string): WhitelistResult {
     try {
-      const listPath = this.getListPath(instanceId);
-      if (!fs.existsSync(listPath)) {
-        this.writeRuntimeList(instanceId, runtimePath => fs.writeFileSync(runtimePath, renderList([]), 'utf8'));
-        return { success: true, playerIds: [], message: 'Created empty whitelist file in main ARK directory' };
-      }
+      const hasList = fs.existsSync(this.getListPath(instanceId));
+      const loaded = this.loadWhitelistFromInstance(instanceId);
+      if (!loaded.success) throw new Error(loaded.error);
 
-      this.writeRuntimeList(instanceId, runtimePath => fs.copyFileSync(listPath, runtimePath));
-      const playerIds = this.loadWhitelistFromInstance(instanceId).playerIds || [];
-      return { success: true, playerIds, message: `Copied whitelist with ${playerIds.length} players to main ARK directory` };
+      const playerIds = loaded.playerIds ?? [];
+      this.writeRuntimeList(instanceId, playerIds);
+      return hasList
+        ? { success: true, playerIds, message: `Copied whitelist with ${playerIds.length} players to main ARK directory` }
+        : { success: true, playerIds: [], message: 'Created empty whitelist file in main ARK directory' };
     } catch (error) {
       return { success: false, error: `Failed to copy whitelist to main directory: ${describeError(error)}` };
     }
