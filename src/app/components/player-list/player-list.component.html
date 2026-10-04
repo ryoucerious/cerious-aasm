@@ -1,4 +1,3 @@
-<!-- Laid out exactly like Whitelist and Mods: a page intro, then titled sections. -->
 <div class="tab-content">
   <div class="form-group page-intro">
     <h4>Online Player Management</h4>
@@ -33,23 +32,19 @@
           </tr>
         </thead>
         <tbody>
-          <!-- Loading State -->
           <tr *ngIf="loading && players.length === 0" class="no-data-row">
             <td colspan="3" class="no-data">
               <i class="material-icons spin">refresh</i> Loading players...
             </td>
           </tr>
-          <!-- Error State -->
           <tr *ngIf="error && !loading" class="no-data-row">
             <td colspan="3" class="no-data">
               <i class="material-icons">error_outline</i> {{ error }}
             </td>
           </tr>
-          <!-- Empty State -->
           <tr *ngIf="!loading && !error && players.length === 0" class="no-data-row">
             <td colspan="3" class="no-data">No players online</td>
           </tr>
-          <!-- Player Rows -->
           <tr *ngFor="let player of players" class="table-row">
             <td class="player-name">{{ player.name }}</td>
             <td class="player-id">{{ player.steamId }}</td>

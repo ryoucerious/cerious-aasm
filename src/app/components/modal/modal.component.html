@@ -1,10 +1,8 @@
-<div class="modal-backdrop" *ngIf="show">
-  <div class="modal" [style.max-width]="maxWidth || null" [style.width]="maxWidth ? '100%' : null">
+<div class="modal-backdrop" *ngIf="show" (mousedown)="onBackdropMousedown($event)" (click)="onBackdropClick($event)">
+  <div class="modal" role="dialog" aria-modal="true" [attr.aria-labelledby]="titleId"
+       [style.max-width]="maxWidth || null" [style.width]="maxWidth ? '100%' : null">
     <div class="modal-header">
-      <h2>{{ title }}</h2>
-      <!-- <button class="close-btn" (click)="close.emit()">
-        <span class="material-icons">close</span>
-      </button> -->
+      <h2 [id]="titleId">{{ title }}</h2>
     </div>
     <div class="modal-body">
       <ng-content></ng-content>

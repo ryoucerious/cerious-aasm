@@ -1,37 +1,20 @@
 import { initializeAuth } from './auth-config';
 import { createApp, getServerPort, startServer } from './server-setup';
 
-// =============================================================================
-// SERVER STARTUP
-// =============================================================================
-
-// Initialize authentication and start server
+/** Entry point of the web server child that main forks. */
 export async function startWebServer(): Promise<void> {
+  // Without main nothing would stop this process, and it would keep holding the port.
+  process.on('disconnect', () => process.exit(0));
+
   try {
-    // Initialize authentication system
     await initializeAuth();
-
-    // Create and configure Express app
-    const app = createApp();
-    const port = getServerPort();
-
-    // Start the server
-    startServer(app, port);
-
+    startServer(createApp(), getServerPort());
   } catch (error) {
-    console.error('[Web Server] Failed to start:', error);
+    console.error('[web-server] Failed to start:', error);
     process.exit(1);
   }
 }
 
-// Only start the server if this file is being run directly (not required as a module)
 if (require.main === module) {
   startWebServer();
 }
-
-// =============================================================================
-// EXPORTS
-// =============================================================================
-
-// Export authentication functions for external use
-export { updateAuthConfig, hashPassword } from './auth-config';

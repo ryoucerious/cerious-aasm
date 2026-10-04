@@ -1,13 +1,14 @@
 import { Component, EventEmitter, Output, ChangeDetectionStrategy, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { Subscription, take } from 'rxjs';
+import { Subscription } from 'rxjs';
 import { NgFor, NgIf, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
 import { ServerInstance } from '../../core/models/server-instance.model';
-import { ServerInstanceService } from '../../core/services/server-instance.service';
+import { ServerInstanceService, withoutRuntimeFields } from '../../core/services/server-instance.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
+import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus, isBusyStatus } from '../../core/utils/server-status';
 import { ServerNavService, ServerTabDef, ServerTabId } from '../../core/services/server-nav.service';
 import { ModalComponent } from '../modal/modal.component';
@@ -15,15 +16,15 @@ import { AddServerModalComponent } from '../add-server-modal/add-server-modal.co
 import { NotificationService } from '../../core/services/notification.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AppUpdateService } from '../../core/services/app-update.service';
-import { UtilityService } from '../../core/services/utility.service';
+import { IpcService } from '../../core/services/ipc.service';
 import { environment } from '../../../environments/environment';
 
 /**
  * Left-hand navigation: Dashboard, the server list, the selected server's pages, Settings.
  *
  * Server pages are routes (/server/<tab>) so the browser back button, reloads and the top
- * bar's search can all land on a specific page. The list keeps everything it always did:
- * drag to reorder, double-click to rename, delete stopped servers, start/stop all, add.
+ * bar's search can all land on a specific page. The server list offers drag to reorder,
+ * double-click to rename, delete (stopped servers only), start/stop all and add.
  */
 @Component({
   selector: 'app-sidebar',
@@ -61,11 +62,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
   featureTabs: ServerTabDef[] = [];
   expertMode = false;
 
-  // Inline rename
   editingServerId: string | null = null;
   editingServerName = '';
 
-  // Modals
   showAddModal = false;
   showConfirmDeleteModal = false;
   serverToDelete: ServerInstance | null = null;
@@ -79,11 +78,12 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private router: Router,
     private serverInstanceService: ServerInstanceService,
     private liveServers: LiveServersService,
+    private serverLifecycle: ServerLifecycleService,
     private serverNav: ServerNavService,
     private notificationService: NotificationService,
     private settingsDrawer: SettingsDrawerService,
     private appUpdate: AppUpdateService,
-    private utility: UtilityService,
+    private ipc: IpcService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -91,7 +91,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.subs.push(this.appUpdate.status$.subscribe(status => {
       this.appUpdateState = status?.status ?? null;
       this.appUpdatePending = AppUpdateService.isPending(status);
-      this.appUpdateExplain = this.utility.getPlatform() === 'Web' || !!status?.manual;
+      this.appUpdateExplain = !this.ipc.isElectron || !!status?.manual;
       this.appUpdateInstructions = status?.instructions || '';
       this.appUpdateInstructionsUrl = status?.instructionsUrl || '';
       this.appUpdateBusy = !this.appUpdateExplain && status?.status === 'downloading';
@@ -153,8 +153,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.subs.forEach(sub => sub.unsubscribe());
   }
-
-  // -------------------- Navigation --------------------
 
   get onServerPage(): boolean {
     return this.currentUrl.startsWith('/server');
@@ -218,7 +216,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
     return 'This page cannot install the update. Use the Cerious AASM window on the computer that runs the app, and click the update button next to the version there.';
   }
 
-
   openTab(tab: ServerTabDef): void {
     if (!this.selectedServerId && this.servers.length) {
       this.onServerClick(this.servers[0], tab.id);
@@ -256,15 +253,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
     if (this.configGroupActive) this.configOpen = true;
   }
 
-  // -------------------- Server list --------------------
-
   onDrop(event: CdkDragDrop<ServerInstance[]>): void {
     if (event.previousIndex === event.currentIndex) return;
     const reordered = this.servers.slice();
     moveItemInArray(reordered, event.previousIndex, event.currentIndex);
-    const orderedIds = reordered.map(server => server.id);
-    this.liveServers.applyOrder(orderedIds);
-    this.serverInstanceService.reorderServers(orderedIds).pipe(take(1)).subscribe();
+    this.liveServers.reorder(reordered.map(server => server.id));
     this.cdr.markForCheck();
   }
 
@@ -298,15 +291,17 @@ export class SidebarComponent implements OnInit, OnDestroy {
       this.cancelServerNameEdit();
       return;
     }
-    const updatedServer = { ...server, name: trimmedName };
-    this.serverInstanceService.save(updatedServer).pipe(take(1)).subscribe((result) => {
-      if (result && result.success === false && result.error) {
-        this.notificationService.warning(result.error);
-      } else {
-        const idx = this.servers.findIndex(s => s.id === server.id);
-        if (idx !== -1) this.servers[idx].name = trimmedName;
+    // The new name reaches the list with the backend's broadcast of the saved server.
+    this.serverInstanceService.save(withoutRuntimeFields({ ...server, name: trimmedName })).subscribe({
+      next: result => {
+        if (result?.success === false) this.notificationService.warning(result.error || 'Could not rename the server.');
+        this.cancelServerNameEdit();
+      },
+      error: error => {
+        console.error('[sidebar] Could not rename the server:', error);
+        this.notificationService.error('Could not rename the server.', 'Server Control');
+        this.cancelServerNameEdit();
       }
-      this.cancelServerNameEdit();
     });
   }
 
@@ -346,8 +341,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
     return tab.id;
   }
 
-  // -------------------- Add / delete --------------------
-
   onAddServerClick(): void {
     this.showAddModal = true;
     this.cdr.markForCheck();
@@ -366,33 +359,18 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   onDeleteServer(server: ServerInstance, event: Event): void {
     event.stopPropagation();
-    if (LiveServersService.normalizeState(server.state) !== 'stopped') {
-      this.notificationService.warning('Cannot Delete Server', 'Server must be stopped before it can be deleted.');
-      return;
-    }
+    if (!this.serverLifecycle.checkDeletable(server)) return;
     this.serverToDelete = server;
     this.showConfirmDeleteModal = true;
     this.cdr.markForCheck();
   }
 
-  onConfirmDelete(): void {
-    if (this.serverToDelete && this.servers.length > 1) {
-      if (LiveServersService.normalizeState(this.serverToDelete.state) !== 'stopped') {
-        this.notificationService.error('Cannot Delete Server', 'Server must be stopped before it can be deleted.');
-        this.onCancelDelete();
-        return;
-      }
-      this.serverInstanceService.delete(this.serverToDelete.id).pipe(take(1)).subscribe(() => {
-        if (this.selectedServerId === this.serverToDelete?.id) {
-          this.selectedServerId = null;
-        }
-        this.serverToDelete = null;
-        this.showConfirmDeleteModal = false;
-        this.cdr.markForCheck();
-      });
-    } else {
-      this.onCancelDelete();
-    }
+  async onConfirmDelete(): Promise<void> {
+    const server = this.serverToDelete;
+    this.onCancelDelete();
+    if (!server || !await this.serverLifecycle.deleteServer(server)) return;
+    if (this.selectedServerId === server.id) this.selectedServerId = null;
+    this.cdr.markForCheck();
   }
 
   onCancelDelete(): void {
@@ -401,8 +379,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
-  // -------------------- Start / stop all --------------------
-
   startAllServers(): void {
     this.showConfirmStartAllModal = true;
     this.cdr.markForCheck();
@@ -410,14 +386,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   onConfirmStartAll(): void {
     this.showConfirmStartAllModal = false;
-    this.serverInstanceService.messaging.sendMessage('start-all-instances', {}).subscribe({
-      next: (res: any) => {
-        if (res?.success) this.notificationService.success('All servers are starting.', 'Server Control');
-        else this.notificationService.error(res?.error || 'Failed to start all servers.', 'Server Control');
-        this.cdr.markForCheck();
-      },
-      error: () => this.notificationService.error('Failed to start all servers.', 'Server Control')
-    });
+    this.serverLifecycle.startAllServers();
+  }
+
+  get canStopAll(): boolean {
+    return this.serverLifecycle.runningServers().length > 0;
   }
 
   stopAllServers(): void {
@@ -427,13 +400,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   onConfirmStopAll(): void {
     this.showConfirmStopAllModal = false;
-    this.serverInstanceService.messaging.sendMessage('stop-all-instances', {}).subscribe({
-      next: (res: any) => {
-        if (res?.success) this.notificationService.success('All servers are stopping.', 'Server Control');
-        else this.notificationService.error(res?.error || 'Failed to stop all servers.', 'Server Control');
-        this.cdr.markForCheck();
-      },
-      error: () => this.notificationService.error('Failed to stop all servers.', 'Server Control')
-    });
+    this.serverLifecycle.stopAllServers();
   }
 }

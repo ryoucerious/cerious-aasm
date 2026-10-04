@@ -11,7 +11,7 @@ const MIN_DELTA_PX = 1;
  * Slides the children of a grid to their new places when the layout reflows.
  *
  * A CSS grid snaps: when the container narrows past a breakpoint the columns are recomputed
- * and every item jumps at once, with nothing to transition — the item's own properties never
+ * and every item jumps at once, with nothing to transition; the item's own properties never
  * changed, only the track it sits in. So this measures where the children were, and after the
  * reflow puts them back with a transform and lets that transform animate away (FLIP).
  *

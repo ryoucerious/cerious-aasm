@@ -5,10 +5,9 @@ import {
 import { NgIf } from '@angular/common';
 
 /**
- * A panel that slides in from the right over the current page, with a dimmed backdrop.
- *
- * Used for things that are app-wide rather than part of the page you are on — settings,
- * user management — so opening one does not take you away from the server you were looking at.
+ * A panel that slides in from the right over the current page, with a dimmed backdrop, for
+ * things that are app-wide rather than part of the page (settings, accounts), so opening one
+ * does not take you away from the server you were looking at.
  * Closes on Escape or a backdrop click; the body is only rendered while open.
  */
 @Component({
@@ -24,8 +23,6 @@ export class DrawerComponent implements OnChanges {
   @Input() subtitle = '';
   /** Icon shown beside the title. */
   @Input() icon = '';
-  /** 'wide' suits a rail plus content; 'narrow' suits a single column. */
-  @Input() size: 'narrow' | 'wide' = 'wide';
   @Output() closed = new EventEmitter<void>();
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -41,8 +38,11 @@ export class DrawerComponent implements OnChanges {
     this.closed.emit();
   }
 
-  @HostListener('document:keydown.escape')
-  onEscape(): void {
+  // On window, which hears the key after document: a dialog open over the drawer, or a dropdown
+  // inside it, takes Escape first and marks it handled.
+  @HostListener('window:keydown.escape', ['$event'])
+  onEscape(event: Event): void {
+    if (event.defaultPrevented) return;
     this.close();
   }
 

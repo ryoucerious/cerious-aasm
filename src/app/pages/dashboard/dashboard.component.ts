@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrateg
 import { NgIf, NgFor, NgClass, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { Subscription, interval, take } from 'rxjs';
+import { EMPTY, Observable, Subscription, catchError, exhaustMap, interval, startWith, tap } from 'rxjs';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
 import { ServerInstance } from '../../core/models/server-instance.model';
@@ -13,7 +13,6 @@ import { MessagingService } from '../../core/services/messaging/messaging.servic
 import { ActivityService, ActivityItem } from '../../core/services/activity.service';
 import { BackupService } from '../../core/services/backup.service';
 import { NotificationService } from '../../core/services/notification.service';
-import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -22,7 +21,7 @@ import { AddServerModalComponent } from '../../components/add-server-modal/add-s
 import { ModalComponent } from '../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../components/dropdown/dropdown.component';
 import { AnimateReflowDirective } from '../../core/directives/animate-reflow.directive';
-import { ACTIVITY_ICONS } from '../../components/topbar/topbar.component';
+import { ACTIVITY_ICONS } from '../../core/utils/activity-icons';
 import { bucketSamples, seriesStats, toPoints, linePath, areaPath, PlayerHistorySample, ChartPoint } from '../../core/utils/chart.utils';
 import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel } from '../../core/utils/format.utils';
 
@@ -30,6 +29,10 @@ export interface HostResources {
   cpuPercent: number;
   memory: { used: number; total: number };
   disk: { used: number; total: number } | null;
+}
+
+interface HostResourcesReply extends Partial<HostResources> {
+  error?: string;
 }
 
 export type ServerFilter = 'all' | 'online' | 'offline';
@@ -41,6 +44,9 @@ const BUCKET_MS = 30 * 60 * 1000;
 const CHART_WIDTH = 640;
 const CHART_HEIGHT = 150;
 const CHART_PAD = 4;
+const HOST_RESOURCES_POLL_MS = 5_000;
+const PLAYER_HISTORY_POLL_MS = 60_000;
+const CLOCK_TICK_MS = 30_000;
 
 /**
  * Landing page: fleet summary, one card per server, quick actions, host resources, the
@@ -123,7 +129,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private activityService: ActivityService,
     private backupService: BackupService,
     private notificationService: NotificationService,
-    private globalConfigService: GlobalConfigService,
     private serverNav: ServerNavService,
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
@@ -152,28 +157,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.activeServerId = server?.id || null;
     }));
 
-    // Greet whoever is actually signed in. The legacy single username is the fallback for
-    // an install that has no accounts.
-    this.subs.push(this.auth.identity$.subscribe(identity => {
-      const account = identity.user;
-      if (account) {
-        this.userName = account.displayName || account.username;
-        this.cdr.markForCheck();
-      }
+    this.subs.push(this.auth.displayName$.subscribe(name => {
+      this.userName = name;
+      this.cdr.markForCheck();
     }));
 
-    this.globalConfigService.loadConfig().then(config => {
-      if (this.auth.currentUser) return;
-      const username = (config as any)?.authenticationUsername;
-      this.userName = config?.authenticationEnabled && username ? username : 'Admin';
-      this.cdr.markForCheck();
-    }).catch(() => { /* defaults are fine */ });
-
-    this.loadHostResources();
-    this.loadPlayerHistory();
-    this.subs.push(interval(5000).subscribe(() => this.loadHostResources()));
-    this.subs.push(interval(60000).subscribe(() => this.loadPlayerHistory()));
-    this.subs.push(interval(30000).subscribe(() => {
+    // exhaustMap: a slow backend is not sent a new request while it still owes the last one.
+    this.subs.push(interval(HOST_RESOURCES_POLL_MS).pipe(startWith(0), exhaustMap(() => this.fetchHostResources())).subscribe());
+    this.subs.push(interval(PLAYER_HISTORY_POLL_MS).pipe(startWith(0), exhaustMap(() => this.fetchPlayerHistory())).subscribe());
+    this.subs.push(interval(CLOCK_TICK_MS).subscribe(() => {
       this.now = Date.now();
       this.cdr.markForCheck();
     }));
@@ -183,16 +175,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.subs.forEach(sub => sub.unsubscribe());
   }
 
-  // -------------------- Header --------------------
-
   get statusLine(): string {
     if (this.summary.total === 0) return 'No servers yet. Add one to get started.';
     if (this.summary.online === this.summary.total) return `All systems operational. ${this.summary.online} of ${this.summary.total} servers are online.`;
     if (this.summary.online === 0) return `All servers are offline. ${this.summary.total} server${this.summary.total === 1 ? '' : 's'} configured.`;
     return `${this.summary.online} of ${this.summary.total} servers are online.`;
   }
-
-  // -------------------- Server list --------------------
 
   setView(view: 'grid' | 'list'): void {
     this.view = view;
@@ -233,9 +221,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (!this.canReorder || event.previousIndex === event.currentIndex) return;
     const reordered = this.visibleServers.slice();
     moveItemInArray(reordered, event.previousIndex, event.currentIndex);
-    const orderedIds = reordered.map(server => server.id);
-    this.liveServers.applyOrder(orderedIds);
-    this.serverInstanceService.reorderServers(orderedIds).pipe(take(1)).subscribe();
+    this.liveServers.reorder(reordered.map(server => server.id));
   }
 
   trackByServerId(_index: number, server: ServerInstance): string {
@@ -249,8 +235,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   get hostMemoryTotal(): number | null {
     return this.hostResources?.memory?.total || null;
   }
-
-  // -------------------- Card actions --------------------
 
   startServer(server: ServerInstance): void {
     this.serverLifecycle.startServer(server, this.cdr);
@@ -283,14 +267,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   requestDelete(server: ServerInstance): void {
-    if (this.servers.length <= 1) {
-      this.notificationService.warning('Cannot Delete Server', 'At least one server must remain.');
-      return;
-    }
-    if (LiveServersService.normalizeState(server.state) !== 'stopped') {
-      this.notificationService.warning('Cannot Delete Server', 'Server must be stopped before it can be deleted.');
-      return;
-    }
+    if (!this.serverLifecycle.checkDeletable(server)) return;
     this.serverToDelete = server;
     this.cdr.markForCheck();
   }
@@ -300,16 +277,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
-  confirmDelete(): void {
+  async confirmDelete(): Promise<void> {
     const server = this.serverToDelete;
-    if (!server) return;
-    this.serverInstanceService.delete(server.id).pipe(take(1)).subscribe(() => {
-      this.serverToDelete = null;
-      this.cdr.markForCheck();
-    });
+    this.cancelDelete();
+    if (server) await this.serverLifecycle.deleteServer(server);
   }
-
-  // -------------------- Quick actions --------------------
 
   openAddServer(): void {
     this.showAddModal = true;
@@ -323,32 +295,16 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   confirmStartAll(): void {
     this.showConfirmStartAll = false;
-    this.messaging.sendMessage('start-all-instances', {}).subscribe({
-      next: (res: any) => {
-        if (res?.success) {
-          this.notificationService.success('All servers are starting.', 'Server Control');
-        } else {
-          this.notificationService.error(res?.error || 'Failed to start all servers.', 'Server Control');
-        }
-        this.cdr.markForCheck();
-      },
-      error: () => this.notificationService.error('Failed to start all servers.', 'Server Control')
-    });
+    this.serverLifecycle.startAllServers();
+  }
+
+  get canStopAll(): boolean {
+    return this.serverLifecycle.runningServers().length > 0;
   }
 
   confirmStopAll(): void {
     this.showConfirmStopAll = false;
-    this.messaging.sendMessage('stop-all-instances', {}).subscribe({
-      next: (res: any) => {
-        if (res?.success) {
-          this.notificationService.success('All servers are stopping.', 'Server Control');
-        } else {
-          this.notificationService.error(res?.error || 'Failed to stop all servers.', 'Server Control');
-        }
-        this.cdr.markForCheck();
-      },
-      error: () => this.notificationService.error('Failed to stop all servers.', 'Server Control')
-    });
+    this.serverLifecycle.stopAllServers();
   }
 
   openBackupModal(): void {
@@ -375,7 +331,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.creatingBackup = true;
     this.cdr.markForCheck();
     this.backupService.createBackup({ instanceId: server.id, type: 'manual', name: this.backupName || this.defaultBackupName() })
-      .pipe(take(1))
       .subscribe({
         next: (response) => {
           this.creatingBackup = false;
@@ -403,24 +358,23 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.settingsDrawer.open();
   }
 
-  // -------------------- Host resources --------------------
-
-  loadHostResources(): void {
-    this.messaging.sendMessage<any>('get-host-resources', {}).pipe(take(1)).subscribe({
-      next: (res) => {
-        if (res && !res.error && typeof res.cpuPercent === 'number') {
+  private fetchHostResources(): Observable<unknown> {
+    return this.messaging.sendMessage<HostResourcesReply>('get-host-resources', {}).pipe(
+      tap(res => {
+        if (res && !res.error && typeof res.cpuPercent === 'number' && res.memory) {
           this.hostResources = { cpuPercent: res.cpuPercent, memory: res.memory, disk: res.disk || null };
           this.hostResourcesError = false;
         } else if (res?.error) {
           this.hostResourcesError = true;
         }
         this.cdr.markForCheck();
-      },
-      error: () => {
+      }),
+      catchError(() => {
         this.hostResourcesError = true;
         this.cdr.markForCheck();
-      }
-    });
+        return EMPTY;
+      })
+    );
   }
 
   get cpuPercent(): number {
@@ -449,19 +403,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
   }
 
-  // -------------------- Player history --------------------
-
-  loadPlayerHistory(): void {
-    this.messaging.sendMessage<any>('get-player-history', {}).pipe(take(1)).subscribe({
-      next: (res) => {
-        if (res && Array.isArray(res.samples)) {
+  private fetchPlayerHistory(): Observable<unknown> {
+    return this.messaging.sendMessage<{ samples?: PlayerHistorySample[] }>('get-player-history', {}).pipe(
+      tap(res => {
+        if (Array.isArray(res?.samples)) {
           this.historySamples = res.samples;
           this.rebuildHistories();
           this.cdr.markForCheck();
         }
-      },
-      error: () => { /* chart simply stays empty */ }
-    });
+      }),
+      // The chart keeps what it has; the next poll tries again.
+      catchError(() => EMPTY)
+    );
   }
 
   /** True once any player count has been recorded; until then there is no chart to draw. */
@@ -506,8 +459,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.serverHistories = histories;
   }
 
-  // -------------------- Uptime chart --------------------
-
   trackByUptimeBar(_index: number, bar: { server: ServerInstance }): string {
     return bar.server.id;
   }
@@ -524,8 +475,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
       label: item.ms > 0 ? formatUptime(this.now - item.ms, this.now) : '0m'
     }));
   }
-
-  // -------------------- Activity --------------------
 
   get recentActivity(): ActivityItem[] {
     return this.activity.slice(0, 6);
@@ -553,8 +502,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.activityService.clear();
   }
 
-  // -------------------- Preferences --------------------
-
   private defaultBackupName(): string {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -570,7 +517,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       if (['all', 'online', 'offline'].includes(prefs.filter)) this.filter = prefs.filter;
       if (['custom', 'name-asc', 'name-desc', 'status', 'players'].includes(prefs.sort)) this.sort = prefs.sort;
     } catch {
-      // ignore corrupt or unavailable storage
+      // Corrupt or unavailable storage: keep the defaults.
     }
   }
 
@@ -578,7 +525,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     try {
       localStorage.setItem('cerious-aasm.dashboard', JSON.stringify({ view: this.view, filter: this.filter, sort: this.sort }));
     } catch {
-      // ignore
+      // Unavailable storage: the choice lasts for this visit only.
     }
   }
 }

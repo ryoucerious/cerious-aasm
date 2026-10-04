@@ -10,12 +10,8 @@ export interface PlayerHistorySample {
 }
 
 /**
- * Keeps a rolling 24-hour record of player counts across all server instances.
- *
- * The renderer could sample this itself, but a browser tab on the web UI is not always open
- * and the desktop app is often minimised for days, so the record lives here where the servers
- * are. It is stored in the application database rather than a JSON file so every client sees
- * the same history and the rows can be queried per server.
+ * A rolling 24-hour record of player counts per instance, sampled here rather than in a client
+ * (which may not be open) and kept in the application database so every client sees the same one.
  */
 export class PlayerHistoryService {
   static readonly SAMPLE_INTERVAL_MS = 60 * 1000;
@@ -42,7 +38,7 @@ export class PlayerHistoryService {
 
     this.timer = setInterval(tick, PlayerHistoryService.SAMPLE_INTERVAL_MS);
     // Take one sample immediately so a freshly started app has a point on the chart.
-    tick();
+    void tick();
   }
 
   stop(): void {

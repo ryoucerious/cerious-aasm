@@ -1,4 +1,6 @@
-import { formatUptime, formatRelativeTime, formatBytes, formatMegabytes, formatPercent, toPercent, formatHourLabel, initialOf } from './format.utils';
+import {
+  formatUptime, formatRelativeTime, formatBytes, formatMegabytes, formatPercent, toPercent, formatHourLabel, initialOf, formatLocalDateTime
+} from './format.utils';
 
 describe('format.utils', () => {
   const now = 1_700_000_000_000;
@@ -46,5 +48,14 @@ describe('format.utils', () => {
     expect(formatHourLabel(nine)).toBe('9pm');
     expect(initialOf('jared')).toBe('J');
     expect(initialOf('')).toBe('?');
+  });
+
+  it('formats a date and time in the local time zone', () => {
+    const created = new Date(2026, 0, 2, 3, 4, 5);
+    expect(formatLocalDateTime(created)).toBe(created.toLocaleString());
+    expect(formatLocalDateTime(created.toISOString())).toBe(created.toLocaleString());
+    expect(formatLocalDateTime(created.getTime())).toBe(created.toLocaleString());
+    expect(formatLocalDateTime(undefined)).toBe('Unknown');
+    expect(formatLocalDateTime('not a date')).toBe('Invalid Date');
   });
 });

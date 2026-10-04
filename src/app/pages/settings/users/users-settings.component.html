@@ -26,7 +26,6 @@
 
   <div class="dash-muted" *ngIf="loading">Loading accounts...</div>
 
-  <!-- Users -->
   <section class="settings-card users-table-card" *ngIf="!loading && view === 'users'">
   <div class="users-table-wrap">
     <div class="users-empty" *ngIf="!users.length">
@@ -80,8 +79,6 @@
       </tbody>
     </table>
   </div>
-
-  <!-- Roles -->
   </section>
 
   <section class="settings-card users-table-card" *ngIf="!loading && view === 'roles'">
@@ -123,7 +120,6 @@
   </section>
 </div>
 
-<!-- User editor -->
 <app-modal [title]="editingUser ? 'Edit User' : 'Add User'" [show]="showUserModal" [maxWidth]="'520px'" (close)="closeUserModal()">
   <div class="modal-form">
     <div class="form-group">
@@ -138,7 +134,7 @@
     <div class="form-group" *ngIf="!editingUser?.cliLocked">
       <label class="form-control-label">{{ editingUser ? 'New password' : 'Password' }}</label>
       <input type="password" class="form-control" [(ngModel)]="form.password" [disabled]="saving"
-             [placeholder]="editingUser ? 'Leave blank to keep the current password' : 'At least 8 characters'" />
+             [placeholder]="editingUser ? 'Leave blank to keep the current password' : 'At least ' + minPasswordLength + ' characters'" />
     </div>
     <div class="ark-install-notice" *ngIf="editingUser?.cliLocked">
       This password is set with <span class="mono">--password</span> (or <span class="mono">AASM_PASSWORD</span> in Docker) and cannot be changed here. Other accounts can still be added and given their own passwords.
@@ -170,7 +166,6 @@
   </div>
 </app-modal>
 
-<!-- Role editor -->
 <app-modal [title]="editingRole ? (roleEditorLocked ? 'Admin Role' : 'Edit Role') : 'Add Role'"
            [show]="showRoleModal" [maxWidth]="'680px'" (close)="closeRoleModal()">
   <div class="modal-form">
@@ -221,7 +216,6 @@
   </div>
 </app-modal>
 
-<!-- Confirmations -->
 <app-modal [title]="'Delete User'" [show]="!!userToDelete" (close)="userToDelete = null">
   <div class="modal-confirmation">
     Delete <span class="modal-target">{{ userToDelete?.username }}</span>?

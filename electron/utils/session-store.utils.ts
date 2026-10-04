@@ -2,279 +2,271 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getDefaultInstallDir } from './platform.utils';
+import { writeFileAtomic } from './fs.utils';
+import type { Permission } from '../types/auth.types';
+
+/** A session older than this is refused and pruned. */
+export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const STORE_VERSION = 2;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const KEY_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
- * Session data interface.
- *
- * Carries the resolved account so the WebSocket handshake and the permission checks that
- * follow do not need another database round trip. `userId` is absent for sessions created
- * before accounts existed, and for the legacy single-login mode.
+ * Carries the resolved account so the WebSocket handshake needs no database round trip.
+ * `userId` is absent for the legacy single login, which has no database user; its sessions carry
+ * `loginFingerprint` instead, the login they were made with.
  */
 export interface SessionData {
   username: string;
   created: Date;
   userId?: string;
   roleId?: string;
-  permissions?: string[];
+  permissions?: Permission[];
+  loginFingerprint?: string;
 }
 
-// Module-level state
+interface StoredSession {
+  token: string;
+  username: string;
+  created: string;
+  userId?: string;
+  roleId?: string;
+  permissions?: string[];
+  loginFingerprint?: string;
+}
+
+interface StoreFile {
+  version: typeof STORE_VERSION;
+  sessions: StoredSession[];
+}
+
 let sessions = new Map<string, SessionData>();
-let sessionFile: string;
-let encryptionKey: string;
+let sessionFile = '';
+let encryptionKey = '';
 let initialized = false;
 let cleanupInterval: NodeJS.Timeout | null = null;
 
-/**
- * Initialize the secure session store
- * Must be called before using other functions
- */
 export function initializeSecureSessionStore(): void {
   if (initialized) return;
 
-  // Use the installation directory for session storage. If older files exist in
-  // the app folder (process.cwd()/data), migrate them on startup.
   const installDataDir = path.join(getDefaultInstallDir(), 'data');
-  const oldDataDir = path.join(process.cwd(), 'data');
-  const oldSessionFile = path.join(oldDataDir, 'sessions.enc');
-  const oldKeyFile = path.join(oldDataDir, 'session.key');
-  const newSessionFile = path.join(installDataDir, 'sessions.enc');
-  const newKeyFile = path.join(installDataDir, 'session.key');
+  migrateFromWorkingDirectory(installDataDir);
 
+  sessionFile = path.join(installDataDir, 'sessions.enc');
+  encryptionKey = loadOrCreateEncryptionKey(path.join(installDataDir, 'session.key'));
+  initialized = true;
+  loadSessions();
+
+  if (!cleanupInterval) {
+    cleanupInterval = setInterval(() => cleanupExpiredSessions(), CLEANUP_INTERVAL_MS);
+    cleanupInterval.unref();
+  }
+}
+
+// Older versions kept these files under process.cwd()/data, which moves with the app.
+function migrateFromWorkingDirectory(installDataDir: string): void {
+  const oldDataDir = path.join(process.cwd(), 'data');
   try {
-    // Ensure install data dir exists
     if (!fs.existsSync(installDataDir)) {
       fs.mkdirSync(installDataDir, { recursive: true });
     }
-
-    // Migrate existing files from old location if present and not already migrated
-    if (fs.existsSync(oldSessionFile) && !fs.existsSync(newSessionFile)) {
-      try {
-        fs.renameSync(oldSessionFile, newSessionFile);
-      } catch (e) {
-        console.error('[Session] Failed to migrate sessions.enc:', e);
+    for (const name of ['sessions.enc', 'session.key']) {
+      const from = path.join(oldDataDir, name);
+      const to = path.join(installDataDir, name);
+      if (fs.existsSync(from) && !fs.existsSync(to)) {
+        try {
+          fs.renameSync(from, to);
+        } catch (error) {
+          console.error(`[session-store] Failed to migrate ${name}:`, error);
+        }
       }
     }
-
-    if (fs.existsSync(oldKeyFile) && !fs.existsSync(newKeyFile)) {
-      try {
-        fs.renameSync(oldKeyFile, newKeyFile);
-      } catch (e) {
-        console.error('[Session] Failed to migrate session.key:', e);
-      }
-    }
-  } catch (e) {
-    console.error('[Session] Migration check failed:', e);
+  } catch (error) {
+    console.error('[session-store] Migration check failed:', error);
   }
-
-  // Set the active file locations to the install directory
-  sessionFile = newSessionFile;
-  encryptionKey = getOrCreateEncryptionKey();
-  loadSessions();
-
-  // Clean up expired sessions every hour (only start once)
-  if (!cleanupInterval) {
-    cleanupInterval = setInterval(() => cleanupExpiredSessions(), 60 * 60 * 1000);
-  }
-
-  initialized = true;
 }
 
-/**
- * Get or create encryption key
- */
-function getOrCreateEncryptionKey(): string {
-  const keyFile = path.join(getDefaultInstallDir(), 'data', 'session.key');
-
-  // Ensure data directory exists
-  const dataDir = path.dirname(keyFile);
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
+function loadOrCreateEncryptionKey(keyFile: string): string {
   if (fs.existsSync(keyFile)) {
-    return fs.readFileSync(keyFile, 'utf8');
-  } else {
-    const key = crypto.randomBytes(32).toString('hex');
-    try {
-      fs.writeFileSync(keyFile, key, { mode: 0o600 }); // Restricted permissions
-    } catch (e) {
-      // On some platforms, mode may be ignored; still attempt to write
-      fs.writeFileSync(keyFile, key);
+    const key = fs.readFileSync(keyFile, 'utf8').trim();
+    if (KEY_PATTERN.test(key)) {
+      return key;
     }
-    return key;
+    console.warn(`[session-store] ${keyFile} does not hold a valid key; replacing it, so everyone signs in again`);
   }
+  const key = crypto.randomBytes(32).toString('hex');
+  try {
+    writeFileAtomic(keyFile, key, { mode: 0o600 });
+  } catch (error) {
+    console.error(`[session-store] Could not save ${keyFile}; sessions will not survive a restart:`, error);
+  }
+  return key;
 }
 
-/**
- * Encrypt data
- */
 function encrypt(data: string): string {
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
   let encrypted = cipher.update(data, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag();
-  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 }
 
-/**
- * Decrypt data
- */
 function decrypt(encryptedData: string): string {
-  const parts = encryptedData.split(':');
-  const iv = Buffer.from(parts[0], 'hex');
-  const authTag = Buffer.from(parts[1], 'hex');
-  const encrypted = parts[2];
-
-  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
-  decipher.setAuthTag(authTag);
+  const [iv, authTag, encrypted] = encryptedData.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), Buffer.from(iv, 'hex'));
+  decipher.setAuthTag(Buffer.from(authTag, 'hex'));
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
 }
 
-/**
- * Load sessions from file
- */
 function loadSessions(): void {
+  let stored: unknown;
   try {
-    if (fs.existsSync(sessionFile)) {
-      const encryptedData = fs.readFileSync(sessionFile, 'utf8');
-      if (encryptedData.trim()) {
-        const decryptedData = decrypt(encryptedData);
-        const sessionArray = JSON.parse(decryptedData);
+    if (!fs.existsSync(sessionFile)) return;
+    const encryptedData = fs.readFileSync(sessionFile, 'utf8');
+    if (!encryptedData.trim()) return;
+    stored = JSON.parse(decrypt(encryptedData));
+  } catch {
+    // Not the error itself: a JSON syntax error would quote the decrypted file, live tokens included.
+    console.error(`[session-store] Could not read ${sessionFile}; starting with no sessions`);
+    return;
+  }
 
-        // Convert back to Map and validate dates
-        for (const [token, data] of sessionArray) {
-          sessions.set(token, {
-            username: data.username,
-            created: new Date(data.created)
-          });
-        }
-      }
+  // Sessions saved before version 2 lost their userId on load, so any of them could be a
+  // demoted or deleted user who would now read as the legacy admin.
+  if (Array.isArray(stored)) {
+    console.info('[session-store] Discarded sessions saved by an older version; everyone signs in again');
+    saveSessions();
+    return;
+  }
+  if (!isStoreFile(stored)) {
+    console.error(`[session-store] ${sessionFile} has an unknown format; starting with no sessions`);
+    return;
+  }
+
+  for (const entry of stored.sessions) {
+    const session = toSession(entry);
+    if (session && !isExpired(session)) {
+      sessions.set(entry.token, session);
     }
-  } catch (error) {
-    console.error('[Session] Failed to load sessions:', error);
-    sessions.clear();
   }
 }
 
-/**
- * Save sessions to file
- */
+function isStoreFile(value: unknown): value is StoreFile {
+  const file = value as StoreFile | null;
+  return typeof file === 'object' && file !== null && file.version === STORE_VERSION && Array.isArray(file.sessions);
+}
+
+function toSession(entry: StoredSession): SessionData | null {
+  const created = new Date(entry?.created);
+  if (typeof entry?.token !== 'string' || typeof entry.username !== 'string' || Number.isNaN(created.getTime())) {
+    return null;
+  }
+  return {
+    username: entry.username,
+    created,
+    userId: typeof entry.userId === 'string' ? entry.userId : undefined,
+    roleId: typeof entry.roleId === 'string' ? entry.roleId : undefined,
+    permissions: Array.isArray(entry.permissions)
+      ? entry.permissions.filter((p): p is Permission => typeof p === 'string')
+      : undefined,
+    loginFingerprint: typeof entry.loginFingerprint === 'string' ? entry.loginFingerprint : undefined
+  };
+}
+
 function saveSessions(): void {
+  const file: StoreFile = {
+    version: STORE_VERSION,
+    sessions: Array.from(sessions, ([token, session]) => ({
+      token,
+      username: session.username,
+      created: session.created.toISOString(),
+      userId: session.userId,
+      roleId: session.roleId,
+      permissions: session.permissions,
+      loginFingerprint: session.loginFingerprint
+    }))
+  };
   try {
-    // Ensure data directory exists
-    const dataDir = path.dirname(sessionFile);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    const sessionArray = Array.from(sessions.entries());
-    const encryptedData = encrypt(JSON.stringify(sessionArray));
-    fs.writeFileSync(sessionFile, encryptedData, { mode: 0o600 });
+    writeFileAtomic(sessionFile, encrypt(JSON.stringify(file)), { mode: 0o600 });
   } catch (error) {
-    console.error('[Session] Failed to save sessions:', error);
+    console.error('[session-store] Failed to save sessions:', error);
   }
 }
 
-/**
- * Clean up expired sessions
- */
-function cleanupExpiredSessions(): void {
-  const now = new Date();
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-  let cleaned = 0;
+function isExpired(session: SessionData, now = Date.now()): boolean {
+  return now - session.created.getTime() > SESSION_MAX_AGE_MS;
+}
 
-  for (const [token, session] of sessions.entries()) {
-    const sessionAge = now.getTime() - session.created.getTime();
-    if (sessionAge > maxAge) {
+function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [token, session] of sessions) {
+    if (isExpired(session, now)) {
       sessions.delete(token);
       cleaned++;
     }
   }
-
   if (cleaned > 0) {
     saveSessions();
   }
 }
 
-/**
- * Set a session
- * @param token - Session token
- * @param data - Session data
- */
 export function setSession(token: string, data: SessionData): void {
-  if (!initialized) initializeSecureSessionStore();
+  initializeSecureSessionStore();
   sessions.set(token, data);
   saveSessions();
 }
 
-/**
- * Get a session
- * @param token - Session token
- * @returns Session data or undefined if not found
- */
+/** The session behind a token; undefined when unknown or expired (an expired one is removed). */
 export function getSession(token: string): SessionData | undefined {
-  if (!initialized) initializeSecureSessionStore();
-  return sessions.get(token);
+  initializeSecureSessionStore();
+  const session = sessions.get(token);
+  if (session && isExpired(session)) {
+    sessions.delete(token);
+    saveSessions();
+    return undefined;
+  }
+  return session;
 }
 
-/**
- * Delete a session
- * @param token - Session token
- * @returns True if session was deleted
- */
 export function deleteSession(token: string): boolean {
-  if (!initialized) initializeSecureSessionStore();
-  const result = sessions.delete(token);
-  if (result) {
+  initializeSecureSessionStore();
+  const removed = sessions.delete(token);
+  if (removed) {
     saveSessions();
   }
-  return result;
+  return removed;
 }
 
 /**
- * Check if a session exists
- * @param token - Session token
- * @returns True if session exists
+ * Remove sessions for one user, or for everyone with a given role, so a demoted, disabled or
+ * deleted account loses its rights now. Returns the tokens of the dropped sessions.
  */
-/**
- * Remove sessions for one user, or for everyone with a given role. Used when an account is
- * demoted, disabled or deleted so its rights stop applying immediately.
- * Returns how many sessions were dropped.
- */
-export function invalidateSessionsFor(filter: { userId?: string; roleId?: string }): number {
-  if (!initialized) initializeSecureSessionStore();
-  let removed = 0;
-  for (const [token, session] of Array.from(sessions.entries())) {
+export function invalidateSessionsFor(filter: { userId?: string; roleId?: string }): string[] {
+  initializeSecureSessionStore();
+  const removed: string[] = [];
+  for (const [token, session] of sessions) {
     const matchesUser = filter.userId && session.userId === filter.userId;
     const matchesRole = filter.roleId && session.roleId === filter.roleId;
     if (matchesUser || matchesRole) {
       sessions.delete(token);
-      removed++;
+      removed.push(token);
     }
   }
-  if (removed > 0) saveSessions();
+  if (removed.length > 0) saveSessions();
   return removed;
 }
 
-export function hasSession(token: string): boolean {
-  if (!initialized) initializeSecureSessionStore();
-  return sessions.has(token);
-}
-
-/**
- * Reset the session store (for testing purposes)
- */
+/** Forget all in-memory state, as a process restart would. For tests. */
 export function resetSessionStore(): void {
-  sessions.clear();
+  sessions = new Map();
   initialized = false;
   sessionFile = '';
   encryptionKey = '';
-  
-  // Clear the cleanup interval
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;

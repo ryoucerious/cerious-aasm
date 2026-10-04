@@ -1,72 +1,81 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-
-export interface Field {
-  key: string;
-  label: string;
-  type: 'text' | 'number' | 'boolean' | 'dropdown' | 'combo' | 'multi-toggle';
-  description: string;
-  options?: any[];
-  step?: number;
-  min?: number;
-  max?: number;
-}
+import { FieldDefinition, FieldOption } from '../../../../core/services/field-definitions.service';
+import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
 
 @Component({
   selector: 'app-general-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FieldMessagesComponent],
   templateUrl: './general-tab.component.html'
 })
-export class GeneralTabComponent {
+export class GeneralTabComponent implements OnChanges {
+  // Fields are addressed by key from the settings metadata, so this stays loosely typed.
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
-  @Input() generalFields: Field[] = [];
+  @Input() generalFields: FieldDefinition[] = [];
   @Input() dropdownOpen = false;
-  @Input() fieldErrors: { [key: string]: string } = {};
-  @Input() fieldWarnings: { [key: string]: string } = {};
+  @Input() fieldErrors: FieldMessages = {};
+  @Input() fieldWarnings: FieldMessages = {};
 
   @Output() saveSettings = new EventEmitter<void>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
   @Output() toggleMultiOption = new EventEmitter<{key: string, option: string, checked: boolean}>();
-  @Output() mapSelect = new EventEmitter<{value: string, key?: string}>();
-  @Output() mapInput = new EventEmitter<{event: any, key: string}>();
+  /** A combo field was picked from its list or left after typing; the host validates it before saving. */
+  @Output() comboCommit = new EventEmitter<{key: string, value: unknown}>();
   @Output() dropdownToggle = new EventEmitter<boolean>();
 
-  get mapDisplayValue(): string {
-    return this.getMapDisplayName(this.serverInstance.mapName) || this.serverInstance.mapName || '';
+  /** The last value committed per combo field: picking from the list also blurs the input, which must not commit again. */
+  private readonly committed = new Map<string, unknown>();
+
+  ngOnChanges(changes: SimpleChanges): void {
+    const server = changes['serverInstance'];
+    // What was committed belongs to the previous server; keyed on the id because the same server
+    // arrives as a new object after every save.
+    if (server && server.previousValue?.id !== server.currentValue?.id) this.committed.clear();
   }
 
-  getMapDisplayName(mapName: string): string {
-    if (!mapName) return '';
-    const field = this.generalFields.find(f => f.key === 'mapName');
-    if (!field?.options) return mapName;
-    const option = field.options.find((opt: any) => opt.value === mapName);
-    return option?.display || mapName;
+  /**
+   * What a combo input shows: the option's display name for a known value, otherwise the value
+   * itself. Typing maps back the same way, so an unchanged field round-trips to the same value.
+   */
+  comboText(field: FieldDefinition): string {
+    const value = this.serverInstance?.[field.key];
+    const option = this.comboOptions(field).find(opt => opt.value === value);
+    return option?.display ?? (value == null ? '' : String(value));
   }
 
-  hasFieldError(key: string): boolean {
-    return !!this.fieldErrors[key];
+  comboOptions(field: FieldDefinition): Exclude<FieldOption, string>[] {
+    return (field.options ?? []).filter((opt): opt is Exclude<FieldOption, string> => typeof opt !== 'string');
   }
 
-  getFieldError(key: string): string {
-    return this.fieldErrors[key] || '';
+  textOptions(field: FieldDefinition): string[] {
+    return (field.options ?? []).filter((opt): opt is string => typeof opt === 'string');
   }
 
-  hasFieldWarning(key: string): boolean {
-    return !!this.fieldWarnings[key];
+  onComboInput(field: FieldDefinition, event: Event): void {
+    const text = (event.target as HTMLInputElement).value;
+    const option = this.comboOptions(field).find(opt => opt.display === text);
+    this.serverInstance[field.key] = option ? option.value : text;
   }
 
-  getFieldWarning(key: string): string {
-    return this.fieldWarnings[key] || '';
+  onComboSelect(field: FieldDefinition, value: string): void {
+    this.serverInstance[field.key] = value;
+    this.commitCombo(field.key, value);
+  }
+
+  onComboBlur(field: FieldDefinition): void {
+    const value = this.serverInstance[field.key];
+    if (this.committed.has(field.key) && this.committed.get(field.key) === value) return;
+    this.commitCombo(field.key, value);
   }
 
   onSaveSettings(): void {
     this.saveSettings.emit();
   }
 
-  onValidateField(key: string, value: any): void {
+  onValidateField(key: string, value: unknown): void {
     this.validateField.emit({key, value});
   }
 
@@ -74,15 +83,12 @@ export class GeneralTabComponent {
     this.toggleMultiOption.emit({key, option, checked});
   }
 
-  onMapSelect(value: string, key?: string): void {
-    this.mapSelect.emit({value, key});
-  }
-
-  onMapInput(event: any, key: string): void {
-    this.mapInput.emit({event, key});
-  }
-
   onDropdownToggle(): void {
     this.dropdownToggle.emit(!this.dropdownOpen);
+  }
+
+  private commitCombo(key: string, value: unknown): void {
+    this.committed.set(key, value);
+    this.comboCommit.emit({ key, value });
   }
 }

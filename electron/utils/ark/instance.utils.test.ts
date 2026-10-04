@@ -1,35 +1,28 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
+import { getDefaultInstallDir } from '../platform.utils';
+import { writeJsonAtomic } from '../fs.utils';
+import {
+  getInstancesBaseDir,
+  getInstanceDir,
+  getAllInstances,
+  getInstance,
+  saveInstance,
+  deleteInstance,
+  getInstanceSaveDir
+} from './instance.utils';
 
-jest.mock('fs');
-jest.mock('path');
 jest.mock('../platform.utils');
+jest.mock('../fs.utils');
 jest.mock('../global-config.utils', () => ({
   loadGlobalConfig: jest.fn(() => ({ serverDataDir: '' }))
 }));
 
-// Add rmSync to the fs mock
-const fsModule = require('fs');
-fsModule.rmSync = jest.fn();
-
-const mockedFs = fs as jest.Mocked<typeof fs>;
-const mockedPath = path as jest.Mocked<typeof path>;
-const { getDefaultInstallDir } = require('../platform.utils');
-
-// Mock uuid module
-jest.mock('uuid', () => ({
-  v4: jest.fn(() => 'mock-uuid-1234')
-}));
-
-// Import after mocks are set up
-import {
-  getInstancesBaseDir,
-  getDefaultInstancesBaseDir,
-  getAllInstances,
-  getInstance,
-  saveInstance,
-  deleteInstance
-} from '../ark/instance.utils';
+const mockedFs = jest.mocked(fs);
+const mockedPath = jest.mocked(path);
+const mockedGetDefaultInstallDir = jest.mocked(getDefaultInstallDir);
+const mockedWriteJsonAtomic = jest.mocked(writeJsonAtomic);
 
 const mockInstallDir = '/mock/install/dir';
 const mockInstancesBaseDir = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers';
@@ -50,68 +43,64 @@ const mockInstanceConfig2 = {
 
 describe('instance.utils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    
-    // Mock console.warn to suppress expected warnings from invalid input tests
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-
-    // Setup default mocks
-    (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-    mockedPath.join.mockImplementation((...args) => args.join('/'));
-    mockedPath.dirname.mockReturnValue('/mock/dir');
+    mockedFs.existsSync.mockReset();
+    mockedFs.readFileSync.mockReset();
+    mockedFs.readdirSync.mockReset();
+    mockedGetDefaultInstallDir.mockReturnValue(mockInstallDir);
   });
 
   describe('validateInstanceId (indirect)', () => {
     it('should throw for invalid instance IDs in getInstance', () => {
-      // Invalid characters
       expect(() => getInstance('../bad-id')).toThrow('Invalid instance ID format: ../bad-id');
-      // Too long
       const longId = 'a'.repeat(51);
       expect(() => getInstance(longId)).toThrow(`Invalid instance ID format: ${longId}`);
     });
+
     it('should reject invalid instance IDs in saveInstance', async () => {
-      const badInstance = { id: '../bad-id', name: 'Bad' };
-      await expect(saveInstance(badInstance)).rejects.toThrow();
-      const longInstance = { id: 'a'.repeat(51), name: 'Long' };
-      await expect(saveInstance(longInstance)).rejects.toThrow();
+      await expect(saveInstance({ id: '../bad-id', name: 'Bad' })).rejects.toThrow('Invalid instance ID format');
+      await expect(saveInstance({ id: 'a'.repeat(51), name: 'Long' })).rejects.toThrow('Invalid instance ID format');
     });
   });
 
   describe('getInstancesBaseDir', () => {
     it('should return the correct instances base directory', () => {
-      const result = getInstancesBaseDir();
-      expect(result).toBe(mockInstancesBaseDir);
-      expect(getDefaultInstallDir).toHaveBeenCalled();
+      expect(getInstancesBaseDir()).toBe(mockInstancesBaseDir);
+      expect(mockedGetDefaultInstallDir).toHaveBeenCalled();
     });
 
     it('should throw error when install directory is not available', () => {
-      (getDefaultInstallDir as jest.Mock).mockReturnValue(null);
+      mockedGetDefaultInstallDir.mockReturnValue(null as unknown as string);
       expect(() => getInstancesBaseDir()).toThrow('Could not determine install directory');
     });
   });
 
-  describe('getDefaultInstancesBaseDir', () => {
-    it('should be an alias for getInstancesBaseDir', () => {
-      const result = getDefaultInstancesBaseDir();
-      expect(result).toBe(mockInstancesBaseDir);
+  describe('getInstanceDir', () => {
+    it('returns the instance directory under a base path containing spaces', () => {
+      mockedGetDefaultInstallDir.mockReturnValue('C:/Users/A B/AppData/Roaming/Cerious AASM');
+
+      expect(getInstanceDir('abc-123')).toBe(
+        'C:/Users/A B/AppData/Roaming/Cerious AASM/AASMServer/ShooterGame/Saved/Servers/abc-123'
+      );
+    });
+
+    it.each(['../x', '..', 'a/b', 'a\\b', 'C:', '', 'a'.repeat(51)])('rejects the id %p', id => {
+      expect(() => getInstanceDir(id)).toThrow('Invalid instance ID format');
+    });
+
+    it('rejects a directory that resolves outside the base directory', () => {
+      mockedPath.resolve.mockReturnValueOnce('/elsewhere/abc');
+
+      expect(() => getInstanceDir('abc')).toThrow('escapes');
     });
   });
 
   describe('getAllInstances', () => {
     it('should return all valid instances from the directory', async () => {
       const mockDirs = ['test-instance-1', 'test-instance-2', 'invalid-dir'];
-      const mockConfigPath1 = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/test-instance-1/config.json';
-      const mockConfigPath2 = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/test-instance-2/config.json';
-      const mockConfigPath3 = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/invalid-dir/config.json';
+      const mockConfigPath1 = `${mockInstancesBaseDir}/test-instance-1/config.json`;
+      const mockConfigPath2 = `${mockInstancesBaseDir}/test-instance-2/config.json`;
 
-      mockedFs.existsSync.mockImplementation((path) => {
-        if (path === mockInstancesBaseDir) return false; // Directory doesn't exist initially
-        if (path === mockConfigPath1) return true;
-        if (path === mockConfigPath2) return true;
-        if (path === mockConfigPath3) return false;
-        return false;
-      });
-
+      mockedFs.existsSync.mockImplementation(p => p === mockConfigPath1 || p === mockConfigPath2);
       mockedFs.readdirSync.mockReturnValue(mockDirs as any);
       mockedFs.readFileSync
         .mockReturnValueOnce(JSON.stringify(mockInstanceConfig))
@@ -121,10 +110,7 @@ describe('instance.utils', () => {
 
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(mockInstancesBaseDir, { recursive: true });
       expect(mockedFs.readdirSync).toHaveBeenCalled();
-      expect(result).toEqual([
-        mockInstanceConfig,
-        mockInstanceConfig2
-      ]);
+      expect(result).toEqual([mockInstanceConfig, mockInstanceConfig2]);
     });
 
     it('should handle directory that already exists', async () => {
@@ -138,41 +124,47 @@ describe('instance.utils', () => {
     });
 
     it('should filter out instances with invalid config files', async () => {
-      const mockDirs = ['valid-instance', 'invalid-instance'];
-      const mockConfigPath1 = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/valid-instance/config.json';
-      const mockConfigPath2 = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/invalid-instance/config.json';
-
-      mockedFs.existsSync.mockImplementation((path) => {
-        if (path === mockInstancesBaseDir) return false;
-        if (path === mockConfigPath1) return true;
-        if (path === mockConfigPath2) return true;
-        return false;
-      });
-
-      mockedFs.readdirSync.mockReturnValue(mockDirs as any);
+      mockedFs.existsSync.mockImplementation(p => p !== mockInstancesBaseDir);
+      mockedFs.readdirSync.mockReturnValue(['valid-instance', 'invalid-instance'] as any);
       mockedFs.readFileSync
         .mockReturnValueOnce(JSON.stringify(mockInstanceConfig))
         .mockReturnValueOnce('invalid json');
 
       const result = await getAllInstances();
 
-      expect(result).toEqual([mockInstanceConfig]);
+      expect(result).toEqual([{ ...mockInstanceConfig, id: 'valid-instance' }]);
+    });
+
+    it('lets the directory name win over a stale id in config.json', async () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.readdirSync.mockReturnValue(['new-dir-id'] as any);
+      mockedFs.readFileSync.mockReturnValue(JSON.stringify({ id: 'old-id', name: 'Imported' }));
+
+      const result = await getAllInstances();
+
+      expect(result).toEqual([{ id: 'new-dir-id', name: 'Imported' }]);
+    });
+
+    it('reads a config.json saved with a byte order mark', async () => {
+      // Notepad and PowerShell 5 write one, and the server still belongs in the list.
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.readdirSync.mockReturnValue(['test-instance-1'] as any);
+      mockedFs.readFileSync.mockReturnValue(`\uFEFF${JSON.stringify(mockInstanceConfig)}`);
+
+      expect(await getAllInstances()).toEqual([mockInstanceConfig]);
     });
 
     it('should handle empty directory', async () => {
       mockedFs.existsSync.mockReturnValue(false);
       mockedFs.readdirSync.mockReturnValue([] as any);
 
-      const result = await getAllInstances();
-
-      expect(result).toEqual([]);
+      expect(await getAllInstances()).toEqual([]);
     });
   });
 
   describe('getInstance', () => {
     it('should return instance config when it exists', () => {
-      const mockConfigPath = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/test-instance-1/config.json';
-
+      const mockConfigPath = `${mockInstancesBaseDir}/test-instance-1/config.json`;
       mockedFs.existsSync.mockReturnValue(true);
       mockedFs.readFileSync.mockReturnValue(JSON.stringify(mockInstanceConfig));
 
@@ -183,145 +175,141 @@ describe('instance.utils', () => {
       expect(result).toEqual(mockInstanceConfig);
     });
 
-    it('should return null when instance does not exist', () => {
-      const mockConfigPath = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/nonexistent/config.json';
+    it('lets the directory name win over a stale id in config.json', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.readFileSync.mockReturnValue(JSON.stringify({ id: 'old-id', name: 'Imported' }));
 
+      expect(getInstance('new-dir-id')).toEqual({ id: 'new-dir-id', name: 'Imported' });
+    });
+
+    it('reads a config.json saved with a byte order mark', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.readFileSync.mockReturnValue(`\uFEFF${JSON.stringify(mockInstanceConfig)}`);
+
+      expect(getInstance('test-instance-1')).toEqual(mockInstanceConfig);
+    });
+
+    it('should return null when instance does not exist', () => {
       mockedFs.existsSync.mockReturnValue(false);
 
-      const result = getInstance('nonexistent');
-
-      expect(result).toBe(null);
+      expect(getInstance('nonexistent')).toBe(null);
     });
 
     it('should return null for invalid instance ID', () => {
-      const result = getInstance('');
-
-      expect(result).toBe(null);
+      expect(getInstance('')).toBe(null);
     });
 
     it('should return null for null/undefined instance ID', () => {
-      const result1 = getInstance(null as any);
-      const result2 = getInstance(undefined as any);
-
-      expect(result1).toBe(null);
-      expect(result2).toBe(null);
+      expect(getInstance(null as any)).toBe(null);
+      expect(getInstance(undefined as any)).toBe(null);
     });
   });
 
   describe('saveInstance', () => {
-    it('should save new instance with generated UUID', async () => {
-      const instanceData = { name: 'New Server', port: 7777 };
-      const expectedId = 'mock-uuid-1234';
-      const mockConfigPath = `/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/${expectedId}/config.json`;
-      const mockDir = `/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/${expectedId}`;
-
-      // Mock getAllInstances to return empty array (no duplicates)
+    beforeEach(() => {
       mockedFs.existsSync.mockReturnValue(false);
-      mockedFs.readdirSync.mockReturnValue([]);
+      mockedFs.readdirSync.mockReturnValue([] as any);
+    });
+
+    it('should save new instance with a generated UUID', async () => {
+      const expectedId = '0f8fad5b-d9cb-469f-a165-70867728950e';
+      jest.mocked(randomUUID).mockReturnValueOnce(expectedId);
+      const instanceData = { name: 'New Server', port: 7777 };
 
       const result = await saveInstance(instanceData);
 
-      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(mockDir, { recursive: true });
-      expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
-        mockConfigPath,
-        JSON.stringify({ ...instanceData, id: expectedId }, null, 2)
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/${expectedId}`, { recursive: true });
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
+        `${mockInstancesBaseDir}/${expectedId}/config.json`,
+        { ...instanceData, id: expectedId }
       );
       expect(result).toEqual({ ...instanceData, id: expectedId });
     });
 
     it('should save instance with provided ID', async () => {
       const instanceData = { id: 'custom-id', name: 'Custom Server', port: 7777 };
-      const mockConfigPath = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/custom-id/config.json';
-      const mockDir = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/custom-id';
-
-      mockedFs.existsSync.mockReturnValue(false);
-      mockedFs.readdirSync.mockReturnValue([]);
 
       const result = await saveInstance(instanceData);
 
-      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(mockDir, { recursive: true });
-      expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
-        mockConfigPath,
-        JSON.stringify(instanceData, null, 2)
-      );
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id`, { recursive: true });
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, instanceData);
       expect(result).toEqual(instanceData);
     });
 
-    it('should return error for duplicate server name', async () => {
-      const instanceData = { name: 'Existing Server', port: 7777 };
-      const existingInstance = { id: 'existing-1', name: 'existing server', port: 7778 };
+    it('rejects a traversal id before creating any directory', async () => {
+      await expect(saveInstance({ id: '../../evil', name: 'Evil' })).rejects.toThrow('Invalid instance ID format');
 
-      // Mock getAllInstances to return existing instance
-      mockedFs.existsSync.mockImplementation((path) => {
-        if (path === mockInstancesBaseDir) return true;
-        if (path === '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/existing-1/config.json') return true;
-        return false;
+      expect(mockedFs.mkdirSync).not.toHaveBeenCalled();
+      expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
+    });
+
+    it('does not persist runtime-only fields', async () => {
+      const settings = { id: 'custom-id', name: 'Custom Server', sessionName: 'My Server', maxPlayers: 20 };
+
+      const result = await saveInstance({
+        ...settings,
+        state: 'running',
+        status: 'online',
+        players: 3,
+        memory: 2048,
+        cpu: 12.5,
+        startedAt: 1700000000000
       });
+
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, settings);
+      expect(result).toEqual(settings);
+    });
+
+    it('should return error for duplicate server name', async () => {
+      const existingInstance = { id: 'existing-1', name: 'existing server', port: 7778 };
+      mockedFs.existsSync.mockImplementation(p =>
+        p === mockInstancesBaseDir || p === `${mockInstancesBaseDir}/existing-1/config.json`
+      );
       mockedFs.readdirSync.mockReturnValue(['existing-1'] as any);
       mockedFs.readFileSync.mockReturnValue(JSON.stringify(existingInstance));
 
-      const result = await saveInstance(instanceData);
+      const result = await saveInstance({ name: 'Existing Server', port: 7777 });
 
       expect(result).toEqual({ error: 'A server with this name already exists.' });
       expect(mockedFs.mkdirSync).not.toHaveBeenCalled();
-      expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
+      expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
     });
 
     it('should allow updating existing instance with same name', async () => {
       const instanceData = { id: 'existing-1', name: 'Existing Server', port: 7777 };
       const existingInstance = { id: 'existing-1', name: 'existing server', port: 7778 };
-      const mockConfigPath = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/existing-1/config.json';
-      const mockDir = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/existing-1';
-
-      mockedFs.existsSync.mockImplementation((path) => {
-        if (path === mockInstancesBaseDir) return true;
-        if (path === mockConfigPath) return true;
-        return false;
-      });
+      const mockConfigPath = `${mockInstancesBaseDir}/existing-1/config.json`;
+      mockedFs.existsSync.mockImplementation(p => p === mockInstancesBaseDir || p === mockConfigPath);
       mockedFs.readdirSync.mockReturnValue(['existing-1'] as any);
       mockedFs.readFileSync.mockReturnValue(JSON.stringify(existingInstance));
 
       const result = await saveInstance(instanceData);
 
-      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(mockDir, { recursive: true });
-      expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
-        mockConfigPath,
-        JSON.stringify(instanceData, null, 2)
-      );
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/existing-1`, { recursive: true });
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(mockConfigPath, instanceData);
       expect(result).toEqual(instanceData);
     });
 
     it('should handle case-insensitive name comparison', async () => {
-      const instanceData = { name: 'EXISTING SERVER', port: 7777 };
       const existingInstance = { id: 'existing-1', name: 'existing server', port: 7778 };
-
-      mockedFs.existsSync.mockImplementation((path) => {
-        if (path === mockInstancesBaseDir) return true;
-        if (path === '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/existing-1/config.json') return true;
-        return false;
-      });
+      mockedFs.existsSync.mockImplementation(p =>
+        p === mockInstancesBaseDir || p === `${mockInstancesBaseDir}/existing-1/config.json`
+      );
       mockedFs.readdirSync.mockReturnValue(['existing-1'] as any);
       mockedFs.readFileSync.mockReturnValue(JSON.stringify(existingInstance));
 
-      const result = await saveInstance(instanceData);
+      const result = await saveInstance({ name: 'EXISTING SERVER', port: 7777 });
 
       expect(result).toEqual({ error: 'A server with this name already exists.' });
-    });
-
-    it('should use fallback UUID when uuid import fails', async () => {
-      // This test is complex due to ES module mocking, skipping for now
-      expect(true).toBe(true);
     });
   });
 
   describe('deleteInstance', () => {
     it('should delete existing instance directory', () => {
-      const instanceId = 'test-instance-1';
-      const mockDir = `/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/${instanceId}`;
-
+      const mockDir = `${mockInstancesBaseDir}/test-instance-1`;
       mockedFs.existsSync.mockReturnValue(true);
 
-      const result = deleteInstance(instanceId);
+      const result = deleteInstance('test-instance-1');
 
       expect(mockedFs.existsSync).toHaveBeenCalledWith(mockDir);
       expect(mockedFs.rmSync).toHaveBeenCalledWith(mockDir, { recursive: true, force: true });
@@ -329,35 +317,18 @@ describe('instance.utils', () => {
     });
 
     it('should return false when instance does not exist', () => {
-      const instanceId = 'nonexistent';
-      const mockDir = `/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/${instanceId}`;
-
+      const mockDir = `${mockInstancesBaseDir}/nonexistent`;
       mockedFs.existsSync.mockReturnValue(false);
 
-      const result = deleteInstance(instanceId);
+      const result = deleteInstance('nonexistent');
 
       expect(mockedFs.existsSync).toHaveBeenCalledWith(mockDir);
       expect(mockedFs.rmSync).not.toHaveBeenCalled();
       expect(result).toBe(false);
     });
 
-    it('should return false for empty string id', () => {
-      const result = deleteInstance('');
-      expect(result).toBe(false);
-      expect(mockedFs.existsSync).not.toHaveBeenCalled();
-      expect(mockedFs.rmSync).not.toHaveBeenCalled();
-    });
-
-    it('should return false for directory traversal id', () => {
-      const result = deleteInstance('../etc');
-      expect(result).toBe(false);
-      expect(mockedFs.existsSync).not.toHaveBeenCalled();
-      expect(mockedFs.rmSync).not.toHaveBeenCalled();
-    });
-
-    it('should return false for id with special characters', () => {
-      const result = deleteInstance('bad id with spaces');
-      expect(result).toBe(false);
+    it.each(['', '../etc', 'bad id with spaces'])('should return false for the id %p', id => {
+      expect(deleteInstance(id)).toBe(false);
       expect(mockedFs.existsSync).not.toHaveBeenCalled();
       expect(mockedFs.rmSync).not.toHaveBeenCalled();
     });
@@ -369,79 +340,37 @@ describe('instance.utils', () => {
         throw new Error('Filesystem error');
       });
 
-      try {
-        await getAllInstances();
-        fail('Expected getAllInstances to throw');
-      } catch (error) {
-        expect((error as Error).message).toBe('Filesystem error');
-      }
+      await expect(getAllInstances()).rejects.toThrow('Filesystem error');
     });
 
     it('should handle JSON parse errors in getInstance', () => {
-      const mockConfigPath = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/test-instance-1/config.json';
-
       mockedFs.existsSync.mockReturnValue(true);
       mockedFs.readFileSync.mockReturnValue('invalid json');
 
       expect(() => getInstance('test-instance-1')).toThrow();
     });
-  });
-  });
 
-  describe('loadInstanceConfig', () => {
-    it('should load config if present', () => {
-      const instanceId = 'test-instance-1';
-      const baseDir = mockInstancesBaseDir;
-      const instanceDir = `${baseDir}/${instanceId}`;
-      const configPath = `${instanceDir}/config.json`;
-      (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-      mockedPath.join.mockImplementation((...args) => args.join('/'));
-      mockedFs.existsSync.mockImplementation((p) => p === configPath);
-      mockedFs.readFileSync.mockReturnValue(JSON.stringify(mockInstanceConfig));
-      const { loadInstanceConfig } = require('../ark/instance.utils');
-      const result = loadInstanceConfig(instanceId);
-      expect(result.instanceDir).toBe(instanceDir);
-      expect(result.config).toEqual(mockInstanceConfig);
-    });
-    it('should return empty config if config file missing', () => {
-      const instanceId = 'no-config';
-      const baseDir = mockInstancesBaseDir;
-      const instanceDir = `${baseDir}/${instanceId}`;
-      const configPath = `${instanceDir}/config.json`;
-      (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-      mockedPath.join.mockImplementation((...args) => args.join('/'));
-      mockedFs.existsSync.mockImplementation((p) => false);
-      const { loadInstanceConfig } = require('../ark/instance.utils');
-      const result = loadInstanceConfig(instanceId);
-      expect(result.instanceDir).toBe(instanceDir);
-      expect(result.config).toEqual({});
-    });
-    it('should throw if baseDir missing', () => {
-      (getDefaultInstallDir as jest.Mock).mockReturnValue(null);
-      const { loadInstanceConfig } = require('../ark/instance.utils');
-      expect(() => loadInstanceConfig('any')).toThrow('Could not determine install directory');
-    });
-    it('should handle JSON parse error gracefully', () => {
-      const instanceId = 'bad-json';
-      const baseDir = mockInstancesBaseDir;
-      const instanceDir = `${baseDir}/${instanceId}`;
-      const configPath = `${instanceDir}/config.json`;
-      (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-      mockedPath.join.mockImplementation((...args) => args.join('/'));
-      mockedFs.existsSync.mockImplementation((p) => p === configPath);
-      mockedFs.readFileSync.mockReturnValue('bad json');
-      const { loadInstanceConfig } = require('../ark/instance.utils');
-      const result = loadInstanceConfig(instanceId);
-      expect(result.config).toEqual({});
+    it('never passes on the parser message, which can quote the file', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.readFileSync.mockReturnValue('hunter2 is the password');
+
+      let thrown: unknown;
+      try {
+        getInstance('test-instance-1');
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).not.toBeInstanceOf(SyntaxError);
+      expect((thrown as Error).message).toBe('The config.json of server test-instance-1 is not valid JSON.');
     });
   });
 
   describe('getInstanceSaveDir', () => {
     it('should return the SavedArks path for an instanceDir', () => {
-      const { getInstanceSaveDir } = require('../ark/instance.utils');
-      mockedPath.join.mockImplementation((...args) => args.join('/'));
-      const instanceDir = '/mock/install/dir/AASMServer/ShooterGame/Saved/Servers/test-instance-1';
-      const result = getInstanceSaveDir(instanceDir);
-      expect(result).toBe(`${instanceDir}/SavedArks`);
+      const instanceDir = `${mockInstancesBaseDir}/test-instance-1`;
+
+      expect(getInstanceSaveDir(instanceDir)).toBe(`${instanceDir}/SavedArks`);
     });
   });
+});

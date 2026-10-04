@@ -1,218 +1,210 @@
-import { jest } from "@jest/globals";
+jest.unmock('crypto');
 
-// Mock dependencies
-jest.mock("fs");
-jest.mock("path");
-jest.mock("./platform.utils");
-jest.mock("crypto", () => ({
-  randomBytes: jest.fn(() => Buffer.alloc(32, 'a')),
-  createCipheriv: jest.fn(() => ({
-    update: jest.fn().mockReturnValue('encrypted'),
-    final: jest.fn().mockReturnValue(''),
-    getAuthTag: jest.fn().mockReturnValue(Buffer.from('authtag1234567890'))
-  })),
-  createDecipheriv: jest.fn(() => ({
-    setAuthTag: jest.fn(),
-    update: jest.fn().mockReturnValue('{}'),
-    final: jest.fn().mockReturnValue('')
-  }))
-}));
-
-import crypto from "crypto";
-import * as fs from "fs";
-import * as path from "path";
-import { getDefaultInstallDir } from "./platform.utils";
-
-// Import the module under test
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import { getDefaultInstallDir } from './platform.utils';
+import { writeFileAtomic } from './fs.utils';
 import {
-  initializeSecureSessionStore,
-  setSession,
-  getSession,
+  SESSION_MAX_AGE_MS,
+  SessionData,
   deleteSession,
-  hasSession,
+  getSession,
+  initializeSecureSessionStore,
+  invalidateSessionsFor,
   resetSessionStore,
-  SessionData
-} from "./session-store.utils";
+  setSession
+} from './session-store.utils';
 
-describe("session-store.utils", () => {
+jest.mock('./platform.utils');
+jest.mock('./fs.utils');
+
+const DATA_DIR = '/install/data';
+const SESSION_FILE = `${DATA_DIR}/sessions.enc`;
+const KEY_FILE = `${DATA_DIR}/session.key`;
+const KEY = 'ab'.repeat(32);
+
+const mockedFs = jest.mocked(fs);
+const mockedWriteFileAtomic = jest.mocked(writeFileAtomic);
+
+/** What is on "disk", by path. */
+let disk: Map<string, string>;
+
+function encrypt(text: string, key = KEY): string {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv);
+  const encrypted = cipher.update(text, 'utf8', 'hex') + cipher.final('hex');
+  return `${iv.toString('hex')}:${cipher.getAuthTag().toString('hex')}:${encrypted}`;
+}
+
+function decrypt(data: string, key = KEY): unknown {
+  const [iv, tag, encrypted] = data.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), Buffer.from(iv, 'hex'));
+  decipher.setAuthTag(Buffer.from(tag, 'hex'));
+  return JSON.parse(decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8'));
+}
+
+/** The process restarts: the in-memory store is gone and the next call reloads from disk. */
+function restart(): void {
+  resetSessionStore();
+}
+
+function session(overrides: Partial<SessionData> = {}): SessionData {
+  return {
+    username: 'viewer1',
+    created: new Date(),
+    userId: 'u-1',
+    roleId: 'viewer',
+    permissions: ['servers.view'],
+    ...overrides
+  };
+}
+
+describe('session-store.utils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
     resetSessionStore();
-
-    // Setup default mocks
-    (getDefaultInstallDir as jest.Mock).mockReturnValue("/mock/install/dir");
-    (path.join as jest.Mock).mockImplementation((...args) => args.join("/"));
-    (fs.existsSync as jest.Mock).mockReturnValue(false);
-    (fs.mkdirSync as jest.Mock).mockReturnValue(undefined);
-    (fs.writeFileSync as jest.Mock).mockImplementation(() => {});
-    (fs.readFileSync as jest.Mock).mockReturnValue("mock-key");
+    disk = new Map([[KEY_FILE, KEY]]);
+    jest.mocked(getDefaultInstallDir).mockReturnValue('/install');
+    mockedFs.existsSync.mockImplementation(p => p === DATA_DIR || disk.has(String(p)));
+    mockedFs.readFileSync.mockImplementation(((p: string) => {
+      const content = disk.get(String(p));
+      if (content === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return content;
+    }) as typeof fs.readFileSync);
+    mockedWriteFileAtomic.mockImplementation((p, data) => { disk.set(p, String(data)); });
   });
 
   afterEach(() => {
-    // Ensure cleanup interval is cleared after each test
     resetSessionStore();
   });
 
-  describe("initializeSecureSessionStore", () => {
-    it("should initialize without throwing", () => {
-      expect(() => initializeSecureSessionStore()).not.toThrow();
-    });
+  it('keeps userId, roleId and permissions across a restart', () => {
+    const saved = session({ userId: 'u-7', roleId: 'operator', permissions: ['servers.view', 'rcon.use'] });
+    setSession('token-1', saved);
 
-    it("should create data directory if it does not exist", () => {
-      (fs.existsSync as jest.Mock).mockReturnValue(false);
+    restart();
+
+    expect(getSession('token-1')).toEqual(saved);
+  });
+
+  it('saves a versioned store that only the owner can read', () => {
+    setSession('token-1', session());
+
+    expect(mockedWriteFileAtomic).toHaveBeenLastCalledWith(SESSION_FILE, expect.any(String), { mode: 0o600 });
+    expect(decrypt(disk.get(SESSION_FILE)!)).toEqual({
+      version: 2,
+      sessions: [expect.objectContaining({ token: 'token-1', userId: 'u-1', roleId: 'viewer' })]
+    });
+  });
+
+  it('discards a session file in the old array format and says so once', () => {
+    // Saved before sessions kept userId; restoring these would make every one of them an admin.
+    const legacy = [['token-1', { username: 'viewer1', created: new Date().toISOString() }]];
+    disk.set(SESSION_FILE, encrypt(JSON.stringify(legacy)));
+    const info = jest.spyOn(console, 'info').mockImplementation(() => {});
+
+    expect(getSession('token-1')).toBeUndefined();
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(decrypt(disk.get(SESSION_FILE)!)).toEqual({ version: 2, sessions: [] });
+
+    restart();
+    expect(getSession('token-1')).toBeUndefined();
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses and forgets an expired session', () => {
+    setSession('old', session({ created: new Date(Date.now() - SESSION_MAX_AGE_MS - 1000) }));
+
+    expect(getSession('old')).toBeUndefined();
+    restart();
+    expect(getSession('old')).toBeUndefined();
+    expect((decrypt(disk.get(SESSION_FILE)!) as { sessions: unknown[] }).sessions).toEqual([]);
+  });
+
+  it('does not restore an expired session from disk', () => {
+    const created = new Date(Date.now() - SESSION_MAX_AGE_MS - 1000).toISOString();
+    disk.set(SESSION_FILE, encrypt(JSON.stringify({
+      version: 2,
+      sessions: [{ token: 'old', username: 'viewer1', created, userId: 'u-1', roleId: 'viewer', permissions: [] }]
+    })));
+
+    expect(getSession('old')).toBeUndefined();
+  });
+
+  it('skips malformed entries and keeps the rest', () => {
+    disk.set(SESSION_FILE, encrypt(JSON.stringify({
+      version: 2,
+      sessions: [
+        { token: 'bad', username: 42, created: 'not a date' },
+        { token: 'good', username: 'viewer1', created: new Date().toISOString(), userId: 'u-1' }
+      ]
+    })));
+
+    expect(getSession('bad')).toBeUndefined();
+    expect(getSession('good')).toMatchObject({ username: 'viewer1', userId: 'u-1' });
+  });
+
+  it('starts empty, without logging the file, when it cannot be decrypted', () => {
+    disk.set(SESSION_FILE, encrypt(JSON.stringify({ version: 2, sessions: [] }), 'cd'.repeat(32)));
+
+    expect(() => initializeSecureSessionStore()).not.toThrow();
+    expect(getSession('token-1')).toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(SESSION_FILE));
+  });
+
+  it('deletes a session', () => {
+    setSession('token-1', session());
+
+    expect(deleteSession('token-1')).toBe(true);
+    expect(deleteSession('token-1')).toBe(false);
+    expect(getSession('token-1')).toBeUndefined();
+  });
+
+  it('drops the sessions of one user or of everyone holding a role', () => {
+    setSession('a', session({ userId: 'u-1', roleId: 'viewer' }));
+    setSession('b', session({ userId: 'u-2', roleId: 'viewer' }));
+    setSession('c', session({ userId: 'u-3', roleId: 'operator' }));
+
+    expect(invalidateSessionsFor({ userId: 'u-3' })).toEqual(['c']);
+    expect(invalidateSessionsFor({ roleId: 'viewer' })).toEqual(['a', 'b']);
+    expect([getSession('a'), getSession('b'), getSession('c')]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('keeps the login fingerprint of a legacy session across a restart', () => {
+    setSession('legacy', { username: 'admin', created: new Date(), loginFingerprint: 'fp-1' });
+
+    restart();
+
+    expect(getSession('legacy')).toEqual(expect.objectContaining({ username: 'admin', loginFingerprint: 'fp-1' }));
+    expect(getSession('legacy')?.userId).toBeUndefined();
+  });
+
+  describe('encryption key', () => {
+    it('creates a key readable only by the owner when there is none', () => {
+      disk.delete(KEY_FILE);
 
       initializeSecureSessionStore();
 
-      expect(fs.mkdirSync).toHaveBeenCalledWith("/mock/install/dir/data", { recursive: true });
+      expect(mockedWriteFileAtomic).toHaveBeenCalledWith(KEY_FILE, expect.stringMatching(/^[0-9a-f]{64}$/), { mode: 0o600 });
     });
 
-    it("should create encryption key if it does not exist", () => {
-      (fs.existsSync as jest.Mock)
-        .mockReturnValueOnce(false) // data dir does not exist
-        .mockReturnValueOnce(false); // key file does not exist
+    it('keeps sessions in memory when the key cannot be saved', () => {
+      disk.delete(KEY_FILE);
+      mockedWriteFileAtomic.mockImplementationOnce(() => { throw new Error('EACCES'); });
 
-      initializeSecureSessionStore();
+      setSession('token-1', session());
 
-      expect(fs.writeFileSync).toHaveBeenCalled();
+      expect(getSession('token-1')).toMatchObject({ userId: 'u-1' });
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining(KEY_FILE), expect.any(Error));
     });
 
-    it("should load existing encryption key", () => {
-      (fs.existsSync as jest.Mock)
-        .mockReturnValueOnce(false) // data dir does not exist
-        .mockReturnValueOnce(true); // key file exists
+    it('replaces a key file that does not hold a 256-bit hex key', () => {
+      disk.set(KEY_FILE, 'truncated');
 
-      expect(() => initializeSecureSessionStore()).not.toThrow();
-    });
-  });
+      setSession('token-1', session());
+      restart();
 
-  describe("setSession", () => {
-    it("should set a session", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-
-      setSession("token123", sessionData);
-
-      expect(hasSession("token123")).toBe(true);
-      expect(getSession("token123")).toEqual(sessionData);
-    });
-
-    it("should save sessions to file", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-
-      setSession("token123", sessionData);
-
-      expect(fs.writeFileSync).toHaveBeenCalled();
-    });
-  });
-
-  describe("getSession", () => {
-    it("should return session data if session exists", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-      setSession("token123", sessionData);
-
-      const result = getSession("token123");
-
-      expect(result).toEqual(sessionData);
-    });
-
-    it("should return undefined if session does not exist", () => {
-      const result = getSession("nonexistent");
-
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe("deleteSession", () => {
-    it("should delete existing session and return true", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-      setSession("token123", sessionData);
-
-      const result = deleteSession("token123");
-
-      expect(result).toBe(true);
-      expect(hasSession("token123")).toBe(false);
-    });
-
-    it("should return false if session does not exist", () => {
-      const result = deleteSession("nonexistent");
-
-      expect(result).toBe(false);
-    });
-
-    it("should save sessions after deletion", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-      setSession("token123", sessionData);
-
-      deleteSession("token123");
-
-      expect(fs.writeFileSync).toHaveBeenCalled();
-    });
-  });
-
-  describe("hasSession", () => {
-    it("should return true if session exists", () => {
-      const sessionData: SessionData = { username: "testuser", created: new Date() };
-      setSession("token123", sessionData);
-
-      const result = hasSession("token123");
-
-      expect(result).toBe(true);
-    });
-
-    it("should return false if session does not exist", () => {
-      const result = hasSession("nonexistent");
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe("session persistence", () => {
-    it("should load sessions from encrypted file on initialization", () => {
-      (fs.existsSync as jest.Mock)
-        .mockReturnValueOnce(false) // data dir
-        .mockReturnValueOnce(true) // key file
-        .mockReturnValueOnce(true); // session file exists
-
-      (fs.readFileSync as jest.Mock)
-        .mockReturnValueOnce("mock-key") // key file
-        .mockReturnValueOnce("mock-encrypted-data"); // session file
-
-      expect(() => initializeSecureSessionStore()).not.toThrow();
-    });
-
-    it("should handle corrupted session file gracefully", () => {
-      (fs.existsSync as jest.Mock)
-        .mockReturnValueOnce(false) // data dir
-        .mockReturnValueOnce(true) // key file
-        .mockReturnValueOnce(true); // session file
-
-      (fs.readFileSync as jest.Mock)
-        .mockReturnValueOnce("mock-key") // key file
-        .mockReturnValueOnce("corrupted-data"); // session file
-
-      // Mock decryption to throw
-      const crypto = require("crypto");
-      crypto.createDecipheriv.mockReturnValue({
-        setAuthTag: jest.fn(),
-        update: jest.fn().mockImplementation(() => { throw new Error("decrypt error"); }),
-        final: jest.fn()
-      });
-
-      expect(() => initializeSecureSessionStore()).not.toThrow();
-    });
-  });
-
-  describe("encryption/decryption", () => {
-    it("should encrypt and decrypt data correctly", () => {
-      const testData = "test data";
-      const mockIv = Buffer.from("mock-iv-16-bytes");
-
-      const crypto = require("crypto");
-      crypto.randomBytes.mockReturnValueOnce(mockIv);
-
-      initializeSecureSessionStore();
-
-      // Test encryption/decryption would happen internally
-      // This is tested indirectly through the session functions above
+      expect(disk.get(KEY_FILE)).toMatch(/^[0-9a-f]{64}$/);
+      expect(getSession('token-1')).toMatchObject({ userId: 'u-1' });
     });
   });
 });

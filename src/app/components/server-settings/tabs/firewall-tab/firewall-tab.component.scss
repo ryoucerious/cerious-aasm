@@ -34,7 +34,7 @@
     border-bottom: none;
   }
 
-  // Keep "7777–7900" together on a narrow screen; the description column wraps instead.
+  // Keep a range like "7777-7900" on one line; the description column wraps instead.
   td.mono {
     white-space: nowrap;
   }

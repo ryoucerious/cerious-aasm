@@ -1,523 +1,336 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as fsExtra from 'fs-extra';
 import { validateInstanceId, validateServerName, validatePort } from '../../utils/validation.utils';
 import * as instanceUtils from '../../utils/ark/instance.utils';
-import { backupService } from '../backup/backup.service';
 import { generateRandomPassword } from '../../utils/crypto.utils';
+import { getProcessMemoryUsage } from '../../utils/platform.utils';
+import { getArkServerDir, getInstanceRuntimeRoot } from '../../utils/ark/ark-server/ark-server-paths.utils';
 import {
-  InstancesResult,
-  SingleInstanceResult,
-  SaveInstanceResult,
+  linkInstanceSaveDir,
+  linkSharedShooterGameSubdirs,
+  linkSharedWin64Subdirs
+} from '../../utils/ark/ark-server/ark-server-isolation.utils';
+import type {
   DeleteInstanceResult,
-  ImportBackupResult
+  ExclusiveJoinPlayer,
+  ImportBackupResult,
+  InstanceConfig,
+  InstancesResult,
+  SaveInstanceResult,
+  SingleInstanceResult
 } from '../../types/server-instance.types';
+import { arkConfigService } from '../ark-config.service';
+import { backupService } from '../backup/backup.service';
+import { validateDiscordConfig } from '../discord.service';
+import { schedulerService } from '../scheduler.service';
+import { whitelistService } from '../whitelist.service';
+import { serverMonitoringService } from './server-monitoring.service';
+import { serverProcessService } from './server-process.service';
 
-/**
- * Server Management Service - Handles instance CRUD operations and backup/import operations
- */
 export class ServerManagementService {
-  /**
-   * Get all server instances with current runtime state
-   */
+  /** Every instance's config.json merged with its live state, memory, CPU, uptime and players. */
   async getAllInstances(): Promise<InstancesResult> {
     try {
-      const instances = await instanceUtils.getAllInstances();
+      const instances: InstanceConfig[] = await instanceUtils.getAllInstances();
 
-      // Get lifecycle and monitoring services for runtime data
-      const processService = require('./server-process.service').serverProcessService;
-      const monitoringService = require('./server-monitoring.service').serverMonitoringService;
+      // Memory is read off-thread, so the instances are enhanced in parallel. Readings are
+      // briefly cached in platform.utils, so listing several running instances back to back does
+      // not spawn a lookup per instance per call.
+      const enhancedInstances = await Promise.all(instances.map(async instance => {
+        const state = serverProcessService.getNormalizedInstanceState(instance.id);
+        const child = serverProcessService.getServerProcess(instance.id);
+        const running = state === 'running';
 
-      // Memory is read off-thread now, so the instances are enhanced in parallel rather than in
-      // a synchronous map. Readings are briefly cached in platform.utils, so listing several
-      // running instances back to back does not spawn a lookup per instance per call.
-      const enhancedInstances = await Promise.all(instances.map(async (instance: any) => {
-        const currentState = processService.getNormalizedInstanceState(instance.id);
-        const process = processService.getServerProcess(instance.id);
-        let memory: number | undefined;
-
-        // Get memory usage if server is running and we have a process
-        if (currentState === 'running' && process && process.pid) {
-          const { getProcessMemoryUsage } = require('../../utils/platform.utils');
-          memory = (await getProcessMemoryUsage(process.pid)) ?? undefined;
-        }
-
-        // Uptime and CPU only make sense while the process is alive; null otherwise so the
-        // UI can show a dash rather than a stale value.
-        const startedAt = currentState === 'running' && process
-          ? (typeof processService.getProcessStartTime === 'function' ? processService.getProcessStartTime(instance.id) : null)
-          : null;
-        const cpu = currentState === 'running'
-          ? (typeof monitoringService.getLatestCpuPercent === 'function' ? monitoringService.getLatestCpuPercent(instance.id) : null)
-          : null;
+        const memory = running && child?.pid ? (await getProcessMemoryUsage(child.pid)) ?? undefined : undefined;
+        // Uptime and CPU only mean something while the process is alive; null lets the UI show
+        // a dash rather than a stale value.
+        const startedAt = running && child ? serverProcessService.getProcessStartTime(instance.id) : null;
+        const cpu = running ? serverMonitoringService.getLatestCpuPercent(instance.id) : null;
 
         return {
           ...instance,
-          state: currentState,
+          state,
           memory,
           cpu,
           startedAt,
-          players: monitoringService.getLatestPlayerCount(instance.id)
+          players: serverMonitoringService.getLatestPlayerCount(instance.id)
         };
       }));
 
-      return {
-        instances: enhancedInstances
-      };
+      return { instances: enhancedInstances };
     } catch (error) {
-      console.error('[server-management-service] Failed to get all instances:', error);
-      return {
-        instances: []
-      };
+      console.error('[server-management] Failed to get all instances:', error);
+      return { instances: [] };
     }
   }
 
-  /**
-   * Retrieve a single server instance by its ID
-   */
   async getInstance(instanceId: string): Promise<SingleInstanceResult> {
     try {
       if (!instanceId) {
         return { instance: null };
       }
-
-      const instance = await instanceUtils.getInstance(instanceId);
-      return { instance };
+      return { instance: instanceUtils.getInstance(instanceId) };
     } catch (error) {
-      console.error('[server-management-service] Failed to get instance:', error);
+      console.error('[server-management] Failed to get instance:', error);
       return { instance: null };
     }
   }
 
-  /**
-   * Save or update a server instance configuration
-   */
-  async saveInstance(instance: any): Promise<SaveInstanceResult> {
+  async saveInstance(instance: Partial<InstanceConfig> | null | undefined): Promise<SaveInstanceResult> {
     try {
-      // Validate instance object
       if (!instance || typeof instance !== 'object') {
-        return {
-          success: false,
-          error: 'Invalid instance object'
-        };
+        return { success: false, error: 'Invalid instance object' };
       }
-
-      // Validate instance ID if provided
       if (instance.id !== undefined && !validateInstanceId(instance.id)) {
-        return {
-          success: false,
-          error: 'Invalid instance ID'
-        };
+        return { success: false, error: 'Invalid instance ID' };
       }
-
-      // Validate instance name
       if (instance.name && !validateServerName(instance.name)) {
-        return {
-          success: false,
-          error: 'Invalid server name'
-        };
+        return { success: false, error: 'Invalid server name' };
       }
-
-      // Validate port if provided
-      if (instance.port !== undefined && !validatePort(instance.port)) {
-        return {
-          success: false,
-          error: 'Invalid port number'
-        };
+      const { port } = instance;
+      if (port !== undefined && !((typeof port === 'number' || typeof port === 'string') && validatePort(port))) {
+        return { success: false, error: 'Invalid port number' };
+      }
+      const stored = instance.id ? instanceUtils.getInstance(instance.id) : null;
+      const invalidDiscordConfig = validateDiscordConfig(instance.discordConfig, stored?.discordConfig?.webhookUrl);
+      if (invalidDiscordConfig) {
+        return { success: false, error: invalidDiscordConfig };
       }
 
       const saved = await instanceUtils.saveInstance(instance);
-      if (saved && saved.error) {
-        return {
-          success: false,
-          error: saved.error
-        };
+      if (saved.error !== undefined) {
+        return { success: false, error: saved.error };
       }
 
-      // Keep scheduled announcements in sync with saved broadcastConfig
-      if (saved?.id) {
-        try {
-          const { schedulerService } = require('../scheduler.service');
-          await schedulerService.initSchedule(saved.id);
-        } catch (error) {
-          console.warn(`[server-management-service] Failed to sync broadcast schedule for ${saved.id}:`, error);
-        }
+      // Keep scheduled announcements in sync with the saved broadcastConfig.
+      try {
+        await schedulerService.initSchedule(saved.id);
+      } catch (error) {
+        console.warn(`[server-management] Failed to sync the broadcast schedule for ${saved.id}:`, error);
       }
 
-      // Handle whitelist file generation after successful save
-      if (saved && saved.id && instance.useExclusiveList) {
-        try {
-          const path = require('path');
-          const { getInstancesBaseDir } = require('../../utils/ark/instance.utils');
-          const { whitelistService } = require('../whitelist.service');
-          
-          const instanceDir = path.join(getInstancesBaseDir(), saved.id);
-          
-          // Extract player IDs from the new exclusiveJoinPlayers array
-          let playerIds: string[] = [];
-          if (instance.exclusiveJoinPlayers && Array.isArray(instance.exclusiveJoinPlayers)) {
-            playerIds = instance.exclusiveJoinPlayers.map((player: any) => player.playerId).filter((id: string) => id && id.trim());
-          } else if (instance.exclusiveJoinPlayerIds && Array.isArray(instance.exclusiveJoinPlayerIds)) {
-            // Fallback to old format for backward compatibility
-            playerIds = instance.exclusiveJoinPlayerIds.filter((id: string) => id && id.trim());
-          }
-          
-          // Write whitelist file to instance directory
-          const result = whitelistService.writeWhitelistFile(instanceDir, playerIds);
-          if (result.success) {
-            console.log(`[server-management-service] Whitelist file written for instance ${saved.id}: ${playerIds.length} players`);
-          } else {
-            console.warn(`[server-management-service] Failed to write whitelist file for instance ${saved.id}: ${result.error}`);
-          }
-        } catch (error) {
-          console.error(`[server-management-service] Error writing whitelist file for instance ${saved.id}:`, error);
-        }
+      if (instance.useExclusiveList) {
+        this.writeWhitelist(saved.id, instance);
       }
 
-      return {
-        success: true,
-        instance: saved
-      };
+      return { success: true, instance: saved };
     } catch (error) {
-      console.error('[server-management-service] Failed to save instance:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to save instance'
-      };
+      console.error('[server-management] Failed to save instance:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to save instance' };
     }
   }
 
-  /**
-   * Delete a server instance
-   */
+  private writeWhitelist(instanceId: string, instance: Partial<InstanceConfig>): void {
+    try {
+      // Older configs list bare ids in exclusiveJoinPlayerIds.
+      const playerIds = Array.isArray(instance.exclusiveJoinPlayers)
+        ? instance.exclusiveJoinPlayers.map((player: ExclusiveJoinPlayer) => player.playerId)
+        : Array.isArray(instance.exclusiveJoinPlayerIds) ? instance.exclusiveJoinPlayerIds : [];
+      const ids = playerIds.filter(id => typeof id === 'string' && id.trim());
+
+      const result = whitelistService.writeWhitelistFile(instanceId, ids);
+      if (!result.success) {
+        console.warn(`[server-management] Failed to write the whitelist for ${instanceId}: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`[server-management] Failed to write the whitelist for ${instanceId}:`, error);
+    }
+  }
+
   async deleteInstance(instanceId: string): Promise<DeleteInstanceResult> {
     try {
-      if (!validateInstanceId(instanceId)) {
-        return {
-          success: false,
-          id: instanceId
-        };
+      if (!validateInstanceId(instanceId) || !instanceUtils.getInstance(instanceId)) {
+        return { success: false, id: instanceId };
       }
-
-      // Check if instance exists
-      const instance = await instanceUtils.getInstance(instanceId);
-      if (!instance) {
-        return {
-          success: false,
-          id: instanceId
-        };
-      }
-
-      // Stop the server if it's running
-      const lifecycleService = require('./server-lifecycle.service').serverLifecycleService;
-      const monitoringService = require('./server-monitoring.service').serverMonitoringService;
-      const processService = require('./server-process.service').serverProcessService;
-
-      const currentState = processService.getNormalizedInstanceState(instanceId);
-      if (['running', 'starting'].includes(currentState)) {
-        await lifecycleService.stopServerInstance(instanceId);
-      }
-
-      // Stop monitoring
-      monitoringService.stopPlayerPolling(instanceId);
-      monitoringService.stopMemoryPolling(instanceId);
-
-      try {
-        const { schedulerService } = require('../scheduler.service');
-        schedulerService.stopScheduler(instanceId);
-      } catch {}
-
-      // Delete the instance
-      const deleted = await instanceUtils.deleteInstance(instanceId);
-      if (!deleted) {
-        return {
-          success: false,
-          id: instanceId
-        };
-      }
-
-      return {
-        success: true,
-        id: instanceId
-      };
     } catch (error) {
-      console.error('[server-management-service] Failed to delete instance:', error);
-      return {
-        success: false,
-        id: instanceId
-      };
+      console.error('[server-management] Failed to delete instance:', error);
+      return { success: false, id: instanceId };
     }
-  }
 
-  /**
-   * Create a new server instance
-   */
-  async createInstance(instanceData: any): Promise<SaveInstanceResult> {
+    let deleted = false;
     try {
-      // Generate a unique ID for the new instance
-      const instanceId = `instance_${Date.now()}`;
+      // Before the stop, which can take minutes. (Crash detection and scheduled restarts are stopped
+      // by ServerInstanceService.deleteInstance.)
+      await backupService.stopBackupScheduler(instanceId);
+      schedulerService.stopScheduler(instanceId);
 
-      const newInstance = {
-        id: instanceId,
-        ...instanceData,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+      const state = serverProcessService.getNormalizedInstanceState(instanceId);
+      if (state === 'running' || state === 'starting') {
+        await serverProcessService.stopServerProcess(instanceId);
+      }
 
-      return await this.saveInstance(newInstance);
+      serverMonitoringService.stopPlayerPolling(instanceId);
+      serverMonitoringService.stopMemoryPolling(instanceId);
+      serverMonitoringService.stopCpuPolling(instanceId);
+
+      // A backup still reading the directory, or a restore still rewriting it, finishes first.
+      await backupService.waitForBackupOperations(instanceId);
+      deleted = instanceUtils.deleteInstance(instanceId);
     } catch (error) {
-      console.error('[server-management-service] Failed to create instance:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to create instance'
-      };
+      console.error('[server-management] Failed to delete instance:', error);
     }
+    if (!deleted) {
+      this.rearmSchedules(instanceId);
+    }
+    return { success: deleted, id: instanceId };
   }
 
-  /**
-   * Import a server instance from a backup
-   */
+  // For a delete that failed with the instance still there: it keeps the schedules stopped above.
+  private rearmSchedules(instanceId: string): void {
+    try {
+      if (!instanceUtils.getInstance(instanceId)) return;
+    } catch {
+      return;
+    }
+    void backupService.startBackupScheduler(instanceId);
+    schedulerService.initSchedule(instanceId).catch(error => {
+      console.warn(`[server-management] Failed to restore the broadcast schedule for ${instanceId}:`, error);
+    });
+  }
+
   async importFromBackup(backupPath: string, instanceName: string): Promise<ImportBackupResult> {
     try {
       if (!backupPath || typeof backupPath !== 'string') {
-        return {
-          success: false,
-          error: 'Invalid backup path'
-        };
+        return { success: false, error: 'Invalid backup path' };
       }
-
       if (!instanceName || typeof instanceName !== 'string') {
-        return {
-          success: false,
-          error: 'Invalid instance name'
-        };
+        return { success: false, error: 'Invalid instance name' };
       }
 
-      // Use backup service to import
       const instance = await backupService.importBackupAsNewServer(instanceName, backupPath);
-
-      return {
-        success: true,
-        instance: instance
-      };
+      return { success: true, instance };
     } catch (error) {
-      console.error('[server-management-service] Failed to import server from backup:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to import server from backup'
-      };
+      console.error('[server-management] Failed to import server from backup:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to import server from backup' };
     }
   }
 
   /**
-   * Prepare instance configuration (generate RCON password, write config files, copy whitelist)
+   * Readies an instance to launch: its file tree, an RCON password, the INI files and the
+   * whitelist. Throws only when the save folder cannot be linked; other failures are logged, and
+   * the runtime tree is validated before the spawn.
    */
-  async prepareInstanceConfiguration(instanceId: string, instance: any): Promise<void> {
-    const path = require('path');
-    const fs = require('fs');
-    // Using fs-extra for easier copy/symlink operations (make sure it's installed or use basic fs)
-    const fsExtra = require('fs-extra'); 
-    const { getInstancesBaseDir } = require('../../utils/ark/instance.utils');
-    const { ArkPathUtils } = require('../../utils/ark/ark-path.utils');
-    const { arkConfigService } = require('../ark-config.service');
-    const { whitelistService } = require('../whitelist.service');
-    
-    const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-    const sourceDir = ArkPathUtils.getArkServerDir();
+  async prepareInstanceConfiguration(instanceId: string, instance: InstanceConfig): Promise<void> {
+    const instanceDir = instanceUtils.getInstanceDir(instanceId);
 
-    // ==================================================================================
-    // 1. Structure Isolation (Junctions & Binary Copies) 
-    // This ensures plugins work per-server but bulk data is shared
-    // ==================================================================================
     try {
-      if (!fs.existsSync(sourceDir)) {
-          console.warn(`[server-management] Source directory ${sourceDir} does not exist. Skipping file structure setup.`);
-      } else {
-          const shooterGameDir = path.join(instanceDir, 'ShooterGame');
-          const engineDir = path.join(instanceDir, 'Engine');
-          
-          await fsExtra.ensureDir(shooterGameDir);
-          
-          // Junction: Content (Heavy ~70GB)
-          const sourceContent = path.join(sourceDir, 'ShooterGame', 'Content');
-          const destContent = path.join(shooterGameDir, 'Content');
-          if (await fsExtra.pathExists(sourceContent)) {
-             // Remove existing symlink/junction if it exists to ensure freshness or if it was a folder
-             if (await fsExtra.pathExists(destContent)) {
-                 const stat = await fsExtra.lstat(destContent);
-                 if (stat.isSymbolicLink()) await fsExtra.unlink(destContent);
-             }
-             // Create Junction (Windows) or Symlink (Linux)
-             // fs-extra's ensureSymlink acts like `ln -sf` but ensureDir checks parent
-             if (!(await fsExtra.pathExists(destContent))) {
-                 await fsExtra.ensureSymlink(sourceContent, destContent, 'junction'); 
-             }
-          }
-
-          // Junction: Engine (Medium ~3GB)
-          const sourceEngine = path.join(sourceDir, 'Engine');
-          if (await fsExtra.pathExists(sourceEngine)) {
-             if (await fsExtra.pathExists(engineDir)) {
-                 const stat = await fsExtra.lstat(engineDir);
-                 if (stat.isSymbolicLink()) await fsExtra.unlink(engineDir);
-             }
-             if (!(await fsExtra.pathExists(engineDir))) {
-                 await fsExtra.ensureSymlink(sourceEngine, engineDir, 'junction');
-             }
-          }
-
-          // Copy: Binaries (Small ~200MB, but vital for ArkApi isolation)
-          // We copy Win64 so we can inject individual ArkApi plugins
-          const sourceBinaries = path.join(sourceDir, 'ShooterGame', 'Binaries', 'Win64');
-          const destBinaries = path.join(shooterGameDir, 'Binaries', 'Win64');
-          
-          if (await fsExtra.pathExists(sourceBinaries)) {
-              await fsExtra.ensureDir(destBinaries);
-              // Copy only files from source to dest (exe, dlls)
-              // We do NOT want to overwrite the entire folder because 'ArkApi' subfolder lives in dest
-              const binaryFiles = await fsExtra.readdir(sourceBinaries);
-              for (const file of binaryFiles) {
-                  const srcFile = path.join(sourceBinaries, file);
-                  const destFile = path.join(destBinaries, file);
-                  const stat = await fsExtra.stat(srcFile);
-                  
-                  // If it's a file (dll/exe), copy/update it — skip if dest is already current.
-                  // Comparing size + mtime avoids a full ~200MB binary copy on every server
-                  // start when using a custom directory on a slow disk (mirrors rsync --update).
-                  if (stat.isFile()) {
-                      let needsCopy = true;
-                      if (await fsExtra.pathExists(destFile)) {
-                          const destStat = await fsExtra.stat(destFile);
-                          if (destStat.size === stat.size && destStat.mtimeMs >= stat.mtimeMs) {
-                              needsCopy = false;
-                          }
-                      }
-                      if (needsCopy) {
-                          await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
-                      }
-                  }
-                  // Subfolders are handled separately below — ArkApi and other per-instance
-                  // folders must stay instance-owned, so we never bulk-copy directories here.
-              }
-
-              // Junction the game's own Win64 subfolders (RedpointEOS, BattlEye, D3D12, DML).
-              // Without RedpointEOS next to the exe the server aborts with
-              // "The EOS SDK could not be found. Please reinstall the application."
-              const { linkSharedWin64Subdirs } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
-              const linked = await linkSharedWin64Subdirs(sourceBinaries, destBinaries);
-              if (linked.length) {
-                  console.log(`[server-management] Linked Win64 subfolders for ${instanceId}: ${linked.join(', ')}`);
-              }
-          }
-
-          // Junction the game's bundled UE plugins (ShooterGame/Plugins: DiscordPartnerSDK,
-          // AWSSDK, sentry). Without them the server aborts with
-          // "Failed to load Discord Partner SDK third party library".
-          const { linkSharedShooterGameSubdirs } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
-          const linkedGameDirs = await linkSharedShooterGameSubdirs(
-              path.join(sourceDir, 'ShooterGame'),
-              shooterGameDir
-          );
-          if (linkedGameDirs.length) {
-              console.log(`[server-management] Linked ShooterGame subfolders for ${instanceId}: ${linkedGameDirs.join(', ')}`);
-          }
-
-          // Point the runtime save path at the instance's canonical SavedArks folder so an
-          // isolated instance keeps writing worlds where backups and restore expect them.
-          const { linkInstanceSaveDir } = require('../../utils/ark/ark-server/ark-server-isolation.utils');
-          const { getInstanceRuntimeRoot } = require('../../utils/ark/ark-server/ark-server-paths.utils');
-          if (await linkInstanceSaveDir(instanceDir, getInstanceRuntimeRoot(instanceId))) {
-              console.log(`[server-management] Linked runtime save directory for ${instanceId}`);
-          }
-      }
+      await this.prepareIsolatedTree(instanceId, instanceDir);
     } catch (error) {
-        console.error(`[server-management] Failed to setup isolated file structure:`, error);
-        // Do not throw, try to proceed, maybe it's already set up
+      // It may already be set up; the runtime tree check catches what is really missing.
+      console.error(`[server-management] Failed to set up the isolated file structure for ${instanceId}:`, error);
     }
 
-    
-    const instanceDirVerified = fs.existsSync(instanceDir); // Should exist now
-    
-    // Generate a random RCON password if missing
+    // Keeps an isolated instance writing its worlds where backups and restore expect them.
+    if (await linkInstanceSaveDir(instanceDir, getInstanceRuntimeRoot(instanceId))) {
+      console.log(`[server-management] Linked the runtime save directory for ${instanceId}`);
+    }
+
     if (!instance.rconPassword) {
       instance.rconPassword = generateRandomPassword(16);
-      // Save it back to config.json
-      try {
-        const configPath = path.join(instanceDir, 'config.json');
-        fs.writeFileSync(configPath, JSON.stringify(instance, null, 2), 'utf8');
-      } catch (e) {
-        console.error('[server-management-service] Failed to save generated RCON password:', e);
-      }
+      await this.saveGeneratedRconPassword(instanceId, instance.rconPassword);
     }
 
-    // Write ARK configuration files (GameUserSettings.ini, Game.ini)
     try {
       arkConfigService.writeArkConfigFiles(instanceDir, instance, instanceId);
-      console.log(`[server-management-service] ARK config files written for instance ${instanceId}`);
     } catch (error) {
-      console.error(`[server-management-service] Failed to write ARK config files for instance ${instanceId}:`, error);
+      console.error(`[server-management] Failed to write the ARK config files for ${instanceId}:`, error);
     }
 
-    // Copy whitelist file to main ARK directory (if whitelist is enabled)
     if (instance.useExclusiveList) {
       try {
-        const result = whitelistService.copyWhitelistToMainDir(instanceDir);
-        if (result.success) {
-          console.log(`[server-management-service] Whitelist file copied for instance ${instanceId}: ${result.message}`);
-        } else {
-          console.warn(`[server-management-service] Failed to copy whitelist for instance ${instanceId}: ${result.error}`);
+        const result = whitelistService.copyWhitelistToMainDir(instanceId);
+        if (!result.success) {
+          console.warn(`[server-management] Failed to copy the whitelist for ${instanceId}: ${result.error}`);
         }
       } catch (error) {
-        console.error(`[server-management-service] Error copying whitelist for instance ${instanceId}:`, error);
+        console.error(`[server-management] Failed to copy the whitelist for ${instanceId}:`, error);
       }
     }
   }
 
-  /**
-   * Clone an existing server instance
-   */
-  async cloneInstance(sourceInstanceId: string, newInstanceName: string): Promise<SaveInstanceResult> {
+  // Saved into the config.json on disk: the instance being started may be the enriched object
+  // from getAllInstances, with state, memory and players merged in.
+  private async saveGeneratedRconPassword(instanceId: string, rconPassword: string): Promise<void> {
     try {
-      if (!validateInstanceId(sourceInstanceId)) {
-        return {
-          success: false,
-          error: 'Invalid source instance ID'
-        };
+      const stored = instanceUtils.getInstance(instanceId);
+      if (!stored) return;
+      const saved = await instanceUtils.saveInstance({ ...stored, rconPassword });
+      if (saved.error !== undefined) {
+        console.error(`[server-management] Failed to save the generated RCON password for ${instanceId}: ${saved.error}`);
       }
-
-      if (!validateServerName(newInstanceName)) {
-        return {
-          success: false,
-          error: 'Invalid instance name'
-        };
-      }
-
-      // Get the source instance
-      const sourceInstance = await instanceUtils.getInstance(sourceInstanceId);
-      if (!sourceInstance) {
-        return {
-          success: false,
-          error: 'Source instance not found'
-        };
-      }
-
-      // Create a new instance based on the source
-      const newInstanceId = `instance_${Date.now()}`;
-      const clonedInstance = {
-        ...sourceInstance,
-        id: newInstanceId,
-        name: newInstanceName,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      return await this.saveInstance(clonedInstance);
     } catch (error) {
-      console.error('[server-management-service] Failed to clone instance:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to clone instance'
-      };
+      console.error(`[server-management] Failed to save the generated RCON password for ${instanceId}:`, error);
+    }
+  }
+
+  /**
+   * Gives the instance its own copy of the Win64 binaries, so ArkApi plugins stay per server, and
+   * junctions everything else (Content ~70 GB, Engine ~3 GB, the bundled plugins) onto the shared
+   * install.
+   */
+  private async prepareIsolatedTree(instanceId: string, instanceDir: string): Promise<void> {
+    const sourceDir = getArkServerDir();
+    if (!fs.existsSync(sourceDir)) {
+      console.warn(`[server-management] ${sourceDir} does not exist; skipping the file structure setup`);
+      return;
+    }
+
+    const shooterGameDir = path.join(instanceDir, 'ShooterGame');
+    await fsExtra.ensureDir(shooterGameDir);
+    await relinkJunction(path.join(sourceDir, 'ShooterGame', 'Content'), path.join(shooterGameDir, 'Content'));
+    await relinkJunction(path.join(sourceDir, 'Engine'), path.join(instanceDir, 'Engine'));
+
+    const sourceBinaries = path.join(sourceDir, 'ShooterGame', 'Binaries', 'Win64');
+    const destBinaries = path.join(shooterGameDir, 'Binaries', 'Win64');
+    if (await fsExtra.pathExists(sourceBinaries)) {
+      await fsExtra.ensureDir(destBinaries);
+      // Files only: the ArkApi folder and other per-instance folders in dest must stay the
+      // instance's own, so directories are never bulk-copied.
+      for (const file of await fsExtra.readdir(sourceBinaries)) {
+        const srcFile = path.join(sourceBinaries, file);
+        const destFile = path.join(destBinaries, file);
+        const stat = await fsExtra.stat(srcFile);
+        if (stat.isFile() && !(await isCurrentCopy(destFile, stat))) {
+          await fsExtra.copy(srcFile, destFile, { overwrite: true, preserveTimestamps: true });
+        }
+      }
+
+      // Without RedpointEOS next to the exe the server aborts with "The EOS SDK could not be
+      // found. Please reinstall the application."
+      const linked = await linkSharedWin64Subdirs(sourceBinaries, destBinaries);
+      if (linked.length) {
+        console.log(`[server-management] Linked Win64 subfolders for ${instanceId}: ${linked.join(', ')}`);
+      }
+    }
+
+    // ShooterGame/Plugins (DiscordPartnerSDK, AWSSDK, sentry). Without them the server aborts with
+    // "Failed to load Discord Partner SDK third party library".
+    const linkedGameDirs = await linkSharedShooterGameSubdirs(path.join(sourceDir, 'ShooterGame'), shooterGameDir);
+    if (linkedGameDirs.length) {
+      console.log(`[server-management] Linked ShooterGame subfolders for ${instanceId}: ${linkedGameDirs.join(', ')}`);
     }
   }
 }
 
-// Export singleton instance
+/** Junctions `dest` onto `source`, replacing any link already there; a real folder is left alone. */
+async function relinkJunction(source: string, dest: string): Promise<void> {
+  if (!(await fsExtra.pathExists(source))) return;
+  if (await fsExtra.pathExists(dest)) {
+    const stat = await fsExtra.lstat(dest);
+    if (stat.isSymbolicLink()) await fsExtra.unlink(dest);
+  }
+  if (!(await fsExtra.pathExists(dest))) {
+    await fsExtra.ensureSymlink(source, dest, 'junction');
+  }
+}
+
+// Same size and at least as new: skips a full ~200 MB binary copy on every start when a custom
+// directory sits on a slow disk (like rsync --update).
+async function isCurrentCopy(destFile: string, source: fs.Stats): Promise<boolean> {
+  if (!(await fsExtra.pathExists(destFile))) return false;
+  const dest = await fsExtra.stat(destFile);
+  return dest.size === source.size && dest.mtimeMs >= source.mtimeMs;
+}
+
 export const serverManagementService = new ServerManagementService();

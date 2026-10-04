@@ -1,237 +1,105 @@
-import * as path from 'path';
+import AdmZip from 'adm-zip';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
-import * as crypto from 'crypto';
-import { promisify } from 'util';
+import * as path from 'path';
+import type { InstanceConfig } from '../../types/server-instance.types';
 import * as instanceUtils from '../../utils/ark/instance.utils';
+import { removeDirectory } from '../../utils/fs.utils';
 
-// File system operations
-const mkdir = promisify(fs.mkdir);
-const readdir = promisify(fs.readdir);
-const stat = promisify(fs.stat);
-const copyFile = promisify(fs.copyFile);
-const unlink = promisify(fs.unlink);
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
+const CONFIG_ENTRY = 'config.json';
+// Zip bomb limits, checked against the archive's headers before anything is written.
+const MAX_ENTRIES = 10000;
+const MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024 * 1024;
 
-// Note: Using require() due to lack of proper TypeScript definitions for adm-zip
-const AdmZip = require('adm-zip') as any;
+const DEFAULT_SETTINGS: Partial<InstanceConfig> = {
+  mapName: 'TheIsland_WP',
+  gamePort: 7777,
+  rconPort: 27020,
+  maxPlayers: 70,
+  serverPassword: '',
+  serverAdminPassword: '',
+  crossplay: ['Steam (PC)'],
+  xpMultiplier: 1.0,
+  installed: false,
+  currentVersion: null,
+  autoUpdateEnabled: true
+};
 
 export class BackupImportService {
   /**
-   * Generate a new instance ID.
-   *
-   * Uses Node's built-in crypto.randomUUID() so we never depend on the ESM-only
-   * `uuid` package, which fails to resolve from inside a packaged app.asar
-   * ("Cannot find package 'uuid'"). Falls back to a manual v4 generator on the
-   * off chance crypto.randomUUID is unavailable.
+   * Creates a new server from a backup archive, with a new id and the name `serverName`; the
+   * archive's config.json supplies its settings. Throws on any failure and leaves nothing behind.
    */
-  private generateInstanceId(): string {
-    try {
-      if (typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
-      }
-    } catch {
-      // fall through to manual generator
+  async importBackupAsNewServer(serverName: string, backupFilePath: string): Promise<InstanceConfig> {
+    if (!fs.existsSync(backupFilePath)) {
+      throw new Error(`Backup file not found: ${backupFilePath}`);
     }
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
-  }
 
-  /**
-   * Import a backup file as a new server instance
-   */
-  async importBackupAsNewServer(serverName: string, backupFilePath: string): Promise<any> {
-    let newInstance: any = null;
+    const zip = new AdmZip(backupFilePath);
+    checkEntries(zip);
+    const settings = readArchivedSettings(zip);
+    // Only config.json makes a directory list as a server, and the archived one still names the
+    // server the backup was taken from: it is never extracted, the new one is written instead.
+    zip.deleteFile(CONFIG_ENTRY);
 
+    // crypto.randomUUID, not the uuid package: that is ESM-only and fails to load from app.asar.
+    const id = randomUUID();
+    const instanceDir = instanceUtils.getInstanceDir(id);
+    await fs.promises.mkdir(instanceDir, { recursive: true });
     try {
-      // Validate backup file exists
-      if (!fs.existsSync(backupFilePath)) {
-        throw new Error(`Backup file not found: ${backupFilePath}`);
+      zip.extractAllTo(instanceDir, true);
+      const saved = await instanceUtils.saveInstance({ ...settings, id, name: serverName, sessionName: serverName });
+      if (saved.error !== undefined) {
+        throw new Error(saved.error);
       }
-
-      // Generate new instance ID
-      const instanceId = this.generateInstanceId();
-
-      // Get base directory for instances
-      const baseDir = instanceUtils.getInstancesBaseDir();
-      const instanceDir = path.join(baseDir, instanceId);
-
-      // Create instance directory
-      await fs.promises.mkdir(instanceDir, { recursive: true });
-
-      // Extract backup to temporary directory first
-      const tempDir = path.join(instanceDir, 'temp_import');
-      await fs.promises.mkdir(tempDir, { recursive: true });
-
+      return saved;
+    } catch (error) {
       try {
-        // Extract backup with safety checks
-        const zip = new AdmZip(backupFilePath);
-        const entries = zip.getEntries();
-
-        // ZIP bomb protection: limit entry count and total decompressed size
-        const MAX_ENTRIES = 10000;
-        const MAX_DECOMPRESSED_SIZE = 50 * 1024 * 1024 * 1024; // 50 GB
-        if (entries.length > MAX_ENTRIES) {
-          throw new Error(`Backup archive contains too many entries (${entries.length}). Maximum allowed: ${MAX_ENTRIES}`);
-        }
-        let totalSize = 0;
-        for (const entry of entries) {
-          totalSize += entry.header.size;
-          if (totalSize > MAX_DECOMPRESSED_SIZE) {
-            throw new Error('Backup archive decompressed size exceeds the 50 GB limit');
-          }
-          // Path traversal protection: reject entries with '..' in the name
-          const entryName = entry.entryName.replace(/\\/g, '/');
-          if (entryName.includes('..') || path.isAbsolute(entryName)) {
-            throw new Error(`Unsafe entry detected in backup archive: ${entry.entryName}`);
-          }
-        }
-
-        zip.extractAllTo(tempDir, true);
-
-        // Try to find and read the original server configuration
-        const configPath = path.join(tempDir, 'config.json');
-        let originalConfig = null;
-
-        if (fs.existsSync(configPath)) {
-          try {
-            const configContent = await fs.promises.readFile(configPath, 'utf8');
-            originalConfig = JSON.parse(configContent);
-          } catch (error) {
-            console.warn(`[backup-import] Failed to parse config.json from backup, using defaults:`, error);
-          }
-        } else {
-          console.warn(`[backup-import] No config.json found in backup, using defaults`);
-        }
-
-        // Create new instance with original settings (if available) or defaults
-        if (originalConfig) {
-          // Use original config but update ID and name
-          newInstance = {
-            ...originalConfig,
-            id: instanceId,
-            name: serverName,
-            sessionName: serverName
-          };
-        } else {
-          // Fallback to defaults if no config found
-          newInstance = {
-            id: instanceId,
-            name: serverName,
-            sessionName: serverName,
-            mapName: 'TheIsland_WP',
-            gamePort: 7777,
-            rconPort: 27020,
-            maxPlayers: 70,
-            serverPassword: '',
-            serverAdminPassword: '',
-            crossplay: ['Steam (PC)'],
-            xpMultiplier: 1.0,
-            installed: false,
-            currentVersion: null,
-            autoUpdateEnabled: true
-          };
-        }
-
-        // Move extracted files to instance directory (excluding temp folder)
-        const extractedItems = await fs.promises.readdir(tempDir);
-        for (const item of extractedItems) {
-          const sourcePath = path.join(tempDir, item);
-          const destPath = path.join(instanceDir, item);
-
-          // Use recursive copy for directories, direct copy for files
-          const stats = await fs.promises.stat(sourcePath);
-          if (stats.isDirectory()) {
-            await this.copyDirectory(sourcePath, destPath);
-          } else {
-            await fs.promises.copyFile(sourcePath, destPath);
-          }
-        }
-
-        // Initialize backup directory for the new instance
-        const backupsDir = path.join(instanceDir, 'backups');
-        await fs.promises.mkdir(backupsDir, { recursive: true });
-
-        // Save the new instance
-        const saveResult = await instanceUtils.saveInstance(newInstance);
-        if (!saveResult) {
-          throw new Error('Failed to save new server instance');
-        }
-        return newInstance;
-
-      } finally {
-        // Clean up temporary directory
-        if (fs.existsSync(tempDir)) {
-          await this.removeDirectory(tempDir);
-        }
+        await removeDirectory(instanceDir);
+      } catch (cleanupError) {
+        console.error('[backup-import] Failed to remove the half-imported server:', cleanupError);
       }
-
-    } catch (error) {
-      console.error('[backup-import] Failed to import backup as new server:', error);
-
-      // Clean up instance directory if it was created
-      if (newInstance?.id) {
-        const baseDir = instanceUtils.getInstancesBaseDir();
-        const instanceDir = path.join(baseDir, newInstance.id);
-        if (fs.existsSync(instanceDir)) {
-          try {
-            await this.removeDirectory(instanceDir);
-          } catch (cleanupError) {
-            console.error('[backup-import] Failed to cleanup failed import:', cleanupError);
-          }
-        }
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * Copy directory recursively
-   */
-  private async copyDirectory(source: string, destination: string): Promise<void> {
-    try {
-      await mkdir(destination, { recursive: true });
-      const items = await readdir(source);
-
-      for (const item of items) {
-        const sourcePath = path.join(source, item);
-        const destPath = path.join(destination, item);
-        const stats = await stat(sourcePath);
-
-        if (stats.isDirectory()) {
-          await this.copyDirectory(sourcePath, destPath);
-        } else {
-          await copyFile(sourcePath, destPath);
-        }
-      }
-    } catch (error) {
-      console.error('[backup-import] Failed to copy directory:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Remove directory recursively
-   */
-  private async removeDirectory(dirPath: string): Promise<void> {
-    try {
-      if (!fs.existsSync(dirPath)) {
-        return;
-      }
-
-      // fs.rm unlinks symlinks/junctions rather than recursing through them. Cleaning up
-      // a failed import removes the half-built instance directory, which may already hold
-      // junctions into the shared install — walking those would delete the game itself.
-      await fs.promises.rm(dirPath, { recursive: true, force: true });
-    } catch (error) {
-      console.error('[backup-import] Failed to remove directory:', error);
       throw error;
     }
   }
 }
 
-export const backupImportService = new BackupImportService();
+function checkEntries(zip: AdmZip): void {
+  const entries = zip.getEntries();
+  if (entries.length > MAX_ENTRIES) {
+    throw new Error(`Backup archive contains too many entries (${entries.length}). Maximum allowed: ${MAX_ENTRIES}`);
+  }
+
+  let totalBytes = 0;
+  for (const entry of entries) {
+    totalBytes += entry.header.size;
+    if (totalBytes > MAX_DECOMPRESSED_BYTES) {
+      throw new Error('Backup archive decompressed size exceeds the 50 GB limit');
+    }
+    const entryName = entry.entryName.replace(/\\/g, '/');
+    if (entryName.includes('..') || path.isAbsolute(entryName)) {
+      throw new Error(`Unsafe entry detected in backup archive: ${entry.entryName}`);
+    }
+  }
+}
+
+// Not validated, like any hand-edited config; saveInstance drops the runtime fields.
+function readArchivedSettings(zip: AdmZip): Partial<InstanceConfig> {
+  const entry = zip.getEntry(CONFIG_ENTRY);
+  if (!entry) {
+    console.warn('[backup-import] The backup has no config.json; using default settings');
+    return DEFAULT_SETTINGS;
+  }
+  try {
+    const text = entry.getData().toString('utf8');
+    // Notepad and PowerShell 5 save UTF-8 with a byte order mark, which JSON.parse rejects.
+    const parsed: unknown = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Partial<InstanceConfig>;
+    }
+  } catch {
+    // The parser's message quotes the file, which holds passwords.
+  }
+  console.warn('[backup-import] The backup\'s config.json is not valid; using default settings');
+  return DEFAULT_SETTINGS;
+}

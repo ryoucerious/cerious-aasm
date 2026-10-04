@@ -40,7 +40,7 @@ exports.default = async function afterPack(context) {
   // Ensure LF line endings for Linux shells even when built on Windows
   wrapper = wrapper.replace(/\r\n/g, '\n');
   fs.writeFileSync(execPath, wrapper, { mode: 0o755 });
-  // mode in writeFileSync is masked by umask on some systems — force executable
+  // writeFileSync's mode is masked by umask on some systems, so force executable
   fs.chmodSync(execPath, 0o755);
   fs.chmodSync(realBinPath, 0o755);
 

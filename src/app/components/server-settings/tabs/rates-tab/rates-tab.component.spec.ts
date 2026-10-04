@@ -1,13 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { RatesTabComponent } from './rates-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { ServerInstanceService } from '../../../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
 
 describe('RatesTabComponent', () => {
   let component: RatesTabComponent;
@@ -15,19 +7,12 @@ describe('RatesTabComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [RatesTabComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [RatesTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(RatesTabComponent);
     component = fixture.componentInstance;
-    // Provide required @Input() values
     component.serverInstance = { gamePort: 7777 };
-    component.ratesFields = [{ key: 'xpMultiplier', label: 'XP Multiplier', type: 'number', description: '', category: 'experience' }];
+    component.ratesFields = [{ tab: 'rates', key: 'xpMultiplier', label: 'XP Multiplier', type: 'number', description: '' }];
     fixture.detectChanges();
   });
 
@@ -49,11 +34,20 @@ describe('RatesTabComponent', () => {
 
   it('should get fields by category', () => {
     component.ratesFields = [
-      { key: 'xpMultiplier', category: 'experience', label: '', type: 'number', description: '' },
-      { key: 'tamingSpeedMultiplier', category: 'taming', label: '', type: 'number', description: '' }
+      { tab: 'rates', key: 'xpMultiplier', label: '', type: 'number', description: '' },
+      { tab: 'rates', key: 'tamingSpeedMultiplier', label: '', type: 'number', description: '' }
     ];
     expect(component.getFieldsByCategory('experience').length).toBe(1);
     expect(component.getFieldsByCategory('taming').length).toBe(1);
     expect(component.getFieldsByCategory('unknown').length).toBe(0);
+  });
+
+  it('shows validation messages under their fields', () => {
+    component.fieldErrors = { xpMultiplier: 'XP Multiplier must be a positive number' };
+    component.fieldWarnings = { xpMultiplier: 'XP Multiplier is set to a very high value' };
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.validation-error')?.textContent).toContain('XP Multiplier must be a positive number');
+    expect(el.querySelector('.validation-warning')?.textContent).toContain('XP Multiplier is set to a very high value');
   });
 });

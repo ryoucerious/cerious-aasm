@@ -2,6 +2,61 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [Unreleased]
+
+A hardening release. The web interface's sign-in and permission checks, the desktop window and the code that writes files were audited and tightened, and a long list of faults in stopping, restarting, backing up and updating servers were fixed. There are no new screens.
+
+> **Upgrading.**
+>
+> - Everyone who uses the web interface signs in once more. Session files written by older versions are discarded (see Security).
+> - The `headless:auth` and `headless:auth:custom` npm scripts are gone, because they carried fixed passwords. Use `npm run headless -- --auth-enabled --username=<name> --password=<password>`, or set `AASM_AUTH_ENABLED=true`, `AASM_USERNAME` and `AASM_PASSWORD`, which the app now reads whenever the matching flag is not given.
+> - Docker: when you build the image yourself, `CURSEFORGE_API_KEY` is a build secret (`docker build --secret id=curseforge_api_key,env=CURSEFORGE_API_KEY .`) and `--build-arg` no longer has any effect. The Compose file needs Docker Compose 2.23.1 or newer, even if you only pull the published image.
+
+### Security
+
+- **Restored Web Sessions Could Act as Admin**: Sessions were saved without the account they belonged to, so after a restart every restored session read as the pre-accounts web login, which is an Admin. A Viewer, or a user since demoted or deleted, could act as Admin until they signed out. Sessions are now saved with their account and role, which is why older session files are discarded.
+- **Users and Roles Could Be Used to Become Admin**: A role that could manage users could create or promote an Admin, take over a more powerful account, or hand out roles with permissions it lacked, and a role that could change settings could replace the web login or switch authentication off. Only an Admin can do these things now, and changing or deleting a user or role ends the affected web sessions at once.
+- **Sign-In Attempts Are Rate Limited**: After ten attempts for one username from one address within 15 minutes, further attempts are refused with "Too many sign-in attempts" until the window passes. A successful sign-in clears the count.
+- **The Web Login Password Was Sent to Browsers**: The settings reply and every settings broadcast carried the web login's password to each connected browser. They now say only whether a password is set, and a blank field keeps the stored one. In Docker the password is also off the container's command line, where any process could read it.
+- **Other Websites Could Reach the Web Interface's Socket**: The WebSocket accepted connections from pages on any site, and with sign-in off such a page acted with the desktop owner's rights. Connections from another origin are now refused, so behind a reverse proxy the `Host` header (or `X-Forwarded-Host`) must be forwarded. The web server also no longer sends CORS headers, sends standard security headers, and its unused `/api/message` endpoint is gone.
+- **The Desktop Window Had Direct Access to Node**: A script that got into the page could have run commands on your machine. The window is now sandboxed, reaches the app through a fixed set of channels, refuses to navigate away from it, and opens web links in your browser.
+- **A Crafted Upload Name or Backup Type Could Write Outside the App's Folders**: The upload name of a backup import and the backup type both ended up in file paths. The name is now ignored, the type is limited to manual or scheduled, and server ids that are not plain ids (`../x`) are refused wherever they name a folder. Line breaks in a setting can no longer add lines to a server's INI files.
+- **The Linux Dependency Installer Ran a Shell With Text From the Browser**: Package names from the request went into a `bash -c` command run as root. The installer now takes only names from its own list and runs the package manager directly, with no shell.
+- **Plugin Downloads, Discord Webhooks and "Open Website" Are Restricted**: Plugin downloads must be https with at most five redirects, a Discord webhook must be a Discord webhook address, and the CurseForge "open website" button opens only https links.
+
+### Bug Fixes
+
+- **"Shut Down Servers and Exit" Never Finished**: The stop request the interface sent had no handler behind it, so stopping from the interface or the exit dialog waited out its timeout. Stopping now saves the world, asks ARK to exit, waits up to two minutes, and only then terminates the process. The interface allows 3.5 minutes before it reports a failed stop.
+- **The Exit Prompt Missed Starting Servers**: Closing the app while a server was still starting did not ask first. Starting servers now count as running and are stopped with the rest, and the dialog gives up after 150 seconds so the app can always close.
+- **A Backup Retention of 0 or Blank Deleted Every Backup**: Cleanup now runs only for a whole number of at least 1, and the setting is limited to 1-50. Manual backups were also listed as created "now", so once they filled the limit the newest scheduled backup went first; backup times now come from the files.
+- **Importing a Backup Under Its Original Name Broke the Server**: The import copied the archive's old `config.json`, so the new entry carried the original's id, and deleting it could delete the original server's files. Imports now start from a fresh config, report failures, and clean up after themselves.
+- **Scheduled Restarts Could Loop and Killed Servers Without Saving**: A schedule set to "none", a weekly one with no days, or an invalid time counted as due at once and fired repeatedly, broadcasting to players each time. Those schedules now never fire, and a real restart goes through the graceful stop, so the world is saved and it is not reported as a crash.
+- **Crash Detection Never Fired**: The interval was read as milliseconds instead of seconds, and a running server that died was recorded as a plain stop, so Discord and the activity feed never heard about it. A server that exits without being asked to is now reported as crashed and restarted when crash detection is on.
+- **A Failed ARK Update Left Every Server Stopped**: Servers the updater had stopped stayed down when SteamCMD failed. They are now restarted whatever the outcome, and a failed attempt starts a one-hour cooldown before the next automatic try.
+- **RCON Reconnect Storms and Mixed-Up Replies**: Two code paths connected RCON at once, a manual connect during a retry hung, and commands sent together could receive each other's replies. Each server now has one connect loop and its commands run one at a time.
+- **Duplicate Log Lines After a Restart**: Every start added another reader on the server's log. There is now one reader per server, closed on restart.
+- **Port Conflicts Went Unnoticed**: The game and query ports are UDP, but the check connected to them over TCP or HTTP, so a taken port looked free. They are now tested by binding UDP.
+- **Servers the App Doesn't Manage Were Killed at Startup**: Each launch force-stopped every ARK process on the machine, including servers run by other tools. Cleanup now touches only processes started from the app's own install.
+- **A Second Launch Killed the First One's Servers**: Starting the app while it was running ran that same cleanup against the running copy's servers. A second launch now brings the running window forward and exits without touching anything.
+- **Long Backups and Installs Were Reported as Failed After 30 Seconds**: Every request from the interface gave up after 30 seconds while the work carried on. Backups and restores now wait up to 30 minutes and installs up to an hour.
+- **Settings Were Lost or Saved on Every Keystroke**: The stat multiplier boxes, the map field and the web server port saved with each key press, so half-typed values were written. They now save when you leave the field or pick a value, after validation, and a save's reply no longer overwrites what you typed since.
+- **Switching Servers Could Show or Save the Previous Server's Data**: A slow reply for the server you had left could fill the form of the one you switched to, and a save after that wrote the wrong data. Discord, broadcasts, plugins, the INI editor and backups now follow the selected server and ignore replies meant for another.
+- **The INI Editor Could Save an Empty File**: If a file failed to load, saving wrote an empty one over it. Saving now waits for a successful load, and leaving with unsaved edits asks first.
+- **INI Export Dropped Custom Lines and Rewrote Live Files**: Export regenerated the running server's INI files and lost lines added by hand. It now leaves the live files alone and keeps custom lines.
+- **Edited Custom INI Lines Came Back**: A custom line changed in the INI editor could return with its old value on the next start, and on Linux a server could pick up another server's custom lines. Each server's custom lines now come only from its own files.
+- **Copying Settings Between Servers Lost Mods**: A copy now brings the mod list and the structure decay period and delay, and no longer clears the target's mod settings when the source has none.
+- **Config Files Could Be Left Truncated by a Crash**: Server, global, backup, login and session files are now written to a temporary file and renamed into place, where a crash mid-write could truncate a server's config and make the server vanish. A global settings or login file that can't be parsed is set aside as `<name>.corrupt-<time>` instead of being replaced by defaults.
+- **A Save Folder That Couldn't Be Linked Split the World**: On drives that can't link it (exFAT, some network shares) the server started on a copy of its save that backups never saw. The start is now refused with a message.
+- **The Web Interface Gave Up Reconnecting**: After 20 failed attempts the browser stopped trying until the page was reloaded. It now keeps retrying, up to 30 seconds apart and at once when the browser comes back online, and sends what you did in the meantime when the connection returns.
+
+### Changes
+
+- **Cancelling an Install or Update Works Between Phases**: A cancel that arrived between SteamCMD phases was ignored and the next phase started anyway.
+- **A Backup Can Be Restored After a Crash**: Restore was refused unless the server was cleanly stopped. A server that crashed or failed to start is now accepted too, and is marked stopped first so crash detection cannot restart it mid-restore.
+- **Starts Wait for SteamCMD**: While SteamCMD installs or updates the shared server files, starting a server, crash restarts included, is refused with a message instead of launching a half-updated install.
+- **Unused Dependencies Removed**: Tailwind, PostCSS, Bootstrap, Font Awesome, node-fetch, ps-list, sharp, png-to-ico and the CORS middleware are gone, along with unused styles and the never-supported macOS packaging target.
+- **Reverse Proxy Notes**: The [Docker guide](docs/DOCKER.md#behind-a-reverse-proxy) and the [troubleshooting guide](docs/TROUBLESHOOTING.md#behind-a-reverse-proxy) say what a proxy has to forward.
+
 ## [1.2.0] - 2026-09-27
 
 Cerious AASM now runs in Docker. The image serves the same web interface as a headless Linux

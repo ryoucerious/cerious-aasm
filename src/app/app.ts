@@ -1,58 +1,54 @@
-import { ServerInstanceService } from './core/services/server-instance.service';
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { NgIf, NgForOf } from '@angular/common';
-import { WebSocketService } from './core/services/web-socket.service';
-import { Subscription } from 'rxjs';
-import { ConnectionLostComponent } from './components/connect-lost/connection-lost.component';
 import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
-import { MessagingService } from './core/services/messaging/messaging.service';
+import { Subscription } from 'rxjs';
+import { WebSocketService } from './core/services/web-socket.service';
+import { IpcService } from './core/services/ipc.service';
+import { ServerLifecycleService } from './core/services/server-lifecycle.service';
 import { NotificationService } from './core/services/notification.service';
 import { ThemeService } from './core/services/theme.service';
+import { ActivityService } from './core/services/activity.service';
+import { LiveServersService } from './core/services/live-servers.service';
+import { ServerInstance } from './core/models/server-instance.model';
+import { ConnectionLostComponent } from './components/connect-lost/connection-lost.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { ModalComponent } from './components/modal/modal.component';
-import { ServerInstance } from './core/models/server-instance.model';
-import { UtilityService } from './core/services/utility.service';
 import { TopbarComponent } from './components/topbar/topbar.component';
 import { SettingsPageComponent } from './pages/settings/settings.component';
 import { TooltipHostComponent } from './components/tooltip/tooltip-host.component';
-import { ActivityService } from './core/services/activity.service';
-import { LiveServersService } from './core/services/live-servers.service';
 
-declare global {
-  interface Window {
-    require: any;
-  }
+export type ExitAction = 'shutdown' | 'exit' | 'cancel';
 
-}
+/** How long the web UI waits for its first connection before showing "Connection Lost". */
+const FIRST_CONNECT_GRACE_MS = 5000;
 
 @Component({
   selector: 'app-root',
   imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent],
   templateUrl: './app.html'
 })
-
 export class App implements OnInit, OnDestroy {
   showExitModal = false;
+  shuttingDown = false;
   runningServers: ServerInstance[] = [];
   selectedServer: ServerInstance | null = null;
   connectionLost = false;
   connecting = true;
-  isElectron = false;
-  isWebMode = false;
+  readonly isElectron: boolean;
   isLoginPage = false;
   isMobile = false;
   isMobileMenuOpen = false;
-  private wsCheckInterval: Subscription | null = null;
+  private connectionSub: Subscription | null = null;
   private unauthorizedSub: Subscription | null = null;
-  private wsTimeout: any;
+  private stopListeningForClose: (() => void) | null = null;
+  private connectTimeout: ReturnType<typeof setTimeout> | undefined;
   private everConnected = false;
 
   constructor(
-    private messaging: MessagingService,
     private cdr: ChangeDetectorRef,
     private ws: WebSocketService,
-    private serverInstanceService: ServerInstanceService,
-    private utility: UtilityService,
+    private ipc: IpcService,
+    private serverLifecycle: ServerLifecycleService,
     private router: Router,
     // Eagerly instantiate NotificationService for global notifications
     _notification: NotificationService,
@@ -64,137 +60,89 @@ export class App implements OnInit, OnDestroy {
     _liveServers: LiveServersService,
     _activity: ActivityService
   ) {
+    this.isElectron = ipc.isElectron;
     this.detectMobile();
-    this.setupResizeListener();
+    window.addEventListener('resize', this.onWindowResize);
   }
+
   ngOnInit(): void {
-    this.isElectron = !!(window as any).require;
-    this.isWebMode = this.utility.getPlatform() === 'Web';
-    
-    // Track current route to determine if we're on login page
     this.router.events.subscribe(event => {
       if (event instanceof NavigationEnd) {
         this.isLoginPage = event.url === '/login';
         this.cdr.detectChanges();
       }
     });
-    
-    // Set initial login page state
     this.isLoginPage = this.router.url === '/login';
-  
-    
+
     if (this.isElectron) {
-      const electron = (window as any).require('electron');
-      electron.ipcRenderer.on('app-close-request', async (_event: any) => {
-        // Get running servers
-        this.runningServers = await this.serverInstanceService.getInstancesOnce();
-        if (this.runningServers.length > 0) {
-          this.showExitModal = true;
-          this.cdr.detectChanges();
-        } else {
-          electron.ipcRenderer.send('app-close-response', { action: 'exit' });
-        }
-      });
-    } else {
-      // Only show connection lost in browser (not Electron)
-      this.wsTimeout = setTimeout(() => {
-        if (!this.everConnected) {
-          this.connecting = false;
-          this.connectionLost = true;
-          this.cdr.markForCheck();
-        }
-      }, 5000);
-      // A socket refused for want of a sign-in is not a lost connection: send the user to
-      // the login page instead of leaving them on the "Connection Lost" screen.
-      this.unauthorizedSub = this.ws.unauthorized$.subscribe(() => {
-        if (this.wsTimeout) clearTimeout(this.wsTimeout);
+      this.stopListeningForClose = this.ipc.on('app-close-request', () => this.onCloseRequested());
+      return;
+    }
+
+    // The desktop app has no connection to lose; only the web UI shows these screens.
+    this.connectTimeout = setTimeout(() => {
+      if (!this.everConnected) {
         this.connecting = false;
-        this.connectionLost = false;
+        this.connectionLost = true;
         this.cdr.markForCheck();
-        this.router.navigate(['/login']);
-      });
+      }
+    }, FIRST_CONNECT_GRACE_MS);
 
-      this.wsCheckInterval = this.ws.connected$.subscribe((connected) => {
-        if (connected) {
-          if (!this.everConnected) {
-            this.everConnected = true;
-            this.connecting = false;
-            this.connectionLost = false;
-            this.cdr.markForCheck();
-            if (this.wsTimeout) clearTimeout(this.wsTimeout);
-          } else if (this.connectionLost) {
-            this.connectionLost = false;
-            this.cdr.markForCheck();
-          }
-        } else {
-          if (this.everConnected && !this.connectionLost) {
-            this.connectionLost = true;
-            this.cdr.markForCheck();
-          }
+    // A socket refused for want of a sign-in is not a lost connection: send the user to
+    // the login page instead of leaving them on the "Connection Lost" screen.
+    this.unauthorizedSub = this.ws.unauthorized$.subscribe(() => {
+      clearTimeout(this.connectTimeout);
+      this.connecting = false;
+      this.connectionLost = false;
+      this.cdr.markForCheck();
+      this.router.navigate(['/login']);
+    });
+
+    this.connectionSub = this.ws.connected$.subscribe(connected => {
+      if (connected) {
+        if (!this.everConnected) {
+          this.everConnected = true;
+          this.connecting = false;
+          clearTimeout(this.connectTimeout);
         }
-      });
-    }
+        this.connectionLost = false;
+      } else if (this.everConnected) {
+        this.connectionLost = true;
+      }
+      this.cdr.markForCheck();
+    });
   }
-  onExitModalClose(action: 'shutdown' | 'exit' | 'cancel') {
-    const electron = (window as any).require?.('electron');
-    if (!electron) return;
+
+  /** The main process holds the window open until it gets an app-close-response. */
+  async onExitModalClose(action: ExitAction): Promise<void> {
+    if (!this.isElectron || this.shuttingDown) return;
+
     if (action === 'shutdown') {
-      this.serverInstanceService.shutdownAllServers().then(() => {
-        electron.ipcRenderer.send('app-close-response', { action: 'shutdown' });
-        this.showExitModal = false;
-        this.cdr.detectChanges();
-      });
-    } else if (action === 'exit') {
-      electron.ipcRenderer.send('app-close-response', { action: 'exit' });
-      this.showExitModal = false;
-      this.cdr.detectChanges();
-    } else {
-      electron.ipcRenderer.send('app-close-response', { action: 'cancel' });
-      this.showExitModal = false;
-      this.cdr.detectChanges();
+      this.shuttingDown = true;
+      await this.serverLifecycle.shutdownAllServers()
+        .catch(error => console.error('[app] Stopping servers before exit failed:', error));
     }
+
+    this.ipc.send('app-close-response', { action });
+    this.showExitModal = false;
+    this.shuttingDown = false;
   }
-
-
 
   ngOnDestroy(): void {
-    if (this.wsCheckInterval) this.wsCheckInterval.unsubscribe();
-    if (this.unauthorizedSub) this.unauthorizedSub.unsubscribe();
-    if (this.wsTimeout) clearTimeout(this.wsTimeout);
-    // Clean up resize listener
+    this.connectionSub?.unsubscribe();
+    this.unauthorizedSub?.unsubscribe();
+    this.stopListeningForClose?.();
+    clearTimeout(this.connectTimeout);
     window.removeEventListener('resize', this.onWindowResize);
   }
 
   onServerSelected(server: ServerInstance) {
     this.selectedServer = server;
-    // Close mobile menu when selecting a server
     if (this.isMobile) {
       this.isMobileMenuOpen = false;
       this.cdr.detectChanges();
     }
   }
-
-  // Mobile responsive methods
-  private detectMobile(): void {
-    this.isMobile = window.innerWidth <= 860;
-  }
-
-  private setupResizeListener(): void {
-    this.onWindowResize = this.onWindowResize.bind(this);
-    window.addEventListener('resize', this.onWindowResize);
-  }
-
-  private onWindowResize = (): void => {
-    const wasMobile = this.isMobile;
-    this.detectMobile();
-    
-    // If switching from mobile to desktop, close mobile menu
-    if (wasMobile && !this.isMobile) {
-      this.isMobileMenuOpen = false;
-    }
-    
-    this.cdr.detectChanges();
-  };
 
   toggleMobileMenu(): void {
     this.isMobileMenuOpen = !this.isMobileMenuOpen;
@@ -208,4 +156,28 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
+  private onCloseRequested(): void {
+    // Main repeats an unanswered request. During a shutdown the servers still stopping no longer
+    // count as running, so answering again would let main exit while they save.
+    if (this.shuttingDown || this.showExitModal) return;
+    this.runningServers = this.serverLifecycle.runningServers();
+    if (this.runningServers.length > 0) {
+      this.showExitModal = true;
+    } else {
+      this.ipc.send('app-close-response', { action: 'exit' });
+    }
+  }
+
+  private detectMobile(): void {
+    this.isMobile = window.innerWidth <= 860;
+  }
+
+  private onWindowResize = (): void => {
+    const wasMobile = this.isMobile;
+    this.detectMobile();
+    if (wasMobile && !this.isMobile) {
+      this.isMobileMenuOpen = false;
+    }
+    this.cdr.detectChanges();
+  };
 }

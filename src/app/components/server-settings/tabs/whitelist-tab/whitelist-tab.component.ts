@@ -1,12 +1,13 @@
-import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ServerInstance } from '../../../../core/models/server-instance.model';
 
-interface WhitelistPlayer {
-  playerId: string;
-  playerName?: string;
-  dateAdded?: string;
-}
+type WhitelistSettings = Pick<ServerInstance, 'useExclusiveList' | 'exclusiveJoinPlayerIds' | 'exclusiveJoinPlayers'> & { id?: string };
+type WhitelistPlayer = NonNullable<ServerInstance['exclusiveJoinPlayers']>[number];
+type StatusType = 'success' | 'error' | 'warning';
+
+const STATUS_DISPLAY_MS = 5000;
 
 @Component({
   selector: 'app-whitelist-tab',
@@ -14,49 +15,42 @@ interface WhitelistPlayer {
   imports: [CommonModule, FormsModule],
   templateUrl: './whitelist-tab.component.html'
 })
-export class WhitelistTabComponent implements OnChanges {
-  @Input() serverInstance: any;
+export class WhitelistTabComponent implements OnChanges, OnDestroy {
+  @Input() serverInstance: WhitelistSettings | null = null;
   @Input() isLocked = false;
 
   @Output() saveSettings = new EventEmitter<void>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
-  @Output() statusUpdate = new EventEmitter<{message: string, type: 'success' | 'error' | 'warning'}>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
 
-  // Modal states
   showAddPlayerModal = false;
   showBulkAddModal = false;
   showRemoveConfirmModal = false;
-  playerToRemove: string = '';
-  
-  // Form data
+  playerToRemove = '';
+
   newPlayerId = '';
   newPlayerName = '';
   bulkPlayerIds = '';
-  
-  // UI state
+
   statusMessage = '';
-  statusType: 'success' | 'error' | 'warning' = 'success';
+  statusType: StatusType = 'success';
+  private statusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor() {}
-
-  ngOnChanges(changes: SimpleChanges) {
-    // Ensure exclusiveJoinPlayerIds array exists and migrate to new format
-    if (changes['serverInstance'] && this.serverInstance) {
-      if (!this.serverInstance.exclusiveJoinPlayerIds) {
-        this.serverInstance.exclusiveJoinPlayerIds = [];
-      }
-      
-      // Migrate from old string array to new player objects array if needed
-      if (!this.serverInstance.exclusiveJoinPlayers && this.serverInstance.exclusiveJoinPlayerIds.length > 0) {
-        this.serverInstance.exclusiveJoinPlayers = this.serverInstance.exclusiveJoinPlayerIds.map((id: string) => ({
-          playerId: id,
-          playerName: undefined,
-          dateAdded: new Date().toLocaleDateString()
-        }));
-      } else if (!this.serverInstance.exclusiveJoinPlayers) {
-        this.serverInstance.exclusiveJoinPlayers = [];
-      }
+  ngOnChanges(changes: SimpleChanges): void {
+    const change = changes['serverInstance'];
+    if (!change) return;
+    if (change.previousValue?.id !== change.currentValue?.id) {
+      this.closeModal();
+      this.clearStatus();
     }
+    // Older configs kept bare ids; the list shows player entries.
+    const server = this.serverInstance;
+    if (server?.exclusiveJoinPlayerIds?.length && !server.exclusiveJoinPlayers) {
+      server.exclusiveJoinPlayers = server.exclusiveJoinPlayerIds.map(playerId => this.newEntry(playerId));
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.clearStatus();
   }
 
   get whitelistEnabled(): boolean {
@@ -64,43 +58,19 @@ export class WhitelistTabComponent implements OnChanges {
   }
 
   get whitelistedPlayers(): WhitelistPlayer[] {
-    if (!this.serverInstance) {
-      return [];
-    }
-
-    // Migrate from old string array to new player objects array if needed
-    if (!this.serverInstance.exclusiveJoinPlayers && this.serverInstance.exclusiveJoinPlayerIds) {
-      this.serverInstance.exclusiveJoinPlayers = this.serverInstance.exclusiveJoinPlayerIds.map((id: string) => ({
-        playerId: id,
-        playerName: undefined,
-        dateAdded: new Date().toLocaleDateString()
-      }));
-    }
-
-    return this.serverInstance.exclusiveJoinPlayers || [];
+    return this.serverInstance?.exclusiveJoinPlayers ?? [];
   }
 
-  trackByPlayerId(index: number, player: WhitelistPlayer): string {
+  trackByPlayerId(_index: number, player: WhitelistPlayer): string {
     return player.playerId;
   }
 
+  /** Turning the whitelist off keeps the list, so turning it back on restores it. */
   onUseExclusiveListChange(enabled: boolean) {
-    if (this.serverInstance) {
-      this.serverInstance.useExclusiveList = enabled;
-      
-      // Initialize array if it doesn't exist
-      if (!this.serverInstance.exclusiveJoinPlayerIds) {
-        this.serverInstance.exclusiveJoinPlayerIds = [];
-      }
-      
-      this.validateField.emit({ key: 'useExclusiveList', value: enabled });
-      this.saveSettings.emit();
-      
-      if (!enabled) {
-        // Clear whitelist when disabling
-        this.serverInstance.exclusiveJoinPlayerIds = [];
-      }
-    }
+    if (!this.serverInstance) return;
+    this.serverInstance.useExclusiveList = enabled;
+    this.validateField.emit({ key: 'useExclusiveList', value: enabled });
+    this.saveSettings.emit();
   }
 
   openAddPlayerModal() {
@@ -125,35 +95,15 @@ export class WhitelistTabComponent implements OnChanges {
   }
 
   addPlayer() {
-    if (!this.newPlayerId.trim() || !this.serverInstance) return;
-
     const playerId = this.newPlayerId.trim();
-    const playerName = this.newPlayerName.trim() || undefined;
-    
-    // Initialize arrays if they don't exist
-    if (!this.serverInstance.exclusiveJoinPlayerIds) {
-      this.serverInstance.exclusiveJoinPlayerIds = [];
-    }
-    if (!this.serverInstance.exclusiveJoinPlayers) {
-      this.serverInstance.exclusiveJoinPlayers = [];
-    }
-    
-    // Check if player already exists
-    if (this.serverInstance.exclusiveJoinPlayers.some((p: any) => p.playerId === playerId)) {
+    if (!playerId || !this.serverInstance) return;
+
+    if (this.whitelistedPlayers.some(player => player.playerId === playerId)) {
       this.showStatus('Player is already in the whitelist', 'warning');
       return;
     }
 
-    // Add to both arrays (for compatibility)
-    const playerObj = {
-      playerId,
-      playerName,
-      dateAdded: new Date().toLocaleDateString()
-    };
-    
-    this.serverInstance.exclusiveJoinPlayers.push(playerObj);
-    this.serverInstance.exclusiveJoinPlayerIds.push(playerId);
-    
+    this.addEntries([this.newEntry(playerId, this.newPlayerName.trim() || undefined)]);
     this.saveSettings.emit();
     this.closeModal();
   }
@@ -164,22 +114,11 @@ export class WhitelistTabComponent implements OnChanges {
   }
 
   removePlayer() {
-    if (!this.playerToRemove || !this.serverInstance) return;
+    const server = this.serverInstance;
+    if (!this.playerToRemove || !server) return;
 
-    // Remove from both arrays
-    if (this.serverInstance.exclusiveJoinPlayers) {
-      const index = this.serverInstance.exclusiveJoinPlayers.findIndex((p: any) => p.playerId === this.playerToRemove);
-      if (index > -1) {
-        this.serverInstance.exclusiveJoinPlayers.splice(index, 1);
-      }
-    }
-    
-    if (this.serverInstance.exclusiveJoinPlayerIds) {
-      const index = this.serverInstance.exclusiveJoinPlayerIds.indexOf(this.playerToRemove);
-      if (index > -1) {
-        this.serverInstance.exclusiveJoinPlayerIds.splice(index, 1);
-      }
-    }
+    server.exclusiveJoinPlayers = this.whitelistedPlayers.filter(player => player.playerId !== this.playerToRemove);
+    server.exclusiveJoinPlayerIds = (server.exclusiveJoinPlayerIds ?? []).filter(id => id !== this.playerToRemove);
 
     this.showStatus('Player removed from whitelist', 'success');
     this.saveSettings.emit();
@@ -200,9 +139,7 @@ export class WhitelistTabComponent implements OnChanges {
   }
 
   bulkAddPlayers() {
-    const playerIds = this.bulkPlayerIds.split('\n')
-      .map(id => id.trim())
-      .filter(id => id.length > 0);
+    const playerIds = this.bulkPlayerIds.split('\n').map(id => id.trim()).filter(id => id.length > 0);
 
     if (playerIds.length === 0) {
       this.showStatus('No valid player IDs found', 'error');
@@ -211,46 +148,52 @@ export class WhitelistTabComponent implements OnChanges {
 
     if (!this.serverInstance) return;
 
-    // Initialize arrays if they don't exist
-    if (!this.serverInstance.exclusiveJoinPlayerIds) {
-      this.serverInstance.exclusiveJoinPlayerIds = [];
+    const listed = new Set(this.whitelistedPlayers.map(player => player.playerId));
+    const added: string[] = [];
+    for (const playerId of playerIds) {
+      if (listed.has(playerId)) continue;
+      listed.add(playerId);
+      added.push(playerId);
     }
-    if (!this.serverInstance.exclusiveJoinPlayers) {
-      this.serverInstance.exclusiveJoinPlayers = [];
-    }
+    const duplicates = playerIds.length - added.length;
 
-    let addedCount = 0;
-    let duplicateCount = 0;
-
-    playerIds.forEach(playerId => {
-      if (!this.serverInstance.exclusiveJoinPlayers.some((p: any) => p.playerId === playerId)) {
-        const playerObj = {
-          playerId,
-          playerName: undefined,
-          dateAdded: new Date().toLocaleDateString()
-        };
-        this.serverInstance.exclusiveJoinPlayers.push(playerObj);
-        this.serverInstance.exclusiveJoinPlayerIds.push(playerId);
-        addedCount++;
-      } else {
-        duplicateCount++;
-      }
-    });
-
-    if (addedCount > 0) {
+    if (added.length > 0) {
+      this.addEntries(added.map(playerId => this.newEntry(playerId)));
       this.saveSettings.emit();
+      const skipped = duplicates > 0 ? `; ${duplicates} already on the whitelist` : '';
+      this.showStatus(`Added ${added.length} player(s) to the whitelist${skipped}`, 'success');
+    } else {
+      this.showStatus(`All ${duplicates} player(s) are already on the whitelist`, 'warning');
     }
     this.closeModal();
   }
 
-  private showStatus(message: string, type: 'success' | 'error' | 'warning') {
+  private addEntries(entries: WhitelistPlayer[]): void {
+    const server = this.serverInstance;
+    if (!server) return;
+    server.exclusiveJoinPlayers = [...this.whitelistedPlayers, ...entries];
+    server.exclusiveJoinPlayerIds = [...(server.exclusiveJoinPlayerIds ?? []), ...entries.map(entry => entry.playerId)];
+  }
+
+  private newEntry(playerId: string, playerName?: string): WhitelistPlayer {
+    return { playerId, playerName, dateAdded: new Date().toLocaleDateString() };
+  }
+
+  private showStatus(message: string, type: StatusType) {
+    this.clearStatus();
     this.statusMessage = message;
     this.statusType = type;
-    this.statusUpdate.emit({ message, type });
-    
-    // Clear status after 5 seconds
-    setTimeout(() => {
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
       this.statusMessage = '';
-    }, 5000);
+    }, STATUS_DISPLAY_MS);
+  }
+
+  private clearStatus(): void {
+    if (this.statusTimer) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    this.statusMessage = '';
   }
 }

@@ -1,145 +1,54 @@
-/* --- UNIFIED DESIGN SYSTEM VARIABLES --- */
+$breakpoint-sm: 480px;
+$breakpoint-md: 768px;
+$breakpoint-xl: 1200px;
 
-// =========================
-// BREAKPOINTS
-// =========================
-$breakpoint-sm: 480px;   // Small mobile
-$breakpoint-md: 768px;   // Tablet
-$breakpoint-lg: 1024px;  // Desktop
-$breakpoint-xl: 1200px;  // Large desktop
-
-// =========================
-// COLORS
-// =========================
-//
-// These are aliases onto the theme tokens in _theme.scss — they hold a `var()`
-// reference, not a colour, so they follow the active theme at runtime.
-//
-// The names below are historical and literal ($background-dark is white in the light
-// theme). They are kept so existing rules did not all have to be rewritten; prefer the
-// semantic token names for anything new, e.g. `var(--surface)` over `$background-dark`.
-//
-// Because these are `var()` references they cannot be passed to SCSS colour functions
-// (darken/lighten/mix) — those run at compile time and have no colour to work on. Add a
-// token for the variant you need instead, the way --primary-hover exists for what used
-// to be `lighten($primary, 6%)`.
-
-// Primary brand colors
-// Navigation rows — pages and servers alike — are this tall, so a selected one is the same
-// shape whichever kind it is and the accent mark down its edge is the same length.
+// Navigation rows, pages and servers alike, share this height so a selected row is the same
+// shape whichever kind it is.
 $sidenav-row-height: 2.95rem;
 
+// Aliases onto the _theme.scss tokens: each holds a var() reference, not a colour, so it
+// follows the active theme and cannot go through SCSS colour functions. The names are
+// historical ($background-dark is white in the light theme); prefer the token for new rules.
 $primary: var(--primary);
-$primary-hover: var(--primary-hover);
-$success: var(--success);
-$danger: var(--danger);
 $warning: var(--warning);
 $info: var(--info);
-$secondary: var(--secondary);
 
-// Background colors
 $background-dark: var(--surface);
 $background-darker: var(--surface-base);
 $background-card: var(--surface-overlay);
 $background-hover: var(--surface-raised);
 
-// Text colors
 $text-primary: var(--text-primary);
 $text-secondary: var(--text-secondary);
 $text-white: var(--text-strong);
 $text-light: var(--text-emphasis);
 $text-muted: var(--text-muted);
 
-// Border colors
 $border-color: var(--border-strong);
 $border-dark: var(--border);
-$border-darker: var(--border-muted);
 $border-subtle: var(--border-subtle);
 
-// Focus and interaction colors
-$focus-color: var(--focus);
-
-// Shadows
-$shadow-color: var(--shadow-color);
-$shadow-color-strong: var(--shadow-color-strong);
-
-// =========================
-// BORDER RADIUS
-// =========================
-$radius-sm: 3px;
-$radius-md: 4px;
-$radius-lg: 6px;
-$radius-xl: 8px;
-$radius-pill: 9999px;
-
-// =========================
-// TRANSITIONS
-// =========================
 $transition-fast: 0.15s ease;
 $transition-normal: 0.2s ease;
-$transition-colors: background 0.15s, color 0.15s, border 0.15s;
 
-// =========================
-// TYPOGRAPHY
-// =========================
 $font-normal: 400;
 $font-medium: 500;
 $font-semibold: 600;
 $font-bold: 700;
 
-// =========================
-// SPACING
-// =========================
 $spacing-xs: 0.25rem;
 $spacing-sm: 0.5rem;
 $spacing-md: 1rem;
 $spacing-lg: 1.5rem;
-$spacing-xl: 2rem;
 
-// =========================
-// MIXINS
-// =========================
-
-// Responsive breakpoint mixins
 @mixin mobile-only {
   @media (max-width: #{$breakpoint-md - 1px}) {
     @content;
   }
 }
 
-@mixin tablet-up {
-  @media (min-width: #{$breakpoint-md}) {
-    @content;
-  }
-}
-
-@mixin desktop-up {
-  @media (min-width: #{$breakpoint-lg}) {
-    @content;
-  }
-}
-
-@mixin large-desktop-up {
-  @media (min-width: #{$breakpoint-xl}) {
-    @content;
-  }
-}
-
-// Additional responsive mixins for common patterns found in codebase
 @mixin small-mobile-only {
   @media (max-width: #{$breakpoint-sm}) {
-    @content;
-  }
-}
-
-@mixin tablet-only {
-  @media (min-width: #{$breakpoint-md}) and (max-width: #{$breakpoint-lg - 1px}) {
-    @content;
-  }
-}
-
-@mixin below-desktop {
-  @media (max-width: #{$breakpoint-lg - 1px}) {
     @content;
   }
 }
@@ -156,7 +65,6 @@ $spacing-xl: 2rem;
   }
 }
 
-// Custom breakpoints for specific use cases (maintaining existing behavior)
 @mixin below-700px {
   @media (max-width: 700px) {
     @content;
@@ -185,19 +93,6 @@ $spacing-xl: 2rem;
   @media (max-width: 400px) {
     @content;
   }
-}
-
-@mixin above-700px {
-  @media (min-width: 701px) {
-    @content;
-  }
-}
-
-// Common utility mixins
-@mixin flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 @mixin flex-between {

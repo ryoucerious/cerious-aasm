@@ -1,20 +1,24 @@
-import { ArkServerValidationService, ValidationResult, FieldValidation } from './ark-server-validation.service';
-import { HttpClient } from '@angular/common/http';
+import { ArkServerValidationService, ValidationResult } from './ark-server-validation.service';
+import { FieldDefinition, FieldDefinitionsService } from './field-definitions.service';
 import { of } from 'rxjs';
 
 describe('ArkServerValidationService', () => {
+  const validServer = { name: 'Test', sessionName: 'Session', mapName: 'TheIsland_WP' };
+  const definitions: FieldDefinition[] = [
+    { tab: 'General', label: 'Server Name', key: 'name', type: 'string' },
+    { tab: 'General', label: 'Session Name', key: 'sessionName', type: 'string' },
+    { tab: 'General', label: 'Server Map', key: 'mapName', type: 'string', options: [{ value: 'TheIsland_WP', display: 'The Island' }] }
+  ];
   let service: ArkServerValidationService;
-  let httpMock: jasmine.SpyObj<HttpClient>;
 
   beforeEach(() => {
-    httpMock = jasmine.createSpyObj('HttpClient', ['get']);
-    httpMock.get.and.returnValue(of([]));
-    service = new ArkServerValidationService(httpMock);
-    (service as any).fieldDefinitions = [
-      { tab: 'General', label: 'Server Name', key: 'name', type: 'string' },
-      { tab: 'General', label: 'Session Name', key: 'sessionName', type: 'string' },
-      { tab: 'General', label: 'Server Map', key: 'mapName', type: 'string', options: [{ value: 'TheIsland_WP' }] }
-    ];
+    const fieldDefinitions = jasmine.createSpyObj<FieldDefinitionsService>('FieldDefinitionsService', ['getFieldDefinitions']);
+    fieldDefinitions.getFieldDefinitions.and.returnValue(of(definitions));
+    service = new ArkServerValidationService(fieldDefinitions);
+  });
+
+  it('labels errors with the field definitions', () => {
+    expect(service.validateServerName('').error).toBe('Server Name is required');
   });
 
   it('should be created', () => {
@@ -83,9 +87,9 @@ describe('ArkServerValidationService', () => {
   });
 
   it('should invalidate empty server name', () => {
-  const result = service.validateServerName('');
-  expect(result.isValid).toBeFalse();
-  expect(result.error).toContain('is required');
+    const result = service.validateServerName('');
+    expect(result.isValid).toBeFalse();
+    expect(result.error).toContain('is required');
   });
 
   it('should invalidate server name with invalid characters', () => {
@@ -114,10 +118,21 @@ describe('ArkServerValidationService', () => {
   });
 
   it('should invalidate negative multiplier', () => {
-    const server = { xpMultiplier: -1 };
-    const result = service.validateMultipliers(server);
+    const result = service.validateServerConfiguration({ ...validServer, xpMultiplier: -1 });
     expect(result.isValid).toBeFalse();
-    expect(result.error).toContain('cannot be negative');
+    expect(result.errors).toEqual([jasmine.stringContaining('cannot be negative')]);
+  });
+
+  it('reports every multiplier problem, not just the first warning', () => {
+    const result = service.validateServerConfiguration({ ...validServer, xpMultiplier: 200, tamingSpeedMultiplier: -1 });
+    expect(result.isValid).toBeFalse();
+    expect(result.errors).toEqual([jasmine.stringContaining('tamingSpeedMultiplier cannot be negative')]);
+    expect(result.warnings).toEqual([jasmine.stringContaining('xpMultiplier is set to a very high value')]);
+  });
+
+  it('reports a bad multiplier once', () => {
+    const result = service.validateServerConfiguration({ ...validServer, dinoCountMultiplier: -1 });
+    expect(result.errors.length).toBe(1);
   });
 
   it('should invalidate stat array with wrong length', () => {

@@ -1,313 +1,249 @@
+import httpMocks from 'node-mocks-http';
+import { getAuthConfig, legacyLoginFingerprint } from './auth-config';
 import {
-  generateSessionToken,
-  sessionAuth,
-  ensureAuthInitialized,
+  SessionOwner,
   createSession,
   destroySession,
-  isAuthenticated
-} from '../web-server/auth-middleware';
+  generateSessionToken,
+  getLiveSession,
+  isAuthenticated,
+  resolveSessionFromCookieHeader,
+  sessionAuth,
+  sessionTokenFromCookieHeader
+} from './auth-middleware';
+import { SESSION_MAX_AGE_MS, getSession, resetSessionStore, setSession } from '../utils/session-store.utils';
+import { messagingService } from '../services/messaging.service';
 
-// Mock dependencies
-jest.mock('crypto');
-jest.mock('express');
-jest.mock('../utils/session-store.utils');
-jest.mock('../web-server/auth-config');
+jest.mock('./auth-config', () => ({ getAuthConfig: jest.fn(), legacyLoginFingerprint: jest.fn() }));
+jest.mock('../services/messaging.service', () => ({ messagingService: { closeWebSockets: jest.fn() } }));
+jest.mock('../utils/fs.utils');
+jest.mock('../utils/platform.utils', () => ({ getDefaultInstallDir: () => '/install' }));
 
-const mockCrypto = require('crypto');
-const mockExpress = require('express');
-const mockSessionStore = require('../utils/session-store.utils');
-const mockAuthConfig = require('../web-server/auth-config');
-
-// Mock express types
-const mockRequest = () => ({
-  headers: {},
-  path: '/api/test'
+const mockedGetAuthConfig = jest.mocked(getAuthConfig);
+jest.mocked(legacyLoginFingerprint).mockImplementation(() => {
+  const { username, passwordHash } = mockedGetAuthConfig();
+  return `${username}:${passwordHash}`;
 });
 
-const mockResponse = () => ({
-  status: jest.fn().mockReturnThis(),
-  json: jest.fn(),
-  cookie: jest.fn()
-});
+function authEnabled(enabled: boolean) {
+  mockedGetAuthConfig.mockReturnValue({ enabled, username: '', passwordHash: '' });
+}
 
-const mockNext = jest.fn();
+function legacyLogin(username: string, passwordHash: string) {
+  mockedGetAuthConfig.mockReturnValue({ enabled: true, username, passwordHash });
+}
+
+/** A plain-HTTP request; node-mocks-http leaves `secure` unset where Express always has a boolean. */
+function request(options: httpMocks.RequestOptions = {}, secure = false) {
+  const req = httpMocks.createRequest(options);
+  Object.defineProperty(req, 'secure', { value: secure });
+  return req;
+}
+
+/** Signs in (with the current legacy login unless an account is given) and returns the Cookie header a browser would send back. */
+function signIn(owner: SessionOwner = { loginFingerprint: legacyLoginFingerprint() }): string {
+  const res = httpMocks.createResponse();
+  createSession(request(), res, 'jared', owner);
+  return `session=${res.cookies.session.value}`;
+}
 
 describe('auth-middleware', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup default mocks
-    mockAuthConfig.getAuthConfig.mockReturnValue({
-      enabled: false,
-      username: '',
-      passwordHash: ''
-    });
-    mockAuthConfig.isAuthInitialized.mockReturnValue(true);
-    mockSessionStore.hasSession.mockReturnValue(false);
-    mockSessionStore.getSession.mockReturnValue(null);
+    resetSessionStore();
+    authEnabled(true);
   });
 
-  describe('generateSessionToken', () => {
-    it('should generate a secure random token', () => {
-      mockCrypto.randomBytes.mockReturnValue(Buffer.from('testtoken1234567890123456'));
+  afterEach(() => {
+    resetSessionStore();
+  });
 
-      const token = generateSessionToken();
+  describe('sessionTokenFromCookieHeader', () => {
+    it('finds the session cookie among others', () => {
+      expect(sessionTokenFromCookieHeader('theme=dark; session=abc123; lang=en')).toBe('abc123');
+    });
 
-      expect(mockCrypto.randomBytes).toHaveBeenCalledWith(32);
-      expect(token).toBe('74657374746f6b656e31323334353637383930313233343536');
+    it('keeps everything after the first "="', () => {
+      expect(sessionTokenFromCookieHeader('session=abc=def')).toBe('abc=def');
+    });
+
+    it('returns null when there is no session cookie', () => {
+      expect(sessionTokenFromCookieHeader(undefined)).toBeNull();
+      expect(sessionTokenFromCookieHeader('xsession=abc')).toBeNull();
+      expect(sessionTokenFromCookieHeader('session=')).toBeNull();
+    });
+  });
+
+  it('generates a 256-bit hex token', () => {
+    expect(generateSessionToken()).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  describe('createSession', () => {
+    it('stores the account with the session', () => {
+      const cookie = signIn({ id: 'u-1', roleId: 'viewer', permissions: ['servers.view'] });
+
+      expect(resolveSessionFromCookieHeader(cookie)).toMatchObject({
+        username: 'jared', userId: 'u-1', roleId: 'viewer', permissions: ['servers.view']
+      });
+      expect(resolveSessionFromCookieHeader(cookie)?.loginFingerprint).toBeUndefined();
+    });
+
+    it('stamps a legacy session with the fingerprint it is given, not the current login', () => {
+      // The caller checked the password against a snapshot; the login may have changed since.
+      legacyLogin('admin', 'hash-2');
+      const res = httpMocks.createResponse();
+
+      createSession(request(), res, 'jared', { loginFingerprint: 'admin:hash-1' });
+
+      expect(getSession(res.cookies.session.value)).toMatchObject({ username: 'jared', loginFingerprint: 'admin:hash-1' });
+      expect(getSession(res.cookies.session.value)?.userId).toBeUndefined();
+    });
+
+    it('sets an HttpOnly, SameSite=Strict cookie that lasts as long as the session', () => {
+      const res = httpMocks.createResponse();
+      createSession(request(), res, 'jared', { loginFingerprint: 'fp' });
+
+      expect(res.cookies.session.options).toEqual({
+        httpOnly: true, secure: false, sameSite: 'strict', maxAge: SESSION_MAX_AGE_MS
+      });
+    });
+
+    it('marks the cookie Secure when the request came over HTTPS', () => {
+      const res = httpMocks.createResponse();
+
+      createSession(request({}, true), res, 'jared', { loginFingerprint: 'fp' });
+
+      expect(res.cookies.session.options.secure).toBe(true);
     });
   });
 
   describe('sessionAuth', () => {
-    it('should call next() when auth is disabled', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: false });
+    function run(path: string, cookie?: string) {
+      const req = request({ path, headers: cookie ? { cookie } : {} });
+      const res = httpMocks.createResponse();
+      const next = jest.fn();
+      sessionAuth(req, res, next);
+      return { res, next };
+    }
 
-      const req = mockRequest();
-      const res = mockResponse();
+    it('lets everything through while authentication is off', () => {
+      authEnabled(false);
 
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(mockNext).toHaveBeenCalled();
+      expect(run('/anything').next).toHaveBeenCalled();
     });
 
-    it('should call next() for auth endpoints', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
-
-      const req = mockRequest();
-      req.path = '/login';
-      const res = mockResponse();
-
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(mockNext).toHaveBeenCalled();
+    it.each(['/login', '/logout', '/auth-status'])('lets %s through without a session', path => {
+      expect(run(path).next).toHaveBeenCalled();
     });
 
-    it('should return 401 when no session token provided', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
+    it('refuses a request without a session', () => {
+      const { res, next } = run('/anything');
 
-      const req = mockRequest();
-      const res = mockResponse();
-
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({
-        error: 'Authentication required',
-        requiresLogin: true
-      });
-      expect(mockNext).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+      expect(res._getJSONData()).toEqual({ error: 'Authentication required', requiresLogin: true });
     });
 
-    it('should return 401 when session token is invalid', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
-      mockSessionStore.hasSession.mockReturnValue(false);
-
-      const req = mockRequest();
-      req.headers = { cookie: 'session=invalidtoken' };
-      const res = mockResponse();
-
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(mockSessionStore.hasSession).toHaveBeenCalledWith('invalidtoken');
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(mockNext).not.toHaveBeenCalled();
+    it('lets a live session through', () => {
+      expect(run('/anything', signIn()).next).toHaveBeenCalled();
     });
 
-    it('should return 401 when session is expired', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
-      mockSessionStore.hasSession.mockReturnValue(true);
-      mockSessionStore.getSession.mockReturnValue({
-        username: 'testuser',
-        created: new Date(Date.now() - 25 * 60 * 60 * 1000) // 25 hours ago
-      });
+    it('refuses an expired session', () => {
+      const cookie = signIn();
+      jest.spyOn(Date, 'now').mockReturnValue(Date.now() + SESSION_MAX_AGE_MS + 1000);
 
-      const req = mockRequest();
-      req.headers = { cookie: 'session=validtoken' };
-      const res = mockResponse();
+      const { res, next } = run('/anything', cookie);
 
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({
-        error: 'Session expired',
-        requiresLogin: true
-      });
-      expect(mockSessionStore.deleteSession).toHaveBeenCalledWith('validtoken');
-      expect(mockNext).not.toHaveBeenCalled();
-    });
-
-    it('should call next() for valid session', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
-      mockSessionStore.hasSession.mockReturnValue(true);
-      mockSessionStore.getSession.mockReturnValue({
-        username: 'testuser',
-        created: new Date(Date.now() - 1 * 60 * 60 * 1000) // 1 hour ago
-      });
-
-      const req = mockRequest();
-      req.headers = { cookie: 'session=validtoken' };
-      const res = mockResponse();
-
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect((req as any).user).toEqual({ username: 'testuser' });
-      expect(mockNext).toHaveBeenCalled();
-    });
-
-    it('should extract session token from cookie header', () => {
-      mockAuthConfig.getAuthConfig.mockReturnValue({ enabled: true });
-
-      const req = mockRequest();
-      req.headers = { cookie: 'other=value; session=testtoken; another=value' };
-      const res = mockResponse();
-
-      sessionAuth(req as any, res as any, mockNext);
-
-      expect(mockSessionStore.hasSession).toHaveBeenCalledWith('testtoken');
-    });
-  });
-
-  describe('ensureAuthInitialized', () => {
-    it('should call next() when auth is already initialized', async () => {
-      mockAuthConfig.isAuthInitialized.mockReturnValue(true);
-
-      const req = mockRequest();
-      const res = mockResponse();
-
-      await ensureAuthInitialized(req as any, res as any, mockNext);
-
-      expect(mockNext).toHaveBeenCalled();
-    });
-
-    it('should wait for auth initialization', async () => {
-      mockAuthConfig.isAuthInitialized
-        .mockReturnValueOnce(false)
-        .mockReturnValueOnce(false)
-        .mockReturnValueOnce(true);
-
-      jest.useFakeTimers();
-      const req = mockRequest();
-      const res = mockResponse();
-
-      const promise = ensureAuthInitialized(req as any, res as any, mockNext);
-
-      // Run all pending timers and microtasks
-      await Promise.resolve();
-      if (jest.runAllTimersAsync) {
-        await jest.runAllTimersAsync();
-      } else {
-        jest.runAllTimers();
-        await Promise.resolve();
-      }
-      await promise;
-
-      expect(mockNext).toHaveBeenCalled();
-
-      jest.useRealTimers();
-    });
-  });
-
-  describe('createSession', () => {
-    it('should create and set a session cookie', () => {
-      mockCrypto.randomBytes.mockReturnValue(Buffer.from('testtoken1234567890123456'));
-
-      const res = mockResponse();
-
-      createSession(res as any, 'testuser');
-
-      expect(mockSessionStore.setSession).toHaveBeenCalled();
-      const [token, sessionData] = mockSessionStore.setSession.mock.calls[0];
-      expect(token).toBe('74657374746f6b656e31323334353637383930313233343536');
-      expect(sessionData.username).toBe('testuser');
-      expect(sessionData.created).toBeInstanceOf(Date);
-
-      expect(res.cookie).toHaveBeenCalledWith(
-        'session',
-        '74657374746f6b656e31323334353637383930313233343536',
-        {
-          httpOnly: true,
-          secure: false,
-          sameSite: 'strict',
-          maxAge: 24 * 60 * 60 * 1000
-        }
-      );
-    });
-  });
-
-  describe('destroySession', () => {
-    it('should delete session and clear cookie', () => {
-      const req = mockRequest();
-      req.headers = { cookie: 'session=testtoken' };
-      const res = mockResponse();
-
-      destroySession(req as any, res as any);
-
-      expect(mockSessionStore.deleteSession).toHaveBeenCalledWith('testtoken');
-      expect(res.cookie).toHaveBeenCalled();
-      const cookieCall = res.cookie.mock.calls.find(call => call[0] === 'session');
-      expect(cookieCall).toBeDefined();
-      expect(cookieCall[1]).toBe('');
-      expect(cookieCall[2].httpOnly).toBe(true);
-      expect(cookieCall[2].secure).toBe(false);
-      expect(cookieCall[2].sameSite).toBe('strict');
-      expect(cookieCall[2].path).toBe('/');
-      expect(cookieCall[2].expires).toBeInstanceOf(Date);
-    });
-
-    it('should handle missing session token', () => {
-      const req = mockRequest();
-      const res = mockResponse();
-
-      destroySession(req as any, res as any);
-
-      expect(mockSessionStore.deleteSession).not.toHaveBeenCalled();
-      expect(res.cookie).toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
     });
   });
 
   describe('isAuthenticated', () => {
-    it('should return true for valid session', () => {
-      mockSessionStore.hasSession.mockReturnValue(true);
-
-      const req = mockRequest();
-      req.headers = { cookie: 'session=validtoken' };
-
-      const result = isAuthenticated(req as any);
-
-      expect(result).toBe(true);
-      expect(mockSessionStore.hasSession).toHaveBeenCalledWith('validtoken');
+    it('is true for a live session', () => {
+      expect(isAuthenticated(request({ headers: { cookie: signIn() } }))).toBe(true);
     });
 
-    it('should return false for invalid session', () => {
-      mockSessionStore.hasSession.mockReturnValue(false);
-
-      const req = mockRequest();
-      req.headers = { cookie: 'session=invalidtoken' };
-
-      const result = isAuthenticated(req as any);
-
-      expect(result).toBe(false);
+    it('is false without a session cookie', () => {
+      expect(isAuthenticated(request())).toBe(false);
     });
 
-    it('should return false when no session cookie', () => {
-      const req = mockRequest();
+    it('is false once the session has expired', () => {
+      const cookie = signIn();
+      jest.spyOn(Date, 'now').mockReturnValue(Date.now() + SESSION_MAX_AGE_MS + 1000);
 
-      const result = isAuthenticated(req as any);
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(false);
+    });
+  });
 
-      expect(result).toBe(false);
-      expect(mockSessionStore.hasSession).not.toHaveBeenCalled();
+  describe('getLiveSession', () => {
+    const cookieFor = (token: string) => `session=${token}`;
+
+    it('signs a legacy session out once its login changes, and for good', () => {
+      legacyLogin('admin', 'hash-1');
+      const cookie = signIn();
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(true);
+
+      legacyLogin('admin', 'hash-2');
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(false);
+
+      legacyLogin('admin', 'hash-1');
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(false);
+      expect(getSession(sessionTokenFromCookieHeader(cookie)!)).toBeUndefined();
     });
 
-    it('should extract session token from complex cookie header', () => {
-      mockSessionStore.hasSession.mockReturnValue(true);
+    it('signs a legacy session out when the username changes', () => {
+      legacyLogin('admin', 'hash-1');
+      const cookie = signIn();
 
-      const req = mockRequest();
-      req.headers = { cookie: 'other=value; session=complex; another=value' };
+      legacyLogin('owner', 'hash-1');
 
-      const result = isAuthenticated(req as any);
+      expect(resolveSessionFromCookieHeader(cookie)).toBeNull();
+    });
 
-      expect(result).toBe(true);
-      expect(mockSessionStore.hasSession).toHaveBeenCalledWith('complex');
+    it('keeps account sessions when the legacy login changes', () => {
+      legacyLogin('admin', 'hash-1');
+      const cookie = signIn({ id: 'u-1', roleId: 'viewer', permissions: ['servers.view'] });
+
+      legacyLogin('admin', 'hash-2');
+
+      expect(resolveSessionFromCookieHeader(cookie)).toMatchObject({ userId: 'u-1' });
+    });
+
+    it('treats a legacy session saved without a fingerprint as missing', () => {
+      // Saved by a version that did not stamp sessions; nothing says which login made it.
+      const token = 'ab'.repeat(32);
+      setSession(token, { username: 'admin', created: new Date() });
+
+      expect(getLiveSession(token)).toBeUndefined();
+      expect(resolveSessionFromCookieHeader(cookieFor(token))).toBeNull();
+    });
+  });
+
+  describe('destroySession', () => {
+    it('deletes the session and expires the cookie', () => {
+      const cookie = signIn();
+      const token = sessionTokenFromCookieHeader(cookie)!;
+      const res = httpMocks.createResponse();
+
+      destroySession(request({ headers: { cookie } }), res);
+
+      expect(getSession(token)).toBeUndefined();
+      const [code, reason, matches] = jest.mocked(messagingService.closeWebSockets).mock.calls[0];
+      expect([code, reason]).toEqual([4401, 'Signed out']);
+      expect(matches!({ _sessionToken: token, readyState: 1, send: jest.fn(), close: jest.fn() })).toBe(true);
+      expect(matches!({ _sessionToken: 'other', readyState: 1, send: jest.fn(), close: jest.fn() })).toBe(false);
+      expect(res.cookies.session.value).toBe('');
+      expect(res.cookies.session.options).toEqual({
+        httpOnly: true, secure: false, sameSite: 'strict', path: '/', expires: new Date(0)
+      });
+    });
+
+    it('still clears the cookie when there is no session', () => {
+      const res = httpMocks.createResponse();
+
+      destroySession(request(), res);
+
+      expect(res.cookies.session.value).toBe('');
     });
   });
 });

@@ -26,12 +26,11 @@
             "assets": [
               {
                 "glob": "**/*",
-                "input": "public"
-              },
-              {
-                "glob": "**/*",
                 "input": "src/assets",
-                "output": "assets/"
+                "output": "assets/",
+                "ignore": [
+                  "**/*.md"
+                ]
               }
             ],
             "styles": [
@@ -88,9 +87,6 @@
           },
           "defaultConfiguration": "development"
         },
-        "extract-i18n": {
-          "builder": "@angular/build:extract-i18n"
-        },
         "test": {
           "builder": "@angular/build:karma",
           "options": {
@@ -100,12 +96,6 @@
             ],
             "tsConfig": "tsconfig.spec.json",
             "inlineStyleLanguage": "scss",
-            "assets": [
-              {
-                "glob": "**/*",
-                "input": "public"
-              }
-            ],
             "styles": [
               "node_modules/ngx-toastr/toastr.css",
               "src/styles.scss"

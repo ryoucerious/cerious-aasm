@@ -33,6 +33,7 @@ jest.mock('electron', () => ({
     getPath: jest.fn(() => '/mock/userData'),
   },
 }));
+jest.mock('os', () => ({ homedir: jest.fn(() => '/home/user') }));
 
 describe('logger', () => {
   it('should export getLogFilePath function', () => {
@@ -59,5 +60,47 @@ describe('logger', () => {
   it('should configure file transport settings', () => {
     const log = require('electron-log').default;
     expect(log.transports.file.level).toBe('debug');
+  });
+
+  describe('log file path', () => {
+    const originalPlatform = process.platform;
+    const originalEnv = { APPDATA: process.env.APPDATA, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    let resolvePath: () => string;
+    let getPath: jest.Mock;
+
+    beforeEach(() => {
+      require('./logger');
+      resolvePath = require('electron-log').default.transports.file.resolvePathFn;
+      getPath = require('electron').app.getPath;
+      getPath.mockReturnValue('/mock/userData');
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+      for (const [name, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+
+    it("is in the logs folder of Electron's user data", () => {
+      expect(resolvePath()).toBe('/mock/userData/logs/cerious-aasm.log');
+      expect(getPath).toHaveBeenCalledWith('userData');
+    });
+
+    // Electron names the user data folder after package.json's name, not the product name.
+    it.each([
+      ['win32', { APPDATA: 'C:/Users/user/AppData/Roaming' }, 'C:/Users/user/AppData/Roaming/cerious-aasm/logs/cerious-aasm.log'],
+      ['linux', { XDG_CONFIG_HOME: '/home/user/.xdg' }, '/home/user/.xdg/cerious-aasm/logs/cerious-aasm.log'],
+      ['linux', {}, '/home/user/.config/cerious-aasm/logs/cerious-aasm.log']
+    ])('falls back to the same folder on %s when Electron cannot say (%p)', (platform, env, expected) => {
+      Object.defineProperty(process, 'platform', { value: platform });
+      delete process.env.APPDATA;
+      delete process.env.XDG_CONFIG_HOME;
+      Object.assign(process.env, env);
+      getPath.mockImplementation(() => { throw new Error('app not ready'); });
+
+      expect(resolvePath()).toBe(expected);
+    });
   });
 });

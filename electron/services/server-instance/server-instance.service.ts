@@ -1,121 +1,36 @@
-import { execSync } from 'child_process';
-
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as instanceUtils from '../../utils/ark/instance.utils';
 import { validateInstanceId } from '../../utils/validation.utils';
+import type { DeleteInstanceResult, ImportBackupResult, ServerInstanceResult, StartServerResult } from '../../types/server-instance.types';
 import { automationService } from '../automation/automation.service';
-import { getPlatform } from '../../utils/platform.utils';
-import {
-  ServerInstanceResult,
-  StartServerResult,
-  ImportBackupResult
-} from '../../types/server-instance.types';
-
-// Import specialized services
+import { messagingService } from '../messaging.service';
 import { serverLifecycleService } from './server-lifecycle.service';
-import { serverMonitoringService } from './server-monitoring.service';
 import { serverManagementService } from './server-management.service';
+import { serverProcessService } from './server-process.service';
 
-/**
- * Server Instance Service - Main orchestrator for server instance management operations
- * Delegates to specialized services for different concerns
- */
 export class ServerInstanceService {
-
-  /**
-   * Returns the standard event callbacks for server start (log, state, rcon, player polling)
-   */
-  getStandardEventCallbacks(instanceId: string) {
-    const messagingService = require('../messaging.service').messagingService;
-    return {
-      onLog: (log: string) => messagingService.sendToAll('server-instance-log', { log, instanceId }),
-      onState: async (state: string) => {
-        messagingService.sendToAll('server-instance-state', { state, instanceId });
-        // Only broadcast full instance list for meaningful state changes, not during deletion
-        if (state === 'running' || state === 'stopped' || state === 'crashed') {
-          setTimeout(async () => {
-            try {
-              const allInstances = await serverManagementService.getAllInstances();
-              if (allInstances.instances.length > 0) {
-                messagingService.sendToAll('server-instances', allInstances.instances);
-              }
-            } catch (err) {
-              console.error('[server-instance-service] Error broadcasting instances after state change:', err);
-            }
-          }, 100);
-        }
-        // Handle state change for polling
-        if (state === 'running') {
-          serverMonitoringService.startMemoryPolling(instanceId, (instanceId: string, memory: number) => {
-            messagingService.sendToAll('server-instance-memory', { instanceId, memory });
-          });
-          serverMonitoringService.startPlayerPolling(instanceId, (instanceId: string, count: number) => {
-            // The renderer reads `players`; `count` is kept for anything already listening to it.
-            messagingService.sendToAll('server-instance-players', { instanceId, players: count, count });
-          });
-          serverMonitoringService.startCpuPolling(instanceId, (instanceId: string, cpu: number) => {
-            messagingService.sendToAll('server-instance-cpu', { instanceId, cpu });
-          });
-          
-          // Establish RCON connection when server is running
-          setTimeout(async () => {
-            try {
-              const result = await require('./server-operations.service').serverOperationsService.connectRcon(instanceId);
-              messagingService.sendToAll('rcon-status', {
-                instanceId,
-                connected: result.connected || false
-              });
-              if (!result.success || !result.connected) {
-                console.error(`[server-instance-service] Failed to establish RCON connection for instance ${instanceId}:`, result.error);
-              }
-            } catch (error) {
-              console.error(`[server-instance-service] Error establishing RCON connection for instance ${instanceId}:`, error);
-              messagingService.sendToAll('rcon-status', {
-                instanceId,
-                connected: false
-              });
-            }
-          }, 2000); // Wait 2 seconds for server to be fully ready
-        } else {
-          serverMonitoringService.stopMemoryPolling(instanceId);
-          serverMonitoringService.stopPlayerPolling(instanceId);
-          serverMonitoringService.stopCpuPolling(instanceId);
-        }
-      }
-    };
-  }
-
-  /**
-   * Start a server instance with event callbacks for monitoring
-   * @param instanceId - The unique identifier of the server instance to start
-   * @param onLog - Callback function invoked for each log message from the server process
-   * @param onStateChange - Callback function invoked when the server state changes (starting, running, stopped, etc.)
-   * @returns Promise resolving to a StartServerResult indicating success/failure and any port conflicts
-   */
-  async startServerInstance(instanceId: string, onLog: (log: string) => void, onStateChange: (state: string) => void): Promise<StartServerResult> {
+  /** Starts an instance. Never rejects: a failure, a busy port included, comes back as `portError`. */
+  async startServerInstance(
+    instanceId: string,
+    onLog: (line: string) => void,
+    onState: (state: string) => void
+  ): Promise<StartServerResult> {
     try {
-      const result = await serverLifecycleService.startArkServerInstance(instanceId, onLog, onStateChange);
-      
-      if (result.started) {
-        // Immediately broadcast the starting state
-        const messagingService = require('../messaging.service').messagingService;
+      const instance = instanceUtils.getInstance(instanceId);
+      if (!instance) {
+        return { started: false, portError: 'Instance not found', instanceId };
+      }
+
+      const result = await serverLifecycleService.startServerInstance(instanceId, instance, onLog, onState);
+      if (result.success) {
         messagingService.sendToAll('server-instance-state', { state: 'starting', instanceId });
-        
-        // Notify automation service that server was manually started
         automationService.setManuallyStopped(instanceId, false);
       }
-
-      // Get instance name for notifications
-      const instance = await instanceUtils.getInstance(instanceId);
-      const instanceName = instance?.name || instanceId;
-
-      return {
-        started: result.started,
-        portError: result.portError,
-        instanceId,
-        instanceName
-      };
+      return { started: result.success, portError: result.error, instanceId, instanceName: instance.name || instanceId };
     } catch (error) {
-      console.error('[server-instance-service] Failed to start server instance:', error);
+      console.error(`[server-instance] Failed to start ${instanceId}:`, error);
       return {
         started: false,
         portError: error instanceof Error ? error.message : 'Failed to start server',
@@ -125,109 +40,93 @@ export class ServerInstanceService {
   }
 
   /**
-   * Import a server instance from a backup file, creating a new instance with the backup data
-   * @param serverName - The name to assign to the newly imported server instance
-   * @param backupFilePath - Optional file system path to the backup file for direct file access
-   * @param fileData - Optional base64 encoded backup file data for web uploads
-   * @param fileName - Optional original filename of the backup for metadata purposes
-   * @returns Promise resolving to an ImportBackupResult with the new instance details or error information
+   * Creates a new instance from a backup: uploaded base64 contents, or a path on this machine,
+   * which only the desktop window may give (a web user could otherwise have any zip on the host read).
    */
-  async importServerFromBackup(serverName: string, backupFilePath?: string, fileData?: string, fileName?: string): Promise<ImportBackupResult> {
+  async importServerFromBackup(
+    serverName: string,
+    backup: { filePath?: string; fileData?: string },
+    fromDesktopWindow: boolean
+  ): Promise<ImportBackupResult> {
     try {
-      if (!serverName || (!backupFilePath && !fileData)) {
-        return {
-          success: false,
-          error: 'Server name and backup file (path or data) are required'
-        };
+      const fileData = nonEmptyText(backup.fileData);
+      const filePath = nonEmptyText(backup.filePath);
+      if (serverName && fileData) {
+        return await this.importUpload(serverName, fileData);
       }
-
-      let actualFilePath = backupFilePath;
-
-      // If we received file data (browser environment), save it to a temporary file
-      if (fileData && fileName) {
-        const fs = await import('fs');
-        const path = await import('path');
-        const os = await import('os');
-
-        try {
-          // Create temporary file
-          const tempDir = os.tmpdir();
-          const tempFileName = `import_${Date.now()}_${fileName}`;
-          actualFilePath = path.join(tempDir, tempFileName);
-
-          // Convert base64 to buffer and save
-          const buffer = Buffer.from(fileData, 'base64');
-          fs.writeFileSync(actualFilePath, buffer);
-        } catch (error) {
-          console.error('[server-instance-service] Failed to save uploaded file:', error);
-          return {
-            success: false,
-            error: 'Failed to save uploaded backup file'
-          };
-        }
+      if (!serverName || !filePath) {
+        return { success: false, error: 'Server name and backup file (path or data) are required' };
       }
-
-      // Import the backup as a new server using management service
-      if (!actualFilePath) {
-        return {
-          success: false,
-          error: 'No backup file path available'
-        };
+      if (!fromDesktopWindow) {
+        return { success: false, error: 'Only the desktop app can import a backup by path. Upload the file instead.' };
       }
-      
-      const result = await serverManagementService.importFromBackup(actualFilePath, serverName);
-
-      // Clean up temporary file if we created one
-      if (fileData && actualFilePath !== backupFilePath) {
-        const fs = await import('fs');
-        try {
-          fs.unlinkSync(actualFilePath);
-        } catch (cleanupError) {
-          console.warn('[server-instance-service] Failed to cleanup temporary file:', cleanupError);
-        }
-      }
-
-      return result;
-    } catch (error: any) {
-      console.error('[server-instance-service] Failed to import server from backup:', error);
+      return await serverManagementService.importFromBackup(filePath, serverName);
+    } catch (error) {
+      console.error('[server-instance] Failed to import server from backup:', error);
       return {
         success: false,
-        error: error.message || 'Failed to import server from backup'
+        error: error instanceof Error && error.message ? error.message : 'Failed to import server from backup'
       };
     }
   }
 
-  // ========== PUBLIC SERVICE METHODS ==========
+  // The client's file name is never part of the path: the upload goes to a fixed name in a
+  // directory only this process knows, removed afterwards whatever happens.
+  private async importUpload(serverName: string, fileData: string): Promise<ImportBackupResult> {
+    let tempDir: string | undefined;
+    try {
+      let archivePath: string;
+      try {
+        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-import-'));
+        archivePath = path.join(tempDir, 'backup.zip');
+        fs.writeFileSync(archivePath, Buffer.from(fileData, 'base64'));
+      } catch (error) {
+        console.error('[server-instance] Failed to save the uploaded backup:', error);
+        return { success: false, error: 'Failed to save uploaded backup file' };
+      }
+      return await serverManagementService.importFromBackup(archivePath, serverName);
+    } finally {
+      if (tempDir) {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (error) {
+          console.warn('[server-instance] Failed to remove the uploaded backup:', error);
+        }
+      }
+    }
+  }
 
-  /**
-   * Forcefully stop a running server instance, terminating the process if necessary
-   * @param instanceId - The unique identifier of the server instance to force stop
-   * @returns Promise resolving to a ServerInstanceResult indicating success/failure of the stop operation
-   */
+  /** Deletes an instance, stopping its server and everything that runs on a timer for it first. */
+  async deleteInstance(instanceId: string): Promise<DeleteInstanceResult> {
+    // First, as the stop can take minutes: crash detection or a scheduled restart could otherwise
+    // start the server again meanwhile.
+    automationService.forgetInstance(instanceId);
+    const result = await serverManagementService.deleteInstance(instanceId);
+    if (!result.success) {
+      automationService.restoreInstance(instanceId);
+    }
+    return result;
+  }
+
+  /** Sends the full instance list, with live state, to every client on 'server-instances'. */
+  async broadcastInstances(): Promise<void> {
+    const { instances } = await serverManagementService.getAllInstances();
+    messagingService.sendToAll('server-instances', instances);
+  }
+
+  /** Kills the server's process tree at once, with no save. */
   async forceStopInstance(instanceId: string): Promise<ServerInstanceResult> {
     try {
       if (!validateInstanceId(instanceId)) {
-        return {
-          success: false,
-          error: 'Invalid instance ID'
-        };
+        return { success: false, error: 'Invalid instance ID' };
       }
 
-      // Full force-kill: RCON disconnect, process tree kill, clear tracking, broadcast stopped
-      await require('./server-process.service').serverProcessService.forceKillServerProcess(instanceId);
+      await serverProcessService.forceKillServerProcess(instanceId);
 
-      // Get instance details for notification
-      const instance = await instanceUtils.getInstance(instanceId);
-      const instanceName = instance?.name || instanceId;
-
-      return {
-        success: true,
-        instanceId,
-        instanceName,
-        shouldNotifyAutomation: true
-      };
+      const instanceName = instanceUtils.getInstance(instanceId)?.name || instanceId;
+      return { success: true, instanceId, instanceName, shouldNotifyAutomation: true };
     } catch (error) {
-      console.error('[server-instance-service] Failed to force stop instance:', error);
+      console.error(`[server-instance] Failed to force stop ${instanceId}:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to force stop server',
@@ -235,63 +134,10 @@ export class ServerInstanceService {
       };
     }
   }
-
-  /**
-   * Cleanup orphaned ARK processes on startup (moved from ark-server-utils.ts)
-   * This is more aggressive than the normal cleanup and should be called on app startup
-   */
-  cleanupOrphanedArkProcesses(): void {    
-    if (getPlatform() === 'linux') {
-      try {      
-        // Kill any ARK server processes
-        try {
-          execSync('pkill -f ArkAscendedServer', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-        
-        // Kill any Proton processes running ARK
-        try {
-          execSync('pkill -f "proton.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-        
-        // Kill any xvfb processes that might be stuck
-        try {
-          execSync('pkill -f "Xvfb.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-        
-        // Kill any wine processes that might be related to ARK (if somehow still present)
-        try {
-          execSync('pkill -f "wine.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-      } catch (e) {
-        console.error('[server-instance-service] Orphaned process cleanup failed:', e);
-      }
-    } else {
-      // On Windows, use taskkill for orphaned processes
-      try {
-        try {
-          execSync('taskkill /F /IM AsaApiLoader.exe', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-        try {
-          execSync('taskkill /F /IM ArkAscendedServer.exe', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-      } catch (e) {
-        console.error('[server-instance-service] Windows orphaned process cleanup failed:', e);
-      }
-    }
-  }
 }
 
-// Export singleton instance
 export const serverInstanceService = new ServerInstanceService();
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}

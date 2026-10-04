@@ -5,7 +5,7 @@ import { AuthService } from '../../../core/services/auth.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ModalComponent } from '../../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../../components/dropdown/dropdown.component';
-import { Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID } from '../../../core/models/auth.model';
+import { Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID, MIN_PASSWORD_LENGTH } from '../../../core/models/auth.model';
 
 interface PermissionGroup {
   name: string;
@@ -27,6 +27,7 @@ interface PermissionGroup {
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class UsersSettingsComponent implements OnInit {
+  readonly minPasswordLength = MIN_PASSWORD_LENGTH;
   view: 'users' | 'roles' = 'users';
   loading = true;
 
@@ -36,28 +37,23 @@ export class UsersSettingsComponent implements OnInit {
   /**
    * Derived once per load rather than per change detection pass. As getters these rebuilt
    * their *ngFor rows constantly, which stopped the checkboxes and dropdown from being
-   * clickable — see the note in settings.component.ts.
+   * clickable (see the note in settings.component.ts).
    */
   permissionGroups: PermissionGroup[] = [];
   roleOptions: DropdownOption<string>[] = [];
 
-  // User editor
   showUserModal = false;
   editingUser: User | null = null;
   form = { username: '', displayName: '', password: '', roleId: '', active: true };
   saving = false;
 
-  // Role editor
   showRoleModal = false;
   editingRole: Role | null = null;
   roleForm: { name: string; description: string; permissions: Set<Permission> } =
     { name: '', description: '', permissions: new Set<Permission>() };
 
-  // Deletion
   userToDelete: User | null = null;
   roleToDelete: Role | null = null;
-
-  // Change own password
 
   constructor(
     private auth: AuthService,
@@ -68,8 +64,6 @@ export class UsersSettingsComponent implements OnInit {
   ngOnInit(): void {
     this.reload();
   }
-
-  // -------------------- Loading --------------------
 
   async reload(): Promise<void> {
     this.loading = true;
@@ -84,14 +78,13 @@ export class UsersSettingsComponent implements OnInit {
       this.permissionCatalog = roleInfo.permissions;
       this.roleOptions = this.roles.map(role => ({ value: role.id, label: role.name }));
       this.permissionGroups = this.buildPermissionGroups();
+    } catch (error) {
+      console.error('[users-settings] Could not load the accounts:', error);
+      this.notification.error('Could not load the accounts.', 'Accounts');
     } finally {
       this.loading = false;
       this.cdr.markForCheck();
     }
-  }
-
-  get isDesktop(): boolean {
-    return this.auth.identity.isLocalDesktop;
   }
 
   get currentUserId(): string | null {
@@ -128,8 +121,6 @@ export class UsersSettingsComponent implements OnInit {
     return item.id;
   }
 
-  // -------------------- Users --------------------
-
   openCreateUser(): void {
     this.editingUser = null;
     this.form = {
@@ -165,7 +156,8 @@ export class UsersSettingsComponent implements OnInit {
   get canSaveUser(): boolean {
     if (this.saving || !this.form.username.trim() || !this.form.roleId) return false;
     // A new account needs a password; an existing one only when changing it.
-    return this.editingUser ? true : this.form.password.length >= 8;
+    if (this.editingUser && !this.form.password) return true;
+    return this.form.password.length >= MIN_PASSWORD_LENGTH;
   }
 
   async saveUser(): Promise<void> {
@@ -219,8 +211,6 @@ export class UsersSettingsComponent implements OnInit {
       this.cdr.markForCheck();
     }
   }
-
-  // -------------------- Roles --------------------
 
   openCreateRole(): void {
     this.editingRole = null;

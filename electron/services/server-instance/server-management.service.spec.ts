@@ -1,628 +1,348 @@
-import { serverManagementService } from './server-management.service';
-
-// Mock all dependencies
-jest.mock('../../utils/validation.utils');
-jest.mock('../../utils/ark/instance.utils');
-jest.mock('../backup/backup.service');
-jest.mock('../../utils/crypto.utils');
-jest.mock('./server-process.service');
-jest.mock('./server-monitoring.service');
-jest.mock('./server-lifecycle.service');
-jest.mock('../../utils/ark/ark-server/ark-server-state.utils');
-jest.mock('../../utils/platform.utils');
-jest.mock('path');
-jest.mock('fs');
-jest.mock('../scheduler.service', () => ({
-  schedulerService: {
-    initSchedule: jest.fn(() => Promise.resolve()),
-    initAllSchedules: jest.fn(() => Promise.resolve()),
+jest.mock('../../utils/ark/instance.utils', () => ({
+  getAllInstances: jest.fn(),
+  getInstance: jest.fn(),
+  saveInstance: jest.fn(),
+  deleteInstance: jest.fn(),
+  getInstanceDir: jest.fn((id: string) => `/instances/${id}`)
+}));
+jest.mock('../../utils/crypto.utils', () => ({ generateRandomPassword: jest.fn(() => 'generated_password') }));
+jest.mock('../../utils/platform.utils', () => ({ getProcessMemoryUsage: jest.fn() }));
+jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({
+  getArkServerDir: jest.fn(() => '/ark'),
+  getInstanceRuntimeRoot: jest.fn((id: string) => `/instances/${id}`)
+}));
+jest.mock('../../utils/ark/ark-server/ark-server-isolation.utils', () => ({
+  linkInstanceSaveDir: jest.fn(async () => false),
+  linkSharedShooterGameSubdirs: jest.fn(async () => []),
+  linkSharedWin64Subdirs: jest.fn(async () => [])
+}));
+jest.mock('../ark-config.service', () => ({ arkConfigService: { writeArkConfigFiles: jest.fn() } }));
+jest.mock('../backup/backup.service', () => ({
+  backupService: {
+    importBackupAsNewServer: jest.fn(),
+    stopBackupScheduler: jest.fn(),
+    startBackupScheduler: jest.fn(async () => ({ success: true })),
+    waitForBackupOperations: jest.fn(async () => undefined)
+  }
+}));
+jest.mock('../scheduler.service', () => ({ schedulerService: { initSchedule: jest.fn(async () => undefined), stopScheduler: jest.fn() } }));
+jest.mock('../whitelist.service', () => ({
+  whitelistService: { writeWhitelistFile: jest.fn(() => ({ success: true })), copyWhitelistToMainDir: jest.fn(() => ({ success: true })) }
+}));
+jest.mock('./server-process.service', () => ({
+  serverProcessService: {
+    getNormalizedInstanceState: jest.fn(),
+    getServerProcess: jest.fn(),
+    getProcessStartTime: jest.fn(),
+    stopServerProcess: jest.fn()
+  }
+}));
+jest.mock('./server-monitoring.service', () => ({
+  serverMonitoringService: {
+    getLatestPlayerCount: jest.fn(),
+    getLatestCpuPercent: jest.fn(),
+    stopPlayerPolling: jest.fn(),
+    stopMemoryPolling: jest.fn(),
+    stopCpuPolling: jest.fn()
   }
 }));
 
+import * as fs from 'fs';
+import * as instanceUtils from '../../utils/ark/instance.utils';
+import { generateRandomPassword } from '../../utils/crypto.utils';
+import { getProcessMemoryUsage } from '../../utils/platform.utils';
+import { linkInstanceSaveDir } from '../../utils/ark/ark-server/ark-server-isolation.utils';
+import { arkConfigService } from '../ark-config.service';
+import { backupService } from '../backup/backup.service';
+import { schedulerService } from '../scheduler.service';
+import { whitelistService } from '../whitelist.service';
+import { serverProcessService } from './server-process.service';
+import { serverMonitoringService } from './server-monitoring.service';
+import { serverManagementService } from './server-management.service';
+import type { InstanceConfig } from '../../types/server-instance.types';
+
+const mockInstanceUtils = jest.mocked(instanceUtils);
+const mockProcess = jest.mocked(serverProcessService);
+const mockMonitoring = jest.mocked(serverMonitoringService);
+
 describe('ServerManagementService', () => {
-  let validateInstanceIdMock: any;
-  let validateServerNameMock: any;
-  let validatePortMock: any;
-  let instanceUtilsMock: any;
-  let backupServiceMock: any;
-  let generateRandomPasswordMock: any;
-  let serverProcessServiceMock: any;
-  let serverMonitoringServiceMock: any;
-  let serverLifecycleServiceMock: any;
-  let getNormalizedInstanceStateMock: any;
-  let getProcessMemoryUsageMock: any;
-  let pathMock: any;
-  let fsMock: any;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup mocks
-    validateInstanceIdMock = jest.fn();
-    validateServerNameMock = jest.fn();
-    validatePortMock = jest.fn();
-    jest.mocked(require('../../utils/validation.utils')).validateInstanceId = validateInstanceIdMock;
-    jest.mocked(require('../../utils/validation.utils')).validateServerName = validateServerNameMock;
-    jest.mocked(require('../../utils/validation.utils')).validatePort = validatePortMock;
-
-    instanceUtilsMock = {
-      getAllInstances: jest.fn(),
-      getInstance: jest.fn(),
-      saveInstance: jest.fn(),
-      deleteInstance: jest.fn(),
-      getInstancesBaseDir: jest.fn()
-    };
-    jest.mocked(require('../../utils/ark/instance.utils')).getAllInstances = instanceUtilsMock.getAllInstances;
-    jest.mocked(require('../../utils/ark/instance.utils')).getInstance = instanceUtilsMock.getInstance;
-    jest.mocked(require('../../utils/ark/instance.utils')).saveInstance = instanceUtilsMock.saveInstance;
-    jest.mocked(require('../../utils/ark/instance.utils')).deleteInstance = instanceUtilsMock.deleteInstance;
-    jest.mocked(require('../../utils/ark/instance.utils')).getInstancesBaseDir = instanceUtilsMock.getInstancesBaseDir;
-
-    backupServiceMock = {
-      importBackupAsNewServer: jest.fn()
-    };
-    jest.mocked(require('../backup/backup.service')).backupService = backupServiceMock;
-
-    generateRandomPasswordMock = jest.fn();
-    jest.mocked(require('../../utils/crypto.utils')).generateRandomPassword = generateRandomPasswordMock;
-
-    serverProcessServiceMock = {
-      getServerProcess: jest.fn(),
-      getNormalizedInstanceState: jest.fn(),
-      getProcessStartTime: jest.fn(),
-      stopServerInstance: jest.fn()
-    };
-  jest.mocked(require('./server-process.service')).serverProcessService = serverProcessServiceMock;
-
-    serverMonitoringServiceMock = {
-      getLatestPlayerCount: jest.fn(),
-      getLatestCpuPercent: jest.fn(),
-      stopPlayerPolling: jest.fn(),
-      stopMemoryPolling: jest.fn()
-    };
-    jest.mocked(require('./server-monitoring.service')).serverMonitoringService = serverMonitoringServiceMock;
-
-    serverLifecycleServiceMock = {
-      stopServerInstance: jest.fn(),
-      getNormalizedInstanceState: jest.fn()
-    };
-    jest.mocked(require('./server-lifecycle.service')).serverLifecycleService = serverLifecycleServiceMock;
-
-    getNormalizedInstanceStateMock = jest.fn();
-    jest.mocked(require('../../utils/ark/ark-server/ark-server-state.utils')).getNormalizedInstanceState = getNormalizedInstanceStateMock;
-
-    getProcessMemoryUsageMock = jest.fn();
-    jest.mocked(require('../../utils/platform.utils')).getProcessMemoryUsage = getProcessMemoryUsageMock;
-
-    pathMock = {
-      join: jest.fn()
-    };
-    jest.mocked(require('path')).join = pathMock.join;
-
-    fsMock = {
-      writeFileSync: jest.fn()
-    };
-    jest.mocked(require('fs')).writeFileSync = fsMock.writeFileSync;
-  });
-
   describe('getAllInstances', () => {
-    it('should get all instances with enhanced data', async () => {
-      const instances = [
-        { id: 'instance1', name: 'Server 1' },
-        { id: 'instance2', name: 'Server 2' }
-      ];
+    it('adds the live state, memory, CPU, uptime and players', async () => {
+      mockInstanceUtils.getAllInstances.mockResolvedValue([{ id: 'a1', name: 'Alpha' }]);
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+      mockProcess.getServerProcess.mockReturnValue({ pid: 123 } as never);
+      mockProcess.getProcessStartTime.mockReturnValue(1700000000000);
+      jest.mocked(getProcessMemoryUsage).mockResolvedValue(512);
+      mockMonitoring.getLatestCpuPercent.mockReturnValue(7.5);
+      mockMonitoring.getLatestPlayerCount.mockReturnValue(5);
 
-      instanceUtilsMock.getAllInstances.mockResolvedValue(instances);
-  serverProcessServiceMock.getNormalizedInstanceState.mockReturnValue('running');
-      serverProcessServiceMock.getServerProcess.mockReturnValue({ pid: 123 });
-      getProcessMemoryUsageMock.mockReturnValue(512);
-      serverMonitoringServiceMock.getLatestPlayerCount.mockReturnValue(5);
-      serverMonitoringServiceMock.getLatestCpuPercent.mockReturnValue(7.5);
-      serverProcessServiceMock.getProcessStartTime.mockReturnValue(1700000000000);
+      await expect(serverManagementService.getAllInstances()).resolves.toEqual({
+        instances: [{ id: 'a1', name: 'Alpha', state: 'running', memory: 512, cpu: 7.5, startedAt: 1700000000000, players: 5 }]
+      });
+      expect(getProcessMemoryUsage).toHaveBeenCalledWith(123);
+    });
 
-      const result = await serverManagementService.getAllInstances();
+    it('leaves the live figures empty for a stopped server', async () => {
+      mockInstanceUtils.getAllInstances.mockResolvedValue([{ id: 'a1', name: 'Alpha' }]);
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      mockProcess.getServerProcess.mockReturnValue(null);
+      mockMonitoring.getLatestPlayerCount.mockReturnValue(0);
 
-      expect(result).toEqual({
-        instances: [
-          {
-            id: 'instance1',
-            name: 'Server 1',
-            state: 'running',
-            memory: 512,
-            cpu: 7.5,
-            startedAt: 1700000000000,
-            players: 5
-          },
-          {
-            id: 'instance2',
-            name: 'Server 2',
-            state: 'running',
-            memory: 512,
-            cpu: 7.5,
-            startedAt: 1700000000000,
-            players: 5
-          }
-        ]
+      await expect(serverManagementService.getAllInstances()).resolves.toEqual({
+        instances: [{ id: 'a1', name: 'Alpha', state: 'stopped', memory: undefined, cpu: null, startedAt: null, players: 0 }]
       });
     });
 
-    it('should handle instances not running', async () => {
-      const instances = [{ id: 'instance1', name: 'Server 1' }];
+    it('returns an empty list when reading fails', async () => {
+      mockInstanceUtils.getAllInstances.mockRejectedValue(new Error('EACCES'));
 
-      instanceUtilsMock.getAllInstances.mockResolvedValue(instances);
-  serverProcessServiceMock.getNormalizedInstanceState.mockReturnValue('stopped');
-      serverProcessServiceMock.getServerProcess.mockReturnValue(null);
-
-      const result = await serverManagementService.getAllInstances();
-
-      expect(result.instances[0]).toEqual({
-        id: 'instance1',
-        name: 'Server 1',
-        state: 'stopped',
-        memory: undefined,
-        cpu: null,
-        startedAt: null,
-        players: undefined
-      });
-    });
-
-    it('should handle exception', async () => {
-      instanceUtilsMock.getAllInstances.mockRejectedValue(new Error('DB error'));
-
-      const result = await serverManagementService.getAllInstances();
-
-      expect(result).toEqual({ instances: [] });
+      await expect(serverManagementService.getAllInstances()).resolves.toEqual({ instances: [] });
     });
   });
 
   describe('getInstance', () => {
-    it('should get instance by id', async () => {
-      const instance = { id: 'instance1', name: 'Server 1' };
-      instanceUtilsMock.getInstance.mockResolvedValue(instance);
+    it('returns the instance', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
 
-      const result = await serverManagementService.getInstance('instance1');
-
-      expect(result).toEqual({ instance });
+      await expect(serverManagementService.getInstance('a1')).resolves.toEqual({ instance: { id: 'a1', name: 'Alpha' } });
     });
 
-    it('should return null for empty id', async () => {
-      const result = await serverManagementService.getInstance('');
+    it('returns null for an empty id or a failed read', async () => {
+      mockInstanceUtils.getInstance.mockImplementation(() => { throw new Error('Invalid instance ID format'); });
 
-      expect(result).toEqual({ instance: null });
-    });
-
-    it('should handle exception', async () => {
-      instanceUtilsMock.getInstance.mockRejectedValue(new Error('DB error'));
-
-      const result = await serverManagementService.getInstance('instance1');
-
-      expect(result).toEqual({ instance: null });
+      await expect(serverManagementService.getInstance('')).resolves.toEqual({ instance: null });
+      await expect(serverManagementService.getInstance('../x')).resolves.toEqual({ instance: null });
     });
   });
 
   describe('saveInstance', () => {
-    it('should save instance successfully', async () => {
-      const instance = { id: 'instance1', name: 'Server 1', port: 7777 };
-      const savedInstance = { ...instance, updatedAt: new Date().toISOString() };
+    const saved = { id: 'a1', name: 'Alpha' };
 
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      validatePortMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockResolvedValue(savedInstance);
-
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: true,
-        instance: savedInstance
-      });
+    beforeEach(() => {
+      mockInstanceUtils.saveInstance.mockResolvedValue(saved);
+      mockInstanceUtils.getInstance.mockReturnValue(null);
     });
 
-    it('should handle invalid instance object', async () => {
-      const result = await serverManagementService.saveInstance(null);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid instance object'
-      });
+    it('saves and resyncs the broadcast schedule', async () => {
+      await expect(serverManagementService.saveInstance({ id: 'a1', name: 'Alpha' })).resolves.toEqual({ success: true, instance: saved });
+      expect(schedulerService.initSchedule).toHaveBeenCalledWith('a1');
     });
 
-    it('should handle invalid instance id', async () => {
-      const instance = { id: 'invalid', name: 'Server 1' };
-
-      validateInstanceIdMock.mockReturnValue(false);
-
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid instance ID'
-      });
+    it.each([
+      ['no object', null, 'Invalid instance object'],
+      ['a bad id', { id: '../x' }, 'Invalid instance ID'],
+      ['a bad name', { id: 'a1', name: 'x'.repeat(101) }, 'Invalid server name'],
+      ['a bad port', { id: 'a1', port: 80 }, 'Invalid port number'],
+      // The Discord tab saves through here; the URL is posted to from the host.
+      ['a webhook URL that is not Discord\'s', { id: 'a1', discordConfig: { enabled: true, webhookUrl: 'http://10.0.0.1/hook' } },
+        'The Discord webhook URL must be a Discord webhook link, such as https://discord.com/api/webhooks/...']
+    ])('refuses %s', async (_label, instance, error) => {
+      await expect(serverManagementService.saveInstance(instance as Partial<InstanceConfig> | null)).resolves.toEqual({ success: false, error });
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
     });
 
-    it('should handle invalid server name', async () => {
-      const instance = { id: 'instance1', name: 'Invalid@Name' };
+    // Refused at send time instead: an old URL must not lock the user out of every other setting.
+    it('an unchanged stored invalid URL does not block the save', async () => {
+      const discordConfig = { enabled: false, webhookUrl: 'http://10.0.0.1/hook' };
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha', discordConfig });
 
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(false);
-
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid server name'
-      });
+      await expect(serverManagementService.saveInstance({ id: 'a1', name: 'Renamed', discordConfig }))
+        .resolves.toEqual({ success: true, instance: saved });
     });
 
-    it('should handle invalid port', async () => {
-      const instance = { id: 'instance1', name: 'Server 1', port: 99999 };
+    it('checks a URL that differs from the stored one', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', discordConfig: { enabled: true, webhookUrl: 'http://10.0.0.1/hook' } });
 
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      validatePortMock.mockReturnValue(false);
-
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid port number'
-      });
+      await expect(serverManagementService.saveInstance({ id: 'a1', discordConfig: { enabled: true, webhookUrl: 'http://10.0.0.2/hook' } }))
+        .resolves.toEqual({ success: false, error: 'The Discord webhook URL must be a Discord webhook link, such as https://discord.com/api/webhooks/...' });
     });
 
-    it('should handle save error', async () => {
-      const instance = { id: 'instance1', name: 'Server 1' };
+    it('passes on a refused save', async () => {
+      mockInstanceUtils.saveInstance.mockResolvedValue({ error: 'A server with this name already exists.' });
 
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockResolvedValue({ error: 'Save failed' });
-
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Save failed'
-      });
+      await expect(serverManagementService.saveInstance({ id: 'a1', name: 'Taken' }))
+        .resolves.toEqual({ success: false, error: 'A server with this name already exists.' });
     });
 
-    it('should handle exception', async () => {
-      const instance = { id: 'instance1', name: 'Server 1' };
+    it('reports a save that throws', async () => {
+      mockInstanceUtils.saveInstance.mockRejectedValue(new Error('EACCES'));
 
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockRejectedValue(new Error('DB error'));
+      await expect(serverManagementService.saveInstance({ id: 'a1' })).resolves.toEqual({ success: false, error: 'EACCES' });
+    });
 
-      const result = await serverManagementService.saveInstance(instance);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'DB error'
+    it('writes the whitelist file from the player list', async () => {
+      await serverManagementService.saveInstance({
+        id: 'a1',
+        useExclusiveList: true,
+        exclusiveJoinPlayers: [{ playerId: 'p1' }, { playerId: ' ' }, { playerId: 'p2' }]
       });
+
+      expect(whitelistService.writeWhitelistFile).toHaveBeenCalledWith('a1', ['p1', 'p2']);
     });
   });
 
   describe('deleteInstance', () => {
-    it('should delete instance successfully', async () => {
-      const instanceId = 'instance1';
-      const instance = { id: instanceId, name: 'Server 1' };
+    beforeEach(() => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1' });
+      mockInstanceUtils.deleteInstance.mockReturnValue(true);
+      jest.mocked(backupService.waitForBackupOperations).mockResolvedValue(undefined);
+    });
 
-      validateInstanceIdMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(instance);
-      serverProcessServiceMock.getNormalizedInstanceState.mockReturnValue('stopped');
-      instanceUtilsMock.deleteInstance.mockResolvedValue(true);
+    // The backup schedule and CPU polling used to outlive the instance: the schedule raised a
+    // failed-backup toast on every run, for good.
+    it('stops everything that runs on a timer for the instance, then deletes', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
 
-      const result = await serverManagementService.deleteInstance(instanceId);
+      await expect(serverManagementService.deleteInstance('a1')).resolves.toEqual({ success: true, id: 'a1' });
+      expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
+      expect(mockMonitoring.stopMemoryPolling).toHaveBeenCalledWith('a1');
+      expect(mockMonitoring.stopCpuPolling).toHaveBeenCalledWith('a1');
+      expect(schedulerService.stopScheduler).toHaveBeenCalledWith('a1');
+      expect(backupService.stopBackupScheduler).toHaveBeenCalledWith('a1');
+      expect(mockProcess.stopServerProcess).not.toHaveBeenCalled();
+    });
 
-      expect(result).toEqual({
-        success: true,
-        id: instanceId
+    it('stops the schedules before a running server, whose stop can take minutes', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+
+      await serverManagementService.deleteInstance('a1');
+
+      expect(jest.mocked(backupService.stopBackupScheduler).mock.invocationCallOrder[0])
+        .toBeLessThan(mockProcess.stopServerProcess.mock.invocationCallOrder[0]);
+    });
+
+    it('stops a running server first', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+
+      await serverManagementService.deleteInstance('a1');
+
+      expect(mockProcess.stopServerProcess).toHaveBeenCalledWith('a1');
+    });
+
+    // A backup still being written reads the directory, and a restore still running rewrites it.
+    it('waits for a backup or restore of the instance before removing its directory', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      let finishBackup: () => void = () => undefined;
+      jest.mocked(backupService.waitForBackupOperations).mockReturnValue(new Promise<void>(resolve => { finishBackup = resolve; }));
+
+      const deleting = serverManagementService.deleteInstance('a1');
+      await new Promise(resolve => setImmediate(resolve));
+      expect(backupService.waitForBackupOperations).toHaveBeenCalledWith('a1');
+      expect(mockInstanceUtils.deleteInstance).not.toHaveBeenCalled();
+
+      finishBackup();
+      await expect(deleting).resolves.toEqual({ success: true, id: 'a1' });
+      expect(mockInstanceUtils.deleteInstance).toHaveBeenCalledWith('a1');
+    });
+
+    it('re-arms the schedules it stopped when the delete fails and the instance is still there', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      mockInstanceUtils.deleteInstance.mockImplementation(() => { throw new Error('EBUSY'); });
+
+      await expect(serverManagementService.deleteInstance('a1')).resolves.toEqual({ success: false, id: 'a1' });
+
+      expect(backupService.startBackupScheduler).toHaveBeenCalledWith('a1');
+      expect(schedulerService.initSchedule).toHaveBeenCalledWith('a1');
+    });
+
+    it('re-arms nothing when the instance went with the failed delete', async () => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      mockInstanceUtils.deleteInstance.mockImplementation(() => {
+        mockInstanceUtils.getInstance.mockReturnValue(null);
+        throw new Error('EBUSY');
       });
-      expect(serverMonitoringServiceMock.stopPlayerPolling).toHaveBeenCalledWith(instanceId);
-      expect(serverMonitoringServiceMock.stopMemoryPolling).toHaveBeenCalledWith(instanceId);
+
+      await serverManagementService.deleteInstance('a1');
+
+      expect(backupService.startBackupScheduler).not.toHaveBeenCalled();
     });
 
-    it('should stop running server before deletion', async () => {
-      const instanceId = 'instance1';
-      const instance = { id: instanceId, name: 'Server 1' };
+    it.each([
+      ['an invalid id', '../x', () => undefined],
+      ['a missing instance', 'a1', () => mockInstanceUtils.getInstance.mockReturnValue(null)],
+      ['a failed delete', 'a1', () => mockInstanceUtils.deleteInstance.mockReturnValue(false)],
+      ['a read that throws', 'a1', () => mockInstanceUtils.getInstance.mockImplementation(() => { throw new Error('EACCES'); })]
+    ])('reports %s', async (_label, id, arrange) => {
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      arrange();
 
-      validateInstanceIdMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(instance);
-      serverProcessServiceMock.getNormalizedInstanceState.mockReturnValue('running');
-      serverProcessServiceMock.stopServerInstance.mockResolvedValue({ success: true });
-      instanceUtilsMock.deleteInstance.mockResolvedValue(true);
-
-      const result = await serverManagementService.deleteInstance(instanceId);
-
-      expect(serverLifecycleServiceMock.stopServerInstance).toHaveBeenCalledWith(instanceId);
-    });
-
-    it('should handle invalid instance id', async () => {
-      validateInstanceIdMock.mockReturnValue(false);
-
-      const result = await serverManagementService.deleteInstance('invalid');
-
-      expect(result).toEqual({
-        success: false,
-        id: 'invalid'
-      });
-    });
-
-    it('should handle instance not found', async () => {
-      validateInstanceIdMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(null);
-
-      const result = await serverManagementService.deleteInstance('instance1');
-
-      expect(result).toEqual({
-        success: false,
-        id: 'instance1'
-      });
-    });
-
-    it('should handle delete failure', async () => {
-      const instanceId = 'instance1';
-      const instance = { id: instanceId, name: 'Server 1' };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(instance);
-      serverLifecycleServiceMock.getNormalizedInstanceState.mockReturnValue('stopped');
-      instanceUtilsMock.deleteInstance.mockResolvedValue(false);
-
-      const result = await serverManagementService.deleteInstance(instanceId);
-
-      expect(result).toEqual({
-        success: false,
-        id: instanceId
-      });
-    });
-
-    it('should handle exception', async () => {
-      const instanceId = 'instance1';
-
-      validateInstanceIdMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockRejectedValue(new Error('DB error'));
-
-      const result = await serverManagementService.deleteInstance(instanceId);
-
-      expect(result).toEqual({
-        success: false,
-        id: instanceId
-      });
-    });
-  });
-
-  describe('createInstance', () => {
-    it('should create instance successfully', async () => {
-      const instanceData = { name: 'New Server', port: 7777 };
-      const savedInstance = { id: 'instance_123', name: 'New Server', port: 7777 };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      validatePortMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockResolvedValue(savedInstance);
-
-      const result = await serverManagementService.createInstance(instanceData);
-
-      expect(result.success).toBe(true);
-      expect(result.instance).toEqual(savedInstance);
-      expect(instanceUtilsMock.saveInstance).toHaveBeenCalled();
-      const callArgs = instanceUtilsMock.saveInstance.mock.calls[0][0];
-      expect(callArgs.id).toMatch(/^instance_\d+$/);
-      expect(callArgs.name).toBe('New Server');
-      expect(callArgs.port).toBe(7777);
-      expect(typeof callArgs.createdAt).toBe('string');
-      expect(typeof callArgs.updatedAt).toBe('string');
-    });
-
-    it('should handle save failure', async () => {
-      const instanceData = { name: 'New Server' };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockResolvedValue({ error: 'Save failed' });
-
-      const result = await serverManagementService.createInstance(instanceData);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Save failed'
-      });
-    });
-
-    it('should handle exception', async () => {
-      const instanceData = { name: 'New Server' };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.saveInstance.mockRejectedValue(new Error('DB error'));
-
-      const result = await serverManagementService.createInstance(instanceData);
-
-      expect(result).toEqual({
-        success: false,
-        error: 'DB error'
-      });
+      await expect(serverManagementService.deleteInstance(id)).resolves.toEqual({ success: false, id });
     });
   });
 
   describe('importFromBackup', () => {
-    it('should import from backup successfully', async () => {
-      const backupPath = '/path/to/backup.zip';
-      const instanceName = 'Imported Server';
-      const importedInstance = { id: 'instance1', name: instanceName };
+    it('imports the backup as a new server', async () => {
+      jest.mocked(backupService.importBackupAsNewServer).mockResolvedValue({ id: 'b2', name: 'Imported' } as never);
 
-      backupServiceMock.importBackupAsNewServer.mockResolvedValue(importedInstance);
-
-      const result = await serverManagementService.importFromBackup(backupPath, instanceName);
-
-      expect(result).toEqual({
-        success: true,
-        instance: importedInstance
-      });
+      await expect(serverManagementService.importFromBackup('/backups/a.zip', 'Imported'))
+        .resolves.toEqual({ success: true, instance: { id: 'b2', name: 'Imported' } });
     });
 
-    it('should handle invalid backup path', async () => {
-      const result = await serverManagementService.importFromBackup('', 'Server Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid backup path'
-      });
+    it.each([
+      ['path', '', 'Imported', 'Invalid backup path'],
+      ['name', '/backups/a.zip', '', 'Invalid instance name']
+    ])('refuses a missing %s', async (_label, backupPath, name, error) => {
+      await expect(serverManagementService.importFromBackup(backupPath, name)).resolves.toEqual({ success: false, error });
     });
 
-    it('should handle invalid instance name', async () => {
-      const result = await serverManagementService.importFromBackup('/path/backup.zip', '');
+    it('reports a failed import', async () => {
+      jest.mocked(backupService.importBackupAsNewServer).mockRejectedValueOnce(new Error('Import error'));
 
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid instance name'
-      });
-    });
-
-
-
-    it('should handle exception', async () => {
-      backupServiceMock.importBackupAsNewServer.mockRejectedValue(new Error('Import error'));
-
-      const result = await serverManagementService.importFromBackup('/path/backup.zip', 'Server Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Import error'
-      });
+      await expect(serverManagementService.importFromBackup('/backups/a.zip', 'Imported'))
+        .resolves.toEqual({ success: false, error: 'Import error' });
     });
   });
 
   describe('prepareInstanceConfiguration', () => {
-    it('should generate RCON password when missing', async () => {
-      const instanceId = 'instance1';
-      const instance = { name: 'Server 1' };
-
-      generateRandomPasswordMock.mockReturnValue('generated_password');
-      instanceUtilsMock.getInstancesBaseDir.mockReturnValue('/instances');
-      pathMock.join.mockReturnValue('/instances/instance1/config.json');
-
-      await serverManagementService.prepareInstanceConfiguration(instanceId, instance);
-
-      expect(generateRandomPasswordMock).toHaveBeenCalledWith(16);
-      expect((instance as any).rconPassword).toBe('generated_password');
-      expect(fsMock.writeFileSync).toHaveBeenCalledWith(
-        '/instances/instance1/config.json',
-        JSON.stringify(instance, null, 2),
-        'utf8'
-      );
+    beforeEach(() => {
+      jest.mocked(fs.existsSync).mockReturnValue(false);
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ id: 'a1', name: 'Alpha', rconPassword: 'generated_password' });
     });
 
-    it('should not generate password if already exists', async () => {
-      const instanceId = 'instance1';
-      const instance = { name: 'Server 1', rconPassword: 'existing_password' };
+    // Start All passes the list entry, with state, memory and players merged in; writing that
+    // object put runtime fields into config.json.
+    it('saves a generated RCON password into the stored config, not the live object', async () => {
+      const live = { id: 'a1', name: 'Alpha', state: 'running', memory: 512, players: 3 };
 
-      await serverManagementService.prepareInstanceConfiguration(instanceId, instance);
+      await serverManagementService.prepareInstanceConfiguration('a1', live);
 
-      expect(generateRandomPasswordMock).not.toHaveBeenCalled();
-      expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+      expect(generateRandomPassword).toHaveBeenCalledWith(16);
+      expect(live).toHaveProperty('rconPassword', 'generated_password');
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({ id: 'a1', name: 'Alpha', rconPassword: 'generated_password' });
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
 
-    it('should handle file write error gracefully', async () => {
-      const instanceId = 'instance1';
-      const instance = { name: 'Server 1' };
+    it('keeps an existing RCON password', async () => {
+      await serverManagementService.prepareInstanceConfiguration('a1', { id: 'a1', rconPassword: 'existing' });
 
-      generateRandomPasswordMock.mockReturnValue('generated_password');
-      fsMock.writeFileSync.mockImplementation(() => { throw new Error('Write failed'); });
-
-      // Should not throw
-      await serverManagementService.prepareInstanceConfiguration(instanceId, instance);
-    });
-  });
-
-  describe('cloneInstance', () => {
-    it('should clone instance successfully', async () => {
-      const sourceInstanceId = 'source1';
-      const newInstanceName = 'Cloned Server';
-      const sourceInstance = { id: 'source1', name: 'Original Server', port: 7777 };
-      const clonedInstance = { id: 'instance_123', name: newInstanceName, port: 7777 };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      validatePortMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(sourceInstance);
-      instanceUtilsMock.saveInstance.mockResolvedValue(clonedInstance);
-
-      const result = await serverManagementService.cloneInstance(sourceInstanceId, newInstanceName);
-
-      expect(result.success).toBe(true);
-      expect(result.instance).toEqual(clonedInstance);
-      expect(instanceUtilsMock.saveInstance).toHaveBeenCalled();
-      const callArgs = instanceUtilsMock.saveInstance.mock.calls[0][0];
-      expect(callArgs.id).toMatch(/^instance_\d+$/);
-      expect(callArgs.name).toBe(newInstanceName);
-      expect(callArgs.port).toBe(7777);
-      expect(typeof callArgs.createdAt).toBe('string');
-      expect(typeof callArgs.updatedAt).toBe('string');
+      expect(generateRandomPassword).not.toHaveBeenCalled();
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
     });
 
-    it('should handle invalid source instance id', async () => {
-      validateInstanceIdMock.mockReturnValue(false);
+    it('carries on when the password cannot be saved', async () => {
+      mockInstanceUtils.saveInstance.mockRejectedValue(new Error('EACCES'));
 
-      const result = await serverManagementService.cloneInstance('invalid', 'New Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid source instance ID'
-      });
+      await expect(serverManagementService.prepareInstanceConfiguration('a1', { id: 'a1' })).resolves.toBeUndefined();
+      expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalled();
     });
 
-    it('should handle invalid instance name', async () => {
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(false);
+    it('writes the INI files and copies the whitelist', async () => {
+      const instance = { id: 'a1', rconPassword: 'pw', useExclusiveList: true };
 
-      const result = await serverManagementService.cloneInstance('source1', 'Invalid@Name');
+      await serverManagementService.prepareInstanceConfiguration('a1', instance);
 
-      expect(result).toEqual({
-        success: false,
-        error: 'Invalid instance name'
-      });
+      expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalledWith('/instances/a1', instance, 'a1');
+      expect(whitelistService.copyWhitelistToMainDir).toHaveBeenCalledWith('a1');
     });
 
-    it('should handle source instance not found', async () => {
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(null);
+    // A copied SavedArks takes ARK's writes while backups keep reading the canonical folder.
+    it('fails the start when the save folder cannot be linked', async () => {
+      jest.mocked(linkInstanceSaveDir).mockRejectedValueOnce(new Error('Could not link SavedArks'));
 
-      const result = await serverManagementService.cloneInstance('source1', 'New Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Source instance not found'
-      });
-    });
-
-    it('should handle save failure', async () => {
-      const sourceInstance = { id: 'source1', name: 'Original Server' };
-
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockResolvedValue(sourceInstance);
-      instanceUtilsMock.saveInstance.mockResolvedValue({ error: 'Save failed' });
-
-      const result = await serverManagementService.cloneInstance('source1', 'New Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'Save failed'
-      });
-    });
-
-    it('should handle exception', async () => {
-      validateInstanceIdMock.mockReturnValue(true);
-      validateServerNameMock.mockReturnValue(true);
-      instanceUtilsMock.getInstance.mockRejectedValue(new Error('DB error'));
-
-      const result = await serverManagementService.cloneInstance('source1', 'New Name');
-
-      expect(result).toEqual({
-        success: false,
-        error: 'DB error'
-      });
+      await expect(serverManagementService.prepareInstanceConfiguration('a1', { id: 'a1', rconPassword: 'pw' }))
+        .rejects.toThrow('Could not link SavedArks');
+      expect(linkInstanceSaveDir).toHaveBeenCalledWith('/instances/a1', '/instances/a1');
     });
   });
 });

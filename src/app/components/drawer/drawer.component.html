@@ -1,6 +1,6 @@
 <div class="drawer-backdrop" *ngIf="open" (click)="close()"></div>
 
-<aside class="drawer" [class.open]="open" [class.narrow]="size === 'narrow'"
+<aside class="drawer" [class.open]="open"
        role="dialog" aria-modal="true" [attr.aria-label]="title || 'Panel'" [attr.aria-hidden]="!open">
   <header class="drawer-header">
     <span class="drawer-header-icon material-icons" *ngIf="icon">{{ icon }}</span>

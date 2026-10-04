@@ -5,7 +5,6 @@
       <span class="nav-item-label">Dashboard</span>
     </button>
 
-    <!-- Server list -->
     <div class="nav-section">
       <div class="nav-section-header" (click)="showServers = !showServers">
         <span class="nav-section-title">
@@ -15,7 +14,7 @@
           <button type="button" class="nav-mini-btn" title="Start all servers" *ngIf="servers.length" (click)="startAllServers()">
             <span class="material-icons">play_arrow</span>
           </button>
-          <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" (click)="stopAllServers()">
+          <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="stopAllServers()">
             <span class="material-icons">stop</span>
           </button>
           <button type="button" class="nav-mini-btn" title="Add server" (click)="onAddServerClick()">
@@ -61,7 +60,6 @@
       </div>
     </div>
 
-    <!-- Selected server pages -->
     <div class="nav-section" *ngIf="selectedServer">
       <div class="nav-section-header static">
         <span class="nav-section-title nav-section-server" [title]="selectedServer.name">{{ selectedServer.name }}</span>

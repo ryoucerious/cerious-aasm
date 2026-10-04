@@ -1,24 +1,13 @@
-/**
- * Integration tests for backup file operations against a REAL filesystem.
- *
- * These deliberately avoid mocking fs: the behaviour under test is link semantics
- * (junctions on Windows, symlinks elsewhere), which a mocked fs cannot represent.
- *
- * Regression cover for the restore path deleting the shared ARK installation. An
- * instance directory is mostly junctions into the shared install, and the clear/remove
- * helpers used stat() — which follows a junction and reports a directory — so the
- * recursive delete walked into the shared install and unlinked the real game files.
- * Every server on the machine then failed to start, with the only user-visible symptom
- * being "Could not detect log file".
- */
-// test/setup.ts mocks fs/path globally; this suite needs the real ones, both here and
-// inside the service under test.
+// Real fs: the behaviour under test is link semantics (junctions on Windows, symlinks elsewhere).
+// A restore once deleted the shared ARK install: the clear/remove helpers used stat(), which
+// follows a junction, so the recursive delete walked into the game files of every server.
 jest.unmock('fs');
 jest.unmock('path');
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { removeDirectory } from '../../utils/fs.utils';
 import { BackupOperationsService } from './backup-operations.service';
 
 describe('BackupOperationsService filesystem safety (real fs)', () => {
@@ -33,7 +22,6 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-backup-test-'));
 
-    // Shared ARK install holding the real game files
     sharedContent = path.join(tmpRoot, 'AASMServer', 'ShooterGame', 'Content');
     sharedEngine = path.join(tmpRoot, 'AASMServer', 'Engine');
     fs.mkdirSync(path.join(sharedContent, 'Maps'), { recursive: true });
@@ -41,7 +29,6 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
     fs.writeFileSync(path.join(sharedContent, 'Maps', 'TheIsland.uasset'), 'map-data');
     fs.writeFileSync(path.join(sharedEngine, 'engine.dll'), 'engine-data');
 
-    // Instance directory laid out the way prepareInstanceConfiguration builds it
     instanceDir = path.join(tmpRoot, 'Servers', 'instance-1');
     const instanceShooterGame = path.join(instanceDir, 'ShooterGame');
     fs.mkdirSync(path.join(instanceShooterGame, 'Saved', 'SavedArks'), { recursive: true });
@@ -52,7 +39,7 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
       fs.symlinkSync(sharedContent, path.join(instanceShooterGame, 'Content'), 'junction');
       fs.symlinkSync(sharedEngine, path.join(instanceDir, 'Engine'), 'junction');
     } catch {
-      // Unprivileged/unsupported filesystem — assertions on link handling cannot run
+      // Links need privileges or a filesystem that supports them; the link tests are skipped.
       linksSupported = false;
     }
   });
@@ -93,7 +80,7 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
   it('removeDirectory does not follow a nested junction into the shared install', async () => {
     if (!linksSupported) return;
 
-    await service.removeDirectory(path.join(instanceDir, 'ShooterGame'));
+    await removeDirectory(path.join(instanceDir, 'ShooterGame'));
 
     expect(fs.existsSync(path.join(instanceDir, 'ShooterGame'))).toBe(false);
     expect(sharedFilesIntact()).toBe(true);
@@ -117,7 +104,7 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
     const added: string[] = [];
     const zipStub = { addFile: (name: string) => added.push(name) };
 
-    await service.addToZip(zipStub, instanceDir, '', 'instance-1');
+    await service.addToZip(zipStub, instanceDir, '');
 
     expect(added.some(n => /Logs/.test(n))).toBe(false);
     // Saves and config are still archived

@@ -1,78 +1,121 @@
+// Real fs, zip and instance store: the bugs here were in how they interact.
+jest.unmock('fs');
+jest.unmock('path');
+jest.unmock('crypto');
+
+import AdmZip from 'adm-zip';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as instanceUtils from '../../utils/ark/instance.utils';
 import { BackupImportService } from './backup-import.service';
 
-jest.mock('adm-zip', () => {
-  return jest.fn().mockImplementation(() => ({ extractAllTo: jest.fn() }));
-});
+jest.mock('../../utils/global-config.utils', () => ({ loadGlobalConfig: jest.fn() }));
+jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn() }));
 
-jest.mock('fs', () => ({
-  existsSync: jest.fn(),
-  mkdir: jest.fn((_path: string, _opts: any, cb: Function) => cb(null)),
-  readdir: jest.fn((_path: string, cb: Function) => cb(null, [])),
-  stat: jest.fn((_path: string, cb: Function) => cb(null, { isDirectory: () => false })),
-  copyFile: jest.fn((_src: string, _dst: string, cb: Function) => cb(null)),
-  readFile: jest.fn((_path: string, _enc: any, cb: Function) => cb(null, '{}')),
-  writeFile: jest.fn((_path: string, _data: any, _enc: any, cb: Function) => cb(null)),
-  unlink: jest.fn((_path: string, cb: Function) => cb(null)),
-  rmdirSync: jest.fn(),
-  promises: {
-    mkdir: jest.fn().mockResolvedValue(undefined),
-    readFile: jest.fn().mockResolvedValue('{"id":"oldid","name":"oldname"}'),
-    readdir: jest.fn().mockResolvedValue(['config.json', 'file.txt']),
-    stat: jest.fn().mockResolvedValue({ isDirectory: () => false }),
-    copyFile: jest.fn().mockResolvedValue(undefined),
-    unlink: jest.fn().mockResolvedValue(undefined),
-  },
-}));
+const { loadGlobalConfig } = jest.requireMock('../../utils/global-config.utils') as { loadGlobalConfig: jest.Mock };
 
-jest.mock('../../utils/ark/instance.utils', () => ({
-  getInstancesBaseDir: jest.fn().mockReturnValue('baseDir'),
-  saveInstance: jest.fn().mockResolvedValue(true),
-}));
+describe('BackupImportService (real fs)', () => {
+  const service = new BackupImportService();
+  let root: string;
+  let serversDir: string;
+  let archivePath: string;
 
-const fs = require('fs');
-
-describe('BackupImportService', () => {
-  let service: BackupImportService;
   beforeEach(() => {
-    jest.clearAllMocks();
-    service = new BackupImportService();
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-import-test-'));
+    loadGlobalConfig.mockReturnValue({ serverDataDir: root });
+    serversDir = path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
+    archivePath = path.join(root, 'backup.zip');
   });
 
-  it('should instantiate', () => {
-    expect(service).toBeDefined();
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
-  describe('importBackupAsNewServer', () => {
-    beforeEach(() => {
-      fs.existsSync.mockImplementation((...args: any[]) => {
-        const file = args[0];
-        return file === 'backup.zip' || (typeof file === 'string' && file.includes('instanceDir'));
-      });
-      jest.spyOn(service as any, 'removeDirectory').mockResolvedValue(undefined);
-      jest.spyOn(service as any, 'copyDirectory').mockResolvedValue(undefined);
-      jest.spyOn(service, 'importBackupAsNewServer').mockImplementation(async (serverName: string, backupFilePath: string) => {
-        if (backupFilePath !== 'backup.zip') throw new Error('Backup file not found');
-        return { id: 'uuid', name: serverName };
-      });
-    });
+  function writeArchive(files: Record<string, string>): void {
+    const zip = new AdmZip();
+    for (const [entry, content] of Object.entries(files)) {
+      zip.addFile(entry, Buffer.from(content));
+    }
+    zip.writeZip(archivePath);
+  }
 
-    it('should import backup as new server with config', async () => {
-      const result = await service.importBackupAsNewServer('newServer', 'backup.zip');
-      expect(result).toBeDefined();
-      expect(result.id).toBe('uuid');
-      expect(result.name).toBe('newServer');
-    });
+  const originalConfig = JSON.stringify({ id: 'old-server', name: 'Alpha', sessionName: 'Alpha', gamePort: 7778, state: 'running' });
 
-    it('should throw error if backup file does not exist', async () => {
-      await service.importBackupAsNewServer('newServer', 'missing.zip')
-        .catch(e => expect(e.message).toBe('Backup file not found'));
-    });
+  function serverDirs(): string[] {
+    return fs.existsSync(serversDir) ? fs.readdirSync(serversDir).sort() : [];
+  }
 
-    it('should handle error and cleanup on failure', async () => {
-      fs.existsSync.mockReturnValue(true);
-      jest.spyOn(service as any, 'removeDirectory').mockResolvedValue(undefined);
-      await service.importBackupAsNewServer('newServer', 'backup.zip')
-        .catch(e => expect(e).toBeDefined());
-    });
+  // The archived config.json used to be copied in unchanged, still carrying the old id and name:
+  // the import listed as a phantom of the original server and reported success regardless.
+  it('imports a backup under its original name as a working, separate server', async () => {
+    writeArchive({ 'config.json': originalConfig, 'SavedArks/TheIsland_WP/TheIsland_WP.ark': 'world' });
+
+    const imported = await service.importBackupAsNewServer('Alpha', archivePath);
+
+    expect(imported.id).not.toBe('old-server');
+    expect(imported).toMatchObject({ name: 'Alpha', sessionName: 'Alpha', gamePort: 7778 });
+    const onDisk = JSON.parse(fs.readFileSync(path.join(serversDir, imported.id, 'config.json'), 'utf8'));
+    expect(onDisk).toEqual({ id: imported.id, name: 'Alpha', sessionName: 'Alpha', gamePort: 7778 });
+    expect(fs.readFileSync(path.join(serversDir, imported.id, 'SavedArks', 'TheIsland_WP', 'TheIsland_WP.ark'), 'utf8')).toBe('world');
+    expect((await instanceUtils.getAllInstances()).map(instance => instance.id)).toEqual([imported.id]);
+  });
+
+  it('refuses the name of a server that still exists, and leaves nothing behind', async () => {
+    await instanceUtils.saveInstance({ id: 'old-server', name: 'Alpha' });
+    writeArchive({ 'config.json': originalConfig });
+
+    await expect(service.importBackupAsNewServer('alpha', archivePath)).rejects.toThrow('A server with this name already exists.');
+
+    expect(serverDirs()).toEqual(['old-server']);
+    expect((await instanceUtils.getAllInstances()).map(instance => instance.name)).toEqual(['Alpha']);
+  });
+
+  it('imports under a new name next to the original', async () => {
+    await instanceUtils.saveInstance({ id: 'old-server', name: 'Alpha' });
+    writeArchive({ 'config.json': originalConfig });
+
+    const imported = await service.importBackupAsNewServer('Alpha copy', archivePath);
+
+    expect((await instanceUtils.getAllInstances()).map(instance => [instance.id, instance.name]).sort())
+      .toEqual([[imported.id, 'Alpha copy'], ['old-server', 'Alpha']].sort());
+  });
+
+  it('uses default settings when the backup has no usable config.json', async () => {
+    writeArchive({ 'config.json': '{ not json', 'SavedArks/x.ark': 'world' });
+
+    const imported = await service.importBackupAsNewServer('Beta', archivePath);
+
+    expect(imported).toMatchObject({ name: 'Beta', sessionName: 'Beta', mapName: 'TheIsland_WP', gamePort: 7777 });
+  });
+
+  // A failed extraction used to leave the created directory behind.
+  it('leaves no directory behind when the archive cannot be read', async () => {
+    fs.writeFileSync(archivePath, 'not a zip');
+
+    await expect(service.importBackupAsNewServer('Beta', archivePath)).rejects.toThrow();
+
+    expect(serverDirs()).toEqual([]);
+  });
+
+  it('removes the new directory when saving the server fails', async () => {
+    writeArchive({ 'config.json': originalConfig });
+    jest.spyOn(instanceUtils, 'saveInstance').mockRejectedValueOnce(new Error('EACCES'));
+
+    await expect(service.importBackupAsNewServer('Beta', archivePath)).rejects.toThrow('EACCES');
+
+    expect(serverDirs()).toEqual([]);
+  });
+
+  it('does not create a backups folder inside the new server', async () => {
+    writeArchive({ 'config.json': originalConfig });
+
+    const imported = await service.importBackupAsNewServer('Beta', archivePath);
+
+    expect(fs.readdirSync(path.join(serversDir, imported.id))).toEqual(['config.json']);
+  });
+
+  it('reports a missing archive', async () => {
+    await expect(service.importBackupAsNewServer('Beta', path.join(root, 'missing.zip'))).rejects.toThrow('Backup file not found');
   });
 });

@@ -2,11 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
+import type { BindValues, Database } from 'node-sqlite3-wasm';
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import {
   ALL_PERMISSIONS, BUILT_IN_ROLES, ROLE_IDS, Permission, Role, User, AuthenticatedUser,
-  effectivePermissions
+  UNMATCHABLE_BCRYPT_HASH, effectivePermissions
 } from '../../types/auth.types';
+import type { ActivityEntry, ActivityKind } from '../activity-log.service';
 
 const SALT_ROUNDS = 12;
 const SCHEMA_VERSION = 1;
@@ -24,6 +26,15 @@ interface UserRow {
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
+}
+
+interface ActivityRow {
+  id: number;
+  kind: ActivityKind;
+  message: string;
+  instance_id: string | null;
+  username: string | null;
+  created_at: number;
 }
 
 interface RoleRow {
@@ -74,7 +85,7 @@ export type Result<T> = { success: true; data: T } | { success: false; error: st
  * Passwords are bcrypt hashes and never leave this module.
  */
 export class UserDatabaseService {
-  private db: any = null;
+  private db: Database | null = null;
   private dbPath = '';
   /** Path of the file recording which process owns the database. */
   private pidPath = '';
@@ -82,6 +93,21 @@ export class UserDatabaseService {
   private ownedByOtherInstance = false;
   /** When we last tried to open, used to back off while another instance holds the file. */
   private lastOpenAttempt = 0;
+
+  /** The open connection. Callers go through ensureOpen() or initialize() first. */
+  private get conn(): Database {
+    if (!this.db) throw new Error('The user database is not open.');
+    return this.db;
+  }
+
+  // db.get and db.all finalize their statement; a bare prepare() leaks it in the WASM heap.
+  private queryOne<T>(sql: string, values?: BindValues): T | undefined {
+    return (this.conn.get(sql, values) ?? undefined) as unknown as T | undefined;
+  }
+
+  private queryAll<T>(sql: string, values?: BindValues): T[] {
+    return this.conn.all(sql, values) as unknown as T[];
+  }
 
   /** Opens (creating if needed) the database and applies the schema. Safe to call repeatedly. */
   initialize(): void {
@@ -94,7 +120,7 @@ export class UserDatabaseService {
 
     // The driver locks by creating a "<db>.lock" directory around each write and removing it
     // afterwards. A process killed mid-write leaves that directory behind, and from then on
-    // every write fails with "database is locked" — busy_timeout does not help, because the
+    // every write fails with "database is locked". busy_timeout does not help, because the
     // lock is a directory rather than SQLite's own contention. Clear it if whoever made it
     // is gone, and leave it alone if that process is still running.
     this.releaseStaleLock();
@@ -122,11 +148,11 @@ export class UserDatabaseService {
   /** Open the file and bring the schema up to date. Throws if either step cannot write. */
   private openAndPrepare(): void {
     // Required lazily so an environment without the driver still starts (tests, odd packaging).
-    const { Database } = require('node-sqlite3-wasm');
-    this.db = new Database(this.dbPath);
-    this.db.exec('PRAGMA foreign_keys = ON');
+    const { Database: SqliteDatabase } = require('node-sqlite3-wasm') as typeof import('node-sqlite3-wasm');
+    this.db = new SqliteDatabase(this.dbPath);
+    this.conn.exec('PRAGMA foreign_keys = ON');
     // Wait rather than fail if a write briefly overlaps another.
-    this.db.exec('PRAGMA busy_timeout = 5000');
+    this.conn.exec('PRAGMA busy_timeout = 5000');
     this.applySchema();
     this.seedBuiltInRoles();
   }
@@ -164,7 +190,7 @@ export class UserDatabaseService {
    * Run a statement, recovering once from a lock left behind by a dead process.
    *
    * Every write goes through here. A lock held by a process that is still running is left
-   * alone — clearing it would let two processes write at once and corrupt the file — so in
+   * alone (clearing it would let two processes write at once and corrupt the file), so in
    * that case the write is dropped and reported instead.
    */
   private write<T>(operation: () => T): T | undefined {
@@ -186,14 +212,12 @@ export class UserDatabaseService {
   /** True once at least one user exists, i.e. accounts are actually in use. */
   hasAnyUser(): boolean {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number };
+    const row = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users');
     return (row?.count ?? 0) > 0;
   }
 
-  // -------------------- Schema --------------------
-
   private applySchema(): void {
-    this.db.exec(`
+    this.conn.exec(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -237,33 +261,31 @@ export class UserDatabaseService {
       );
       CREATE INDEX IF NOT EXISTS idx_player_history_time ON player_history(created_at);
     `);
-    this.db.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ['schema_version', String(SCHEMA_VERSION)]);
+    this.conn.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ['schema_version', String(SCHEMA_VERSION)]);
     // Existing installs were created before the command-line admin flag existed.
-    const columns = this.db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+    const columns = this.queryAll<{ name: string }>('PRAGMA table_info(users)');
     if (!columns.some(column => column.name === 'cli_locked')) {
-      this.db.run('ALTER TABLE users ADD COLUMN cli_locked INTEGER NOT NULL DEFAULT 0');
+      this.conn.run('ALTER TABLE users ADD COLUMN cli_locked INTEGER NOT NULL DEFAULT 0');
     }
   }
 
   private seedBuiltInRoles(): void {
     const now = Date.now();
     for (const role of BUILT_IN_ROLES) {
-      const existing = this.db.prepare('SELECT id FROM roles WHERE id = ?').get(role.id);
+      const existing = this.queryOne('SELECT id FROM roles WHERE id = ?', [role.id]);
       if (existing) {
         // Keep the built-in description and name current with the app, but leave any
         // permission edits the operator made to a non-admin built-in role alone.
-        this.db.run('UPDATE roles SET name = ?, description = ?, built_in = 1, updated_at = ? WHERE id = ?',
+        this.conn.run('UPDATE roles SET name = ?, description = ?, built_in = 1, updated_at = ? WHERE id = ?',
           [role.name, role.description, now, role.id]);
         continue;
       }
-      this.db.run(
+      this.conn.run(
         'INSERT INTO roles (id, name, description, permissions, built_in, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
         [role.id, role.name, role.description, JSON.stringify(role.permissions), now, now]
       );
     }
   }
-
-  // -------------------- Activity feed --------------------
 
   /**
    * Append an entry and trim the table back to `maxEntries`.
@@ -280,13 +302,13 @@ export class UserDatabaseService {
   }): void {
     this.ensureOpen();
     this.write(() => {
-      this.db.run(
+      this.conn.run(
         'INSERT INTO activity (kind, message, instance_id, username, created_at) VALUES (?, ?, ?, ?, ?)',
         [entry.kind, entry.message, entry.instanceId ?? null, entry.username ?? null, Date.now()]
       );
 
       const max = entry.maxEntries ?? 500;
-      this.db.run(
+      this.conn.run(
         `DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY id DESC LIMIT ?)`,
         [max]
       );
@@ -294,11 +316,12 @@ export class UserDatabaseService {
   }
 
   /** Most recent first. */
-  listActivity(limit = 100): any[] {
+  listActivity(limit = 100): ActivityEntry[] {
     this.ensureOpen();
-    const rows = this.db
-      .prepare('SELECT id, kind, message, instance_id, username, created_at FROM activity ORDER BY id DESC LIMIT ?')
-      .all(Math.max(1, Math.min(500, limit))) as any[];
+    const rows = this.queryAll<ActivityRow>(
+      'SELECT id, kind, message, instance_id, username, created_at FROM activity ORDER BY id DESC LIMIT ?',
+      [Math.max(1, Math.min(500, limit))]
+    );
     return rows.map(row => ({
       id: row.id,
       kind: row.kind,
@@ -311,10 +334,8 @@ export class UserDatabaseService {
 
   clearActivity(): void {
     this.ensureOpen();
-    this.db.run('DELETE FROM activity');
+    this.conn.run('DELETE FROM activity');
   }
-
-  // -------------------- Player history --------------------
 
   /**
    * Record one sample: the player count of every instance at a moment in time. Written as
@@ -326,10 +347,10 @@ export class UserDatabaseService {
       const entries = Object.entries(counts || {});
       for (const [instanceId, players] of entries) {
         const value = Number.isFinite(players) && players > 0 ? Math.round(players) : 0;
-        this.db.run('INSERT INTO player_history (instance_id, players, created_at) VALUES (?, ?, ?)',
+        this.conn.run('INSERT INTO player_history (instance_id, players, created_at) VALUES (?, ?, ?)',
           [instanceId, value, at]);
       }
-      this.db.run('DELETE FROM player_history WHERE created_at < ?', [at - retentionMs]);
+      this.conn.run('DELETE FROM player_history WHERE created_at < ?', [at - retentionMs]);
     });
   }
 
@@ -339,9 +360,10 @@ export class UserDatabaseService {
    */
   listPlayerHistory(sinceMs: number): { t: number; counts: Record<string, number> }[] {
     this.ensureOpen();
-    const rows = this.db
-      .prepare('SELECT instance_id, players, created_at FROM player_history WHERE created_at >= ? ORDER BY created_at ASC')
-      .all(sinceMs) as { instance_id: string; players: number; created_at: number }[];
+    const rows = this.queryAll<{ instance_id: string; players: number; created_at: number }>(
+      'SELECT instance_id, players, created_at FROM player_history WHERE created_at >= ? ORDER BY created_at ASC',
+      [sinceMs]
+    );
 
     const byTime = new Map<number, Record<string, number>>();
     for (const row of rows) {
@@ -355,17 +377,15 @@ export class UserDatabaseService {
     return Array.from(byTime.entries()).map(([t, counts]) => ({ t, counts }));
   }
 
-  // -------------------- Roles --------------------
-
   listRoles(): Role[] {
     this.ensureOpen();
-    const rows = this.db.prepare('SELECT * FROM roles ORDER BY built_in DESC, name ASC').all() as RoleRow[];
+    const rows = this.queryAll<RoleRow>('SELECT * FROM roles ORDER BY built_in DESC, name ASC');
     return rows.map(row => this.toRole(row));
   }
 
   getRole(id: string): Role | null {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT * FROM roles WHERE id = ?').get(id) as RoleRow | undefined;
+    const row = this.queryOne<RoleRow>('SELECT * FROM roles WHERE id = ?', [id]);
     return row ? this.toRole(row) : null;
   }
 
@@ -373,17 +393,17 @@ export class UserDatabaseService {
     this.ensureOpen();
     const name = (input.name || '').trim();
     if (!name) return { success: false, error: 'Role name is required.' };
-    if (this.db.prepare('SELECT id FROM roles WHERE name = ? COLLATE NOCASE').get(name)) {
+    if (this.queryOne('SELECT id FROM roles WHERE name = ? COLLATE NOCASE', [name])) {
       return { success: false, error: `A role named "${name}" already exists.` };
     }
 
     const id = input.id?.trim() || this.slugify(name);
-    if (this.db.prepare('SELECT id FROM roles WHERE id = ?').get(id)) {
+    if (this.queryOne('SELECT id FROM roles WHERE id = ?', [id])) {
       return { success: false, error: `A role with the id "${id}" already exists.` };
     }
 
     const now = Date.now();
-    this.db.run(
+    this.conn.run(
       'INSERT INTO roles (id, name, description, permissions, built_in, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)',
       [id, name, (input.description || '').trim(), JSON.stringify(this.sanitizePermissions(input.permissions)), now, now]
     );
@@ -399,10 +419,10 @@ export class UserDatabaseService {
     }
 
     const name = (input.name || '').trim() || existing.name;
-    const clash = this.db.prepare('SELECT id FROM roles WHERE name = ? COLLATE NOCASE AND id != ?').get(name, input.id);
+    const clash = this.queryOne('SELECT id FROM roles WHERE name = ? COLLATE NOCASE AND id != ?', [name, input.id]);
     if (clash) return { success: false, error: `A role named "${name}" already exists.` };
 
-    this.db.run('UPDATE roles SET name = ?, description = ?, permissions = ?, updated_at = ? WHERE id = ?', [
+    this.conn.run('UPDATE roles SET name = ?, description = ?, permissions = ?, updated_at = ? WHERE id = ?', [
       name,
       (input.description ?? existing.description).trim(),
       JSON.stringify(this.sanitizePermissions(input.permissions)),
@@ -418,26 +438,24 @@ export class UserDatabaseService {
     if (!role) return { success: false, error: 'Role not found.' };
     if (role.builtIn) return { success: false, error: 'Built-in roles cannot be deleted.' };
 
-    const inUse = this.db.prepare('SELECT COUNT(*) AS count FROM users WHERE role_id = ?').get(id) as { count: number };
-    if ((inUse?.count ?? 0) > 0) {
-      return { success: false, error: `${inUse.count} user(s) still have this role. Move them to another role first.` };
+    const inUse = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ?', [id])?.count ?? 0;
+    if (inUse > 0) {
+      return { success: false, error: `${inUse} user(s) still have this role. Move them to another role first.` };
     }
 
-    this.db.run('DELETE FROM roles WHERE id = ?', [id]);
+    this.conn.run('DELETE FROM roles WHERE id = ?', [id]);
     return { success: true, data: { id } };
   }
 
-  // -------------------- Users --------------------
-
   listUsers(): User[] {
     this.ensureOpen();
-    const rows = this.db.prepare('SELECT * FROM users ORDER BY username ASC').all() as UserRow[];
+    const rows = this.queryAll<UserRow>('SELECT * FROM users ORDER BY username ASC');
     return rows.map(row => this.toUser(row));
   }
 
   getUser(id: string): User | null {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+    const row = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
     return row ? this.toUser(row) : null;
   }
 
@@ -459,7 +477,7 @@ export class UserDatabaseService {
     const validation = this.validateCredentials(username, input.password);
     if (validation) return { success: false, error: validation };
 
-    if (this.db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get(username)) {
+    if (this.queryOne('SELECT id FROM users WHERE username = ? COLLATE NOCASE', [username])) {
       return { success: false, error: `A user named "${username}" already exists.` };
     }
     if (!this.getRole(input.roleId)) {
@@ -467,9 +485,9 @@ export class UserDatabaseService {
     }
 
     const now = Date.now();
-    const id = this.newId();
+    const id = randomUUID();
     const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
-    this.db.run(
+    this.conn.run(
       `INSERT INTO users (id, username, password_hash, display_name, role_id, active, created_at, updated_at, last_login_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, now, now]
@@ -486,14 +504,14 @@ export class UserDatabaseService {
     if (!username) return { success: false, error: 'Username is required.' };
     if (username.length > 50) return { success: false, error: 'Username must be 50 characters or fewer.' };
 
-    const clash = this.db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE AND id != ?').get(username, input.id);
+    const clash = this.queryOne('SELECT id FROM users WHERE username = ? COLLATE NOCASE AND id != ?', [username, input.id]);
     if (clash) return { success: false, error: `A user named "${username}" already exists.` };
 
     const roleId = input.roleId ?? existing.roleId;
     if (!this.getRole(roleId)) return { success: false, error: 'That role does not exist.' };
 
     const active = input.active ?? existing.active;
-    // Never allow the last active admin to be demoted or disabled — that would lock everyone out.
+    // Never allow the last active admin to be demoted or disabled: that would lock everyone out.
     const losingAdmin = existing.roleId === ROLE_IDS.ADMIN && (roleId !== ROLE_IDS.ADMIN || !active);
     if (losingAdmin && this.countOtherActiveAdmins(existing.id) === 0) {
       return { success: false, error: 'This is the only active admin. Promote another user first.' };
@@ -517,7 +535,7 @@ export class UserDatabaseService {
       ? await bcrypt.hash(input.password, SALT_ROUNDS)
       : null;
 
-    this.db.run(
+    this.conn.run(
       `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, updated_at = ?
        ${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
       passwordHash
@@ -537,7 +555,7 @@ export class UserDatabaseService {
     if (user.roleId === ROLE_IDS.ADMIN && this.countOtherActiveAdmins(id) === 0) {
       return { success: false, error: 'This is the only active admin and cannot be deleted.' };
     }
-    this.db.run('DELETE FROM users WHERE id = ?', [id]);
+    this.conn.run('DELETE FROM users WHERE id = ?', [id]);
     return { success: true, data: { id } };
   }
 
@@ -552,10 +570,10 @@ export class UserDatabaseService {
     this.ensureOpen();
     const name = (username || '').trim();
     const row = name
-      ? (this.db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(name) as UserRow | undefined)
+      ? this.queryOne<UserRow>('SELECT * FROM users WHERE username = ? COLLATE NOCASE', [name])
       : undefined;
 
-    const hash = row?.password_hash || '$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinva';
+    const hash = row?.password_hash || UNMATCHABLE_BCRYPT_HASH;
     let ok = false;
     try {
       ok = await bcrypt.compare(password || '', hash);
@@ -565,14 +583,14 @@ export class UserDatabaseService {
 
     if (!row || !ok || !row.active) return null;
 
-    this.db.run('UPDATE users SET last_login_at = ? WHERE id = ?', [Date.now(), row.id]);
+    this.conn.run('UPDATE users SET last_login_at = ? WHERE id = ?', [Date.now(), row.id]);
     return this.getAuthenticatedUser(row.id);
   }
 
   /** Change your own password, checking the current one first. */
   async changeOwnPassword(id: string, currentPassword: string, newPassword: string): Promise<Result<{ id: string }>> {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+    const row = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
     if (!row) return { success: false, error: 'User not found.' };
 
     if (row.cli_locked) {
@@ -586,7 +604,7 @@ export class UserDatabaseService {
     if (validation) return { success: false, error: validation };
 
     const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    this.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', [hash, Date.now(), id]);
+    this.conn.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', [hash, Date.now(), id]);
     return { success: true, data: { id } };
   }
 
@@ -614,13 +632,13 @@ export class UserDatabaseService {
     const validation = this.validateCredentials(name, password);
     if (validation) return { success: false, error: validation };
 
-    this.db.run('UPDATE users SET cli_locked = 0 WHERE username != ? COLLATE NOCASE', [name]);
-    const existing = this.db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get(name) as { id: string } | undefined;
+    this.conn.run('UPDATE users SET cli_locked = 0 WHERE username != ? COLLATE NOCASE', [name]);
+    const existing = this.queryOne<{ id: string }>('SELECT id FROM users WHERE username = ? COLLATE NOCASE', [name]);
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const now = Date.now();
     if (!existing) {
-      const id = this.newId();
-      this.db.run(
+      const id = randomUUID();
+      this.conn.run(
         `INSERT INTO users (id, username, password_hash, display_name, role_id, active, cli_locked, created_at, updated_at, last_login_at)
          VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, NULL)`,
         [id, name, hash, name, ROLE_IDS.ADMIN, now, now]
@@ -628,19 +646,15 @@ export class UserDatabaseService {
       return { success: true, data: this.getUser(id)! };
     }
 
-    this.db.run(
+    this.conn.run(
       'UPDATE users SET password_hash = ?, role_id = ?, active = 1, cli_locked = 1, updated_at = ? WHERE id = ?',
       [hash, ROLE_IDS.ADMIN, now, existing.id]
     );
     return { success: true, data: this.getUser(existing.id)! };
   }
 
-  // -------------------- Helpers --------------------
-
   private countOtherActiveAdmins(excludeUserId: string): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) AS count FROM users WHERE role_id = ? AND active = 1 AND id != ?')
-      .get(ROLE_IDS.ADMIN, excludeUserId) as { count: number };
+    const row = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ? AND active = 1 AND id != ?', [ROLE_IDS.ADMIN, excludeUserId]);
     return row?.count ?? 0;
   }
 
@@ -664,14 +678,6 @@ export class UserDatabaseService {
   private slugify(name: string): string {
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     return base || `role-${Date.now()}`;
-  }
-
-  private newId(): string {
-    try {
-      return randomUUID();
-    } catch {
-      return `u_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    }
   }
 
   private toRole(row: RoleRow): Role {
@@ -716,7 +722,7 @@ export class UserDatabaseService {
    * Record this process as the owner, so a later run can tell a crash from a live instance.
    *
    * Only ever called after a write has succeeded, which is itself the proof that no other
-   * process holds the lock — SQLite would have returned "database is locked" otherwise. So
+   * process holds the lock; SQLite would have returned "database is locked" otherwise. So
    * the record is always overwritten: leaving an older process's pid in place was how a
    * dead pid came to stand for a live owner, and the next run then cleared a lock that was
    * still in use.
@@ -743,7 +749,7 @@ export class UserDatabaseService {
 
       // Where /proc exists, check identity rather than bare existence. PIDs restart from 1 in
       // every container, so after a restart the recorded id can name a different process, or a
-      // thread — which kill(id, 0) also accepts — and a stale lock would never be cleared.
+      // thread (which kill(id, 0) also accepts), and a stale lock would never be cleared.
       const identity = this.readProcessIdentity(pid);
       if (identity) {
         if (identity.tgid !== pid) return false;

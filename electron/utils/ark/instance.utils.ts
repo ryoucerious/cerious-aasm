@@ -1,147 +1,106 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { getDefaultInstallDir } from '../platform.utils';
+import { loadGlobalConfig } from '../global-config.utils';
+import { validateInstanceId } from '../validation.utils';
+import { writeJsonAtomic } from '../fs.utils';
+import type { InstanceConfig } from '../../types/server-instance.types';
 
-let uuidv4: (() => string) | null = null;
+// Live values that server-management.getAllInstances merges into each instance. The UI sends
+// the merged object back on save, so they are dropped before config.json is written.
+const RUNTIME_FIELDS = ['state', 'status', 'players', 'memory', 'cpu', 'startedAt'] as const;
 
-// Fallback UUID generator for when the uuid package fails
-function generateFallbackUuid(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
+type SaveOutcome = (InstanceConfig & { error?: undefined }) | { error: string; id?: undefined };
 
-async function getUuidV4() {
-  if (!uuidv4) {
-    try {
-      // Try multiple import methods for better packaged app compatibility
-      let mod;
-      try {
-        mod = await import('uuid');
-      } catch (error) {
-        mod = require('uuid');
-      }
-      
-      uuidv4 = mod.v4 || mod.default?.v4 || generateFallbackUuid;
-    } catch (error) {
-      // If all imports fail, use fallback
-      uuidv4 = generateFallbackUuid;
-    }
-  }
-  return uuidv4;
-}
-
-// Validate instance ID to prevent directory traversal and ensure proper format
-function validateInstanceId(id: string): boolean {
-  if (!id || typeof id !== 'string') {
-    return false;
-  }
-  
-  // Allow only alphanumeric characters, hyphens, and underscores
-  // This prevents directory traversal attempts like "../" or "../../"
-  const validIdPattern = /^[a-zA-Z0-9_-]+$/;
-  if (!validIdPattern.test(id)) {
-    return false;
-  }
-  
-  // Additional length check
-  if (id.length > 50) {
-    return false;
-  }
-  
-  return true;
-}
-
-
-export function getInstancesBaseDir() {
-  // Use config if available, otherwise default
-  try {
-     const { loadGlobalConfig } = require('../global-config.utils');
-     const config = loadGlobalConfig();
-     if (config.serverDataDir) {
-       return path.join(config.serverDataDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
-     }
-  } catch (e) {
-    // Ignore error loading config (circular dependency or file not found), fall back to default
-  }
-
-  const installDir = getDefaultInstallDir();
-  if (!installDir) {
+export function getInstancesBaseDir(): string {
+  const root = loadGlobalConfig().serverDataDir || getDefaultInstallDir();
+  if (!root) {
     throw new Error('Could not determine install directory');
   }
-  return path.join(installDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
+  return path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'Servers');
 }
 
-// For compatibility with previous code, alias getDefaultInstancesBaseDir
-export function getDefaultInstancesBaseDir() {
-  return getInstancesBaseDir();
-}
-
-const getInstanceConfigPath = (id: string) => {
+/** Absolute directory for an instance. Throws if `id` fails validateInstanceId or escapes the base dir. */
+export function getInstanceDir(id: string): string {
   if (!validateInstanceId(id)) {
     throw new Error(`Invalid instance ID format: ${id}`);
   }
-  return path.join(getInstancesBaseDir(), id, 'config.json');
-};
+  const baseDir = getInstancesBaseDir();
+  const dir = path.resolve(baseDir, id);
+  // Defence in depth: the id pattern already rules out dots and separators.
+  const relative = path.relative(baseDir, dir);
+  if (!relative || relative.split(path.sep)[0] === '..' || path.isAbsolute(relative)) {
+    throw new Error(`Instance directory for ${id} escapes ${baseDir}`);
+  }
+  return dir;
+}
+
+function getInstanceConfigPath(id: string): string {
+  return path.join(getInstanceDir(id), 'config.json');
+}
+
+// Notepad and PowerShell 5 save UTF-8 with a byte order mark, which JSON.parse rejects. The
+// parser's message can quote the file, passwords included, so it is replaced. Untyped, as the
+// parse always was: callers read fields InstanceConfig does not declare.
+function readInstanceConfig(id: string): any {
+  const raw = fs.readFileSync(getInstanceConfigPath(id), 'utf8').replace(/^\uFEFF/, '');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`The config.json of server ${id} is not valid JSON.`);
+  }
+}
 
 export async function getAllInstances() {
   const baseDir = getInstancesBaseDir();
-  let justCreated = false;
   if (!fs.existsSync(baseDir)) {
     fs.mkdirSync(baseDir, { recursive: true });
-    justCreated = true;
   }
-  let instances = fs.readdirSync(baseDir)
-    .filter(id => {
-      if (!validateInstanceId(id)) return false;
-      return fs.existsSync(path.join(baseDir, id, 'config.json'));
-    })
+  const instances = fs.readdirSync(baseDir)
+    .filter(id => validateInstanceId(id) && fs.existsSync(path.join(baseDir, id, 'config.json')))
     .map(id => {
       try {
-        const config = JSON.parse(fs.readFileSync(getInstanceConfigPath(id), 'utf8'));
-        return { id, ...config };
+        // The directory name is the id. A config copied in from a backup still carries the id
+        // of the server it was taken from.
+        return { ...readInstanceConfig(id), id };
       } catch {
         return null;
       }
     })
     .filter(Boolean);
 
-  // Sort by sortOrder so Start All / other bulk operations respect the user-defined order
-  instances = instances.sort((a: any, b: any) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
-
-  // No default creation here; frontend is responsible for creating a default if needed
-  return instances;
+  // Start All and other bulk operations follow the user's sidebar order.
+  return instances.sort((a: any, b: any) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
 }
 
 export function getInstance(id: string) {
   if (!id || typeof id !== 'string') {
-    console.warn('[server-instance-utils] getInstance called with invalid id:', id);
+    console.warn('[instance-utils] getInstance called with invalid id:', id);
     return null;
   }
-  
-  const configPath = getInstanceConfigPath(id);
-  if (!fs.existsSync(configPath)) return null;
-  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+  if (!fs.existsSync(getInstanceConfigPath(id))) return null;
+  return { ...readInstanceConfig(id), id };
 }
 
-export async function saveInstance(instance: any) {
-  // Check for duplicate name (case-insensitive)
+export async function saveInstance(instance: Partial<InstanceConfig>): Promise<SaveOutcome> {
+  const id = instance.id || randomUUID();
+  const dir = getInstanceDir(id);
+
   const all = await getAllInstances();
   const name = (instance.name || '').trim().toLowerCase();
-  if (all.some(inst => inst.name && inst.name.trim().toLowerCase() === name && inst.id !== instance.id)) {
-    // Duplicate name found
+  if (all.some(inst => inst.name && inst.name.trim().toLowerCase() === name && inst.id !== id)) {
     return { error: 'A server with this name already exists.' };
   }
-  const uuidGenerator = await getUuidV4();
-  const id = instance.id || (uuidGenerator ? uuidGenerator() : generateFallbackUuid());
-  const dir = path.join(getInstancesBaseDir(), id);
+
+  const config: InstanceConfig = { ...instance, id };
+  for (const field of RUNTIME_FIELDS) {
+    delete config[field];
+  }
   fs.mkdirSync(dir, { recursive: true });
-  // Always include the id in the config.json
-  const instanceWithId = { ...instance, id };
-  fs.writeFileSync(getInstanceConfigPath(id), JSON.stringify(instanceWithId, null, 2));
-  return { ...instanceWithId };
+  writeJsonAtomic(path.join(dir, 'config.json'), config);
+  return config;
 }
 
 export function deleteInstance(id: string) {
@@ -149,8 +108,7 @@ export function deleteInstance(id: string) {
     console.error('[instance-utils] deleteInstance called with invalid id:', id);
     return false;
   }
-  const baseDir = getInstancesBaseDir();
-  const dir = path.join(baseDir, id);
+  const dir = getInstanceDir(id);
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
     return true;
@@ -158,33 +116,6 @@ export function deleteInstance(id: string) {
   return false;
 }
 
-/**
- * Sets up instance directories and loads configuration
- */
-export function loadInstanceConfig(instanceId: string): { instanceDir: string, config: any } {
-  const baseDir = getDefaultInstancesBaseDir?.() || getInstancesBaseDir?.();
-  if (!baseDir) {
-    throw new Error('Instance folder missing');
-  }
-
-  const instanceDir = path.join(baseDir, instanceId);
-
-  // Load instance config
-  let config: any = {};
-  const configPath = path.join(instanceDir, 'config.json');
-  try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    }
-  } catch (e) {
-    console.error('[ark-server-utils] Failed to load instance config:', e);
-  }
-
-  return { instanceDir, config };
-}
-
 export function getInstanceSaveDir(instanceDir: string): string {
   return path.join(instanceDir, 'SavedArks');
 }
-
-// Inline exports declared above

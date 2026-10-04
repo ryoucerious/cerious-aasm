@@ -1,131 +1,114 @@
-import fs from 'fs';
-import path from 'path';
+import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as pty from 'node-pty';
+import axios from 'axios';
+import { onInstallCancel } from './installer.utils';
+import { getDefaultInstallDir, getPlatform } from './platform.utils';
+import {
+  extractTarball,
+  getSteamCmdDir,
+  getSteamCmdExecutable,
+  installSteamCmd,
+  isSteamCmdInstalled
+} from './steamcmd.utils';
 
 jest.mock('fs', () => {
   // The automock omits createWriteStream, and `import * as fs` in the module under
   // test binds at import time, so it has to be present in the factory.
-  const mocked: any = jest.createMockFromModule('fs');
+  const mocked = jest.createMockFromModule<typeof import('fs')>('fs');
   mocked.createWriteStream = jest.fn();
   return mocked;
 });
 jest.mock('path');
-jest.mock('../utils/platform.utils');
-jest.mock('../utils/installer.utils');
-jest.mock('node-pty', () => ({
-  spawn: jest.fn(() => ({
-    onData: jest.fn(),
-    onExit: jest.fn((cb: Function) => { cb({ exitCode: 0 }); }),
-    kill: jest.fn(),
-  })),
+jest.mock('./platform.utils');
+jest.mock('./installer.utils', () => ({
+  ...jest.requireActual('./installer.utils'),
+  onInstallCancel: jest.fn()
 }));
+jest.mock('node-pty', () => ({ spawn: jest.fn() }));
 jest.mock('axios', () => ({ __esModule: true, default: { get: jest.fn() } }));
 jest.mock('tar', () => ({ x: jest.fn() }));
 jest.mock('adm-zip', () => {
   const extractAllTo = jest.fn();
-  const ctor: any = jest.fn().mockImplementation(() => ({ extractAllTo }));
-  ctor.__extractAllTo = extractAllTo;
-  return ctor;
+  const ctor = jest.fn().mockImplementation(() => ({ extractAllTo }));
+  return Object.assign(ctor, { __extractAllTo: extractAllTo });
 });
 
-const mockedFs = fs as jest.Mocked<typeof fs>;
-const mockedPath = path as jest.Mocked<typeof path>;
-const { getDefaultInstallDir } = require('../utils/platform.utils');
-const { setCurrentAbort } = require('../utils/installer.utils');
-const axios = require('axios').default;
-const tar = require('tar');
-const AdmZip = require('adm-zip');
-const { EventEmitter } = require('events');
+const mockFs = jest.mocked(fs);
+const mockGet = jest.mocked(axios.get);
+const mockOnInstallCancel = jest.mocked(onInstallCancel);
+const mockSpawn = jest.mocked(pty.spawn);
+const tar = jest.requireMock<{ x: jest.Mock }>('tar');
+const AdmZip = jest.requireMock<jest.Mock & { __extractAllTo: jest.Mock }>('adm-zip');
 
-// Mock process.platform
-const originalPlatform = process.platform;
-Object.defineProperty(process, 'platform', {
-  writable: true,
-  value: originalPlatform
-});
+const STEAMCMD_DIR = '/mock/install/dir/steamcmd';
 
-const mockInstallDir = '/mock/install/dir';
-const mockSteamCmdDir = '/mock/install/dir/steamcmd';
+function setPlatform(platform: 'windows' | 'linux'): void {
+  jest.mocked(getPlatform).mockReturnValue(platform);
+}
+
+/** A pty for SteamCMD's first-run initialisation that exits with the given codes, one per spawn. */
+function steamCmdExits(...codes: number[]): void {
+  for (const exitCode of codes) {
+    mockSpawn.mockImplementationOnce(() => ({
+      onData: jest.fn(),
+      onExit: (listener: (result: { exitCode: number }) => void) => listener({ exitCode }),
+      kill: jest.fn()
+    }) as unknown as pty.IPty);
+  }
+}
 
 describe('steamcmd.utils', () => {
+  let unregisterCancel: jest.Mock;
+
   beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup default mocks
-    (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-    mockedPath.join.mockImplementation((...args) => args.join('/'));
+    jest.mocked(getDefaultInstallDir).mockReturnValue('/mock/install/dir');
+    jest.mocked(path.join).mockImplementation((...parts: string[]) => parts.join('/'));
+    setPlatform('windows');
+    unregisterCancel = jest.fn();
+    mockOnInstallCancel.mockReset().mockReturnValue(unregisterCancel);
+    mockSpawn.mockReset();
+    mockGet.mockReset();
+    tar.x.mockReset().mockResolvedValue(undefined);
+    AdmZip.mockClear();
+    AdmZip.__extractAllTo.mockReset();
   });
 
-  afterEach(() => {
-    // Reset platform
-    Object.defineProperty(process, 'platform', {
-      writable: true,
-      value: originalPlatform
+  describe('paths', () => {
+    it('keeps SteamCMD in the install dir', () => {
+      expect(getSteamCmdDir()).toBe(STEAMCMD_DIR);
+    });
+
+    it.each([
+      ['windows', `${STEAMCMD_DIR}/steamcmd.exe`],
+      ['linux', `${STEAMCMD_DIR}/steamcmd.sh`]
+    ] as const)('names the %s executable', (platform, executable) => {
+      setPlatform(platform);
+
+      expect(getSteamCmdExecutable()).toBe(executable);
+    });
+
+    it.each([true, false])('reports whether the executable exists (%p)', exists => {
+      setPlatform('linux');
+      mockFs.existsSync.mockReturnValue(exists);
+
+      expect(isSteamCmdInstalled()).toBe(exists);
+      expect(mockFs.existsSync).toHaveBeenCalledWith(`${STEAMCMD_DIR}/steamcmd.sh`);
     });
   });
 
-  describe('getSteamCmdDir', () => {
-    it('should return the correct steamcmd directory', () => {
-      const result = require('../utils/steamcmd.utils').getSteamCmdDir();
-      expect(result).toBe(mockSteamCmdDir);
-      expect(getDefaultInstallDir).toHaveBeenCalled();
-    });
-  });
+  describe('extractTarball', () => {
+    it('unpacks with the options it is given', async () => {
+      await extractTarball('/proton/GE.tar.gz', { cwd: '/proton', strip: 1 });
 
-  describe('isSteamCmdInstalled', () => {
-    it('should return true when steamcmd.exe exists on Windows', () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(true);
-
-      const result = require('../utils/steamcmd.utils').isSteamCmdInstalled();
-
-      expect(result).toBe(true);
-      expect(mockedFs.existsSync).toHaveBeenCalledWith('/mock/install/dir/steamcmd/steamcmd.exe');
-    });
-
-    it('should return false when steamcmd.exe does not exist on Windows', () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const result = require('../utils/steamcmd.utils').isSteamCmdInstalled();
-
-      expect(result).toBe(false);
-      expect(mockedFs.existsSync).toHaveBeenCalledWith('/mock/install/dir/steamcmd/steamcmd.exe');
-    });
-
-    it('should return true when steamcmd.sh exists on Linux', () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'linux' });
-      mockedFs.existsSync.mockReturnValue(true);
-
-      const result = require('../utils/steamcmd.utils').isSteamCmdInstalled();
-
-      expect(result).toBe(true);
-      expect(mockedFs.existsSync).toHaveBeenCalledWith('/mock/install/dir/steamcmd/steamcmd.sh');
-    });
-
-    it('should return false when steamcmd.sh does not exist on Linux', () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'linux' });
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const result = require('../utils/steamcmd.utils').isSteamCmdInstalled();
-
-      expect(result).toBe(false);
-      expect(mockedFs.existsSync).toHaveBeenCalledWith('/mock/install/dir/steamcmd/steamcmd.sh');
-    });
-
-    it('should return true when steamcmd.sh exists on macOS', () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'darwin' });
-      mockedFs.existsSync.mockReturnValue(true);
-
-      const result = require('../utils/steamcmd.utils').isSteamCmdInstalled();
-
-      expect(result).toBe(true);
-      expect(mockedFs.existsSync).toHaveBeenCalledWith('/mock/install/dir/steamcmd/steamcmd.sh');
+      expect(tar.x).toHaveBeenCalledWith({ file: '/proton/GE.tar.gz', cwd: '/proton', strip: 1 });
     });
   });
 
   describe('installSteamCmd', () => {
     let onData: jest.Mock;
-    let writeStream: any;
+    let writeStream: EventEmitter & { destroy?: jest.Mock };
 
     /**
      * Stand in for the axios response stream. `pipe` is what the download ultimately
@@ -134,21 +117,22 @@ describe('steamcmd.utils', () => {
     function stubDownload(opts: { total?: number; chunks?: number[]; failWith?: Error } = {}) {
       const total = opts.total === undefined ? 1000 : opts.total;
       const chunks = opts.chunks || [400, 600];
-      const responseStream: any = new EventEmitter();
-      responseStream.destroy = jest.fn();
-      responseStream.pipe = jest.fn(() => {
-        process.nextTick(() => {
-          if (opts.failWith) {
-            responseStream.emit('error', opts.failWith);
-            return;
-          }
-          for (const size of chunks) {
-            responseStream.emit('data', Buffer.alloc(size));
-          }
-          writeStream.emit('finish');
-        });
+      const responseStream = Object.assign(new EventEmitter(), {
+        destroy: jest.fn(),
+        pipe: jest.fn(() => {
+          process.nextTick(() => {
+            if (opts.failWith) {
+              responseStream.emit('error', opts.failWith);
+              return;
+            }
+            for (const size of chunks) {
+              responseStream.emit('data', Buffer.alloc(size));
+            }
+            writeStream.emit('finish');
+          });
+        })
       });
-      (axios.get as jest.Mock).mockResolvedValue({
+      mockGet.mockResolvedValue({
         headers: total ? { 'content-length': String(total) } : {},
         data: responseStream,
       });
@@ -156,111 +140,87 @@ describe('steamcmd.utils', () => {
     }
 
     /** installSteamCmd is callback-style over a promise chain, so tests must await it. */
-    function runInstall(withOnData = true): Promise<{ err: Error | null; output?: string }> {
-      const { installSteamCmd } = require('../utils/steamcmd.utils');
-      return new Promise((resolve) => {
-        installSteamCmd(
-          (err: Error | null, output?: string) => resolve({ err: err, output: output }),
-          withOnData ? onData : undefined
-        );
-      });
+    function runInstall(withOnData = true): Promise<Error | null> {
+      return new Promise(resolve => installSteamCmd(resolve, withOnData ? onData : undefined));
     }
 
     beforeEach(() => {
       onData = jest.fn();
-      writeStream = new EventEmitter();
-      writeStream.destroy = jest.fn();
-      (mockedFs.createWriteStream as jest.Mock).mockReturnValue(writeStream);
-      (tar.x as jest.Mock).mockResolvedValue(undefined);
-      AdmZip.__extractAllTo.mockReset();
+      writeStream = Object.assign(new EventEmitter(), { destroy: jest.fn() });
+      jest.mocked(mockFs.createWriteStream).mockReturnValue(writeStream as unknown as fs.WriteStream);
+      mockFs.existsSync.mockReturnValue(false);
+      steamCmdExits(0);
     });
 
     it('should download the Windows zip and extract it in-process', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
       stubDownload();
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeNull();
-      expect(mockedFs.mkdirSync).toHaveBeenCalledWith(mockSteamCmdDir, { recursive: true });
-      expect(axios.get).toHaveBeenCalledWith(
+      expect(err).toBeNull();
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith(STEAMCMD_DIR, { recursive: true });
+      expect(mockGet).toHaveBeenCalledWith(
         'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
         expect.objectContaining({ responseType: 'stream' })
       );
-      expect(mockedFs.createWriteStream).toHaveBeenCalledWith(mockSteamCmdDir + '/steamcmd.zip');
-      expect(AdmZip).toHaveBeenCalledWith(mockSteamCmdDir + '/steamcmd.zip');
-      expect(AdmZip.__extractAllTo).toHaveBeenCalledWith(mockSteamCmdDir, true);
+      expect(mockFs.createWriteStream).toHaveBeenCalledWith(STEAMCMD_DIR + '/steamcmd.zip');
+      expect(AdmZip).toHaveBeenCalledWith(STEAMCMD_DIR + '/steamcmd.zip');
+      expect(AdmZip.__extractAllTo).toHaveBeenCalledWith(STEAMCMD_DIR, true);
       expect(tar.x).not.toHaveBeenCalled();
     });
 
     it('should download the Linux tarball, untar it, and chmod steamcmd.sh', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'linux' });
-      mockedFs.existsSync.mockReturnValue(true);
+      setPlatform('linux');
+      mockFs.existsSync.mockReturnValue(true);
       stubDownload();
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeNull();
-      expect(axios.get).toHaveBeenCalledWith(
+      expect(err).toBeNull();
+      expect(mockGet).toHaveBeenCalledWith(
         'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz',
         expect.objectContaining({ responseType: 'stream' })
       );
-      expect(tar.x).toHaveBeenCalledWith({
-        file: mockSteamCmdDir + '/steamcmd_linux.tar.gz',
-        cwd: mockSteamCmdDir,
-      });
+      expect(tar.x).toHaveBeenCalledWith({ file: STEAMCMD_DIR + '/steamcmd_linux.tar.gz', cwd: STEAMCMD_DIR });
       expect(AdmZip).not.toHaveBeenCalled();
-      expect(mockedFs.chmodSync).toHaveBeenCalledWith(mockSteamCmdDir + '/steamcmd.sh', '755');
+      expect(mockFs.chmodSync).toHaveBeenCalledWith(STEAMCMD_DIR + '/steamcmd.sh', '755');
     });
 
-    // The point of the change: no powershell.exe, no bash, no cmd.exe. node-pty survives,
-    // but only to run steamcmd itself during first-time initialization.
+    // node-pty survives only to run steamcmd itself during first-time initialization.
     it('should never spawn a shell to download or extract', async () => {
-      const pty = require('node-pty');
-      for (const platform of ['win32', 'linux']) {
-        jest.clearAllMocks();
-        Object.defineProperty(process, 'platform', { writable: true, value: platform });
-        (getDefaultInstallDir as jest.Mock).mockReturnValue(mockInstallDir);
-        mockedPath.join.mockImplementation((...args: string[]) => args.join('/'));
-        (mockedFs.createWriteStream as jest.Mock).mockReturnValue(writeStream);
-        (tar.x as jest.Mock).mockResolvedValue(undefined);
-        mockedFs.existsSync.mockReturnValue(false);
+      for (const platform of ['windows', 'linux'] as const) {
+        setPlatform(platform);
         stubDownload();
+        steamCmdExits(0);
 
         await runInstall();
+      }
 
-        const spawned = (pty.spawn as jest.Mock).mock.calls.map((c: any[]) => String(c[0]));
-        const shells = ['powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash', 'bash.exe', 'sh'];
-        for (const command of spawned) {
-          // Compare the basename: 'steamcmd.exe' legitimately contains 'cmd.exe'.
-          const base = command.toLowerCase().split(/[\/]/).pop();
-          expect(shells).not.toContain(base);
-        }
+      const shells = ['powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash', 'bash.exe', 'sh'];
+      for (const [command] of mockSpawn.mock.calls) {
+        // Compare the basename: 'steamcmd.exe' legitimately contains 'cmd.exe'.
+        expect(shells).not.toContain(String(command).toLowerCase().split('/').pop());
       }
     });
 
     it('should skip directory creation if the directory already exists', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(true);
+      mockFs.existsSync.mockReturnValue(true);
       stubDownload();
 
       await runInstall();
 
-      expect(mockedFs.existsSync).toHaveBeenCalledWith(mockSteamCmdDir);
-      expect(mockedFs.mkdirSync).not.toHaveBeenCalled();
+      expect(mockFs.existsSync).toHaveBeenCalledWith(STEAMCMD_DIR);
+      expect(mockFs.mkdirSync).not.toHaveBeenCalled();
     });
 
     it('should report byte-accurate download progress across the 0-50% phase', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
       // 1000 bytes delivered as 400 then 600 => 40% and 100% of the download phase,
       // which map onto 20% and 50% of the overall bar.
       stubDownload({ total: 1000, chunks: [400, 600] });
 
       await runInstall();
 
-      const progress = onData.mock.calls.map((c: any[]) => c[0]);
+      const progress = onData.mock.calls.map(([report]) => report);
       expect(progress).toContainEqual({ percent: 20, step: 'download', message: 'Downloading... (20%)' });
       expect(progress).toContainEqual({ percent: 50, step: 'download', message: 'Downloading... (50%)' });
       expect(progress).toContainEqual(expect.objectContaining({ percent: 50, step: 'extract' }));
@@ -268,142 +228,175 @@ describe('steamcmd.utils', () => {
     });
 
     it('should not report download percentages when Content-Length is missing', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
       stubDownload({ total: 0 });
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeNull();
+      expect(err).toBeNull();
       const downloadPercents = onData.mock.calls
-        .map((c: any[]) => c[0])
-        .filter((prog: any) => prog.step === 'download' && prog.percent > 0);
+        .map(([report]) => report)
+        .filter(report => report.step === 'download' && report.percent > 0);
       expect(downloadPercents).toEqual([]);
     });
 
     it('should surface a download failure through the callback', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
       stubDownload({ failWith: new Error('socket hang up') });
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeInstanceOf(Error);
-      expect(result.err!.message).toBe('socket hang up');
+      expect(err).toEqual(new Error('socket hang up'));
       expect(onData).toHaveBeenCalledWith(expect.objectContaining({ step: 'error', message: 'socket hang up' }));
     });
 
     it('should surface an extraction failure through the callback', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'linux' });
-      mockedFs.existsSync.mockReturnValue(false);
+      setPlatform('linux');
       stubDownload();
-      (tar.x as jest.Mock).mockRejectedValue(new Error('unexpected end of file'));
+      tar.x.mockRejectedValue(new Error('unexpected end of file'));
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeInstanceOf(Error);
-      expect(result.err!.message).toBe('unexpected end of file');
+      expect(err).toEqual(new Error('unexpected end of file'));
       expect(onData).toHaveBeenCalledWith(expect.objectContaining({ step: 'error' }));
     });
 
     it('should reject when the request fails before streaming starts', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
-      (axios.get as jest.Mock).mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
+      mockGet.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(result.err).toBeInstanceOf(Error);
-      expect(result.err!.message).toBe('getaddrinfo ENOTFOUND');
+      expect(err).toEqual(new Error('getaddrinfo ENOTFOUND'));
     });
 
     // Cancel has to reach an in-process download, which has no pty to kill.
-    it('should register an AbortController so cancelInstaller can stop the download', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
+    it('lets cancelInstaller stop the download while it runs', async () => {
       stubDownload();
 
       await runInstall();
 
-      expect(setCurrentAbort).toHaveBeenCalledWith(expect.any(AbortController));
-      // ...and cleared once the install settles, so a later cancel aborts nothing stale.
-      const calls = (setCurrentAbort as jest.Mock).mock.calls;
-      expect(calls[calls.length - 1]).toEqual([null]);
+      expect(mockOnInstallCancel).toHaveBeenCalledWith(expect.any(Function));
+      expect(unregisterCancel).toHaveBeenCalled();
     });
 
     it('should pass the abort signal to axios and reject when it fires', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const responseStream: any = new EventEmitter();
-      responseStream.destroy = jest.fn();
-      responseStream.pipe = jest.fn(); // stall mid-download
-      (axios.get as jest.Mock).mockResolvedValue({
-        headers: { 'content-length': '1000' },
-        data: responseStream,
-      });
+      const responseStream = Object.assign(new EventEmitter(), { destroy: jest.fn(), pipe: jest.fn() });
+      mockGet.mockResolvedValue({ headers: { 'content-length': '1000' }, data: responseStream });
 
       const pending = runInstall();
-      const controller = (setCurrentAbort as jest.Mock).mock.calls[0][0] as AbortController;
-      await new Promise((r) => process.nextTick(r));
-      controller.abort();
+      const cancel = mockOnInstallCancel.mock.calls[0][0];
+      await new Promise(resolve => process.nextTick(resolve));
+      cancel();
 
-      const result = await pending;
-      expect(result.err).toBeInstanceOf(Error);
-      expect(result.err!.message).toBe('Install cancelled.');
-      expect(axios.get).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ signal: controller.signal })
-      );
+      const err = await pending;
+      expect(err).toEqual(new Error('Install cancelled.'));
+      expect(mockGet).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    });
+
+    it('reports a cancel that arrives before the download starts as a cancel', async () => {
+      mockGet.mockImplementation((_url, config) => new Promise((_resolve, reject) => {
+        config?.signal?.addEventListener?.('abort', () => reject(new Error('canceled')));
+      }));
+
+      const pending = runInstall();
+      mockOnInstallCancel.mock.calls[0][0]();
+
+      expect(await pending).toEqual(new Error('Install cancelled.'));
     });
 
     it('should work without an onData callback', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      mockedFs.existsSync.mockReturnValue(false);
       stubDownload();
 
-      const result = await runInstall(false);
+      const err = await runInstall(false);
 
-      expect(result.err).toBeNull();
+      expect(err).toBeNull();
     });
 
     it('should initialize SteamCMD after extraction and retry on non-zero exit', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      const pty = require('node-pty');
-
-      let spawnCount = 0;
-      (pty.spawn as jest.Mock).mockImplementation(() => {
-        spawnCount++;
-        return {
-          onData: jest.fn(),
-          onExit: jest.fn((cb: Function) => { cb({ exitCode: spawnCount === 1 ? 7 : 0 }); }),
-          kill: jest.fn(),
-        };
-      });
-      mockedFs.existsSync.mockReturnValue(false);
+      mockSpawn.mockReset();
+      steamCmdExits(7, 0);
       stubDownload();
 
-      const result = await runInstall();
+      const err = await runInstall();
 
-      expect(pty.spawn).toHaveBeenCalledTimes(2);
-      expect(pty.spawn).toHaveBeenCalledWith(mockSteamCmdDir + '/steamcmd.exe', ['+quit'], { cwd: mockSteamCmdDir });
-      expect(result.err).toBeNull();
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      expect(mockSpawn).toHaveBeenCalledWith(STEAMCMD_DIR + '/steamcmd.exe', ['+quit'], { cwd: STEAMCMD_DIR });
+      expect(err).toBeNull();
       expect(onData).toHaveBeenCalledWith(
         expect.objectContaining({ step: 'init', message: expect.stringContaining('Initializing') })
       );
     });
 
     it('should handle pty.spawn failure during initialization gracefully', async () => {
-      Object.defineProperty(process, 'platform', { writable: true, value: 'win32' });
-      const pty = require('node-pty');
-      (pty.spawn as jest.Mock).mockImplementation(() => { throw new Error('pty spawn failed'); });
-      mockedFs.existsSync.mockReturnValue(false);
+      mockSpawn.mockReset().mockImplementation(() => { throw new Error('pty spawn failed'); });
       stubDownload();
 
-      const result = await runInstall();
-
       // Init is best-effort; the install itself still succeeded.
-      expect(result.err).toBeNull();
+      expect(await runInstall()).toBeNull();
+    });
+
+    it('keeps Cancel registered until the install has finished initialising', async () => {
+      stubDownload();
+      mockSpawn.mockReset().mockImplementationOnce(() => ({
+        onData: jest.fn(),
+        onExit: (listener: (result: { exitCode: number }) => void) => {
+          expect(unregisterCancel).not.toHaveBeenCalled();
+          listener({ exitCode: 0 });
+        },
+        kill: jest.fn()
+      }) as unknown as pty.IPty);
+
+      expect(await runInstall()).toBeNull();
+      expect(unregisterCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops first-run initialisation on cancel and ends the install cancelled', async () => {
+      const init = { onData: jest.fn(), onExit: jest.fn(), kill: jest.fn() };
+      mockSpawn.mockReset().mockReturnValueOnce(init as unknown as pty.IPty);
+      stubDownload();
+
+      const pending = runInstall();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      mockOnInstallCancel.mock.calls[0][0]();
+
+      expect(await pending).toEqual(new Error('Install cancelled.'));
+      expect(init.kill).toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(unregisterCancel).toHaveBeenCalled();
+    });
+
+    it('does not initialise after a cancel that arrives during extraction', async () => {
+      setPlatform('linux');
+      stubDownload();
+      tar.x.mockImplementation(async () => mockOnInstallCancel.mock.calls[0][0]());
+
+      expect(await runInstall()).toEqual(new Error('Install cancelled.'));
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('still calls back when a progress report throws', async () => {
+      stubDownload();
+      onData.mockImplementation(() => { throw new Error('socket closed'); });
+
+      expect(await runInstall()).toBeNull();
+    });
+
+    describe('when an initialisation run hangs', () => {
+      beforeEach(() => jest.useFakeTimers({ doNotFake: ['nextTick'] }));
+      afterEach(() => jest.useRealTimers());
+
+      it('stops it after ten minutes and moves on', async () => {
+        const hung = { onData: jest.fn(), onExit: jest.fn(), kill: jest.fn() };
+        mockSpawn.mockReset().mockReturnValueOnce(hung as unknown as pty.IPty);
+        steamCmdExits(0);
+        stubDownload();
+
+        const pending = runInstall();
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+        expect(hung.kill).toHaveBeenCalled();
+        expect(await pending).toBeNull();
+        expect(mockSpawn).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });

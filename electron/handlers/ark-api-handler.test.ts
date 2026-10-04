@@ -1,13 +1,10 @@
-import { jest } from '@jest/globals';
+import { messagingService } from '../services/messaging.service';
+import { arkApiPluginService } from '../services/ark-api-plugin.service';
+import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
 
 jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-    sendToAll: jest.fn(),
-  },
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
 }));
-
 jest.mock('../services/ark-api-plugin.service', () => ({
   arkApiPluginService: {
     listPlugins: jest.fn(),
@@ -15,243 +12,198 @@ jest.mock('../services/ark-api-plugin.service', () => ({
     getLatestAsaApiRelease: jest.fn(),
     downloadAsaApi: jest.fn(),
     installPluginFromZipPath: jest.fn(),
-    installPluginFromUrl: jest.fn(),
-  },
+    installPluginFromUrl: jest.fn()
+  }
 }));
+jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ isAsaApiLoaderInstalled: jest.fn() }));
 
-jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({
-  isAsaApiLoaderInstalled: jest.fn(),
-}));
+const mockMessaging = jest.mocked(messagingService);
+const mockPlugins = jest.mocked(arkApiPluginService);
 
-import { messagingService } from '../services/messaging.service';
-import { arkApiPluginService } from '../services/ark-api-plugin.service';
-
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const mockPluginService = arkApiPluginService as jest.Mocked<typeof arkApiPluginService>;
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
 describe('ark-api-handler', () => {
-  let handlers: Record<string, (...args: any[]) => Promise<void>>;
-  let mockSender: any;
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
     require('./ark-api-handler');
-
-    handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
-      handlers[call[0] as string] = call[1] as any;
-    }
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    mockSender = { id: 'test-sender' };
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('should register all expected handlers', () => {
-    expect(handlers['list-ark-api-plugins']).toBeDefined();
-    expect(handlers['remove-ark-api-plugin']).toBeDefined();
-    expect(handlers['get-asaapi-latest']).toBeDefined();
-    expect(handlers['download-asaapi']).toBeDefined();
-    expect(handlers['install-plugin-from-zip']).toBeDefined();
-    expect(handlers['install-plugin-from-url']).toBeDefined();
-    expect(handlers['get-asaapi-status']).toBeDefined();
-  });
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
   describe('get-asaapi-status', () => {
-    it('should report when AsaApiLoader is installed', async () => {
-      const { isAsaApiLoaderInstalled } = require('../utils/ark/ark-server/ark-server-paths.utils');
-      (isAsaApiLoaderInstalled as jest.Mock).mockReturnValue(true);
+    it.each([
+      [true, 'AsaApiLoader.exe'],
+      [false, null]
+    ])('reports installed=%p', async (installed, loaderExe) => {
+      jest.mocked(isAsaApiLoaderInstalled).mockReturnValue(installed);
 
-      await handlers['get-asaapi-status']({ instanceId: 'inst1', requestId: 'r0' }, mockSender);
+      await handlers['get-asaapi-status']({ instanceId: 'a1', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'get-asaapi-status',
-        { success: true, installed: true, loaderExe: 'AsaApiLoader.exe', requestId: 'r0' },
-        mockSender
-      );
+      expect(isAsaApiLoaderInstalled).toHaveBeenCalledWith('a1');
+      expect(replies('get-asaapi-status')).toEqual([{ success: true, installed, loaderExe, requestId: 'r1' }]);
     });
   });
 
   describe('list-ark-api-plugins', () => {
-    it('should list plugins successfully', async () => {
-      const plugins = [{ name: 'TestPlugin', version: '1.0' }];
-      (mockPluginService.listPlugins as jest.Mock<any>).mockReturnValue(plugins);
+    it('replies with the plugins', async () => {
+      const plugins = [{
+        name: 'MyPlugin', version: '1.0', author: 'me', description: '', folderName: 'MyPlugin', enabled: true, hasPluginJson: true
+      }];
+      mockPlugins.listPlugins.mockReturnValue(plugins);
 
-      await handlers['list-ark-api-plugins']({ instanceId: 'inst1', requestId: 'r1' }, mockSender);
+      await handlers['list-ark-api-plugins']({ instanceId: 'a1', requestId: 'r1' }, sender);
 
-      expect(mockPluginService.listPlugins).toHaveBeenCalledWith('inst1');
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'list-ark-api-plugins',
-        { success: true, plugins, requestId: 'r1' },
-        mockSender
-      );
+      expect(mockPlugins.listPlugins).toHaveBeenCalledWith('a1');
+      expect(replies('list-ark-api-plugins')).toEqual([{ success: true, plugins, requestId: 'r1' }]);
     });
 
-    it('should handle errors', async () => {
-      (mockPluginService.listPlugins as jest.Mock<any>).mockImplementation(() => {
-        throw new Error('Not found');
-      });
+    it('replies with the reason listing fails', async () => {
+      mockPlugins.listPlugins.mockImplementation(() => { throw new Error('ArkApi folder unreadable'); });
 
-      await handlers['list-ark-api-plugins']({ instanceId: 'inst1', requestId: 'r1' }, mockSender);
+      await handlers['list-ark-api-plugins']({ instanceId: 'a1', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'list-ark-api-plugins',
-        { success: false, error: 'Not found', requestId: 'r1' },
-        mockSender
-      );
-    });
-
-    it('should handle undefined payload', async () => {
-      (mockPluginService.listPlugins as jest.Mock<any>).mockReturnValue([]);
-
-      await handlers['list-ark-api-plugins'](undefined, mockSender);
-
-      expect(mockPluginService.listPlugins).toHaveBeenCalledWith(undefined);
+      expect(replies('list-ark-api-plugins')).toEqual([{ success: false, error: 'ArkApi folder unreadable', requestId: 'r1' }]);
     });
   });
 
   describe('remove-ark-api-plugin', () => {
-    it('should remove plugin successfully', async () => {
-      await handlers['remove-ark-api-plugin']({ instanceId: 'inst1', folderName: 'MyPlugin', requestId: 'r2' }, mockSender);
+    it('removes the plugin and names it in the reply', async () => {
+      await handlers['remove-ark-api-plugin']({ instanceId: 'a1', folderName: 'MyPlugin', requestId: 'r1' }, sender);
 
-      expect(mockPluginService.removePlugin).toHaveBeenCalledWith('inst1', 'MyPlugin');
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'remove-ark-api-plugin',
-        { success: true, folderName: 'MyPlugin', requestId: 'r2' },
-        mockSender
-      );
+      expect(mockPlugins.removePlugin).toHaveBeenCalledWith('a1', 'MyPlugin');
+      expect(replies('remove-ark-api-plugin')).toEqual([{ success: true, folderName: 'MyPlugin', requestId: 'r1' }]);
     });
 
-    it('should handle removal errors', async () => {
-      (mockPluginService.removePlugin as jest.Mock<any>).mockImplementation(() => {
-        throw new Error('Plugin not found');
-      });
+    it('replies with the reason removal fails', async () => {
+      mockPlugins.removePlugin.mockImplementationOnce(() => { throw new Error('Plugin not found'); });
 
-      await handlers['remove-ark-api-plugin']({ instanceId: 'inst1', folderName: 'Bad', requestId: 'r2' }, mockSender);
+      await handlers['remove-ark-api-plugin']({ instanceId: 'a1', folderName: 'Nope', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'remove-ark-api-plugin',
-        { success: false, error: 'Plugin not found', requestId: 'r2' },
-        mockSender
-      );
+      expect(replies('remove-ark-api-plugin')).toEqual([{ success: false, error: 'Plugin not found', requestId: 'r1' }]);
     });
   });
 
   describe('get-asaapi-latest', () => {
-    it('should fetch latest release successfully', async () => {
-      const release = { version: 'v1.2.0', downloadUrl: 'https://example.com/dl.zip', name: 'AsaApi' };
-      (mockPluginService.getLatestAsaApiRelease as jest.Mock<any>).mockResolvedValue(release);
+    it('replies with the latest release', async () => {
+      const release = { version: '1.19', downloadUrl: 'https://github.com/x.zip', name: 'AsaApi 1.19' };
+      mockPlugins.getLatestAsaApiRelease.mockResolvedValue(release);
 
-      await handlers['get-asaapi-latest']({ requestId: 'r3' }, mockSender);
+      await handlers['get-asaapi-latest']({ requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'get-asaapi-latest',
-        { success: true, ...release, requestId: 'r3' },
-        mockSender
-      );
+      expect(replies('get-asaapi-latest')).toEqual([{ success: true, ...release, requestId: 'r1' }]);
     });
 
-    it('should handle fetch errors', async () => {
-      (mockPluginService.getLatestAsaApiRelease as jest.Mock<any>).mockRejectedValue(new Error('Network error'));
+    it('replies with the reason the release is unavailable', async () => {
+      mockPlugins.getLatestAsaApiRelease.mockRejectedValue(new Error('GitHub API returned 403'));
 
-      await handlers['get-asaapi-latest']({ requestId: 'r3' }, mockSender);
+      await handlers['get-asaapi-latest']({ requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'get-asaapi-latest',
-        { success: false, error: 'Network error', requestId: 'r3' },
-        mockSender
-      );
+      expect(replies('get-asaapi-latest')).toEqual([{ success: false, error: 'GitHub API returned 403', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockPlugins.getLatestAsaApiRelease.mockResolvedValue({ version: '1.19', downloadUrl: 'https://github.com/x.zip', name: 'n' });
+
+      await handlers['get-asaapi-latest'](undefined, sender);
+
+      expect(replies('get-asaapi-latest')).toEqual([expect.objectContaining({ success: true, requestId: undefined })]);
     });
   });
 
   describe('download-asaapi', () => {
-    it('should download AsaApi successfully', async () => {
-      (mockPluginService.downloadAsaApi as jest.Mock<any>).mockResolvedValue(undefined);
+    it('says it is downloading, installs, then replies', async () => {
+      mockPlugins.downloadAsaApi.mockResolvedValue(undefined);
 
-      await handlers['download-asaapi']({ instanceId: 'inst1', downloadUrl: 'https://dl.zip', requestId: 'r4' }, mockSender);
+      await handlers['download-asaapi']({ instanceId: 'a1', downloadUrl: 'https://dl.zip', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'download-asaapi-progress',
-        { status: 'downloading', requestId: 'r4' },
-        mockSender
-      );
-      expect(mockPluginService.downloadAsaApi).toHaveBeenCalledWith('inst1', 'https://dl.zip');
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'download-asaapi',
-        { success: true, requestId: 'r4' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator.mock.calls).toEqual([
+        ['download-asaapi-progress', { status: 'downloading', requestId: 'r1' }, sender],
+        ['download-asaapi', { success: true, requestId: 'r1' }, sender]
+      ]);
+      expect(mockPlugins.downloadAsaApi).toHaveBeenCalledWith('a1', 'https://dl.zip');
     });
 
-    it('should handle download errors', async () => {
-      (mockPluginService.downloadAsaApi as jest.Mock<any>).mockRejectedValue(new Error('Download failed'));
+    it('replies with the reason the download fails', async () => {
+      mockPlugins.downloadAsaApi.mockRejectedValue(new Error('Download failed'));
 
-      await handlers['download-asaapi']({ instanceId: 'inst1', downloadUrl: 'https://dl.zip', requestId: 'r4' }, mockSender);
+      await handlers['download-asaapi']({ instanceId: 'a1', downloadUrl: 'https://dl.zip', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'download-asaapi',
-        { success: false, error: 'Download failed', requestId: 'r4' },
-        mockSender
-      );
+      expect(replies('download-asaapi')).toEqual([{ success: false, error: 'Download failed', requestId: 'r1' }]);
     });
   });
 
   describe('install-plugin-from-zip', () => {
-    it('should install from zip path successfully', async () => {
-      await handlers['install-plugin-from-zip']({ instanceId: 'inst1', zipPath: '/tmp/plugin.zip', requestId: 'r5' }, mockSender);
+    it('installs from the local ZIP', async () => {
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: '/tmp/plugin.zip', requestId: 'r1' }, sender);
 
-      expect(mockPluginService.installPluginFromZipPath).toHaveBeenCalledWith('inst1', '/tmp/plugin.zip');
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-plugin-from-zip',
-        { success: true, requestId: 'r5' },
-        mockSender
-      );
+      expect(mockPlugins.installPluginFromZipPath).toHaveBeenCalledWith('a1', '/tmp/plugin.zip');
+      expect(replies('install-plugin-from-zip')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
-    it('should handle install errors', async () => {
-      (mockPluginService.installPluginFromZipPath as jest.Mock<any>).mockImplementation(() => {
-        throw new Error('ZIP not found');
-      });
+    it('refuses a web client, which could name any ZIP on the host', async () => {
+      const webClient = { type: 'api-process', cid: 'c1', user: null, authEnabled: false, send: jest.fn() };
 
-      await handlers['install-plugin-from-zip']({ instanceId: 'inst1', zipPath: '/bad.zip', requestId: 'r5' }, mockSender);
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: 'C:/Users/x/evil.zip', requestId: 'r1' }, webClient);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-plugin-from-zip',
-        { success: false, error: 'ZIP not found', requestId: 'r5' },
-        mockSender
-      );
+      expect(mockPlugins.installPluginFromZipPath).not.toHaveBeenCalled();
+      expect(replies('install-plugin-from-zip')).toEqual([{
+        success: false,
+        error: 'Only the desktop app can install a plugin from a file path. Use a download URL instead.',
+        requestId: 'r1'
+      }]);
+    });
+
+    it('replies with the reason the install fails', async () => {
+      mockPlugins.installPluginFromZipPath.mockImplementationOnce(() => { throw new Error('Not a ZIP file'); });
+
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: '/tmp/x', requestId: 'r1' }, sender);
+
+      expect(replies('install-plugin-from-zip')).toEqual([{ success: false, error: 'Not a ZIP file', requestId: 'r1' }]);
     });
   });
 
   describe('install-plugin-from-url', () => {
-    it('should install from URL successfully', async () => {
-      (mockPluginService.installPluginFromUrl as jest.Mock<any>).mockResolvedValue(undefined);
+    it('installs from the URL', async () => {
+      mockPlugins.installPluginFromUrl.mockResolvedValue(undefined);
 
-      await handlers['install-plugin-from-url']({ instanceId: 'inst1', url: 'https://dl.zip', requestId: 'r6' }, mockSender);
+      await handlers['install-plugin-from-url']({ instanceId: 'a1', url: 'https://dl.zip', requestId: 'r1' }, sender);
 
-      expect(mockPluginService.installPluginFromUrl).toHaveBeenCalledWith('inst1', 'https://dl.zip');
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-plugin-from-url',
-        { success: true, requestId: 'r6' },
-        mockSender
-      );
+      expect(mockPlugins.installPluginFromUrl).toHaveBeenCalledWith('a1', 'https://dl.zip');
+      expect(replies('install-plugin-from-url')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
-    it('should handle URL install errors', async () => {
-      (mockPluginService.installPluginFromUrl as jest.Mock<any>).mockRejectedValue(new Error('Timeout'));
+    it('replies with the reason the install fails', async () => {
+      mockPlugins.installPluginFromUrl.mockRejectedValue(new Error('Invalid URL'));
 
-      await handlers['install-plugin-from-url']({ instanceId: 'inst1', url: 'https://dl.zip', requestId: 'r6' }, mockSender);
+      await handlers['install-plugin-from-url']({ instanceId: 'a1', url: 'bad', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-plugin-from-url',
-        { success: false, error: 'Timeout', requestId: 'r6' },
-        mockSender
-      );
+      expect(replies('install-plugin-from-url')).toEqual([{ success: false, error: 'Invalid URL', requestId: 'r1' }]);
     });
+  });
+
+  describe.each([
+    ['get-asaapi-status', () => isAsaApiLoaderInstalled],
+    ['list-ark-api-plugins', () => mockPlugins.listPlugins],
+    ['remove-ark-api-plugin', () => mockPlugins.removePlugin],
+    ['download-asaapi', () => mockPlugins.downloadAsaApi],
+    ['install-plugin-from-zip', () => mockPlugins.installPluginFromZipPath],
+    ['install-plugin-from-url', () => mockPlugins.installPluginFromUrl]
+  ])('%s', (channel, target) => {
+    it.each([[{ instanceId: '../x', requestId: 'r1' }, 'r1'], [undefined, undefined]])(
+      'refuses an invalid instance id without touching any files (payload %p)',
+      async (payload, requestId) => {
+        await handlers[channel](payload, sender);
+
+        expect(target()).not.toHaveBeenCalled();
+        expect(mockMessaging.sendToOriginator.mock.calls).toEqual([
+          [channel, { success: false, error: 'Invalid instance ID', requestId }, sender]
+        ]);
+      }
+    );
   });
 });

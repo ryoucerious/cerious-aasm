@@ -1,13 +1,11 @@
-// ark-server-isolation.utils.ts
-// Helpers for building an instance's isolated ShooterGame folder
-
+import type { Stats } from 'fs';
 import * as path from 'path';
-const fsExtra = require('fs-extra');
+import * as fsExtra from 'fs-extra';
+import { getInstanceSaveDir } from '../instance.utils';
 
 /**
- * Win64 subfolders that are generated at runtime (by the shared install or by the
- * instance itself) or that hold per-instance plugin state. Each instance must own
- * these, so they are never linked back to the shared install.
+ * Win64 subfolders generated at runtime (by the shared install or the instance) or holding
+ * per-instance plugin state. Each instance owns these; they are never linked to the shared install.
  */
 export const INSTANCE_OWNED_WIN64_SUBDIRS = [
   'arkapi',
@@ -20,9 +18,9 @@ export const INSTANCE_OWNED_WIN64_SUBDIRS = [
 ];
 
 /**
- * ShooterGame subfolders each instance must own: Binaries is copied per-instance for
- * ArkApi isolation, Saved holds the instance's own worlds/config/logs, Content is
- * junctioned separately, and .sentry-native is a per-process crash database.
+ * ShooterGame subfolders each instance owns: Binaries is copied per instance for ArkApi isolation,
+ * Saved holds its own worlds, config and logs, Content is junctioned separately, and
+ * .sentry-native is a per-process crash database.
  */
 export const INSTANCE_OWNED_SHOOTERGAME_SUBDIRS = [
   'binaries',
@@ -32,16 +30,13 @@ export const INSTANCE_OWNED_SHOOTERGAME_SUBDIRS = [
 ];
 
 /**
- * Links the shared install's subfolders of `sourceDir` into an instance's `destDir`,
- * skipping any name in `instanceOwned` (compared case-insensitively).
+ * Links the shared install's subfolders of `sourceDir` into an instance's `destDir`, skipping any
+ * name in `instanceOwned` (case-insensitive). Returns the names linked (or copied).
  *
- * ARK resolves both the EOS SDK (Win64/RedpointEOS) and its bundled UE plugins
- * (ShooterGame/Plugins/DiscordPartnerSDK, AWSSDK, sentry) relative to the instance it
- * launches from, so an instance that only received loose binaries aborts at startup.
- * Junctions keep these read-only game folders in sync with the shared install instead
- * of duplicating them per instance.
- *
- * Returns the subfolder names that were linked (or copied as a fallback).
+ * ARK resolves the EOS SDK (Win64/RedpointEOS) and its bundled UE plugins
+ * (ShooterGame/Plugins/DiscordPartnerSDK, AWSSDK, sentry) relative to the instance it launches
+ * from, so an instance with only loose binaries aborts at startup. Junctions keep these read-only
+ * game folders in sync with the shared install instead of duplicating them.
  */
 export async function linkSharedSubdirs(
   sourceDir: string,
@@ -58,97 +53,113 @@ export async function linkSharedSubdirs(
     if (!entry.isDirectory()) continue;
     if (instanceOwned.includes(entry.name.toLowerCase())) continue;
 
-    const created = await ensureLinkedDir(
-      path.join(sourceDir, entry.name),
-      path.join(destDir, entry.name)
-    );
-    if (created) linked.push(entry.name);
+    const srcDir = path.join(sourceDir, entry.name);
+    const linkDir = path.join(destDir, entry.name);
+    try {
+      if (await ensureLinkedDir(srcDir, linkDir)) linked.push(entry.name);
+    } catch {
+      // Junctions fail on some filesystems (network shares, restrictive policies). These folders
+      // are read-only game data, so a copy still lets the server start.
+      try {
+        await fsExtra.copy(srcDir, linkDir, { overwrite: false, errorOnExist: false });
+        linked.push(entry.name);
+      } catch (copyError) {
+        console.error(`[ark-server-isolation] Failed to provide "${entry.name}":`, copyError);
+      }
+    }
   }
 
   return linked;
 }
 
-/**
- * Point `destDir` at `srcDir` via a junction, leaving an existing real directory or healthy
- * link alone and repairing a dangling one. Returns true when a link (or fallback copy) was
- * created, false when nothing needed doing.
- */
-async function ensureLinkedDir(srcDir: string, destDir: string): Promise<boolean> {
+/** lstat, or null when nothing is there. lstat reports a junction even when its target is gone. */
+async function lstatOrNull(target: string): Promise<Stats | null> {
   try {
-    // lstat describes the entry itself, so an existing junction is reported even when
-    // its target is gone (shared install moved or reinstalled).
-    let existing: any = null;
-    try {
-      existing = await fsExtra.lstat(destDir);
-    } catch {
-      existing = null;
-    }
+    return await fsExtra.lstat(target);
+  } catch {
+    return null;
+  }
+}
 
-    if (existing) {
-      if (!existing.isSymbolicLink()) return false; // a real folder lives here
-
-      let targetAlive = true;
-      try {
-        await fsExtra.stat(destDir);
-      } catch {
-        targetAlive = false;
-      }
-      if (targetAlive) return false;
-
-      await fsExtra.unlink(destDir); // dangling link, recreate below
-    }
-
-    await fsExtra.ensureSymlink(srcDir, destDir, 'junction');
+// stat follows the link. access() succeeds on a dangling junction on Windows.
+async function targetExists(link: string): Promise<boolean> {
+  try {
+    await fsExtra.stat(link);
     return true;
-  } catch (error) {
-    // Junctions can fail on some filesystems (network shares, restrictive policies).
-    // Fall back to a real copy so the server can still start.
-    try {
-      await fsExtra.copy(srcDir, destDir, { overwrite: false, errorOnExist: false });
-      return true;
-    } catch (copyError) {
-      console.error(`[ark-server-isolation] Failed to provide "${path.basename(destDir)}":`, copyError);
-      return false;
-    }
+  } catch {
+    return false;
   }
 }
 
 /**
- * Point the instance's runtime save directory at its canonical SavedArks folder.
+ * Points `destDir` at `srcDir` with a junction, leaving a real folder or a healthy link alone and
+ * repairing a dangling one. Returns true when a link was created. Throws when it cannot be.
+ */
+async function ensureLinkedDir(srcDir: string, destDir: string): Promise<boolean> {
+  const existing = await lstatOrNull(destDir);
+  if (existing) {
+    if (!existing.isSymbolicLink()) return false;
+    if (await targetExists(destDir)) return false;
+    // Dangling: the shared install was moved or reinstalled.
+    await fsExtra.unlink(destDir);
+  }
+  await fsExtra.ensureSymlink(srcDir, destDir, 'junction');
+  return true;
+}
+
+/**
+ * Points an isolated instance's runtime save folder at its canonical SavedArks. ARK resolves
+ * ?AltSaveDirectoryName=SavedArks to <instance>/ShooterGame/Saved/SavedArks, while backups, restore
+ * and import use <instance>/SavedArks, so the runtime path is junctioned onto it rather than
+ * keeping worlds in two places. Backups skip the junction and archive the real folder.
  *
- * An isolated instance runs out of its own tree, so ARK resolves ?AltSaveDirectoryName=SavedArks
- * to <instance>/ShooterGame/Saved/SavedArks. Backups, restore and import all address the
- * instance's saves at <instance>/SavedArks, so the runtime path is junctioned onto it rather
- * than moving worlds to a second location. Backups skip the junction and archive the real
- * folder exactly as before.
- *
- * No-op for instances that run from the shared install — their AltSaveDirectoryName already
- * lands inside the instance folder.
+ * Returns false when there is nothing to do (a shared-install instance's save path already lands
+ * in its folder). Throws when the link cannot be made: a copy would take the writes while backups
+ * went on reading the canonical folder.
  */
 export async function linkInstanceSaveDir(instanceDir: string, runtimeRoot: string): Promise<boolean> {
   if (path.resolve(runtimeRoot) !== path.resolve(instanceDir)) return false;
 
-  const canonicalSaveDir = path.join(instanceDir, 'SavedArks');
+  const canonicalSaveDir = getInstanceSaveDir(instanceDir);
   const runtimeSaveDir = path.join(runtimeRoot, 'ShooterGame', 'Saved', 'SavedArks');
-
   await fsExtra.ensureDir(canonicalSaveDir);
   await fsExtra.ensureDir(path.dirname(runtimeSaveDir));
-  return ensureLinkedDir(canonicalSaveDir, runtimeSaveDir);
+
+  const existing = await lstatOrNull(runtimeSaveDir);
+  if (existing && !existing.isSymbolicLink()) {
+    if ((await fsExtra.readdir(runtimeSaveDir)).length > 0) {
+      console.warn(
+        `[ark-server-isolation] ${runtimeSaveDir} is a real folder with files in it, so ARK saves there ` +
+        `while backups read ${canonicalSaveDir}. Move its contents into ${canonicalSaveDir} and delete it.`
+      );
+      return false;
+    }
+    await fsExtra.remove(runtimeSaveDir);
+  }
+
+  try {
+    return await ensureLinkedDir(canonicalSaveDir, runtimeSaveDir);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not link ${runtimeSaveDir} to ${canonicalSaveDir} (${reason}). The server was not started, ` +
+      'because its saves would miss every backup. Keep the server data on a drive that supports junctions or symlinks.'
+    );
+  }
 }
 
 /**
- * Links the game's own Win64 subfolders (RedpointEOS, BattlEye, D3D12, DML, ...) into an
- * instance's isolated Win64 folder. Without RedpointEOS next to the exe the server aborts
- * with "The EOS SDK could not be found. Please reinstall the application."
+ * Links the game's own Win64 subfolders (RedpointEOS, BattlEye, D3D12, DML, ...). Without
+ * RedpointEOS next to the exe the server aborts with "The EOS SDK could not be found. Please
+ * reinstall the application."
  */
 export async function linkSharedWin64Subdirs(sourceWin64: string, destWin64: string): Promise<string[]> {
   return linkSharedSubdirs(sourceWin64, destWin64, INSTANCE_OWNED_WIN64_SUBDIRS);
 }
 
 /**
- * Links the game's bundled UE plugin folders (ShooterGame/Plugins and any future siblings)
- * into an instance. Without them the server aborts with "Failed to load Discord Partner SDK
- * third party library".
+ * Links the game's bundled UE plugin folders (ShooterGame/Plugins and any future siblings).
+ * Without them the server aborts with "Failed to load Discord Partner SDK third party library".
  */
 export async function linkSharedShooterGameSubdirs(sourceShooterGame: string, destShooterGame: string): Promise<string[]> {
   return linkSharedSubdirs(sourceShooterGame, destShooterGame, INSTANCE_OWNED_SHOOTERGAME_SUBDIRS);

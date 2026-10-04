@@ -1,10 +1,9 @@
-﻿<div class="tab-content">
+<div class="tab-content">
   <div class="form-group page-intro">
     <h4>Structure & Building Settings</h4>
     <p class="form-control-label desc">Configure structure damage, decay timers, build restrictions, platform saddles, and other settings related to player-built structures and bases.</p>
   </div>
 
-  <!-- Damage & Decay -->
   <div class="settings-section">
     <h5>Damage & Decay</h5>
     <p class="section-desc">Control how structures take damage, decay over time, and structure limits.</p>
@@ -18,13 +17,11 @@
         <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
-        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
-        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+        <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
       </div>
     </ng-container>
   </div>
 
-  <!-- Platform Saddles -->
   <div class="settings-section">
     <h5>Platform Saddles</h5>
     <p class="section-desc">Configure platform saddle build limits, area sizes, and stacking rules.</p>
@@ -38,13 +35,11 @@
         <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
-        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
-        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+        <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
       </div>
     </ng-container>
   </div>
 
-  <!-- Building Rules -->
   <div class="settings-section">
     <h5>Building Rules</h5>
     <p class="section-desc">Configure placement rules, pickup timers, resource prevention, and building restrictions.</p>
@@ -58,8 +53,7 @@
         <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
-        <div *ngIf="hasFieldError(field.key)" class="validation-error">{{ getFieldError(field.key) }}</div>
-        <div *ngIf="hasFieldWarning(field.key)" class="validation-warning">{{ getFieldWarning(field.key) }}</div>
+        <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
       </div>
     </ng-container>
   </div>

@@ -1,4 +1,3 @@
-<!-- Broadcasts Tab Content -->
 <div class="tab-content">
   <div class="form-group page-intro">
     <h4>Auto Broadcasts Management</h4>
@@ -28,7 +27,6 @@
     <h5>Message Management</h5>
     <p class="section-desc">Add and configure automatic broadcast messages with custom intervals.</p>
 
-    <!-- Add Message Section -->
     <div class="form-group span-all">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button class="btn btn-ghost" (click)="addMessage()" [disabled]="isLocked" style="white-space: nowrap;">
@@ -37,7 +35,6 @@
       </div>
     </div>
 
-    <!-- Message List Section -->
     <div class="form-group broadcast-table-container span-all">
       <label class="form-control-label">Broadcast Messages ({{ messages.length }})</label>
       <div class="broadcast-list">

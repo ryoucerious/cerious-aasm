@@ -1,5 +1,7 @@
 import { getAllInstances } from '../../utils/ark/instance.utils';
+import type { InstanceConfig } from '../../types/server-instance.types';
 import { ServerAutomation } from '../../types/automation.types';
+import { createServerAutomation } from './automation-defaults';
 
 export class AutomationInstancesService {
   private automations: Map<string, ServerAutomation>;
@@ -8,37 +10,17 @@ export class AutomationInstancesService {
     this.automations = automations;
   }
 
+  /** One record per instance, from its config.json, so every saved schedule is re-armed at startup. */
   async loadAutomationFromInstances(): Promise<void> {
     try {
-      const allInstances = await getAllInstances();
-      for (const instance of Array.isArray(allInstances) ? allInstances : []) {
-        if (instance && instance.id && instance.autoStartOnAppLaunch !== undefined) {
-          const automation: ServerAutomation = {
-            serverId: instance.id,
-            settings: {
-              autoStartOnAppLaunch: !!instance.autoStartOnAppLaunch,
-              autoStartOnBoot: !!instance.autoStartOnBoot,
-              crashDetectionEnabled: !!instance.crashDetectionEnabled,
-              crashDetectionInterval: instance.crashDetectionInterval || 60,
-              maxRestartAttempts: instance.maxRestartAttempts || 3,
-              scheduledRestartEnabled: !!instance.scheduledRestartEnabled,
-              restartFrequency: instance.restartFrequency || 'daily',
-              restartTime: instance.restartTime || '02:00',
-              restartDays: instance.restartDays || [1],
-              restartWarningMinutes: instance.restartWarningMinutes || 5
-            },
-            restartAttempts: 0,
-            manuallyStopped: false,
-            status: {
-              isMonitoring: false,
-              isScheduled: false
-            }
-          };
-          this.automations.set(instance.id, automation);
+      const instances: Array<InstanceConfig | null> = await getAllInstances();
+      for (const instance of Array.isArray(instances) ? instances : []) {
+        if (instance?.id) {
+          this.automations.set(instance.id, createServerAutomation(instance.id, instance));
         }
       }
     } catch (error) {
-      console.error('Failed to load automation from instances:', error);
+      console.error('[automation-instances] Failed to load automation settings:', error);
     }
   }
 }

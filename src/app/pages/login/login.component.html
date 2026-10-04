@@ -35,7 +35,7 @@
         <button 
           class="btn" 
           (click)="onLogin()" 
-          [disabled]="!username.trim() || !password.trim() || isLoading"
+          [disabled]="!username.trim() || !password || isLoading"
         >
           <span *ngIf="!isLoading">Login</span>
           <span *ngIf="isLoading">Logging in...</span>

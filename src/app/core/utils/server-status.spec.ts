@@ -1,5 +1,5 @@
 import {
-  serverStatusKey, serverStatusLabel, serverStatusClass, serverStatusIcon,
+  serverStatusKey, serverStatusLabel, serverStatusClass,
   isOnlineStatus, isBusyStatus, canStartStatus
 } from './server-status';
 
@@ -36,8 +36,6 @@ describe('server-status', () => {
     expect(serverStatusClass('queued')).toBe('status-starting');
     expect(serverStatusClass('crashed')).toBe('status-error');
     expect(serverStatusClass(undefined)).toBe('status-stopped');
-    expect(serverStatusIcon('running')).toBe('play_circle_filled');
-    expect(serverStatusIcon(undefined)).toBe('stop_circle');
   });
 
   it('answers the lifecycle questions', () => {

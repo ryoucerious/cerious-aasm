@@ -6,7 +6,7 @@ You can run it on a Linux server or on your own Windows or Mac machine with Dock
 
 ## What you'll need
 
-You need Docker with Compose v2. On Linux that means Docker Engine and the Compose plugin; on Windows or Mac, install Docker Desktop, which includes both. Run `docker compose version` to check what you have. Anything recent works, but the host networking option described later needs Compose 2.24 or newer.
+You need Docker with Compose v2. On Linux that means Docker Engine and the Compose plugin; on Windows or Mac, install Docker Desktop, which includes both. Run `docker compose version` to check what you have. You need Compose 2.23.1 or newer: the Compose file passes the CurseForge key to builds as a secret, which older versions can't read. The host networking option described later needs Compose 2.24 or newer.
 
 ARK: Survival Ascended is heavy. Plan for about 20 GB of disk before you create any servers, most of it the ARK server files, plus room for saves and backups. Each running server uses around 10 GB of memory, so a machine with 16 GB can run one server comfortably and you'll want 32 GB or more for two or three.
 
@@ -122,6 +122,26 @@ Host networking doesn't work properly with Docker Desktop on Windows or Mac, whi
 
 Whichever setup you use, players outside your home or office network can only reach your server if your router forwards the game port to the machine running Docker. The Firewall page lists which ports each server needs.
 
+### Behind a reverse proxy
+
+To serve the web interface over HTTPS you can put a reverse proxy such as nginx in front of it. Three things need attention:
+
+- **Forward the Host header.** The web interface talks to the app over a WebSocket at `/ws`, and the app refuses a connection whose `Origin` doesn't match the request's `Host`, and says so in its log (`Refused a WebSocket from origin`). In nginx the fix is `proxy_set_header Host $host;` (use `$http_host` instead if the site is on a non-default port, since the port has to match too). If your proxy has to rewrite `Host`, send the original in `X-Forwarded-Host` instead; the app accepts either.
+- **Pass WebSocket upgrades for `/ws`.** Without them the page loads but never shows live data.
+- **Know what the app doesn't trust.** It ignores `X-Forwarded-For`, so the sign-in limiter (10 attempts per username and address in 15 minutes) sees the proxy's address for every client, and one person guessing a username can lock it out for everyone. It also marks the session cookie `Secure` only when it sees HTTPS itself, which behind a proxy it never does. The cookie is still `HttpOnly` and `SameSite=Strict`.
+
+A minimal nginx location:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
 ## Updating
 
 When a new release is out, the app shows an update icon in the sidebar. It can't update itself from inside the container, so run these on the machine where Docker runs:
@@ -143,7 +163,22 @@ cd cerious-aasm
 AASM_IMAGE=cerious-aasm:local docker compose up -d --build
 ```
 
-Mod browsing needs a CurseForge API key, which the release image already includes. A build of your own only has it if you pass one in with `CURSEFORGE_API_KEY=your-key` on the same command.
+Mod browsing needs a CurseForge API key, which the release image already includes. A build of your own only has it if you set `CURSEFORGE_API_KEY=your-key` in the environment of the same command. Compose hands it to the build as a build secret, so it isn't stored in the image or its history. Leave it unset and the image still builds, without mod browsing.
+
+To build with `docker build` instead of Compose, pass the key as a secret (this needs BuildKit, the default in current Docker):
+
+```bash
+CURSEFORGE_API_KEY=your-key docker build --secret id=curseforge_api_key,env=CURSEFORGE_API_KEY -t cerious-aasm:local .
+```
+
+`--build-arg` is no longer used: the Dockerfile reads the key only from the build secret, so `--build-arg CURSEFORGE_API_KEY=...` has no effect.
+
+## Checking the container is healthy
+
+The image has a Docker `HEALTHCHECK` that polls the web server every 30 seconds. In
+`docker compose ps` and `docker ps` the container shows `starting` while the app boots
+(Xvfb and Electron take a while) and `healthy` once the web server answers. It shows
+`unhealthy` after three failed checks in a row, not counting the first 40 seconds after start.
 
 ## When something goes wrong
 
@@ -175,7 +210,7 @@ All of these go in the `.env` file next to `docker-compose.yml`. Run `docker com
 | `AASM_QUERY_PORTS` | `27015-27030` | Query ports available to servers (UDP) |
 | `AASM_RCON_PORTS` | `27020-27050` | RCON ports available to servers (TCP) |
 | `AASM_IMAGE` | `ghcr.io/ryoucerious/cerious-aasm:latest` | The image to run. Set a local name when building from source. |
-| `CURSEFORGE_API_KEY` | none | Only used when building the image yourself |
+| `CURSEFORGE_API_KEY` | none | Only used when building the image yourself, passed to the build as a secret |
 
 ## For developers
 

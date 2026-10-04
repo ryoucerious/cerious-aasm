@@ -1,4 +1,4 @@
-import { connectRcon, disconnectRcon, sendRconCommand, isRconConnected } from '../utils/rcon.utils';
+import { RconCommandNotSentError, connectRcon, disconnectRcon, getRconPassword, isRconConnected, sendRconCommand } from '../utils/rcon.utils';
 import * as instanceUtils from '../utils/ark/instance.utils';
 
 export interface RconConnectionResult {
@@ -13,6 +13,8 @@ export interface RconCommandResult {
   response?: string;
   instanceId: string;
   error?: string;
+  /** Set when the command provably never reached the server: no connection, or it timed out queued. */
+  notSent?: true;
 }
 
 export interface RconStatusResult {
@@ -21,56 +23,29 @@ export interface RconStatusResult {
   instanceId: string;
 }
 
-/**
- * RCON Service - Handles all RCON-related operations
- * Encapsulates RCON connection management, command execution, and status tracking
- */
 export class RconService {
-
-  /**
-   * Connect RCON for a server instance
-   * @param instanceId - The unique identifier of the server instance
-   * @returns A promise resolving to an object indicating the result of the connection attempt
-   */
+  /** Resolves once the connect attempt finishes, which can take up to 90 s while a server boots. */
   async connectRcon(instanceId: string): Promise<RconConnectionResult> {
     try {
       if (!instanceId) {
-        return {
-          success: false,
-          connected: false,
-          instanceId: instanceId || '',
-          error: 'Invalid instance ID'
-        };
+        return { success: false, connected: false, instanceId: instanceId || '', error: 'Invalid instance ID' };
       }
 
-      const instance = await instanceUtils.getInstance(instanceId);
+      const instance = instanceUtils.getInstance(instanceId);
       if (!instance) {
-        return {
-          success: false,
-          connected: false,
-          instanceId,
-          error: 'Instance not found'
-        };
+        return { success: false, connected: false, instanceId, error: 'Instance not found' };
+      }
+      if (!instance.rconPort || !getRconPassword(instance)) {
+        return { success: false, connected: false, instanceId, error: 'RCON not configured for this instance' };
       }
 
-      if (!instance.rconPort || !instance.rconPassword) {
-        return {
-          success: false,
-          connected: false,
+      return await new Promise<RconConnectionResult>(resolve => {
+        connectRcon(instanceId, instance, connected => resolve({
+          success: true,
+          connected,
           instanceId,
-          error: 'RCON not configured for this instance'
-        };
-      }
-
-      return new Promise<RconConnectionResult>((resolve) => {
-        connectRcon(instanceId, instance, (isConnected: boolean) => {
-          resolve({
-            success: true,
-            connected: isConnected,
-            instanceId,
-            error: isConnected ? undefined : 'Failed to establish RCON connection'
-          });
-        });
+          error: connected ? undefined : 'Failed to establish RCON connection'
+        }));
       });
     } catch (error) {
       console.error('[rcon-service] Failed to connect RCON:', error);
@@ -84,18 +59,31 @@ export class RconService {
   }
 
   /**
-   * Disconnect RCON for a server instance
-   * @param instanceId - The unique identifier of the server instance
-   * @returns A promise resolving to an object indicating the result of the disconnection attempt
+   * A single connect attempt, abandoned after `timeoutMs`: for a stop whose SaveWorld timed out and
+   * dropped the connection, so DoExit still reaches the server.
    */
+  async reconnectRcon(instanceId: string, timeoutMs: number): Promise<boolean> {
+    try {
+      const instance = instanceUtils.getInstance(instanceId);
+      if (!instance?.rconPort || !getRconPassword(instance)) return false;
+      return await new Promise<boolean>(resolve => {
+        // Cancelling the attempt answers the callback below with false.
+        const timer = setTimeout(() => disconnectRcon(instanceId), timeoutMs);
+        connectRcon(instanceId, instance, connected => {
+          clearTimeout(timer);
+          resolve(connected);
+        }, 1);
+      });
+    } catch (error) {
+      console.error(`[rcon-service] Failed to reconnect RCON for ${instanceId}:`, error);
+      return false;
+    }
+  }
+
   async disconnectRcon(instanceId: string): Promise<RconConnectionResult> {
     try {
-      await disconnectRcon(instanceId);
-      return {
-        success: true,
-        connected: false,
-        instanceId
-      };
+      disconnectRcon(instanceId);
+      return { success: true, connected: false, instanceId };
     } catch (error) {
       console.error('[rcon-service] Failed to disconnect RCON:', error);
       return {
@@ -107,127 +95,57 @@ export class RconService {
     }
   }
 
-  /**
-   * Get RCON connection status for a server instance
-   * @param instanceId - The unique identifier of the server instance
-   * @returns A promise resolving to an object containing the RCON status
-   */
   getRconStatus(instanceId: string): RconStatusResult {
-    const connected = isRconConnected(instanceId);
-    return {
-      success: true,
-      connected,
-      instanceId
-    };
+    return { success: true, connected: isRconConnected(instanceId), instanceId };
   }
 
-  /**
-   * Execute an RCON command on a server instance
-   * @param instanceId - The unique identifier of the server instance
-   * @param command - The RCON command to execute
-   * @returns A promise resolving to an object indicating the result of the command execution
-   */
-  async executeRconCommand(
-    instanceId: string,
-    command: string,
-    timeoutMs?: number
-  ): Promise<RconCommandResult> {
+  /** Never rejects: failures, including a timeout (`timeoutMs`, default 30 s), come back as `error`. */
+  async executeRconCommand(instanceId: string, command: string, timeoutMs?: number): Promise<RconCommandResult> {
     try {
       if (!instanceId || !command) {
-        return {
-          success: false,
-          instanceId: instanceId || '',
-          error: 'Invalid instance ID or command'
-        };
+        return { success: false, instanceId: instanceId || '', error: 'Invalid instance ID or command' };
       }
-
       if (!isRconConnected(instanceId)) {
-        return {
-          success: false,
-          instanceId,
-          error: 'RCON not connected for this instance'
-        };
+        return { success: false, instanceId, error: 'RCON not connected for this instance', notSent: true };
       }
 
       const response = await sendRconCommand(instanceId, command, timeoutMs);
-      return {
-        success: true,
-        response,
-        instanceId
-      };
+      return { success: true, response, instanceId };
     } catch (error) {
-      console.error('[rcon-service] Failed to execute RCON command:', error);
-      return {
+      console.error(`[rcon-service] RCON command failed for ${instanceId}:`, error instanceof Error ? error.message : error);
+      const result: RconCommandResult = {
         success: false,
         instanceId,
         error: error instanceof Error ? error.message : 'Failed to execute RCON command'
       };
+      if (error instanceof RconCommandNotSentError) result.notSent = true;
+      return result;
     }
   }
 
-  /**
-   * Get list of online players
-   */
-  async getOnlinePlayers(instanceId: string): Promise<{name: string, steamId: string}[]> {
+  async getOnlinePlayers(instanceId: string): Promise<{ name: string; steamId: string }[]> {
     const result = await this.executeRconCommand(instanceId, 'ListPlayers');
-    if (!result.success || !result.response) return [];
+    if (!result.success || !result.response || result.response.includes('No Players Connected')) return [];
 
-    // Parse ARK Check format: "No Players Connected" or "0. Name, SteamID"
-    if (result.response.includes('No Players Connected')) return [];
-
-    const lines = result.response.split('\n');
-    const players: {name: string, steamId: string}[] = [];
-
-    for (const line of lines) {
-      // Regex for "0. PlayerName, 12345678"
+    const players: { name: string; steamId: string }[] = [];
+    for (const line of result.response.split('\n')) {
+      // "0. PlayerName, 12345678"
       const match = line.match(/\d+\.\s+(.+),\s+(\d+)/);
       if (match) {
-        players.push({
-          name: match[1],
-          steamId: match[2]
-        });
+        players.push({ name: match[1], steamId: match[2] });
       }
     }
     return players;
   }
 
-  /**
-   * Auto-connect RCON with callback for status updates
-   * @param instanceId - The unique identifier of the server instance
-   * @param onStatusChange - Optional callback to receive connection status updates
-   */
-  async autoConnectRcon(instanceId: string, onStatusChange?: (connected: boolean) => void): Promise<void> {
-    try {
-      const instance = await instanceUtils.getInstance(instanceId);
-      if (instance && instance.rconPort && instance.rconPassword) {
-        connectRcon(instanceId, instance, (connected: boolean) => {
-          if (onStatusChange) {
-            onStatusChange(connected);
-          }
-        });
-      }
-    } catch (error) {
-      console.warn('[rcon-service] Auto-connect RCON failed:', error);
-      if (onStatusChange) {
-        onStatusChange(false);
-      }
-    }
-  }
-
- /**
-  * 
-  * @param instanceId - The unique identifier of the server instance
-  * @returns A promise that resolves when the force disconnect attempt is complete
-  * Force disconnect RCON without throwing errors
-  */
+  /** Like disconnectRcon, but only logs a failure: for teardown paths that must carry on. */
   async forceDisconnectRcon(instanceId: string): Promise<void> {
     try {
-      await disconnectRcon(instanceId);
+      disconnectRcon(instanceId);
     } catch (error) {
-      console.warn('[rcon-service] Force disconnect RCON failed, continuing...', error);
+      console.warn(`[rcon-service] Force disconnect of ${instanceId} failed, continuing:`, error);
     }
   }
 }
 
-// Export singleton instance
 export const rconService = new RconService();

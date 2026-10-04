@@ -1,557 +1,345 @@
-// Mock dependencies BEFORE importing
-jest.mock('path');
-jest.mock('fs');
-jest.mock('bcrypt', () => ({
-  hash: jest.fn((password: string) => Promise.resolve(`hashed_${password}`)),
-  compare: jest.fn((password: string, hash: string) => Promise.resolve(hash === `hashed_${password}`)),
-  hashSync: jest.fn((password: string) => `hashed_${password}`),
-  compareSync: jest.fn((password: string, hash: string) => hash === `hashed_${password}`),
-}));
-jest.mock('../utils/platform.utils');
+import * as fs from 'fs';
+import bcrypt from 'bcrypt';
+import { readJsonOrQuarantine, writeJsonAtomic } from '../utils/fs.utils';
+import { UNMATCHABLE_BCRYPT_HASH } from '../types/auth.types';
 
-const mockPath = require('path');
-const mockFs = require('fs');
-const mockBcrypt = require('bcrypt');
-const mockPlatformUtils = require('../utils/platform.utils');
-
-// Setup mocks before importing the module
-mockPlatformUtils.getDefaultInstallDir.mockReturnValue('/install/dir');
-mockPath.join.mockImplementation((...args: string[]) => {
-  if (args.length === 3 && args[0] === '/install/dir' && args[1] === 'data' && args[2] === 'auth-config.json') {
-    return '/install/dir/data/auth-config.json';
-  }
-  if (args.length === 2 && args[1] === 'data') {
-    if (args[0] === '/app/dir') {
-      return '/app/dir/data/auth-config.json';
-    }
-    if (args[0] === '/install/dir') {
-      return '/install/dir/data/auth-config.json';
-    }
-  }
-  return args.join('/');
-});
-mockPath.dirname.mockReturnValue('/install/dir/data');
+jest.unmock('crypto');
+jest.mock('../utils/fs.utils');
+jest.mock('../utils/platform.utils', () => ({ getDefaultInstallDir: () => '/install' }));
 
 import {
-  loadAuthConfig,
-  saveAuthConfig,
-  migrateAuthConfig,
-  hashPassword,
-  verifyPassword,
-  updateAuthConfig,
+  AuthConfig,
   getAuthConfig,
-  isAuthInitialized,
-  setAuthInitialized,
-  initializeAuthFromEnv,
+  hashPassword,
   initializeAuth,
-  AuthConfig
-} from '../web-server/auth-config';
+  initializeAuthFromEnv,
+  legacyLoginFingerprint,
+  loadAuthConfig,
+  migrateAuthConfig,
+  saveAuthConfig,
+  updateAuthConfig,
+  verifyPassword
+} from './auth-config';
 
-// Mock process.cwd
-const originalCwd = process.cwd;
-process.cwd = jest.fn();
+const AUTH_FILE = '/install/data/auth-config.json';
+const OLD_AUTH_FILE = '/app/dir/data/auth-config.json';
+
+const mockedFs = jest.mocked(fs);
+const mockedBcrypt = jest.mocked(bcrypt);
+const mockedRead = jest.mocked(readJsonOrQuarantine);
+const mockedWrite = jest.mocked(writeJsonAtomic);
+
+const disabled: AuthConfig = { enabled: false, username: '', passwordHash: '' };
 
 describe('auth-config', () => {
-  const resetAuthConfig = () => {
-    // Reset to default state by updating with default values
-    updateAuthConfig({
-      enabled: false,
-      username: '',
-      passwordHash: ''
-    });
-    setAuthInitialized(false);
-  };
+  const env = process.env;
 
   beforeEach(() => {
+    process.env = { ...env };
+    delete process.env.AUTH_ENABLED;
+    delete process.env.AUTH_USERNAME;
+    delete process.env.AUTH_PASSWORD;
+    jest.spyOn(process, 'cwd').mockReturnValue('/app/dir');
+    mockedRead.mockReturnValue(undefined);
+    updateAuthConfig(disabled);
     jest.clearAllMocks();
-    resetAuthConfig();
-
-    // Setup default mocks
-    mockPlatformUtils.getDefaultInstallDir.mockReturnValue('/install/dir');
-    mockPath.join.mockImplementation((...args: string[]) => {
-      if (args.length === 3 && args[0] === '/install/dir' && args[1] === 'data' && args[2] === 'auth-config.json') {
-        return '/install/dir/data/auth-config.json';
-      }
-      if (args.length === 2 && args[1] === 'data') {
-        if (args[0] === '/app/dir') {
-          return '/app/dir/data/auth-config.json';
-        }
-        if (args[0] === '/install/dir') {
-          return '/install/dir/data/auth-config.json';
-        }
-      }
-      return args.join('/');
-    });
-    mockPath.dirname.mockReturnValue('/install/dir/data');
-    process.cwd = jest.fn().mockReturnValue('/app/dir');
   });
 
-  afterEach(() => {
-    process.cwd = originalCwd;
+  afterAll(() => {
+    process.env = env;
   });
 
   describe('loadAuthConfig', () => {
-    it('should load auth config from file when it exists', () => {
-      const mockConfig = {
-        enabled: true,
-        username: 'testuser',
-        passwordHash: 'hashedpassword'
-      };
-
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(mockConfig));
+    it('merges the saved login over the defaults', () => {
+      mockedRead.mockReturnValue({ enabled: true, username: 'admin', passwordHash: 'hash' });
 
       loadAuthConfig();
 
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(true);
-      expect(config.username).toBe('testuser');
-      expect(config.passwordHash).toBe('hashedpassword');
+      expect(mockedRead).toHaveBeenCalledWith(AUTH_FILE);
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'admin', passwordHash: 'hash' });
     });
 
-    it('should handle missing config file gracefully', () => {
-      mockFs.existsSync.mockReturnValue(false);
+    it('drops a plaintext password an older version saved, so the next save scrubs it', () => {
+      mockedRead.mockReturnValue({ enabled: false, username: 'admin', passwordHash: 'hash', password: 'plaintext' } as never);
 
       loadAuthConfig();
+      saveAuthConfig();
 
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
-      expect(config.username).toBe('');
-      expect(config.passwordHash).toBe('');
-    });
-
-    it('should handle invalid JSON gracefully', () => {
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue('invalid json');
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      loadAuthConfig();
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] Failed to load saved auth config:',
-        expect.any(Object)
+      expect(getAuthConfig()).toEqual({ enabled: false, username: 'admin', passwordHash: 'hash' });
+      expect(mockedWrite).toHaveBeenLastCalledWith(
+        AUTH_FILE, { enabled: false, username: 'admin', passwordHash: 'hash' }, { mode: 0o600 }
       );
-
-      consoleSpy.mockRestore();
     });
 
-    it('should handle file read errors gracefully', () => {
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockImplementation(() => {
-        throw new Error('Read error');
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    it('ignores saved fields of the wrong type', () => {
+      mockedRead.mockReturnValue({ enabled: 'yes', username: 42, passwordHash: null } as never);
 
       loadAuthConfig();
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] Failed to load saved auth config:',
-        expect.any(Object)
-      );
+      expect(getAuthConfig()).toEqual(disabled);
+    });
 
-      consoleSpy.mockRestore();
+    it('keeps the defaults when there is no saved login', () => {
+      loadAuthConfig();
+
+      expect(getAuthConfig()).toEqual(disabled);
+    });
+
+    it('logs and keeps the defaults when the file cannot be read', () => {
+      mockedRead.mockImplementation(() => { throw new Error('EACCES'); });
+
+      loadAuthConfig();
+
+      expect(getAuthConfig()).toEqual(disabled);
+      expect(console.error).toHaveBeenCalledWith('[auth-config] Failed to load the saved login:', expect.any(Error));
     });
   });
 
   describe('saveAuthConfig', () => {
-    it('should save auth config to file', () => {
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.mkdirSync.mockImplementation();
-      mockFs.writeFileSync.mockImplementation();
-
-      // Set up a config to save
-      updateAuthConfig({
-        enabled: true,
-        username: 'testuser',
-        passwordHash: 'hashedpassword'
-      });
+    it('writes the file atomically, readable only by the owner', () => {
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash' });
+      mockedWrite.mockClear();
 
       saveAuthConfig();
 
-      expect(mockFs.writeFileSync).toHaveBeenCalledWith(
-        '/install/dir/data/auth-config.json',
-        expect.stringContaining('"enabled": true'),
-        { mode: 0o600 }
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith('/install/data', { recursive: true });
+      expect(mockedWrite).toHaveBeenCalledWith(
+        AUTH_FILE, { enabled: true, username: 'admin', passwordHash: 'hash' }, { mode: 0o600 }
       );
     });
 
-    it('should create data directory if it does not exist', () => {
-      mockFs.existsSync.mockReturnValue(false);
-      mockFs.mkdirSync.mockImplementation();
-      mockFs.writeFileSync.mockImplementation();
+    it('logs a failed write', () => {
+      mockedWrite.mockImplementationOnce(() => { throw new Error('ENOSPC'); });
 
       saveAuthConfig();
 
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/install/dir/data', { recursive: true });
-    });
-
-    it('should handle file write errors gracefully', () => {
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.writeFileSync.mockImplementation(() => {
-        throw new Error('Write error');
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      saveAuthConfig();
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] Failed to save auth config:',
-        expect.any(Object)
-      );
-
-      consoleSpy.mockRestore();
+      expect(console.error).toHaveBeenCalledWith('[auth-config] Failed to save the login:', expect.any(Error));
     });
   });
 
   describe('migrateAuthConfig', () => {
-    it('should migrate old config file to new location', () => {
-      // Ensure new config doesn't exist
-      mockFs.existsSync.mockImplementation((path: string) => {
-        if (path === '/install/dir/data') return false;
-        if (path === '/app/dir/data/auth-config.json') return true;
-        if (path === '/install/dir/data/auth-config.json') return false;
-        return false;
-      });
-      mockFs.mkdirSync.mockImplementation();
-      mockFs.renameSync.mockImplementation();
+    function filesExist(...paths: string[]) {
+      mockedFs.existsSync.mockImplementation(p => paths.includes(String(p)));
+    }
+
+    it('moves the file out of the working directory', () => {
+      filesExist(OLD_AUTH_FILE);
 
       migrateAuthConfig();
 
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/install/dir/data', { recursive: true });
-      expect(mockFs.renameSync).toHaveBeenCalledWith(
-        '/app/dir/data/auth-config.json',
-        '/install/dir/data/auth-config.json'
-      );
+      expect(mockedFs.mkdirSync).toHaveBeenCalledWith('/install/data', { recursive: true });
+      expect(mockedFs.renameSync).toHaveBeenCalledWith(OLD_AUTH_FILE, AUTH_FILE);
     });
 
-    it('should not migrate if new config already exists', () => {
-      mockFs.existsSync.mockImplementation((path: string) => {
-        if (path === '/app/dir/data/auth-config.json') return true;
-        if (path === '/install/dir/data/auth-config.json') return true;
-        return false;
-      });
+    it('leaves an existing file alone', () => {
+      filesExist(OLD_AUTH_FILE, AUTH_FILE);
 
       migrateAuthConfig();
 
-      expect(mockFs.renameSync).not.toHaveBeenCalled();
+      expect(mockedFs.renameSync).not.toHaveBeenCalled();
     });
 
-    it('should handle migration errors gracefully', () => {
-      mockFs.existsSync.mockImplementation((path: string) => {
-        if (path === '/install/dir/data') return false;
-        if (path === '/app/dir/data/auth-config.json') return true;
-        if (path === '/install/dir/data/auth-config.json') return false;
-        return false;
-      });
-      mockFs.mkdirSync.mockImplementation();
-      mockFs.renameSync.mockImplementation(() => {
-        throw new Error('Rename error');
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    it('logs a failed move', () => {
+      filesExist(OLD_AUTH_FILE);
+      mockedFs.renameSync.mockImplementation(() => { throw new Error('EXDEV'); });
 
       migrateAuthConfig();
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] Failed to migrate auth-config.json:',
-        expect.any(Object)
-      );
-
-      consoleSpy.mockRestore();
+      expect(console.error).toHaveBeenCalledWith('[auth-config] Failed to migrate auth-config.json:', expect.any(Error));
     });
   });
 
   describe('hashPassword', () => {
-    it('should hash a valid password', async () => {
-      mockBcrypt.hash.mockResolvedValue('hashedpassword');
-
-      const result = await hashPassword('testpassword');
-
-      expect(mockBcrypt.hash).toHaveBeenCalledWith('testpassword', 12);
-      expect(result).toBe('hashedpassword');
+    it('hashes with cost 12', async () => {
+      await expect(hashPassword('secret')).resolves.toBe('hashed_secret');
+      expect(mockedBcrypt.hash).toHaveBeenCalledWith('secret', 12);
     });
 
-    it('should throw error for empty password', async () => {
-      let errorThrown = false;
-      try {
-        await hashPassword('');
-      } catch (error) {
-        errorThrown = true;
-        expect((error as Error).message).toBe('Password must be a non-empty string');
-      }
-      expect(errorThrown).toBe(true);
-    });
-
-    it('should throw error for null password', async () => {
-      let errorThrown = false;
-      try {
-        await hashPassword(null as any);
-      } catch (error) {
-        errorThrown = true;
-        expect((error as Error).message).toBe('Password must be a non-empty string');
-      }
-      expect(errorThrown).toBe(true);
-    });
-
-    it('should throw error for non-string password', async () => {
-      let errorThrown = false;
-      try {
-        await hashPassword(123 as any);
-      } catch (error) {
-        errorThrown = true;
-        expect((error as Error).message).toBe('Password must be a non-empty string');
-      }
-      expect(errorThrown).toBe(true);
+    it.each([[''], [null], [123]])('refuses %p', async password => {
+      await expect(hashPassword(password as string)).rejects.toThrow('Password must be a non-empty string');
     });
   });
 
   describe('verifyPassword', () => {
-    it('should return true for valid password', async () => {
-      mockBcrypt.compare.mockResolvedValue(true);
+    it('reports whether the password matches the hash', async () => {
+      mockedBcrypt.compare.mockResolvedValueOnce(true as never).mockResolvedValueOnce(false as never);
 
-      const result = await verifyPassword('testpassword', 'hashedpassword');
-
-      expect(mockBcrypt.compare).toHaveBeenCalledWith('testpassword', 'hashedpassword');
-      expect(result).toBe(true);
+      await expect(verifyPassword('secret', 'hash')).resolves.toBe(true);
+      await expect(verifyPassword('wrong', 'hash')).resolves.toBe(false);
+      expect(mockedBcrypt.compare).toHaveBeenCalledWith('secret', 'hash');
     });
 
-    it('should return false for invalid password', async () => {
-      mockBcrypt.compare.mockResolvedValue(false);
-
-      const result = await verifyPassword('wrongpassword', 'hashedpassword');
-
-      expect(result).toBe(false);
+    it('refuses an empty password without hashing', async () => {
+      await expect(verifyPassword('', 'hash')).resolves.toBe(false);
+      expect(mockedBcrypt.compare).not.toHaveBeenCalled();
     });
 
-    it('should return false for empty password', async () => {
-      const result = await verifyPassword('', 'hashedpassword');
+    it('refuses a missing hash, but only after a full-cost comparison', async () => {
+      mockedBcrypt.compare.mockResolvedValueOnce(true as never).mockResolvedValueOnce(true as never);
 
-      expect(result).toBe(false);
+      await expect(verifyPassword('secret', '')).resolves.toBe(false);
+      await expect(verifyPassword('secret', null as unknown as string)).resolves.toBe(false);
+      expect(mockedBcrypt.compare).toHaveBeenCalledWith('secret', UNMATCHABLE_BCRYPT_HASH);
+      expect(mockedBcrypt.compare).toHaveBeenCalledTimes(2);
     });
 
-    it('should return false for null password', async () => {
-      const result = await verifyPassword(null as any, 'hashedpassword');
+    it('treats a bcrypt error as a mismatch', async () => {
+      mockedBcrypt.compare.mockRejectedValueOnce(new Error('bad hash') as never);
 
-      expect(result).toBe(false);
-    });
-
-    it('should return false for empty hash', async () => {
-      const result = await verifyPassword('testpassword', '');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false for null hash', async () => {
-      const result = await verifyPassword('testpassword', null as any);
-
-      expect(result).toBe(false);
-    });
-
-    it('should handle bcrypt errors gracefully', async () => {
-      mockBcrypt.compare.mockRejectedValue(new Error('Bcrypt error'));
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      const result = await verifyPassword('testpassword', 'hashedpassword');
-
-      expect(result).toBe(false);
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Auth] Password verification error:',
-        expect.any(Object)
-      );
-
-      consoleSpy.mockRestore();
+      await expect(verifyPassword('secret', 'hash')).resolves.toBe(false);
     });
   });
 
   describe('updateAuthConfig', () => {
-    it('should update auth config successfully', () => {
-      const newConfig: AuthConfig = {
-        enabled: true,
-        username: 'testuser',
-        passwordHash: 'hashedpassword'
-      };
+    it('applies and saves a valid login', () => {
+      const login = { enabled: true, username: 'admin', passwordHash: 'hash' };
 
-      updateAuthConfig(newConfig);
+      updateAuthConfig(login);
 
-      const config = getAuthConfig();
-      expect(config).toEqual(newConfig);
-      expect(mockFs.writeFileSync).toHaveBeenCalled();
+      expect(getAuthConfig()).toEqual(login);
+      expect(mockedWrite).toHaveBeenCalledWith(AUTH_FILE, login, { mode: 0o600 });
     });
 
-    it('should reject config with enabled=true but missing username', () => {
-      const invalidConfig: AuthConfig = {
-        enabled: true,
-        username: '',
-        passwordHash: 'hashedpassword'
-      };
+    it.each([
+      ['no single login', { enabled: true, username: '', passwordHash: '' }],
+      ['a username without a password', { enabled: true, username: 'admin', passwordHash: '' }],
+      ['a password without a username', { enabled: true, username: '', passwordHash: 'hash' }]
+    ])('applies authentication with %s, leaving sign-in to accounts', (_label, login) => {
+      // Refusing it would leave the previous login in force, which may be authentication off.
+      updateAuthConfig(login);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      updateAuthConfig(invalidConfig);
-
-      expect(consoleSpy).toHaveBeenCalledWith('[Auth] Invalid username in auth config');
-
-      // Config should not be updated
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
-
-      consoleSpy.mockRestore();
+      expect(getAuthConfig()).toEqual(login);
+      expect(mockedWrite).toHaveBeenCalledWith(AUTH_FILE, login, { mode: 0o600 });
+      expect(console.error).not.toHaveBeenCalled();
     });
 
-    it('should reject config with enabled=true but missing password hash', () => {
-      const invalidConfig: AuthConfig = {
-        enabled: true,
-        username: 'testuser',
-        passwordHash: ''
-      };
+    it('refuses a login whose fields are not text', () => {
+      updateAuthConfig({ enabled: true, username: 42, passwordHash: 'hash' } as unknown as AuthConfig);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      updateAuthConfig(invalidConfig);
-
-      expect(consoleSpy).toHaveBeenCalledWith('[Auth] Invalid password hash in auth config');
-
-      // Config should not be updated
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
-
-      consoleSpy.mockRestore();
+      expect(console.error).toHaveBeenCalledWith('[auth-config] Refused a malformed login update.');
+      expect(getAuthConfig()).toEqual(disabled);
+      expect(mockedWrite).not.toHaveBeenCalled();
     });
 
-    it('should accept config with enabled=false', () => {
-      const newConfig: AuthConfig = {
-        enabled: false,
-        username: '',
-        passwordHash: ''
-      };
+    it('stores only the login fields', () => {
+      updateAuthConfig({ enabled: false, username: 'admin', passwordHash: 'hash', password: 'plaintext' } as AuthConfig);
 
-      updateAuthConfig(newConfig);
+      expect(getAuthConfig()).toEqual({ enabled: false, username: 'admin', passwordHash: 'hash' });
+    });
 
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
+    it('hands out a copy', () => {
+      getAuthConfig().enabled = true;
+
+      expect(getAuthConfig().enabled).toBe(false);
     });
   });
 
-  describe('getAuthConfig', () => {
-    it('should return a copy of the auth config', () => {
-      const config1 = getAuthConfig();
-      config1.enabled = true;
+  describe('legacyLoginFingerprint', () => {
+    it('changes with the username or the password hash, and only with them', () => {
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash-1' });
+      const original = legacyLoginFingerprint();
 
-      // Original config should not be modified
-      const config2 = getAuthConfig();
-      expect(config2.enabled).toBe(false);
+      expect(original).toMatch(/^[0-9a-f]{64}$/);
+      expect(legacyLoginFingerprint()).toBe(original);
+
+      updateAuthConfig({ enabled: false, username: 'admin', passwordHash: 'hash-1' });
+      expect(legacyLoginFingerprint()).toBe(original);
+
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash-2' });
+      expect(legacyLoginFingerprint()).not.toBe(original);
+
+      updateAuthConfig({ enabled: true, username: 'owner', passwordHash: 'hash-1' });
+      expect(legacyLoginFingerprint()).not.toBe(original);
     });
-  });
 
-  describe('isAuthInitialized and setAuthInitialized', () => {
-    it('should track initialization state', () => {
-      expect(isAuthInitialized()).toBe(false);
+    it('fingerprints a login it is given as it would the current one', () => {
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash-1' });
+      const snapshot = getAuthConfig();
+      const original = legacyLoginFingerprint();
 
-      setAuthInitialized(true);
-      expect(isAuthInitialized()).toBe(true);
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash-2' });
 
-      setAuthInitialized(false);
-      expect(isAuthInitialized()).toBe(false);
+      expect(legacyLoginFingerprint(snapshot)).toBe(original);
+      expect(legacyLoginFingerprint()).not.toBe(original);
     });
   });
 
   describe('initializeAuthFromEnv', () => {
-    beforeEach(() => {
-      // Reset environment
-      delete process.env.AUTH_ENABLED;
-      delete process.env.AUTH_USERNAME;
-      delete process.env.AUTH_PASSWORD;
-    });
-
-    it('should initialize from environment variables when auth is enabled', async () => {
-      process.env.AUTH_ENABLED = 'true';
-      process.env.AUTH_USERNAME = 'envuser';
-      process.env.AUTH_PASSWORD = 'envpassword';
-
-      mockBcrypt.hash.mockResolvedValue('hashedenvpassword');
+    it('sets the login from AUTH_ENABLED, AUTH_USERNAME and AUTH_PASSWORD', async () => {
+      Object.assign(process.env, { AUTH_ENABLED: 'true', AUTH_USERNAME: 'envuser', AUTH_PASSWORD: 'envpassword' });
 
       await initializeAuthFromEnv();
 
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(true);
-      expect(config.username).toBe('envuser');
-      expect(config.passwordHash).toBe('hashedenvpassword');
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'envuser', passwordHash: 'hashed_envpassword' });
+      expect(mockedWrite).toHaveBeenCalled();
     });
 
-    it('should use default username when not specified', async () => {
-      process.env.AUTH_ENABLED = 'true';
-      process.env.AUTH_PASSWORD = 'envpassword';
-
-      mockBcrypt.hash.mockResolvedValue('hashedenvpassword');
+    it('defaults the username to admin', async () => {
+      Object.assign(process.env, { AUTH_ENABLED: 'true', AUTH_PASSWORD: 'envpassword' });
 
       await initializeAuthFromEnv();
 
-      const config = getAuthConfig();
-      expect(config.username).toBe('admin');
+      expect(getAuthConfig().username).toBe('admin');
+    });
+
+    it('overrides the saved login', async () => {
+      mockedRead.mockReturnValue({ enabled: true, username: 'saved', passwordHash: 'saved-hash' });
+      mockedBcrypt.compare.mockResolvedValueOnce(false as never);
+      Object.assign(process.env, { AUTH_ENABLED: 'true', AUTH_USERNAME: 'envuser', AUTH_PASSWORD: 'envpassword' });
+
+      await initializeAuthFromEnv();
+
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'envuser', passwordHash: 'hashed_envpassword' });
+    });
+
+    it('keeps the saved hash while AUTH_PASSWORD still matches it', async () => {
+      // A fresh salt on every start would sign out every legacy session at each restart.
+      mockedRead.mockReturnValue({ enabled: true, username: 'saved', passwordHash: 'saved-hash' });
+      Object.assign(process.env, { AUTH_ENABLED: 'true', AUTH_USERNAME: 'saved', AUTH_PASSWORD: 'envpassword' });
+
+      await initializeAuthFromEnv();
+
+      expect(mockedBcrypt.compare).toHaveBeenCalledWith('envpassword', 'saved-hash');
+      expect(mockedBcrypt.hash).not.toHaveBeenCalled();
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'saved', passwordHash: 'saved-hash' });
     });
 
     it('enables auth without a password, leaving sign-in to accounts', async () => {
+      // Leaving it disabled here would serve the web interface to anyone who can reach it.
       process.env.AUTH_ENABLED = 'true';
-      // No AUTH_PASSWORD set
 
       await initializeAuthFromEnv();
 
-      // Leaving it disabled here would serve the web interface to anyone who can reach it,
-      // even though accounts exist to sign in with.
       expect(getAuthConfig().enabled).toBe(true);
     });
 
-    it('should not override config when AUTH_ENABLED is not true', async () => {
-      process.env.AUTH_ENABLED = 'false';
-      process.env.AUTH_PASSWORD = 'envpassword';
+    it('keeps the saved login when AUTH_ENABLED is not "true"', async () => {
+      mockedRead.mockReturnValue({ enabled: true, username: 'saved', passwordHash: 'saved-hash' });
+      Object.assign(process.env, { AUTH_ENABLED: 'false', AUTH_PASSWORD: 'envpassword' });
 
       await initializeAuthFromEnv();
 
-      const config = getAuthConfig();
-      expect(config.enabled).toBe(false);
-    });
-
-    it('should load existing config first', async () => {
-      // Set up existing config
-      const existingConfig = {
-        enabled: true,
-        username: 'existinguser',
-        passwordHash: 'existinghash'
-      };
-
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(existingConfig));
-
-      // Environment variables that would override
-      process.env.AUTH_ENABLED = 'true';
-      process.env.AUTH_USERNAME = 'envuser';
-      process.env.AUTH_PASSWORD = 'envpassword';
-
-      mockBcrypt.hash.mockResolvedValue('hashedenvpassword');
-
-      await initializeAuthFromEnv();
-
-      // Should use environment config, not existing file config
-      const config = getAuthConfig();
-      expect(config.username).toBe('envuser');
-      expect(config.passwordHash).toBe('hashedenvpassword');
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'saved', passwordHash: 'saved-hash' });
+      expect(mockedWrite).not.toHaveBeenCalled();
     });
   });
 
   describe('initializeAuth', () => {
-    it('should initialize auth successfully', async () => {
+    it('migrates the old file before loading the login', async () => {
+      mockedFs.existsSync.mockImplementation(p => p === OLD_AUTH_FILE);
+
       await initializeAuth();
 
-      expect(isAuthInitialized()).toBe(true);
+      expect(mockedFs.renameSync.mock.invocationCallOrder[0]).toBeLessThan(mockedRead.mock.invocationCallOrder[0]);
     });
 
-    it('should set initialized to true even on error', async () => {
-      // This test has issues with error expectations - skipping for now
-      expect(true).toBe(true);
+    it('logs instead of failing when the environment login cannot be hashed', async () => {
+      Object.assign(process.env, { AUTH_ENABLED: 'true', AUTH_PASSWORD: 'envpassword' });
+      mockedBcrypt.hash.mockRejectedValueOnce(new Error('out of memory') as never);
+
+      await expect(initializeAuth()).resolves.toBeUndefined();
+
+      expect(console.error).toHaveBeenCalledWith('[auth-config] Failed to initialize authentication:', expect.any(Error));
     });
   });
 });

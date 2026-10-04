@@ -1,147 +1,61 @@
 import { messagingService } from '../services/messaging.service';
 import { LinuxDepsService } from '../services/linux-deps.service';
+import type { MessageSender } from '../types/messaging.types';
+import { asPayload, errorMessage } from './handler.utils';
 
-// Initialize service
 const linuxDepsService = new LinuxDepsService();
 
-/** Handles the 'check-linux-deps' message event from the messaging service. 
- * 
- * When triggered, this handler invokes the LinuxDepsService to check for required dependencies.
- * It then sends the result back to the sender of the message, including details such as
- * success status, missing dependencies, and any error information.
- * In case of unexpected errors during the dependency check, it logs the error and sends a failure
- * response to the sender.
- * 
- * @param payload - The payload received with the message, expected to contain a `requestId`.
- * @param sender - The sender of the message, used to route the response.
-*/
-messagingService.on('check-linux-deps', async (payload, sender) => {
-  const { requestId } = payload || {};
-  
+// Each request is answered on a channel of its own, so these cannot use onRequest. Errors are
+// logged by message only: a failed sudo call can carry the command it ran.
+
+messagingService.on('check-linux-deps', async (payload: unknown, sender: MessageSender) => {
+  const { requestId } = asPayload(payload);
   try {
     const result = await linuxDepsService.checkDependencies();
-    
-    sender?.send?.('linux-deps-check-result', {
-      ...result,
-      requestId
-    });
-
+    messagingService.sendToOriginator('linux-deps-check-result', { ...result, requestId }, sender);
   } catch (error) {
-    console.error('[linux-deps-handler] Unexpected error:', error);
-    
-    sender?.send?.('linux-deps-check-result', {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unexpected error',
-      requestId
-    });
+    console.error('[linux-deps-handler] Failed to check dependencies:', errorMessage(error));
+    messagingService.sendToOriginator('linux-deps-check-result', { success: false, error: errorMessage(error), requestId }, sender);
   }
 });
 
-/** Handles the 'validate-sudo-password' message event from the messaging service. 
- * 
- * When triggered, this handler invokes the LinuxDepsService to validate the provided sudo password.
- * It then sends the result back to the sender of the message, including details such as
- * success status and any error information.
- * In case of unexpected errors during the validation, it logs the error and sends a failure
- * response to the sender.
- * 
- * @param payload - The payload received with the message, expected to contain `password` and `requestId`.
- * @param sender - The sender of the message, used to route the response.
-*/
-messagingService.on('validate-sudo-password', async (payload, sender) => {
-  const { password, requestId } = payload || {};
-  
+messagingService.on('validate-sudo-password', async (payload: unknown, sender: MessageSender) => {
+  const { password, requestId } = asPayload(payload);
   try {
     const result = await linuxDepsService.validateSudoPassword(password);
-    
-    sender?.send?.('sudo-password-validation', {
-      ...result,
-      requestId
-    });
+    messagingService.sendToOriginator('sudo-password-validation', { ...result, requestId }, sender);
   } catch (error) {
-    console.error('[linux-deps-handler] Unexpected error validating sudo password:', error);
-    
-    sender?.send?.('sudo-password-validation', {
-      valid: false,
-      error: error instanceof Error ? error.message : 'Unexpected error',
-      requestId
-    });
+    console.error('[linux-deps-handler] Failed to validate the sudo password:', errorMessage(error));
+    messagingService.sendToOriginator('sudo-password-validation', { valid: false, error: errorMessage(error), requestId }, sender);
   }
 });
 
-/** Handles the 'install-linux-deps' message event from the messaging service. 
- * 
- * When triggered, this handler invokes the LinuxDepsService to install the specified dependencies.
- * It sends progress updates back to the sender during the installation process.
- * Once the installation is complete, it sends the final result back to the sender, including details such as
- * success status, any error information, and details of the installation process.
- * In case of unexpected errors during the installation, it logs the error and sends a failure
- * response to the sender.
- * 
- * @param payload - The payload received with the message, expected to contain `password`, `dependencies`, and `requestId`.
- * @param sender - The sender of the message, used to route the response.
-*/
-messagingService.on('install-linux-deps', async (payload, sender) => {
-  const { password, dependencies, requestId } = payload || {};
-  
+messagingService.on('install-linux-deps', async (payload: unknown, sender: MessageSender) => {
+  const { password, dependencies, requestId } = asPayload(payload);
   try {
-    const result = await linuxDepsService.installDependencies(
-      password,
-      dependencies,
-      (progress) => {
-        sender?.send?.('linux-deps-install-progress', {
-          ...progress,
-          requestId
-        });
-      }
-    );
-
-    sender?.send?.('linux-deps-install-result', {
-      ...result,
-      requestId
+    const result = await linuxDepsService.installDependencies(password, dependencies, progress => {
+      messagingService.sendToOriginator('linux-deps-install-progress', { ...progress, requestId }, sender);
     });
-
+    messagingService.sendToOriginator('linux-deps-install-result', { ...result, requestId }, sender);
   } catch (error) {
-    console.error('[linux-deps-handler] Unexpected error installing dependencies:', error);
-    
-    sender?.send?.('linux-deps-install-result', {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unexpected error during installation',
-      details: [],
-      requestId
-    });
+    const message = errorMessage(error, 'Unexpected error during installation');
+    console.error('[linux-deps-handler] Failed to install dependencies:', message);
+    messagingService.sendToOriginator('linux-deps-install-result', { success: false, error: message, details: [], requestId }, sender);
   }
 });
 
-/** Handles the 'get-linux-deps-list' message event from the messaging service. 
- * 
- * When triggered, this handler invokes the LinuxDepsService to get the list of available dependencies.
- * It then sends the result back to the sender of the message, including details such as
- * the list of dependencies and any error information.
- * In case of unexpected errors during the retrieval, it logs the error and sends a failure
- * response to the sender.
- * 
- * @param payload - The payload received with the message, expected to contain a `requestId`.
- * @param sender - The sender of the message, used to route the response.
-*/
-messagingService.on('get-linux-deps-list', (payload, sender) => {
-  const { requestId } = payload || {};
-  
+messagingService.on('get-linux-deps-list', (payload: unknown, sender: MessageSender) => {
+  const { requestId } = asPayload(payload);
   try {
     const result = linuxDepsService.getAvailableDependencies();
-    
-    sender?.send?.('linux-deps-list', {
-      ...result,
-      requestId
-    });
+    messagingService.sendToOriginator('linux-deps-list', { ...result, requestId }, sender);
   } catch (error) {
-    console.error('[linux-deps-handler] Unexpected error getting deps list:', error);
-    
-    sender?.send?.('linux-deps-list', {
+    console.error('[linux-deps-handler] Failed to list dependencies:', errorMessage(error));
+    messagingService.sendToOriginator('linux-deps-list', {
       dependencies: [],
       platform: 'unknown',
-      error: error instanceof Error ? error.message : 'Unexpected error',
+      error: errorMessage(error),
       requestId
-    });
+    }, sender);
   }
 });

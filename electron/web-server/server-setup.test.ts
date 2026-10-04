@@ -1,488 +1,157 @@
-// Mock bcrypt FIRST to prevent native module loading
-jest.mock('bcrypt', () => ({
-  hash: jest.fn(),
-  compare: jest.fn(),
-}));
+import * as net from 'net';
+import type { Server } from 'http';
+import express from 'express';
+import helmet from 'helmet';
+import { createApp, getServerPort, startServer } from './server-setup';
+import { messagingService } from '../services/messaging.service';
+import { sessionAuth } from './auth-middleware';
+import { setupAuthRoutes } from './auth-routes';
+import { setupIPCHandlers } from './ipc-handlers';
+import { installSocketAuth } from './socket-auth';
 
-import { createApp, getServerPort, startServer } from '../web-server/server-setup';
+jest.mock('express', () => {
+  const app = { use: jest.fn(), get: jest.fn(), post: jest.fn(), listen: jest.fn() };
+  const factory = Object.assign(jest.fn(() => app), {
+    json: jest.fn(() => 'json-middleware'),
+    static: jest.fn(() => 'static-middleware')
+  });
+  return { __esModule: true, default: factory };
+});
+jest.mock('helmet', () => ({ __esModule: true, default: jest.fn(() => 'helmet-middleware') }));
+jest.mock('../services/messaging.service', () => ({ messagingService: { attachWebSocketServer: jest.fn() } }));
+jest.mock('./auth-middleware', () => ({ sessionAuth: jest.fn() }));
+jest.mock('./auth-routes', () => ({ setupAuthRoutes: jest.fn() }));
+jest.mock('./ipc-handlers', () => ({ setupIPCHandlers: jest.fn() }));
+jest.mock('./socket-auth', () => ({ installSocketAuth: jest.fn() }));
 
-// Mock dependencies
-jest.mock('express');
-jest.mock('cors');
-jest.mock('path');
-jest.mock('../services/messaging.service');
-jest.mock('../web-server/auth-middleware');
-jest.mock('../web-server/auth-routes');
-jest.mock('../web-server/ipc-handlers');
-
-const mockExpress = require('express');
-const mockCors = require('cors');
-const mockPath = require('path');
-const mockMessagingService = require('../services/messaging.service');
-const mockAuthMiddleware = require('../web-server/auth-middleware');
-const mockAuthRoutes = require('../web-server/auth-routes');
-const mockIPCHandlers = require('../web-server/ipc-handlers');
+const mockedExpress = jest.mocked(express);
 
 describe('server-setup', () => {
-  let mockApp: any;
-  let mockServer: any;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup mock Express app
-    mockApp = {
-      use: jest.fn(),
-      post: jest.fn(),
-      get: jest.fn(),
-      listen: jest.fn(),
-      static: jest.fn()
-    };
-
-    mockExpress.mockReturnValue(mockApp);
-
-    // Setup mock server
-    mockServer = {
-      on: jest.fn(),
-      listen: jest.fn()
-    };
-
-    mockApp.listen.mockReturnValue(mockServer);
-
-    // Setup default mocks
-    mockCors.mockReturnValue('cors-middleware');
-    mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
-    mockAuthMiddleware.sessionAuth = jest.fn();
-    if (!mockMessagingService.messagingService) {
-      mockMessagingService.messagingService = {};
-    }
-    mockMessagingService.messagingService.attachWebSocketServer = jest.fn();
-  });
-
   describe('createApp', () => {
-    it('should create and configure Express app', () => {
-      const app = createApp();
-
-      expect(mockExpress).toHaveBeenCalled();
-      expect(app).toBe(mockApp);
-
-      // Check middleware setup
-      expect(mockApp.use).toHaveBeenCalledWith('cors-middleware');
-      expect(mockApp.use).toHaveBeenCalledWith(mockExpress.json());
-
-      // Check static file serving
-      expect(mockApp.use).toHaveBeenCalledWith(
-        mockExpress.static('__dirname/../../dist/cerious-aasm/browser')
-      );
-
-      // Check auth middleware
-      expect(mockApp.use).toHaveBeenCalledWith('/api', mockAuthMiddleware.sessionAuth);
-
-      // Check auth routes setup
-      expect(mockAuthRoutes.setupAuthRoutes).toHaveBeenCalledWith(mockApp);
-    });
-
-    it('should setup message endpoint', () => {
-      createApp();
-
-      const messageRoute = mockApp.post.mock.calls.find(([path]: [string]) => path === '/api/message');
-      expect(messageRoute).toBeDefined();
-
-      const messageHandler = messageRoute?.[1];
-      expect(typeof messageHandler).toBe('function');
-    });
-
-    it('should setup hello endpoint', () => {
-      createApp();
-
-      const helloRoute = mockApp.get.mock.calls.find(([path]: [string]) => path === '/api/hello');
-      expect(helloRoute).toBeDefined();
-    });
-
-    it('should setup fallback route for SPA', () => {
-      createApp();
-
-      // Should have a catch-all route at the end
-      const lastUseCall = mockApp.use.mock.calls[mockApp.use.mock.calls.length - 1];
-      expect(lastUseCall).toBeDefined();
-    });
-  });
-
-  describe('POST /api/message', () => {
-    let messageHandler: any;
-    let mockReq: any;
-    let mockRes: any;
+    let app: { use: jest.Mock; get: jest.Mock; post: jest.Mock };
 
     beforeEach(() => {
-      createApp();
-      const messageRoute = mockApp.post.mock.calls.find(([path]: [string]) => path === '/api/message');
-      messageHandler = messageRoute?.[1];
-
-      mockReq = {
-        body: {}
-      };
-
-      mockRes = {
-        status: jest.fn().mockReturnThis(),
-        json: jest.fn()
-      };
-
-      // Mock process.send
-      (global as any).process.send = jest.fn();
+      app = createApp() as unknown as typeof app;
     });
 
-    afterEach(() => {
-      delete (global as any).process.send;
+    it('sets the security headers that work over plain HTTP on a LAN', () => {
+      expect(helmet).toHaveBeenCalledWith({ contentSecurityPolicy: false, hsts: false, crossOriginEmbedderPolicy: false });
+      expect(app.use.mock.calls[0]).toEqual(['helmet-middleware']);
     });
 
-    it('should validate channel parameter', async () => {
-      mockReq.body = { payload: 'test' }; // Missing channel
+    it('serves the UI before the session check, so the login page can load', () => {
+      const uses = app.use.mock.calls.map(call => call[0]);
 
-      await messageHandler(mockReq, mockRes);
-
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Channel is required and must be a string'
-      });
+      expect(mockedExpress.static).toHaveBeenCalledWith(expect.stringMatching(/dist\/cerious-aasm\/browser$/));
+      expect(uses.indexOf('static-middleware')).toBeLessThan(uses.indexOf('/api'));
+      expect(app.use).toHaveBeenCalledWith('/api', sessionAuth);
+      expect(setupAuthRoutes).toHaveBeenCalledWith(app);
     });
 
-    it('should forward valid messages to main process', async () => {
-      mockReq.body = {
-        channel: 'test-channel',
-        payload: { test: 'data' }
-      };
+    it('allows no cross-origin requests and has no message route', () => {
+      const routes = [...app.get.mock.calls, ...app.post.mock.calls].map(call => call[0]);
 
-      await messageHandler(mockReq, mockRes);
-
-      expect((global as any).process.send).toHaveBeenCalledWith({
-        type: 'messaging-event',
-        channel: 'test-channel',
-        payload: { test: 'data' }
-      });
-
-      expect(mockRes.json).toHaveBeenCalledWith({
-        status: 'test-channel-sent',
-        channel: 'test-channel',
-        payload: { test: 'data' },
-        transport: 'api'
-      });
+      expect(routes).not.toContain('/api/message');
+      expect(routes).not.toContain('/api/hello');
+      expect(app.use).toHaveBeenCalledTimes(5);
     });
 
-    it('should handle IPC send errors', async () => {
-      (global as any).process.send = undefined; // No process.send available
+    it('answers every other path with the UI', () => {
+      const fallback = app.use.mock.calls[app.use.mock.calls.length - 1][0];
+      const res = { sendFile: jest.fn() };
 
-      mockReq.body = {
-        channel: 'test-channel',
-        payload: 'test'
-      };
+      fallback({}, res);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      await messageHandler(mockReq, mockRes);
-
-      expect(consoleSpy).toHaveBeenCalledWith('[API Server] No process.send available - not a child process?');
-      expect(mockRes.status).toHaveBeenCalledWith(500);
-      expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Internal server error - IPC not available'
-      });
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle message processing errors', async () => {
-      (global as any).process.send = jest.fn(() => {
-        throw new Error('IPC error');
-      });
-
-      mockReq.body = {
-        channel: 'test-channel',
-        payload: 'test'
-      };
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      await messageHandler(mockReq, mockRes);
-
-      expect(consoleSpy).toHaveBeenCalled();
-      expect(consoleSpy.mock.calls[0][0]).toBe('[API Server] Message processing error:');
-      expect(typeof consoleSpy.mock.calls[0][1]).toBe('object');
-      expect(mockRes.status).toHaveBeenCalledWith(500);
-      expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Internal server error',
-        channel: 'test-channel'
-      });
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('GET /api/hello', () => {
-    let helloHandler: any;
-    let mockRes: any;
-
-    beforeEach(() => {
-      createApp();
-      const helloRoute = mockApp.get.mock.calls.find(([path]: [string]) => path === '/api/hello');
-      helloHandler = helloRoute?.[1];
-
-      mockRes = {
-        json: jest.fn()
-      };
-    });
-
-    it('should return hello message', () => {
-      helloHandler({}, mockRes);
-
-      expect(mockRes.json).toHaveBeenCalledWith({
-        message: 'Hello from Electron Express API!'
-      });
+      expect(res.sendFile).toHaveBeenCalledWith(expect.stringMatching(/dist\/cerious-aasm\/browser\/index\.html$/));
     });
   });
 
   describe('getServerPort', () => {
+    const argv = process.argv;
+    const env = process.env;
+
     beforeEach(() => {
-      // Clear argv
-      process.argv = ['node', 'test.js'];
+      process.env = { ...env };
       delete process.env.PORT;
     });
 
-    it('should return default port when no args or env', () => {
-      const port = getServerPort();
-
-      expect(port).toBe(3000);
+    afterEach(() => {
+      process.argv = argv;
+      process.env = env;
     });
 
-    it('should parse port from command line args', () => {
-      process.argv = ['node', 'test.js', '--port=8080'];
+    it('reads --port', () => {
+      process.argv = ['node', 'server.js', '--port=8080'];
+      process.env.PORT = '9090';
 
-      const port = getServerPort();
-
-      expect(port).toBe(8080);
+      expect(getServerPort()).toBe(8080);
     });
 
-    it('should return environment PORT', () => {
-      process.env.PORT = '9000';
+    it('falls back to PORT, then 3000', () => {
+      process.argv = ['node', 'server.js'];
+      expect(getServerPort()).toBe(3000);
 
-      const port = getServerPort();
-
-      expect(port).toBe(9000);
+      process.env.PORT = '9090';
+      expect(getServerPort()).toBe(9090);
     });
 
-    it('should prioritize command line over environment', () => {
-      process.argv = ['node', 'test.js', '--port=8080'];
-      process.env.PORT = '9000';
+    it.each(['--port=invalid', '--port=0', '--port=70000', '--port=80abc'])('ignores %s', arg => {
+      process.argv = ['node', 'server.js', arg];
 
-      const port = getServerPort();
-
-      expect(port).toBe(8080);
-    });
-
-    it('should handle invalid port numbers', () => {
-      process.argv = ['node', 'test.js', '--port=invalid'];
-
-      const port = getServerPort();
-
-      expect(port).toBe(3000);
+      expect(getServerPort()).toBe(3000);
     });
   });
 
   describe('startServer', () => {
+    // Jest's own worker may be talking to its parent over process.send, so it is put back after.
+    const originalSend = process.send;
+    const realExpress = jest.requireActual<typeof import('express')>('express');
+    let send: jest.Mock;
+    let servers: Array<net.Server | Server>;
+
     beforeEach(() => {
-      // Mock process.send
-      (global as any).process.send = jest.fn();
+      send = jest.fn();
+      process.send = send;
+      servers = [];
     });
 
-    afterEach(() => {
-      delete (global as any).process.send;
+    afterEach(async () => {
+      process.send = originalSend;
+      await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
     });
 
-    it('should start server and notify main process', () => {
-      startServer(mockApp, 3000);
+    function start(port: number): Server {
+      startServer(realExpress(), port);
+      const server = jest.mocked(messagingService.attachWebSocketServer).mock.calls[0][0];
+      servers.push(server);
+      return server;
+    }
 
-      expect(mockApp.listen).toHaveBeenCalled();
-      expect(mockApp.listen.mock.calls[0][0]).toBe(3000);
-      expect(typeof mockApp.listen.mock.calls[0][1]).toBe('function');
+    function nextMessage(): Promise<unknown> {
+      return new Promise(resolve => send.mockImplementationOnce(message => resolve(message)));
+    }
 
-      // Trigger the listen callback
-      const listenCallback = mockApp.listen.mock.calls[0][1];
-      listenCallback();
+    it('reports ready once it is listening', async () => {
+      const message = nextMessage();
+      start(0);
 
-      // Use partial match for dynamic instance name
-      expect((global as any).process.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'server-ready',
-          port: 3000,
-          message: expect.stringMatching(/^Server started successfully on port 3000 \(instance: .+\)$/)
-        })
-      );
-    });
-
-    it('should setup IPC handlers', () => {
-      startServer(mockApp, 3000);
-
-      expect(mockIPCHandlers.setupIPCHandlers).toHaveBeenCalled();
+      expect(await message).toEqual({ type: 'server-ready', port: 0, message: 'Server started on port 0' });
+      expect(setupIPCHandlers).toHaveBeenCalled();
+      expect(installSocketAuth).toHaveBeenCalled();
     });
 
-    it('should attach WebSocket server', () => {
-      startServer(mockApp, 3000);
+    it('reports failure, not ready, when the port is taken', async () => {
+      const blocker = net.createServer();
+      servers.push(blocker);
+      await new Promise<void>(resolve => blocker.listen(0, resolve));
+      const port = (blocker.address() as net.AddressInfo).port;
 
-      // Ensure the same mockServer is passed
-  expect(mockMessagingService.messagingService.attachWebSocketServer).toHaveBeenCalledWith(mockApp.listen.mock.results[0].value);
-    });
+      const message = nextMessage();
+      start(port);
 
-    it('should handle server errors', () => {
-      startServer(mockApp, 3000);
-
-      const errorCallback = mockServer.on.mock.calls.find(([event]: [string]) => event === 'error')?.[1];
-      expect(errorCallback).toBeDefined();
-
-      const testError = new Error('Server error');
-      errorCallback(testError);
-
-      expect((global as any).process.send).toHaveBeenCalledWith({
-        type: 'server-error',
-        port: 3000,
-        error: 'Server error'
-      });
-    });
-
-    it('should use fallback error message if error.message is falsy', () => {
-      startServer(mockApp, 3000);
-      const errorCallback = mockServer.on.mock.calls.find(([event]: [string]) => event === 'error')?.[1];
-      expect(errorCallback).toBeDefined();
-      // error object with no message property
-      const testError = {};
-      errorCallback(testError);
-      expect((global as any).process.send).toHaveBeenCalledWith({
-        type: 'server-error',
-        port: 3000,
-        error: 'Server startup failed'
-      });
-    });
-
-    it('should not throw if process.send is undefined (server-ready)', () => {
-      (global as any).process.send = undefined;
-      startServer(mockApp, 3000);
-      const listenCallback = mockApp.listen.mock.calls[0][1];
-      expect(() => listenCallback()).not.toThrow();
-      // Should not call process.send
-    });
-
-    it('should not throw if process.send is undefined (server-error)', () => {
-      (global as any).process.send = undefined;
-      startServer(mockApp, 3000);
-      const errorCallback = mockServer.on.mock.calls.find(([event]: [string]) => event === 'error')?.[1];
-      expect(errorCallback).toBeDefined();
-      const testError = new Error('Server error');
-      expect(() => errorCallback(testError)).not.toThrow();
-      // Should not call process.send
-    });
-  });
-
-  describe('Fallback route (SPA)', () => {
-    it('should serve index.html for non-API routes', () => {
-      createApp();
-      // Find the fallback handler (last .use call)
-      const lastUseCall = mockApp.use.mock.calls[mockApp.use.mock.calls.length - 1];
-      const fallbackHandler = lastUseCall[0];
-      // Simulate Express req/res
-      const mockReq = {};
-      const mockRes = { sendFile: jest.fn() };
-      fallbackHandler(mockReq, mockRes);
-      expect(mockRes.sendFile).toHaveBeenCalled();
-      const callArg = mockRes.sendFile.mock.calls[0][0];
-      expect(/index\.html$/.test(callArg)).toBe(true);
-    });
-
-    it('should handle errors in the fallback route handler', () => {
-      createApp();
-      const lastUseCall = mockApp.use.mock.calls[mockApp.use.mock.calls.length - 1];
-      const fallbackHandler = lastUseCall[0];
-      const mockReq = {};
-      const mockRes = { sendFile: jest.fn(() => { throw new Error('sendFile error'); }) };
-      expect(() => fallbackHandler(mockReq, mockRes)).toThrow('sendFile error');
-    });
-  });
-
-  describe('getPortFromArgs (internal)', () => {
-    let originalArgv: string[];
-    beforeEach(() => {
-      originalArgv = [...process.argv];
-    });
-    afterEach(() => {
-      process.argv = originalArgv;
-    });
-    it('should return undefined if no --port arg', () => {
-      process.argv = ['node', 'test.js'];
-      // getPortFromArgs is only used internally, so we call createApp to exercise it
-      expect(() => createApp()).not.toThrow();
-    });
-    it('should return valid port from --port arg', () => {
-      process.argv = ['node', 'test.js', '--port=1234'];
-      expect(() => createApp()).not.toThrow();
-    });
-    it('should return undefined for invalid port arg', () => {
-      process.argv = ['node', 'test.js', '--port=notanumber'];
-      expect(() => createApp()).not.toThrow();
-    });
-  });
-
-  describe('getPortFromArgs (real express, coverage only)', () => {
-    let originalArgv: string[];
-    let originalExpress: any;
-    beforeAll(() => {
-      originalExpress = jest.requireActual('express');
-    });
-    beforeEach(() => {
-      originalArgv = [...process.argv];
-      jest.unmock('express');
-    });
-    afterEach(() => {
-      process.argv = originalArgv;
-      jest.mock('express');
-    });
-    it('should execute getPortFromArgs logic (no --port)', () => {
-      process.argv = ['node', 'test.js'];
-      expect(() => {
-        const app = require('../web-server/server-setup').createApp();
-        expect(app).toBeDefined();
-      }).not.toThrow();
-    });
-    it('should execute getPortFromArgs logic (valid --port)', () => {
-      process.argv = ['node', 'test.js', '--port=5678'];
-      expect(() => {
-        const app = require('../web-server/server-setup').createApp();
-        expect(app).toBeDefined();
-      }).not.toThrow();
-    });
-    it('should execute getPortFromArgs logic (invalid --port)', () => {
-      process.argv = ['node', 'test.js', '--port=notanumber'];
-      expect(() => {
-        const app = require('../web-server/server-setup').createApp();
-        expect(app).toBeDefined();
-      }).not.toThrow();
-    });
-  });
-
-  describe('getPortFromArgs (direct export)', () => {
-    let originalArgv: string[];
-    beforeEach(() => {
-      originalArgv = [...process.argv];
-    });
-    afterEach(() => {
-      process.argv = originalArgv;
-    });
-    it('returns undefined if no --port arg', () => {
-      process.argv = ['node', 'test.js'];
-      expect(require('../web-server/server-setup').getPortFromArgs()).toBeUndefined();
-    });
-    it('returns valid port if --port=1234', () => {
-      process.argv = ['node', 'test.js', '--port=1234'];
-      expect(require('../web-server/server-setup').getPortFromArgs()).toBe(1234);
-    });
-    it('returns undefined for invalid port', () => {
-      process.argv = ['node', 'test.js', '--port=notanumber'];
-      expect(require('../web-server/server-setup').getPortFromArgs()).toBeUndefined();
+      expect(await message).toEqual({ type: 'server-error', port, error: expect.stringContaining('EADDRINUSE') });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 });

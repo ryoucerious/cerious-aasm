@@ -1,151 +1,97 @@
-// ark-server-paths.utils.ts
-// Utility functions for ARK server paths and cross-platform handling
-
 import * as path from 'path';
 import * as fs from 'fs';
-import { getPlatform } from '../../platform.utils';
-import { getArkServerDir } from './ark-server-install.utils';
+import { getDefaultInstallDir, getPlatform } from '../../platform.utils';
+import { loadGlobalConfig } from '../../global-config.utils';
 import { isProtonInstalled, getProtonBinaryPath, ensureProtonPrefixExists, getProtonPrefixDir } from '../../proton.utils';
-import { getDefaultInstallDir } from '../../platform.utils';
-import { ARK_APP_ID } from '../ark-path.utils';
+import { getInstanceDir } from '../instance.utils';
 
+export const ARK_APP_ID = '2430930';
 export const ASA_API_LOADER_EXE = 'AsaApiLoader.exe';
 export const ARK_SERVER_EXE = 'ArkAscendedServer.exe';
 
 export interface ResolvedServerLaunch {
-  /** Absolute path to the executable to spawn */
   executable: string;
-  /** Working directory for the process (must be Win64 for AsaApi) */
+  /** The instance Win64 folder for AsaApi, so its plugins and DLLs resolve. */
   cwd: string;
-  /** True when launching via AsaApiLoader.exe */
   usesAsaApiLoader: boolean;
 }
 
-/**
- * Gets the ARK server executable path for the current platform.
- * On Windows: ArkAscendedServer.exe
- * On Linux: Uses Proton to run the Windows executable
- */
-export function getArkExecutablePath(): string {
-  const arkServerDir = getArkServerDir();
-  const windowsExePath = path.join(arkServerDir, 'ShooterGame', 'Binaries', 'Win64', ARK_SERVER_EXE);
+/** The shared ARK install, inside the configured Server Data Directory when one is set. */
+export function getArkServerDir(): string {
+  return path.join(loadGlobalConfig().serverDataDir || getDefaultInstallDir(), 'AASMServer');
+}
 
-  if (getPlatform() === 'windows') {
-    return windowsExePath;
-  } else {
-    // Linux: Return the Windows executable path - we'll wrap it with Proton
-    return windowsExePath;
-  }
+/** The Windows executable on both platforms: Linux runs it through Proton. */
+export function getArkExecutablePath(): string {
+  return path.join(getArkServerDir(), 'ShooterGame', 'Binaries', 'Win64', ARK_SERVER_EXE);
+}
+
+/** The Z: drive path Wine sees for a Linux path. */
+export function toProtonPath(linuxPath: string): string {
+  return 'Z:' + linuxPath.replace(/\//g, '\\');
 }
 
 /**
- * Resolve which executable to launch for a given instance.
- *
- * AsaApi requires starting AsaApiLoader.exe (not ArkAscendedServer.exe).
- * The loader injects the API and then starts the real server with the same args.
- * Working directory must be the instance Win64 folder so plugins/DLLs resolve.
+ * AsaApi has to be started through AsaApiLoader.exe, which injects the API and then starts the real
+ * server with the same arguments.
  */
 export function resolveServerLaunch(instanceId: string): ResolvedServerLaunch {
-  const { getInstancesBaseDir } = require('../../ark/instance.utils');
-  const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-  const instanceWin64 = path.join(instanceDir, 'ShooterGame', 'Binaries', 'Win64');
+  const instanceWin64 = path.join(getInstanceDir(instanceId), 'ShooterGame', 'Binaries', 'Win64');
   const asaApiLoader = path.join(instanceWin64, ASA_API_LOADER_EXE);
   const instanceExe = path.join(instanceWin64, ARK_SERVER_EXE);
   const sharedExe = getArkExecutablePath();
-  const sharedWin64 = path.dirname(sharedExe);
 
   if (getPlatform() === 'windows') {
     if (fs.existsSync(asaApiLoader)) {
-      return {
-        executable: asaApiLoader,
-        cwd: instanceWin64,
-        usesAsaApiLoader: true
-      };
+      return { executable: asaApiLoader, cwd: instanceWin64, usesAsaApiLoader: true };
     }
     if (fs.existsSync(instanceExe)) {
-      return {
-        executable: instanceExe,
-        cwd: instanceWin64,
-        usesAsaApiLoader: false
-      };
+      return { executable: instanceExe, cwd: instanceWin64, usesAsaApiLoader: false };
     }
-    return {
-      executable: sharedExe,
-      cwd: sharedWin64,
-      usesAsaApiLoader: false
-    };
+    return { executable: sharedExe, cwd: path.dirname(sharedExe), usesAsaApiLoader: false };
   }
 
-  // Linux / Proton: AsaApi is a Windows-native loader; use the shared ARK install.
-  // If a Proton-friendly loader layout is present under the instance, prefer it.
+  // Under Proton the loader is only used when the instance has its own full binary layout.
   if (fs.existsSync(asaApiLoader) && fs.existsSync(instanceExe)) {
-    return {
-      executable: asaApiLoader,
-      cwd: getArkServerDir(),
-      usesAsaApiLoader: true
-    };
+    return { executable: asaApiLoader, cwd: getArkServerDir(), usesAsaApiLoader: true };
   }
-
-  return {
-    executable: sharedExe,
-    cwd: getArkServerDir(),
-    usesAsaApiLoader: false
-  };
+  return { executable: sharedExe, cwd: getArkServerDir(), usesAsaApiLoader: false };
 }
 
 /**
- * The root of the directory tree ARK will actually run from for this instance.
- *
- * ARK resolves everything path-relative — config, saves, logs, the exclusive-join list —
- * against the tree that owns the executable it launched, NOT against the working directory
- * or the instance's config folder. An instance with isolated binaries therefore runs out of
- * its own folder; one that falls back to the shared executable runs out of the shared install.
- * Every "where will ARK read/write X" question must go through this function.
+ * The root of the tree ARK runs from for this instance. ARK resolves config, saves, logs and the
+ * exclusive-join list against the tree that owns the executable it launched, not the working
+ * directory, so every "where will ARK read or write X" question goes through here.
  */
 export function getInstanceRuntimeRoot(instanceId: string): string {
   const launch = resolveServerLaunch(instanceId);
-  // <root>/ShooterGame/Binaries/Win64/<exe> → <root>
+  // <root>/ShooterGame/Binaries/Win64/<exe>
   return path.resolve(path.dirname(launch.executable), '..', '..', '..');
 }
 
-/**
- * True when this instance runs from its own isolated tree rather than the shared install.
- */
+/** True when the instance runs from its own tree rather than the shared install. */
 export function isInstanceIsolated(instanceId: string): boolean {
-  const { getInstancesBaseDir } = require('../../ark/instance.utils');
-  const instanceDir = path.resolve(path.join(getInstancesBaseDir(), instanceId));
-  return getInstanceRuntimeRoot(instanceId) === instanceDir;
+  return getInstanceRuntimeRoot(instanceId) === getInstanceDir(instanceId);
 }
 
-/**
- * The config directory ARK will actually read GameUserSettings.ini / Game.ini from.
- */
 export function getInstanceConfigDir(instanceId: string): string {
   return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
 }
 
-/**
- * The directory ARK will actually write ShooterGame.log to.
- */
 export function getInstanceLogsDir(instanceId: string): string {
   return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Saved', 'Logs');
 }
 
-/**
- * The exclusive-join list path ARK reads when launched with -exclusivejoin.
- * ARK looks for it next to the executable, in the Win64 binaries folder.
- */
+/** ARK reads the exclusive-join list from the Win64 folder next to the executable. */
 export function getInstanceWhitelistPath(instanceId: string): string {
   return path.join(getInstanceRuntimeRoot(instanceId), 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
 }
 
 /**
- * The value to pass as ?AltSaveDirectoryName= for this instance.
- *
- * ARK appends this to <root>/ShooterGame/Saved/. An isolated instance is already rooted in
- * its own folder, so a plain 'SavedArks' is correct; a shared-install instance needs the
- * Servers/<id>/SavedArks path that lands it back inside its own instance folder.
- * In both cases the saves end up in the instance's historical SavedArks location.
+ * The ?AltSaveDirectoryName= value. ARK appends it to <runtimeRoot>/ShooterGame/Saved/: an isolated
+ * instance is already rooted in its own folder, while a shared-install instance needs
+ * Servers/<id>/SavedArks to land back in its folder. Either way the worlds stay in the instance's
+ * SavedArks.
  */
 export function getInstanceAltSaveDirName(instanceId: string): string {
   return isInstanceIsolated(instanceId)
@@ -154,9 +100,32 @@ export function getInstanceAltSaveDirName(instanceId: string): string {
 }
 
 /**
- * Game folders ARK resolves relative to the tree it launches from. Each is either a real
- * folder (shared-install instances) or a junction onto the shared install (isolated
- * instances) — ARK aborts at startup if any is missing or empty.
+ * Command-line text that only this instance's server processes carry, for finding the ones left
+ * behind when the tracked launcher exits first. An isolated instance runs an executable inside its
+ * own folder; a shared-install instance is told apart by its save directory argument.
+ */
+export function getInstanceProcessMarker(instanceId: string): string {
+  if (isInstanceIsolated(instanceId)) {
+    return commandLinePath(getInstanceDir(instanceId)) + '\\';
+  }
+  return `AltSaveDirectoryName=${getInstanceAltSaveDirName(instanceId)}`;
+}
+
+/** Command-line text every server process launched from this app's install carries. */
+export function getInstallProcessMarker(): string {
+  return commandLinePath(getArkServerDir()) + '\\';
+}
+
+// Proton is handed Z: paths, and they are what its processes show on their command lines.
+function commandLinePath(dir: string): string {
+  const absolute = path.resolve(dir);
+  return getPlatform() === 'windows' ? absolute : toProtonPath(absolute);
+}
+
+/**
+ * Folders ARK resolves against the tree it launches from: real folders for a shared-install
+ * instance, junctions onto the shared install for an isolated one. ARK aborts at startup if any is
+ * missing or empty.
  */
 const REQUIRED_RUNTIME_SUBPATHS = [
   path.join('ShooterGame', 'Content'),
@@ -164,7 +133,6 @@ const REQUIRED_RUNTIME_SUBPATHS = [
   'Engine'
 ];
 
-/** True when `dirPath` is a directory that exists and holds at least one entry. */
 function hasContents(dirPath: string): boolean {
   try {
     return fs.statSync(dirPath).isDirectory() && fs.readdirSync(dirPath).length > 0;
@@ -175,16 +143,10 @@ function hasContents(dirPath: string): boolean {
 }
 
 /**
- * Check that the tree this instance will actually launch from has the game folders ARK
- * needs, and report which are missing and whether the shared install is the cause.
- *
- * Call this AFTER the instance structure has been prepared — preparation is what creates
- * the junctions, so running it earlier reports a fresh instance as broken.
- *
- * Existence alone is not enough: a junction can point at a directory that has been
- * emptied, in which case ARK still aborts. Each folder is therefore required to be
- * non-empty, at both the shared install (which every instance links back to) and the
- * instance's own runtime root.
+ * Checks that the tree this instance launches from has the folders ARK needs, and whether the
+ * shared install is the cause. Call it after the instance structure is prepared: preparation
+ * creates the junctions. A junction onto an emptied folder still aborts ARK, so each folder must be
+ * non-empty.
  */
 export function validateInstanceRuntimeTree(
   instanceId: string
@@ -195,10 +157,8 @@ export function validateInstanceRuntimeTree(
   let sharedInstallBroken = false;
 
   for (const subPath of REQUIRED_RUNTIME_SUBPATHS) {
-    // A shared-install instance runs out of sharedRoot, so checking both would just
-    // duplicate the same path — attribute the failure to the install in that case.
-    const sharedOk = hasContents(path.join(sharedRoot, subPath));
-    if (!sharedOk) {
+    // A shared-install instance runs out of sharedRoot, so the failure belongs to the install.
+    if (!hasContents(path.join(sharedRoot, subPath))) {
       sharedInstallBroken = true;
       missing.push(subPath);
       continue;
@@ -211,49 +171,26 @@ export function validateInstanceRuntimeTree(
   return { valid: missing.length === 0, missing, sharedInstallBroken };
 }
 
-/**
- * True when AsaApiLoader.exe is installed for this instance.
- */
 export function isAsaApiLoaderInstalled(instanceId: string): boolean {
   try {
-    const { getInstancesBaseDir } = require('../../ark/instance.utils');
-    const loader = path.join(
-      getInstancesBaseDir(),
-      instanceId,
-      'ShooterGame',
-      'Binaries',
-      'Win64',
-      ASA_API_LOADER_EXE
-    );
-    return fs.existsSync(loader);
+    return fs.existsSync(path.join(getInstanceDir(instanceId), 'ShooterGame', 'Binaries', 'Win64', ASA_API_LOADER_EXE));
   } catch {
     return false;
   }
 }
 
-/**
- * Gets the config directory path for the current platform.
- * Windows: WindowsServer
- * Linux: LinuxServer (but we use WindowsServer when running via Proton)
- */
-export function getArkConfigDir(): string {
-  const arkServerDir = getArkServerDir();
-  // Always use WindowsServer since we're running Windows binaries via Proton on Linux
-  return path.join(arkServerDir, 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
+export interface ArkServerCommand {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
 }
 
-/**
- * Prepares spawn command and args for running ARK server with Proton on Linux if needed.
- * On Linux, instanceId is required so each server gets an isolated Proton prefix.
- */
-export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[], instanceId?: string) {
-  const platform = getPlatform();
-
-  if (platform === 'windows') {
+/** The spawn command for the server: the executable itself on Windows, Proton on Linux. */
+export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[], instanceId?: string): ArkServerCommand {
+  if (getPlatform() === 'windows') {
     return { command: arkExecutable, args: arkArgs };
   }
 
-  // --- Linux (Proton) ---
   if (!isProtonInstalled()) throw new Error('Proton is required but not installed. Please install Proton first.');
   if (!instanceId) {
     throw new Error('instanceId is required to isolate the Proton prefix on Linux');
@@ -263,39 +200,32 @@ export function prepareArkServerCommand(arkExecutable: string, arkArgs: string[]
   const protonBinary = getProtonBinaryPath();
   const prefixDir = getProtonPrefixDir(instanceId);
 
-  // Set up Proton environment with Wine/Proton compatibility fixes.
-  // WINEPREFIX and STEAM_COMPAT_DATA_PATH must be per-instance — sharing them
-  // across servers causes wineserver lock contention and crashes under load.
+  // WINEPREFIX and STEAM_COMPAT_DATA_PATH are per instance: a shared prefix causes wineserver lock
+  // contention and crashes under load.
   const protonEnv = {
     WINEPREFIX: prefixDir,
     STEAM_COMPAT_DATA_PATH: prefixDir,
     STEAM_COMPAT_CLIENT_INSTALL_PATH: path.join(getDefaultInstallDir(), '.steam'),
     SteamAppId: ARK_APP_ID,
-    // SteamGameId lets Proton write a per-game log. UMU_ID makes GE-Proton launch
-    // the dedicated server with wine directly. Without it Proton starts steam.exe,
-    // which exits in a container that has no Steam client and takes the server with it.
+    // SteamGameId lets Proton write a per-game log. UMU_ID makes GE-Proton launch the dedicated
+    // server with wine directly; otherwise it starts steam.exe, which exits in a container that has
+    // no Steam client and takes the server with it.
     SteamGameId: ARK_APP_ID,
     UMU_ID: ARK_APP_ID,
-    // Wine DLL overrides for compatibility:
-    // - mshtml=d: Disable IE/HTML rendering components (not needed for dedicated server)
-    // - winhttp/bcrypt/crypt32=n,b: Use native Wine implementations for networking/crypto
-    //   (fixes hang during Sentry SDK initialization in ARK Server v83.21+)
+    // mshtml=d: no IE/HTML components. winhttp/bcrypt/crypt32=n,b: native networking and crypto,
+    // which stops the hang during Sentry SDK init in ARK Server v83.21+.
     WINEDLLOVERRIDES: 'mshtml=d;winhttp=n,b;bcrypt=n,b;crypt32=n,b'
   };
 
-  // waitforexitandrun is the verb Steam uses. It also lets protonfixes see a real
-  // game launch (`run` is treated as a unit test and skipped).
-  // A leading '/' makes GE-Proton run `start.exe /unix`, which returns as soon as
-  // the process is created. Wine's Z: drive is the Linux root, so a Z: path is
-  // launched with wine64 and Proton waits until the server exits.
-  const protonExe = arkExecutable.startsWith('/')
-    ? 'Z:' + arkExecutable.replace(/\//g, '\\')
-    : arkExecutable;
+  // waitforexitandrun is the verb Steam uses, and protonfixes treats `run` as a unit test. A
+  // leading '/' makes GE-Proton run `start.exe /unix`, which returns as soon as the process exists;
+  // a Z: path is launched with wine64 and Proton waits until the server exits.
+  const protonExe = arkExecutable.startsWith('/') ? toProtonPath(arkExecutable) : arkExecutable;
   const protonArgs = ['waitforexitandrun', protonExe, ...arkArgs];
 
-  // Docker (and any host that already has a display) keeps a persistent Xvfb.
-  // A second xvfb-run display is torn down when Proton's launcher returns, which
-  // kills Wine with "X connection to :100 broken" before ShooterGame.log exists.
+  // Docker (and any host with a display) keeps a persistent Xvfb. A second xvfb-run display is torn
+  // down when Proton's launcher returns, which kills Wine with "X connection to :100 broken" before
+  // ShooterGame.log exists.
   if (process.env.DISPLAY) {
     return { command: protonBinary, args: protonArgs, env: protonEnv };
   }

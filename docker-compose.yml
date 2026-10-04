@@ -1,6 +1,5 @@
-# =============================================================================
-# Cerious AASM — Docker Compose
-# =============================================================================
+# Cerious AASM - Docker Compose.
+#
 # Start (pulls the release image; builds from source if it can't be pulled):
 #   docker compose up -d
 #   Open http://localhost:3000
@@ -22,18 +21,15 @@
 #   docker compose --profile test run --rm test
 #   docker compose --profile dev up headless-dev
 #   docker compose --profile debug run --rm shell
-# =============================================================================
 
 services:
-  # ---------------------------------------------------------------------------
-  # aasm — headless app (web UI, SteamCMD, Proton, ARK servers)
-  # ---------------------------------------------------------------------------
+  # Headless app: web UI, SteamCMD, Proton and the ARK servers.
   aasm:
     build:
       context: .
       target: runtime
-      args:
-        CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
+      secrets:
+        - curseforge_api_key
     # The release image. `docker compose pull` updates it; set AASM_IMAGE to a local
     # name (e.g. cerious-aasm:local) when building from source so a pull can't replace it.
     image: ${AASM_IMAGE:-ghcr.io/ryoucerious/cerious-aasm:latest}
@@ -49,11 +45,11 @@ services:
       - "${AASM_RCON_PORTS:-27020-27050}:${AASM_RCON_PORTS:-27020-27050}/tcp"
     shm_size: "2gb"
     cap_add:
-      - SYS_PTRACE
-      - SYS_ADMIN
+      - SYS_PTRACE   # Proton's wineserver attaches to its own child processes
+      - SYS_ADMIN    # Proton creates a user namespace to sandbox the game process
     security_opt:
-      - seccomp:unconfined
-      - apparmor:unconfined
+      - seccomp:unconfined   # default profile blocks the namespace syscalls above
+      - apparmor:unconfined  # default profile blocks the same namespace syscalls
     # privileged: true  # fallback if Proton still cannot create user namespaces
     volumes:
       - aasm-data:/home/aasm/.local/share/cerious-aasm
@@ -69,21 +65,17 @@ services:
       AASM_RCON_PORTS: ${AASM_RCON_PORTS:-27020-27050}
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # test — electron Jest tests
-  # ---------------------------------------------------------------------------
+  # Electron Jest tests.
   test:
     build:
       context: .
       target: test
     environment:
       - NODE_ENV=test
-    # docker compose --profile test run --rm test npx jest --testPathPatterns="proton"
+    # docker compose --profile test run --rm test npm run test:electron -- --testPathPatterns=proton
     profiles: ["test"]
 
-  # ---------------------------------------------------------------------------
-  # headless-dev — source mounted, Angular and Electron rebuilt on start
-  # ---------------------------------------------------------------------------
+  # Source mounted; Angular and Electron are rebuilt on start.
   headless-dev:
     build:
       context: .
@@ -105,20 +97,21 @@ services:
       - ELECTRON_DISABLE_SANDBOX=1
       - AASM_DOCKER=1
       - AASM_PORT=3000
+      - DISPLAY=:99
       - AASM_GAME_PORTS=${AASM_GAME_PORTS:-7777-7900}
       - AASM_QUERY_PORTS=${AASM_QUERY_PORTS:-27015-27030}
       - AASM_RCON_PORTS=${AASM_RCON_PORTS:-27020-27050}
+    # Xvfb is started in its own subshell (not a bare trailing `&`) so the `&&` chain
+    # still waits for the build and tsc steps before starting the app.
     command: >
       sh -c "npm run build &&
              npx tsc -p tsconfig.electron.json &&
-             Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+             (Xvfb $$DISPLAY -screen 0 1024x768x24 -nolisten tcp &) &&
              sleep 1 &&
              npx electron electron/main.js --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-audio-output --port=3000"
     profiles: ["dev"]
 
-  # ---------------------------------------------------------------------------
-  # shell — interactive shell with Linux node_modules from the build stage
-  # ---------------------------------------------------------------------------
+  # Interactive shell with the build stage's Linux node_modules.
   shell:
     build:
       context: .
@@ -127,7 +120,8 @@ services:
       - .:/app
       - /app/node_modules
     environment:
-      - DISPLAY=:99
+      # No DISPLAY: nothing here runs Xvfb. Scripts that need one (see
+      # cerious-aasm-headless.sh) detect its absence and start their own.
       - HOME=/home/aasm
     entrypoint: /bin/bash
     stdin_open: true
@@ -139,3 +133,9 @@ volumes:
   aasm-config:
   aasm-data-dev:
   aasm-config-dev:
+
+secrets:
+  # Read from the CURSEFORGE_API_KEY env var (see docs/DOCKER.md) instead of a build
+  # arg so the key stays out of image history. Needs Compose 2.23.1+.
+  curseforge_api_key:
+    environment: CURSEFORGE_API_KEY

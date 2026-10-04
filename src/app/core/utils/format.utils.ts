@@ -3,7 +3,7 @@
  * Pure functions, no Angular dependencies, so they are trivial to unit test.
  */
 
-/** "3d 14h", "1d 6h", "5h 23m", "12m", "45s" — the compact style used on server cards. */
+/** "3d 14h", "1d 6h", "5h 23m", "12m", "45s": the compact style used on server cards. */
 export function formatUptime(startedAt: number | null | undefined, now: number = Date.now()): string {
   if (!startedAt || startedAt > now) return '--';
   const totalSeconds = Math.floor((now - startedAt) / 1000);
@@ -59,6 +59,15 @@ export function formatPercent(value: number | null | undefined): string {
 export function toPercent(used: number | null | undefined, total: number | null | undefined): number {
   if (!used || !total || total <= 0) return 0;
   return Math.max(0, Math.min(100, (used / total) * 100));
+}
+
+/**
+ * Date and time in the browser's time zone and locale, "Unknown" when missing. Local, because
+ * scheduled work such as backups runs on the host's clock and users compare it with their own.
+ */
+export function formatLocalDateTime(value: Date | string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return 'Unknown';
+  return new Date(value).toLocaleString();
 }
 
 /** "12am", "3am", "12pm", "9pm" for chart axes. */

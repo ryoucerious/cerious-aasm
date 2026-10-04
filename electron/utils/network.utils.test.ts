@@ -1,323 +1,114 @@
-import { isPortInUse } from '../utils/network.utils';
+import { EventEmitter } from 'events';
+import { isTcpPortInUse, isUdpPortInUse } from './network.utils';
 
-// Mock the http and net modules
-jest.mock('net', () => ({
-  Socket: jest.fn().mockImplementation(() => ({
-    setTimeout: jest.fn(),
-    once: jest.fn(),
-    connect: jest.fn(),
-    destroy: jest.fn()
-  }))
-}));
+jest.mock('dgram', () => ({ createSocket: jest.fn() }));
+jest.mock('net', () => ({ createServer: jest.fn() }));
 
-jest.mock('http', () => ({
-  request: jest.fn()
-}));
+const mockDgram = jest.requireMock('dgram') as { createSocket: jest.Mock };
+const mockNet = jest.requireMock('net') as { createServer: jest.Mock };
 
-const mockNet = require('net');
-const mockHttp = require('http');
+class FakeSocket extends EventEmitter {
+  bind = jest.fn();
+  close = jest.fn((callback?: () => void) => callback?.());
+}
+
+class FakeServer extends EventEmitter {
+  listen = jest.fn();
+  close = jest.fn((callback?: () => void) => callback?.());
+}
+
+function errno(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(code), { code });
+}
 
 describe('network.utils', () => {
-  let mockSocket: any;
-  let mockHttpRequest: any;
-  let httpRequestCallback: Function | null = null;
+  describe('isUdpPortInUse', () => {
+    let socket: FakeSocket;
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    httpRequestCallback = null;
+    beforeEach(() => {
+      socket = new FakeSocket();
+      mockDgram.createSocket.mockReturnValue(socket);
+    });
 
-    // Setup socket mock
-    mockSocket = {
-      setTimeout: jest.fn(),
-      once: jest.fn(),
-      connect: jest.fn(),
-      destroy: jest.fn()
-    };
-    mockNet.Socket.mockReturnValue(mockSocket);
+    it('binds an IPv4 UDP socket exclusively on the given address', async () => {
+      socket.bind.mockImplementation(() => socket.emit('listening'));
 
-    // Setup HTTP request mock
-    mockHttpRequest = {
-      on: jest.fn(),
-      end: jest.fn(),
-      destroy: jest.fn()
-    };
+      await isUdpPortInUse(7777, '10.0.0.5');
 
-    // Mock http.request to capture the callback
-    mockHttp.request.mockImplementation((options: any, callback?: Function) => {
-      if (callback) {
-        httpRequestCallback = callback;
-      }
-      return mockHttpRequest;
+      expect(mockDgram.createSocket).toHaveBeenCalledWith('udp4');
+      expect(socket.bind).toHaveBeenCalledWith({ port: 7777, address: '10.0.0.5', exclusive: true });
+    });
+
+    it('binds every interface when no address is given', async () => {
+      socket.bind.mockImplementation(() => socket.emit('listening'));
+
+      await isUdpPortInUse(27015);
+
+      expect(socket.bind).toHaveBeenCalledWith({ port: 27015, address: '0.0.0.0', exclusive: true });
+    });
+
+    it('reports a free port and releases it', async () => {
+      socket.bind.mockImplementation(() => socket.emit('listening'));
+
+      await expect(isUdpPortInUse(7777)).resolves.toBe(false);
+      expect(socket.close).toHaveBeenCalled();
+    });
+
+    it.each(['EADDRINUSE', 'EACCES'])('reports a port it cannot bind with %s as in use', async code => {
+      socket.bind.mockImplementation(() => socket.emit('error', errno(code)));
+
+      await expect(isUdpPortInUse(7777)).resolves.toBe(true);
+      expect(socket.close).toHaveBeenCalled();
+    });
+
+    it('does not block a start on an error that says nothing about the port', async () => {
+      socket.bind.mockImplementation(() => socket.emit('error', errno('EADDRNOTAVAIL')));
+
+      await expect(isUdpPortInUse(7777, '10.9.9.9')).resolves.toBe(false);
     });
   });
 
-  describe('isPortInUse', () => {
-    describe('Web server ports (3000-9999)', () => {
-      it('should return true when HTTP request succeeds', async () => {
-        const port = 8080;
-        const host = '127.0.0.1';
+  describe('isTcpPortInUse', () => {
+    let server: FakeServer;
 
-        // Mock successful HTTP response
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            // No error for success case
-          }
-        });
-
-        const resultPromise = isPortInUse(port, host);
-
-        // Simulate successful response by calling the callback
-        if (httpRequestCallback) {
-          httpRequestCallback({});
-        }
-
-        const result = await resultPromise;
-
-        expect(result).toBe(true);
-        expect(mockHttp.request).toHaveBeenCalledTimes(1);
-        expect(mockHttpRequest.end).toHaveBeenCalled();
-        expect(mockHttpRequest.destroy).toHaveBeenCalled();
-      });
-
-      it('should return false when connection is refused', async () => {
-        const port = 8080;
-        const host = '127.0.0.1';
-
-        // Mock connection refused error
-        const mockError = { code: 'ECONNREFUSED' };
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            callback(mockError);
-          }
-        });
-
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(false);
-        expect(mockHttpRequest.destroy).toHaveBeenCalled();
-      });
-
-      it('should return true when HTTP request returns other errors (server running)', async () => {
-        const port = 8080;
-        const host = '127.0.0.1';
-
-        // Mock other HTTP error (like 404, 401, etc.)
-        const mockError = { code: 'ENOTFOUND' };
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            callback(mockError);
-          }
-        });
-
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(true);
-        expect(mockHttpRequest.destroy).toHaveBeenCalled();
-      });
-
-      it('should return false when request times out', async () => {
-        const port = 8080;
-        const host = '127.0.0.1';
-
-        // Mock timeout
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'timeout') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(false);
-        expect(mockHttpRequest.destroy).toHaveBeenCalled();
-      });
-
-      it('should use default host when not provided', async () => {
-        const port = 8080;
-
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            // No error
-          }
-        });
-
-        const resultPromise = isPortInUse(port);
-
-        // Simulate successful response
-        if (httpRequestCallback) {
-          httpRequestCallback({});
-        }
-
-        const result = await resultPromise;
-
-        expect(result).toBe(true);
-        expect(mockHttp.request).toHaveBeenCalledTimes(1);
-      });
+    beforeEach(() => {
+      server = new FakeServer();
+      mockNet.createServer.mockReturnValue(server);
     });
 
-    describe('Non-web server ports (< 3000 or > 9999)', () => {
-      it('should return true when TCP connection succeeds', async () => {
-        const port = 27015; // Steam port
-        const host = '127.0.0.1';
+    it('listens exclusively on the given address', async () => {
+      server.listen.mockImplementation(() => server.emit('listening'));
 
-        // Mock successful TCP connection
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'connect') {
-            callback();
-          }
-        });
+      await isTcpPortInUse(27020, '10.0.0.5');
 
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(true);
-        expect(mockNet.Socket).toHaveBeenCalled();
-        expect(mockSocket.setTimeout).toHaveBeenCalledWith(1000);
-        expect(mockSocket.connect).toHaveBeenCalledWith(port, host);
-        expect(mockSocket.destroy).toHaveBeenCalled();
-      });
-
-      it('should return false when TCP connection times out', async () => {
-        const port = 27015;
-        const host = '127.0.0.1';
-
-        // Mock timeout
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'timeout') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(false);
-        expect(mockSocket.destroy).toHaveBeenCalled();
-      });
-
-      it('should return false when TCP connection fails', async () => {
-        const port = 27015;
-        const host = '127.0.0.1';
-
-        // Mock connection error
-        const mockError = { code: 'ECONNREFUSED' };
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            callback(mockError);
-          }
-        });
-
-        const result = await isPortInUse(port, host);
-
-        expect(result).toBe(false);
-        expect(mockSocket.destroy).toHaveBeenCalled();
-      });
-
-      it('should handle ports below 3000', async () => {
-        const port = 22; // SSH port
-
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'connect') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port);
-
-        expect(result).toBe(true);
-        expect(mockNet.Socket).toHaveBeenCalled();
-        expect(mockSocket.connect).toHaveBeenCalledWith(port, '127.0.0.1');
-      });
-
-      it('should handle ports above 9999', async () => {
-        const port = 27016; // Another Steam port
-
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'connect') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port);
-
-        expect(result).toBe(true);
-        expect(mockNet.Socket).toHaveBeenCalled();
-        expect(mockSocket.connect).toHaveBeenCalledWith(port, '127.0.0.1');
-      });
+      expect(server.listen).toHaveBeenCalledWith({ port: 27020, host: '10.0.0.5', exclusive: true });
     });
 
-    describe('Edge cases', () => {
-      it('should handle port 3000 (boundary case)', async () => {
-        const port = 3000;
+    it('listens on every interface when no address is given', async () => {
+      server.listen.mockImplementation(() => server.emit('listening'));
 
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            // No error
-          }
-        });
+      await isTcpPortInUse(27020);
 
-        const resultPromise = isPortInUse(port);
+      expect(server.listen).toHaveBeenCalledWith({ port: 27020, host: '0.0.0.0', exclusive: true });
+    });
 
-        // Simulate successful response
-        if (httpRequestCallback) {
-          httpRequestCallback({});
-        }
+    it('reports a free port and releases it', async () => {
+      server.listen.mockImplementation(() => server.emit('listening'));
 
-        const result = await resultPromise;
+      await expect(isTcpPortInUse(27020)).resolves.toBe(false);
+      expect(server.close).toHaveBeenCalled();
+    });
 
-        expect(result).toBe(true);
-        expect(mockHttp.request).toHaveBeenCalled();
-      });
+    it.each(['EADDRINUSE', 'EACCES'])('reports a port it cannot listen on with %s as in use', async code => {
+      server.listen.mockImplementation(() => server.emit('error', errno(code)));
 
-      it('should handle port 9999 (boundary case)', async () => {
-        const port = 9999;
+      await expect(isTcpPortInUse(27020)).resolves.toBe(true);
+    });
 
-        mockHttpRequest.on.mockImplementation((event: string, callback: Function) => {
-          if (event === 'error') {
-            // No error
-          }
-        });
+    it('does not block a start on an error that says nothing about the port', async () => {
+      server.listen.mockImplementation(() => server.emit('error', errno('EADDRNOTAVAIL')));
 
-        const resultPromise = isPortInUse(port);
-
-        // Simulate successful response
-        if (httpRequestCallback) {
-          httpRequestCallback({});
-        }
-
-        const result = await resultPromise;
-
-        expect(result).toBe(true);
-        expect(mockHttp.request).toHaveBeenCalled();
-      });
-
-      it('should handle port 2999 (just below web range)', async () => {
-        const port = 2999;
-
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'connect') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port);
-
-        expect(result).toBe(true);
-        expect(mockNet.Socket).toHaveBeenCalled();
-      });
-
-      it('should handle port 10000 (just above web range)', async () => {
-        const port = 10000;
-
-        mockSocket.once.mockImplementation((event: string, callback: Function) => {
-          if (event === 'connect') {
-            callback();
-          }
-        });
-
-        const result = await isPortInUse(port);
-
-        expect(result).toBe(true);
-        expect(mockNet.Socket).toHaveBeenCalled();
-      });
+      await expect(isTcpPortInUse(27020, '10.9.9.9')).resolves.toBe(false);
     });
   });
 });

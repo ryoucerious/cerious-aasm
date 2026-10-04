@@ -19,7 +19,6 @@
     (forceStopServer)="forceStopServer()">
   </app-server-header>
 
-  <!-- Console: live output plus RCON, in the same panel and toolbar every other page uses -->
   <div class="page-panel settings-panel" *ngIf="activeTab === 'console'">
     <div class="settings-toolbar">
       <div class="settings-toolbar-title">
@@ -29,26 +28,18 @@
 
     <app-server-state
       [serverInstance]="activeServerInstance"
-      [logs]="filteredLogs"
-      (startServer)="startServer()"
-      (stopServer)="stopServer()"
-      (forceStopServer)="forceStopServer()"
-      >
+      [logs]="filteredLogs">
     </app-server-state>
 
     <app-rcon-control
       [rconConnected]="rconConnected"
-      [serverState]="mapServerState(activeServerInstance?.state)"
+      [serverState]="mapServerState(activeServerInstance.state)"
       [knownCommands]="knownRconCommands"
       [lastResponse]="rconLastResponse"
-      (sendMessage)="sendRconMessage($event)"
-      (inputFocus)="onRconInputFocus()"
-      (inputBlur)="onRconInputBlur()"
-      (commandFill)="fillRconCommand($event)">
+      (sendMessage)="sendRconMessage($event)">
     </app-rcon-control>
   </div>
 
-  <!-- Online players -->
   <div class="page-panel settings-panel" *ngIf="activeTab === 'players'">
     <div class="settings-toolbar">
       <div class="settings-toolbar-title">
@@ -59,46 +50,32 @@
     <app-player-list [serverInstance]="activeServerInstance"></app-player-list>
   </div>
 
-  <!-- Every configuration / feature page -->
   <app-server-settings
     *ngIf="isSettingsTab"
     [serverInstance]="activeServerInstance"
-    [isVisible]="showServerSettings"
     [activeTab]="activeTab"
     [isLocked]="settingsLocked"
     [generalFields]="generalFields"
     [ratesFields]="ratesFields"
     [structuresFields]="structuresPvpFields"
     [miscFields]="miscFields"
-    [modsFields]="modsFields"
     [modList]="modList"
     [statList]="statList"
     [selectedStatIndex]="selectedStatIndex"
-    [modsInput]="modsInput"
-    [playerStatMultiplier]="getStatMultiplier('Player', selectedStatIndex)"
-    [dinoWildStatMultiplier]="getStatMultiplier('DinoWild', selectedStatIndex)"
-    [dinoTamedStatMultiplier]="getStatMultiplier('DinoTamed', selectedStatIndex)"
-    [dinoTamedAddStatMultiplier]="getStatMultiplier('DinoTamed_Add', selectedStatIndex)"
-    [dinoTamedAffinityStatMultiplier]="getStatMultiplier('DinoTamed_Affinity', selectedStatIndex)"
-    [dinoTamedTorpidityStatMultiplier]="getStatMultiplier('DinoTamed_Torpidity', selectedStatIndex)"
-    [dinoTamedClampStatMultiplier]="getStatMultiplier('DinoTamed_Clamp', selectedStatIndex)"
     [backupScheduleEnabled]="backupScheduleEnabled"
     [backupFrequency]="backupFrequency"
     [backupTime]="backupTime"
     [backupDayOfWeek]="backupDayOfWeek"
     [maxBackupsToKeep]="maxBackupsToKeep"
     [backupList]="backupList"
-    (toggleVisibility)="showServerSettings = !showServerSettings"
     (openDirectory)="openServerDirectory()"
     (tabChanged)="onTabChanged($event)"
-    (backupTabClicked)="onTabChanged('backup')"
     (settingsChanged)="saveSettings()"
+    (configApplied)="onConfigApplied()"
     (toggleMultiOption)="onToggleMultiOption($event.fieldKey, $event.option, $event.checked)"
-    (mapSelected)="activeServerInstance.mapName = $event; saveSettings(); dropdownOpen = false"
     (statMultiplierChanged)="setStatMultiplier($event.type, $event.statIndex, $event.value)"
     (resetStatToDefaults)="resetStatToDefaults($event)"
     (copyStatToAll)="copyStatToAll($event)"
-    (modsInputChanged)="onModsInputChange()"
     (addMod)="onAddMod($event)"
     (removeMod)="onRemoveMod($event)"
     (toggleMod)="onToggleMod($event)"
@@ -112,13 +89,11 @@
     (restoreBackup)="restoreBackup($event)"
     (downloadBackup)="downloadBackup($event)"
     (deleteBackup)="deleteBackup($event)"
-    (saveAutomationSettings)="saveAutomationSettings()"
     (saveAutoStartSettings)="saveAutoStartSettings()"
     (saveCrashDetectionSettings)="saveCrashDetectionSettings()"
     (saveScheduledRestartSettings)="saveScheduledRestartSettings()">
   </app-server-settings>
 
-  <!-- Backup Name Modal -->
   <app-modal
     [title]="'Create Backup'"
     [show]="showBackupNameModal"
@@ -148,7 +123,6 @@
     </div>
   </app-modal>
 
-  <!-- Delete Backup Confirmation Modal -->
   <app-modal
     [title]="'Confirm Delete'"
     [show]="showDeleteBackupModal"

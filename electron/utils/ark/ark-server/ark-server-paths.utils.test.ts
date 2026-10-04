@@ -1,6 +1,3 @@
-// ark-server-paths.utils.test.ts
-// Unit tests for ARK server paths and cross-platform handling
-
 const normalize = (segments: string[]): string => {
   const out: string[] = [];
   for (const part of segments.join('/').split(/[/\\]/)) {
@@ -19,8 +16,9 @@ jest.mock('../../platform.utils', () => ({
   getPlatform: jest.fn(),
   getDefaultInstallDir: jest.fn()
 }));
-jest.mock('./ark-server-install.utils', () => ({
-  getArkServerDir: jest.fn()
+// The shared install resolves to <serverDataDir>/AASMServer, so '/data' puts it at ARK.
+jest.mock('../../global-config.utils', () => ({
+  loadGlobalConfig: jest.fn(() => ({ serverDataDir: '/data' }))
 }));
 jest.mock('../../proton.utils', () => ({
   isProtonInstalled: jest.fn(),
@@ -34,14 +32,14 @@ jest.mock('fs', () => ({
   statSync: jest.fn(),
   readdirSync: jest.fn()
 }));
-jest.mock('../../ark/instance.utils', () => ({
-  getInstancesBaseDir: jest.fn(() => '/instances')
+jest.mock('../instance.utils', () => ({
+  getInstanceDir: jest.fn((id: string) => `/instances/${id}`)
 }));
 
 const path = require('path');
 const fs = require('fs');
 const { getPlatform, getDefaultInstallDir } = require('../../platform.utils');
-const { getArkServerDir } = require('./ark-server-install.utils');
+const ARK = '/data/AASMServer';
 const {
   isProtonInstalled,
   getProtonBinaryPath,
@@ -50,7 +48,6 @@ const {
 } = require('../../proton.utils');
 const {
   getArkExecutablePath,
-  getArkConfigDir,
   prepareArkServerCommand,
   resolveServerLaunch,
   isAsaApiLoaderInstalled,
@@ -60,6 +57,9 @@ const {
   getInstanceLogsDir,
   getInstanceWhitelistPath,
   getInstanceAltSaveDirName,
+  getInstanceProcessMarker,
+  getInstallProcessMarker,
+  toProtonPath,
   validateInstanceRuntimeTree
 } = require('./ark-server-paths.utils');
 
@@ -78,13 +78,11 @@ describe('ark-server-paths.utils', () => {
 
     function useIsolatedInstance() {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockImplementation((p: string) => p === `${INSTANCE}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
     }
 
     function useSharedInstall() {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockReturnValue(false);
     }
 
@@ -96,7 +94,7 @@ describe('ark-server-paths.utils', () => {
 
     it('roots a non-isolated instance in the shared install', () => {
       useSharedInstall();
-      expect(getInstanceRuntimeRoot('inst1')).toBe('/ark');
+      expect(getInstanceRuntimeRoot('inst1')).toBe(ARK);
       expect(isInstanceIsolated('inst1')).toBe(false);
     });
 
@@ -109,13 +107,13 @@ describe('ark-server-paths.utils', () => {
 
     it('points config, logs and whitelist at the shared install otherwise', () => {
       useSharedInstall();
-      expect(getInstanceConfigDir('inst1')).toBe('/ark/ShooterGame/Saved/Config/WindowsServer');
-      expect(getInstanceLogsDir('inst1')).toBe('/ark/ShooterGame/Saved/Logs');
-      expect(getInstanceWhitelistPath('inst1')).toBe('/ark/ShooterGame/Binaries/Win64/PlayersExclusiveJoinList.txt');
+      expect(getInstanceConfigDir('inst1')).toBe(`${ARK}/ShooterGame/Saved/Config/WindowsServer`);
+      expect(getInstanceLogsDir('inst1')).toBe(`${ARK}/ShooterGame/Saved/Logs`);
+      expect(getInstanceWhitelistPath('inst1')).toBe(`${ARK}/ShooterGame/Binaries/Win64/PlayersExclusiveJoinList.txt`);
     });
 
     // Both forms must land on <instance>/SavedArks once ARK appends them to
-    // <runtimeRoot>/ShooterGame/Saved/ — the isolated instance is already rooted there,
+    // <runtimeRoot>/ShooterGame/Saved/: the isolated instance is already rooted there,
     // so reusing the shared form would nest a second Servers/<id> level inside it.
     it('keeps saves in the instance folder for an isolated instance', () => {
       useIsolatedInstance();
@@ -129,37 +127,63 @@ describe('ark-server-paths.utils', () => {
 
     it('resolves the AsaApiLoader tree the same way', () => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockImplementation((p: string) => p === `${INSTANCE}/ShooterGame/Binaries/Win64/AsaApiLoader.exe`);
       expect(getInstanceRuntimeRoot('inst1')).toBe(INSTANCE);
       expect(getInstanceConfigDir('inst1')).toBe(`${INSTANCE}/ShooterGame/Saved/Config/WindowsServer`);
     });
   });
 
-  describe('getArkExecutablePath', () => {
-    it('returns Windows exe path on Windows', () => {
+  // Leftover server processes are found by command line, so each marker must be something only
+  // that instance (or only this app's install) puts there.
+  describe('process markers', () => {
+    const isolated = () => fs.existsSync.mockImplementation(
+      (p: string) => p === '/instances/inst1/ShooterGame/Binaries/Win64/ArkAscendedServer.exe'
+    );
+
+    it('marks an isolated instance by its own folder on Windows', () => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
-      expect(getArkExecutablePath()).toBe('/ark/ShooterGame/Binaries/Win64/ArkAscendedServer.exe');
+      isolated();
+      expect(getInstanceProcessMarker('inst1')).toBe('/instances/inst1\\');
     });
-    it('returns Windows exe path on Linux', () => {
+
+    it('marks an isolated instance by the Z: path Proton is given on Linux', () => {
       getPlatform.mockReturnValue('linux');
-      getArkServerDir.mockReturnValue('/ark');
-      expect(getArkExecutablePath()).toBe('/ark/ShooterGame/Binaries/Win64/ArkAscendedServer.exe');
+      fs.existsSync.mockReturnValue(true);
+      expect(getInstanceProcessMarker('inst1')).toBe('Z:\\instances\\inst1\\');
+    });
+
+    it('marks a shared-install instance by its save directory argument', () => {
+      getPlatform.mockReturnValue('windows');
+      fs.existsSync.mockReturnValue(false);
+      expect(getInstanceProcessMarker('inst1')).toBe('AltSaveDirectoryName=Servers/inst1/SavedArks');
+    });
+
+    it('marks the install by its root folder', () => {
+      getPlatform.mockReturnValue('windows');
+      expect(getInstallProcessMarker()).toBe(`${ARK}\\`);
+      getPlatform.mockReturnValue('linux');
+      expect(getInstallProcessMarker()).toBe('Z:\\data\\AASMServer\\');
+    });
+
+    it('converts a Linux path to the Z: drive path Wine sees', () => {
+      expect(toProtonPath('/home/me/ark.exe')).toBe('Z:\\home\\me\\ark.exe');
     });
   });
 
-  describe('getArkConfigDir', () => {
-    it('returns WindowsServer config path', () => {
-      getArkServerDir.mockReturnValue('/ark');
-      expect(getArkConfigDir()).toBe('/ark/ShooterGame/Saved/Config/WindowsServer');
+  describe('getArkExecutablePath', () => {
+    it('returns Windows exe path on Windows', () => {
+      getPlatform.mockReturnValue('windows');
+      expect(getArkExecutablePath()).toBe(`${ARK}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
+    });
+    it('returns Windows exe path on Linux', () => {
+      getPlatform.mockReturnValue('linux');
+      expect(getArkExecutablePath()).toBe(`${ARK}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
     });
   });
 
   describe('resolveServerLaunch', () => {
     it('prefers AsaApiLoader.exe when present on Windows', () => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockImplementation((p: string) =>
         String(p).endsWith('AsaApiLoader.exe') || String(p).endsWith('ArkAscendedServer.exe')
       );
@@ -173,7 +197,6 @@ describe('ark-server-paths.utils', () => {
 
     it('uses instance ArkAscendedServer.exe when loader is missing', () => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockImplementation((p: string) => String(p).endsWith('ArkAscendedServer.exe'));
 
       const launch = resolveServerLaunch('inst-1');
@@ -185,13 +208,12 @@ describe('ark-server-paths.utils', () => {
 
     it('falls back to shared install when instance binaries are missing', () => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue('/ark');
       fs.existsSync.mockReturnValue(false);
 
       const launch = resolveServerLaunch('inst-1');
 
       expect(launch.usesAsaApiLoader).toBe(false);
-      expect(launch.executable).toBe('/ark/ShooterGame/Binaries/Win64/ArkAscendedServer.exe');
+      expect(launch.executable).toBe(`${ARK}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe`);
     });
   });
 
@@ -268,7 +290,7 @@ describe('ark-server-paths.utils', () => {
   // survives), so ARK was launched, aborted before writing a log, and the user saw only
   // "Could not detect log file". This check turns that into an actionable message.
   describe('validateInstanceRuntimeTree', () => {
-    const SHARED = '/ark';
+    const SHARED = ARK;
     const INSTANCE = '/instances/inst1';
 
     // Directories that exist and have contents; everything else reads as missing/empty
@@ -289,7 +311,6 @@ describe('ark-server-paths.utils', () => {
 
     beforeEach(() => {
       getPlatform.mockReturnValue('windows');
-      getArkServerDir.mockReturnValue(SHARED);
     });
 
     // Isolated instance: its own exe exists, so it runs from its own tree

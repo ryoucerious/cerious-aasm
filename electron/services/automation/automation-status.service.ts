@@ -1,38 +1,11 @@
 import { AutomationStatusResult, ServerAutomation } from '../../types/automation.types';
+import { getOrCreateAutomation } from './automation-defaults';
 
 export class AutomationStatusService {
   private automations: Map<string, ServerAutomation>;
 
   constructor(automations: Map<string, ServerAutomation>) {
     this.automations = automations;
-  }
-
-  private getOrCreateAutomation(serverId: string): ServerAutomation {
-    if (!this.automations.has(serverId)) {
-      const automation: ServerAutomation = {
-        serverId,
-        settings: {
-          autoStartOnAppLaunch: false,
-          autoStartOnBoot: false,
-          crashDetectionEnabled: false,
-          crashDetectionInterval: 60000,
-          maxRestartAttempts: 3,
-          scheduledRestartEnabled: false,
-          restartFrequency: 'daily',
-          restartTime: '04:00',
-          restartDays: [0],
-          restartWarningMinutes: 15
-        },
-        restartAttempts: 0,
-        manuallyStopped: false,
-        status: {
-          isMonitoring: false,
-          isScheduled: false
-        }
-      };
-      this.automations.set(serverId, automation);
-    }
-    return this.automations.get(serverId)!;
   }
 
   getAutostartInstanceIds(): string[] {
@@ -47,7 +20,7 @@ export class AutomationStatusService {
 
   async getAutomationStatus(serverId: string): Promise<AutomationStatusResult> {
     try {
-      const automation = this.getOrCreateAutomation(serverId);
+      const automation = getOrCreateAutomation(this.automations, serverId);
       return {
         success: true,
         status: {
@@ -59,7 +32,7 @@ export class AutomationStatusService {
         }
       };
     } catch (error) {
-      console.error('Failed to get automation status:', error);
+      console.error('[automation-status] Failed to get automation status:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }

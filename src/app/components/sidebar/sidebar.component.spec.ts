@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, NavigationEnd } from '@angular/router';
-import { BehaviorSubject, of, Subject } from 'rxjs';
+import { BehaviorSubject, of, Subject, throwError } from 'rxjs';
 import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { TOAST_CONFIG, ToastrService } from 'ngx-toastr';
 import { SidebarComponent } from './sidebar.component';
@@ -12,6 +12,8 @@ import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AppUpdateService } from '../../core/services/app-update.service';
+import { WebSocketService } from '../../core/services/web-socket.service';
+import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
@@ -43,17 +45,16 @@ describe('SidebarComponent', () => {
     liveServers = {
       servers$: servers$.asObservable(),
       get servers() { return servers$.value; },
-      applyOrder: jasmine.createSpy('applyOrder')
+      find: (id: string) => servers$.value.find(server => server.id === id),
+      reorder: jasmine.createSpy('reorder')
     };
     serverInstanceService = {
       getActiveServer: () => activeServer$.asObservable(),
       setActiveServer: jasmine.createSpy('setActiveServer').and.callFake((s: any) => activeServer$.next(s)),
       save: jasmine.createSpy('save').and.returnValue(of({ success: true })),
-      delete: jasmine.createSpy('delete').and.returnValue(of({})),
-      reorderServers: jasmine.createSpy('reorderServers').and.returnValue(of({})),
+      delete: jasmine.createSpy('delete').and.returnValue(of({ success: true })),
       getDefaultInstanceFromMeta: () => of({}),
-      importServerFromBackup: () => of({}),
-      messaging: { sendMessage: jasmine.createSpy('sendMessage').and.returnValue(of({ success: true })) }
+      importServerFromBackup: () => of({})
     };
     serverNav = {
       expertMode$: of(false),
@@ -76,7 +77,6 @@ describe('SidebarComponent', () => {
       providers: [
         { provide: Router, useValue: router },
         { provide: MessagingService, useClass: MockMessagingService },
-        { provide: 'MessageTransport', useValue: {} },
         { provide: ServerInstanceService, useValue: serverInstanceService },
         { provide: LiveServersService, useValue: liveServers },
         { provide: ServerNavService, useValue: serverNav },
@@ -84,6 +84,7 @@ describe('SidebarComponent', () => {
         { provide: ToastrService, useValue: { success: () => {}, error: () => {}, info: () => {}, warning: () => {} } },
         { provide: NotificationService, useValue: notification },
         { provide: GlobalConfigService, useClass: MockGlobalConfigService },
+        { provide: WebSocketService, useValue: { connected$: of(false) } },
         { provide: SettingsDrawerService, useValue: settingsDrawer }
       ]
     }).compileComponents();
@@ -169,7 +170,6 @@ describe('SidebarComponent', () => {
   it('downloads an app update from the version icon without opening settings', () => {
     const appUpdate = TestBed.inject(AppUpdateService);
     spyOn(appUpdate, 'download');
-    spyOn((component as any).utility, 'getPlatform').and.returnValue('Electron');
     (component as any).appUpdateExplain = false;
     (component as any).appUpdateState = 'available';
     component.onAppUpdateClick();
@@ -196,7 +196,6 @@ describe('SidebarComponent', () => {
   it('installs an app update that has already been downloaded', () => {
     const appUpdate = TestBed.inject(AppUpdateService);
     spyOn(appUpdate, 'install');
-    spyOn((component as any).utility, 'getPlatform').and.returnValue('Electron');
     (component as any).appUpdateExplain = false;
     (component as any).appUpdateState = 'downloaded';
     component.onAppUpdateClick();
@@ -229,6 +228,33 @@ describe('SidebarComponent', () => {
     expect(component.editingServerId).toBeNull();
   });
 
+  it('reports a rename that failed and leaves the name as it was', () => {
+    spyOn(notification, 'error');
+    spyOn(console, 'error');
+    serverInstanceService.save.and.returnValue(throwError(() => new Error('timeout')));
+    component.editingServerId = '1';
+    component.editingServerName = 'Renamed';
+    component.onServerNameKeydown({ key: 'Enter' } as any, stopped as any);
+    expect(notification.error).toHaveBeenCalled();
+    expect(component.editingServerId).toBeNull();
+  });
+
+  it('ends the rename on an empty reply', () => {
+    serverInstanceService.save.and.returnValue(of(null));
+    component.editingServerId = '1';
+    component.editingServerName = 'Renamed';
+    component.onServerNameKeydown({ key: 'Enter' } as any, stopped as any);
+    expect(component.editingServerId).toBeNull();
+  });
+
+  it('saves only the settings of a renamed server', () => {
+    component.editingServerId = '2';
+    component.editingServerName = 'Renamed';
+    component.onServerNameKeydown({ key: 'Enter' } as any, running as any);
+    const saved = serverInstanceService.save.calls.mostRecent().args[0];
+    expect(saved).toEqual({ id: '2', name: 'Renamed' });
+  });
+
   it('does not save an empty or unchanged server name', () => {
     component.editingServerName = '';
     component.onServerNameBlur(stopped as any);
@@ -237,11 +263,10 @@ describe('SidebarComponent', () => {
     expect(serverInstanceService.save).not.toHaveBeenCalled();
   });
 
-  it('reorders servers locally and persists the order', () => {
+  it('reorders servers', () => {
     servers$.next([stopped, running]);
     component.onDrop({ previousIndex: 0, currentIndex: 1 } as any);
-    expect(liveServers.applyOrder).toHaveBeenCalledWith(['2', '1']);
-    expect(serverInstanceService.reorderServers).toHaveBeenCalledWith(['2', '1']);
+    expect(liveServers.reorder).toHaveBeenCalledWith(['2', '1']);
   });
 
   it('maps server states to status classes', () => {
@@ -254,32 +279,47 @@ describe('SidebarComponent', () => {
 
   it('should not delete server if not stopped', () => {
     spyOn(notification, 'warning');
+    servers$.next([stopped, running]);
     component.onDeleteServer(running as any, { stopPropagation: () => {} } as any);
     expect(notification.warning).toHaveBeenCalled();
     expect(component.showConfirmDeleteModal).toBeFalse();
   });
 
   it('should show confirm delete modal if server is stopped', () => {
+    servers$.next([stopped, running]);
     component.onDeleteServer(stopped as any, { stopPropagation: () => {} } as any);
     expect(component.serverToDelete).toBe(stopped as any);
     expect(component.showConfirmDeleteModal).toBeTrue();
   });
 
-  it('should not confirm delete if only one server', () => {
+  it('should not confirm delete if only one server', async () => {
     servers$.next([stopped]);
     component.serverToDelete = stopped as any;
-    component.onConfirmDelete();
+    await component.onConfirmDelete();
     expect(serverInstanceService.delete).not.toHaveBeenCalled();
     expect(component.serverToDelete).toBeNull();
   });
 
-  it('should confirm delete if server stopped and more than one server', () => {
+  it('should confirm delete if server stopped and more than one server', async () => {
     servers$.next([stopped, running]);
     component.serverToDelete = stopped as any;
-    component.onConfirmDelete();
+    await component.onConfirmDelete();
     expect(serverInstanceService.delete).toHaveBeenCalledWith('1');
     expect(component.serverToDelete).toBeNull();
     expect(component.showConfirmDeleteModal).toBeFalse();
+  });
+
+  it('closes the confirmation and reports a delete that failed', async () => {
+    spyOn(notification, 'error');
+    spyOn(console, 'error');
+    serverInstanceService.delete.and.returnValue(throwError(() => new Error('timeout')));
+    servers$.next([stopped, running]);
+    component.serverToDelete = stopped as any;
+    component.showConfirmDeleteModal = true;
+    await component.onConfirmDelete();
+    expect(notification.error).toHaveBeenCalled();
+    expect(component.showConfirmDeleteModal).toBeFalse();
+    expect(component.selectedServerId).toBe('1');
   });
 
   it('opens and closes the add-server modal and selects a created server', () => {
@@ -293,16 +333,33 @@ describe('SidebarComponent', () => {
     expect(component.selectServer.emit).toHaveBeenCalled();
   });
 
-  it('starts and stops all servers through the messaging channel', () => {
-    spyOn(notification, 'success');
+  it('offers Stop All only while a server is running or starting', () => {
+    const stopAll = () => fixture.nativeElement.querySelector('button[title="Stop all servers"]') as HTMLButtonElement;
+    servers$.next([stopped, { ...running, state: 'crashed' }]);
+    fixture.detectChanges();
+    expect(stopAll().disabled).toBeTrue();
+
+    servers$.next([stopped, { ...running, state: 'starting' }]);
+    fixture.detectChanges();
+    expect(stopAll().disabled).toBeFalse();
+  });
+
+  it('starts and stops all servers once confirmed', () => {
+    const lifecycle = TestBed.inject(ServerLifecycleService);
+    spyOn(lifecycle, 'startAllServers');
+    spyOn(lifecycle, 'stopAllServers');
+
     component.startAllServers();
     expect(component.showConfirmStartAllModal).toBeTrue();
+    expect(lifecycle.startAllServers).not.toHaveBeenCalled();
     component.onConfirmStartAll();
-    expect(serverInstanceService.messaging.sendMessage).toHaveBeenCalledWith('start-all-instances', {});
+    expect(component.showConfirmStartAllModal).toBeFalse();
+    expect(lifecycle.startAllServers).toHaveBeenCalled();
+
     component.stopAllServers();
     component.onConfirmStopAll();
-    expect(serverInstanceService.messaging.sendMessage).toHaveBeenCalledWith('stop-all-instances', {});
-    expect(notification.success).toHaveBeenCalledTimes(2);
+    expect(component.showConfirmStopAllModal).toBeFalse();
+    expect(lifecycle.stopAllServers).toHaveBeenCalled();
   });
 
   it('should unsubscribe on destroy', () => {

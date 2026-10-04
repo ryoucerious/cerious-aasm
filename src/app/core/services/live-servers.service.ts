@@ -1,7 +1,9 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { BehaviorSubject, Observable, Subscription } from 'rxjs';
-import { map } from 'rxjs/operators';
-import { ServerInstance } from '../models/server-instance.model';
+import {
+  InstanceCpuEvent, InstanceMemoryEvent, InstancePlayersEvent, InstanceStateEvent, ServerInstance
+} from '../models/server-instance.model';
+import { isOnlineStatus } from '../utils/server-status';
 import { ServerInstanceService } from './server-instance.service';
 import { MessagingService } from './messaging/messaging.service';
 
@@ -19,10 +21,10 @@ export interface ServerSummary {
  *
  * The backend broadcasts the full instance list only on meaningful state changes; in between
  * it streams per-instance events (state, players, memory, cpu). Every screen that shows more
- * than one server at a time — sidebar, dashboard, top bar — needs the same merge, so it lives
+ * than one server at a time (sidebar, dashboard, top bar) needs the same merge, so it lives
  * here once instead of being re-implemented per component. State is kept in the backend's
- * lowercase form ('running', 'stopped', ...); use {@link isOnline} / {@link isBusy} rather
- * than comparing strings.
+ * lowercase form ('running', 'stopped', ...); use {@link isOnline} or utils/server-status
+ * rather than comparing strings.
  */
 @Injectable({ providedIn: 'root' })
 export class LiveServersService implements OnDestroy {
@@ -41,7 +43,7 @@ export class LiveServersService implements OnDestroy {
     );
 
     this.subs.push(
-      this.messaging.receiveMessage<any>('server-instance-state').subscribe(msg => {
+      this.messaging.receiveMessage<InstanceStateEvent>('server-instance-state').subscribe(msg => {
         if (msg?.instanceId && msg.state) {
           this.patch(msg.instanceId, server => {
             const state = String(msg.state).toLowerCase();
@@ -59,7 +61,7 @@ export class LiveServersService implements OnDestroy {
     );
 
     this.subs.push(
-      this.messaging.receiveMessage<any>('server-instance-players').subscribe(msg => {
+      this.messaging.receiveMessage<InstancePlayersEvent>('server-instance-players').subscribe(msg => {
         const players = typeof msg?.players === 'number' ? msg.players : (typeof msg?.count === 'number' ? msg.count : null);
         if (msg?.instanceId && players !== null) {
           this.patch(msg.instanceId, () => ({ players }));
@@ -68,7 +70,7 @@ export class LiveServersService implements OnDestroy {
     );
 
     this.subs.push(
-      this.messaging.receiveMessage<any>('server-instance-memory').subscribe(msg => {
+      this.messaging.receiveMessage<InstanceMemoryEvent>('server-instance-memory').subscribe(msg => {
         if (msg?.instanceId && typeof msg.memory === 'number') {
           this.patch(msg.instanceId, () => ({ memory: msg.memory }));
         }
@@ -76,7 +78,7 @@ export class LiveServersService implements OnDestroy {
     );
 
     this.subs.push(
-      this.messaging.receiveMessage<any>('server-instance-cpu').subscribe(msg => {
+      this.messaging.receiveMessage<InstanceCpuEvent>('server-instance-cpu').subscribe(msg => {
         if (msg?.instanceId && typeof msg.cpu === 'number') {
           this.patch(msg.instanceId, () => ({ cpu: msg.cpu }));
         }
@@ -84,7 +86,7 @@ export class LiveServersService implements OnDestroy {
     );
 
     this.subs.push(
-      this.messaging.receiveMessage<any>('server-instance-updated').subscribe(msg => {
+      this.messaging.receiveMessage<Partial<ServerInstance>>('server-instance-updated').subscribe(msg => {
         if (msg?.id) {
           // Configuration edits from any client. State is owned by the state channel.
           const { state, ...rest } = msg;
@@ -107,24 +109,27 @@ export class LiveServersService implements OnDestroy {
     return this.serversSubject.asObservable();
   }
 
-  get summary$(): Observable<ServerSummary> {
-    return this.servers$.pipe(map(servers => LiveServersService.summarise(servers)));
-  }
-
   find(id: string | null | undefined): ServerInstance | undefined {
     return id ? this.servers.find(server => server.id === id) : undefined;
   }
 
-  /** Apply a local reorder immediately so the UI does not wait for the backend echo. */
-  applyOrder(orderedIds: string[]): void {
-    const byId = new Map(this.servers.map(server => [server.id, server]));
-    const reordered: ServerInstance[] = [];
-    orderedIds.forEach((id, index) => {
-      const server = byId.get(id);
-      if (server) reordered.push({ ...server, sortOrder: index });
+  /**
+   * Shows a new order at once rather than after the backend's echo, and saves it. A refused or
+   * failed save reloads the list, so the screen does not keep an order the backend never stored.
+   */
+  reorder(orderedIds: string[]): void {
+    this.applyOrder(orderedIds);
+    this.serverInstanceService.reorderServers(orderedIds).subscribe({
+      next: result => {
+        if (result?.success !== false) return;
+        console.error('[live-servers] The server order was not saved:', result.error);
+        this.serverInstanceService.refresh();
+      },
+      error: error => {
+        console.error('[live-servers] Could not save the server order:', error);
+        this.serverInstanceService.refresh();
+      }
     });
-    const missing = this.servers.filter(server => !orderedIds.includes(server.id));
-    this.serversSubject.next([...reordered, ...missing]);
   }
 
   static summarise(servers: ServerInstance[]): ServerSummary {
@@ -144,18 +149,18 @@ export class LiveServersService implements OnDestroy {
   }
 
   static isOnline(server: ServerInstance | null | undefined): boolean {
-    return LiveServersService.normalizeState(server?.state) === 'running';
+    return isOnlineStatus(server?.state);
   }
 
-  /** Anything in flight: starting, stopping, queued, or running. Edits are blocked here. */
-  static isBusy(server: ServerInstance | null | undefined): boolean {
-    const state = LiveServersService.normalizeState(server?.state);
-    return state === 'queued' || state === 'starting' || state === 'running' || state === 'stopping';
-  }
-
-  static canStart(server: ServerInstance | null | undefined): boolean {
-    const state = LiveServersService.normalizeState(server?.state);
-    return state === 'stopped' || state === 'error' || state === 'crashed';
+  private applyOrder(orderedIds: string[]): void {
+    const byId = new Map(this.servers.map(server => [server.id, server]));
+    const reordered: ServerInstance[] = [];
+    orderedIds.forEach((id, index) => {
+      const server = byId.get(id);
+      if (server) reordered.push({ ...server, sortOrder: index });
+    });
+    const missing = this.servers.filter(server => !orderedIds.includes(server.id));
+    this.serversSubject.next([...reordered, ...missing]);
   }
 
   private patch(id: string, update: (server: ServerInstance) => Partial<ServerInstance>): void {

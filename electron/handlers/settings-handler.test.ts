@@ -1,15 +1,23 @@
-import { jest } from '@jest/globals';
+import { messagingService } from '../services/messaging.service';
+import { settingsService } from '../services/settings.service';
+import { webServerService } from '../services/web-server.service';
+import type { GlobalConfig } from '../utils/global-config.utils';
 
-// Mock the services
 jest.mock('../services/messaging.service', () => ({
   messagingService: {
     on: jest.fn(),
     sendToOriginator: jest.fn(),
     sendToAll: jest.fn(),
+    getApiProcess: jest.fn(),
   },
 }));
 
+jest.mock('../services/web-server.service', () => ({
+  webServerService: { usesCommandLineLogin: jest.fn(() => false) },
+}));
+
 jest.mock('../services/settings.service', () => ({
+  ...jest.requireActual('../services/settings.service'),
   settingsService: {
     getGlobalConfig: jest.fn(),
     updateGlobalConfig: jest.fn(),
@@ -17,207 +25,151 @@ jest.mock('../services/settings.service', () => ({
   },
 }));
 
-import { messagingService } from '../services/messaging.service';
-import { settingsService } from '../services/settings.service';
+const mockMessaging = jest.mocked(messagingService);
+const mockSettings = jest.mocked(settingsService);
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockSettingsService = settingsService as jest.Mocked<typeof settingsService>;
+const config: GlobalConfig = {
+  startWebServerOnLoad: false,
+  webServerPort: 3000,
+  authenticationEnabled: true,
+  authenticationUsername: 'admin',
+  authenticationPassword: 'secret',
+  maxBackupDownloadSizeMB: 100
+};
+const { authenticationPassword, ...withoutPassword } = config;
+const shown = { ...withoutPassword, authenticationPasswordSet: true };
+
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
 describe('settings-handler', () => {
-  let mockSender: any;
-  let getConfigHandler: (...args: any[]) => Promise<void>;
-  let setConfigHandler: (...args: any[]) => Promise<void>;
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
-    // Import the handler to register the event listeners
     require('./settings-handler');
-
-    // Store the handlers for testing
-    getConfigHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'get-global-config'
-    )?.[1] as (...args: any[]) => Promise<void>;
-
-    setConfigHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'set-global-config'
-    )?.[1] as (...args: any[]) => Promise<void>;
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
+  describe('get-global-config', () => {
+    it('replies and broadcasts the config without the web password', async () => {
+      mockSettings.getGlobalConfig.mockReturnValue(config);
 
-    // Mock console.error to suppress expected errors from error handling tests
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['get-global-config']({ requestId: 'r1' }, sender);
 
-    mockSender = { id: 'test-sender' };
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  describe('get-global-config handler', () => {
-    it('should handle get-global-config successfully', async () => {
-      const payload = { requestId: 'test-request-123' };
-      const mockConfig = { webServerPort: 3000, authenticationEnabled: true };
-
-      mockSettingsService.getGlobalConfig.mockReturnValue(mockConfig);
-
-      expect(getConfigHandler).toBeDefined();
-
-      await getConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.getGlobalConfig).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-global-config',
-        { ...mockConfig, requestId: 'test-request-123' },
-        mockSender
-      );
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('global-config', mockConfig);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-global-config', { ...shown, requestId: 'r1' }, sender);
+      expect(mockMessaging.sendToAll).toHaveBeenCalledWith('global-config', shown);
+      expect(JSON.stringify([...mockMessaging.sendToOriginator.mock.calls, ...mockMessaging.sendToAll.mock.calls])).not.toContain('secret');
     });
 
-    it('should handle get-global-config with undefined payload', async () => {
-      const mockConfig = { webServerPort: 3000, authenticationEnabled: true };
+    it('answers a request without a payload', async () => {
+      mockSettings.getGlobalConfig.mockReturnValue(config);
 
-      mockSettingsService.getGlobalConfig.mockReturnValue(mockConfig);
+      await handlers['get-global-config'](undefined, sender);
 
-      await getConfigHandler(undefined, mockSender);
-
-      expect(mockSettingsService.getGlobalConfig).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-global-config',
-        { ...mockConfig, requestId: undefined },
-        mockSender
-      );
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('global-config', mockConfig);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-global-config', { ...shown, requestId: undefined }, sender);
     });
 
-    it('should handle get-global-config error', async () => {
-      const payload = { requestId: 'test-request-123' };
-      const errorMessage = 'Failed to load config';
+    it.each([
+      ['an Error', new Error('Failed to load config'), 'Failed to load config'],
+      ['a string', 'String error', 'String error']
+    ])('replies { error } without broadcasting when loading throws %s', async (_label, thrown, message) => {
+      mockSettings.getGlobalConfig.mockImplementation(() => { throw thrown; });
 
-      mockSettingsService.getGlobalConfig.mockImplementation(() => {
-        throw new Error(errorMessage);
+      await handlers['get-global-config']({ requestId: 'r1' }, sender);
+
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-global-config', { error: message, requestId: 'r1' }, sender);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('set-global-config', () => {
+    const child = { connected: true };
+
+    beforeEach(() => {
+      mockMessaging.getApiProcess.mockReturnValue(child as never);
+    });
+
+    it('saves, replies, updates the web login and broadcasts the config without the password', async () => {
+      mockSettings.updateGlobalConfig.mockResolvedValue({ success: true, updatedConfig: config });
+
+      await handlers['set-global-config']({ config: shown, requestId: 'r1' }, sender);
+
+      expect(mockSettings.updateGlobalConfig).toHaveBeenCalledWith(shown, { canChangeLogin: true });
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'set-global-config', { success: true, error: undefined, requestId: 'r1' }, sender
+      );
+      expect(mockSettings.updateWebServerAuth).toHaveBeenCalledWith(config, child);
+      expect(mockMessaging.sendToAll).toHaveBeenCalledWith('global-config', shown);
+      expect(mockMessaging.sendToOriginator.mock.invocationCallOrder[0])
+        .toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
+    });
+
+    it('leaves the web login alone while it comes from the command line', async () => {
+      // A headless run's global config usually has authentication off; applying it would turn
+      // off the login the operator started the server with.
+      jest.mocked(webServerService.usesCommandLineLogin).mockReturnValueOnce(true);
+      mockSettings.updateGlobalConfig.mockResolvedValue({ success: true, updatedConfig: { ...config, authenticationEnabled: false } });
+
+      await handlers['set-global-config']({ config: shown, requestId: 'r1' }, sender);
+
+      expect(mockSettings.updateWebServerAuth).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAll).toHaveBeenCalledWith('global-config', expect.objectContaining({ authenticationEnabled: false }));
+    });
+
+    it('lets only an administrator change the web login', async () => {
+      // The single web login signs in as Admin, so settings.manage alone must not reach it.
+      mockSettings.updateGlobalConfig.mockResolvedValue({ success: false, error: 'not saved' });
+      const webUser = (roleId: string) => ({
+        type: 'api-process',
+        authEnabled: true,
+        user: { id: `${roleId}-user`, roleId, permissions: ['settings.manage'] },
+        send: jest.fn()
       });
 
-      await getConfigHandler(payload, mockSender);
+      await handlers['set-global-config']({ config: shown, requestId: 'r1' }, webUser('server-manager'));
+      await handlers['set-global-config']({ config: shown, requestId: 'r2' }, webUser('admin'));
 
-      expect(mockSettingsService.getGlobalConfig).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-global-config',
-        { error: errorMessage, requestId: 'test-request-123' },
-        mockSender
-      );
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
+      expect(mockSettings.updateGlobalConfig.mock.calls).toEqual([
+        [shown, { canChangeLogin: false }],
+        [shown, { canChangeLogin: true }]
+      ]);
     });
 
-    it('should handle get-global-config with non-Error exception', async () => {
-      const payload = { requestId: 'test-request-123' };
+    it('passes on a missing config for the service to refuse', async () => {
+      mockSettings.updateGlobalConfig.mockResolvedValue({ success: false, error: 'Invalid config object' });
 
-      mockSettingsService.getGlobalConfig.mockImplementation(() => {
-        throw 'String error';
-      });
+      await handlers['set-global-config'](undefined, sender);
 
-      await getConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.getGlobalConfig).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-global-config',
-        { error: 'String error', requestId: 'test-request-123' },
-        mockSender
+      expect(mockSettings.updateGlobalConfig).toHaveBeenCalledWith(undefined, { canChangeLogin: true });
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'set-global-config', { success: false, error: 'Invalid config object', requestId: undefined }, sender
       );
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('set-global-config handler', () => {
-    it('should handle set-global-config successfully', async () => {
-      const payload = { config: { webServerPort: 3001 }, requestId: 'test-request-456' };
-      const mockResult = { success: true, updatedConfig: { webServerPort: 3001, authenticationEnabled: false } };
-
-      mockSettingsService.updateGlobalConfig.mockResolvedValue(mockResult);
-
-      expect(setConfigHandler).toBeDefined();
-
-      await setConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.updateGlobalConfig).toHaveBeenCalledWith({ webServerPort: 3001 });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'set-global-config',
-        { success: true, error: undefined, requestId: 'test-request-456' },
-        mockSender
-      );
-      expect(mockSettingsService.updateWebServerAuth).toHaveBeenCalledWith(mockResult.updatedConfig, undefined);
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('global-config', mockResult.updatedConfig);
     });
 
-    it('should handle set-global-config with undefined payload', async () => {
-      const mockResult = { success: true, updatedConfig: { webServerPort: 3000 } };
+    it('neither updates the login nor broadcasts when the save is refused', async () => {
+      mockSettings.updateGlobalConfig.mockResolvedValue({ success: false, error: 'Invalid web server port' });
 
-      mockSettingsService.updateGlobalConfig.mockResolvedValue(mockResult);
+      await handlers['set-global-config']({ config: { webServerPort: 1 }, requestId: 'r1' }, sender);
 
-      await setConfigHandler(undefined, mockSender);
-
-      expect(mockSettingsService.updateGlobalConfig).toHaveBeenCalledWith(undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'set-global-config',
-        { success: true, error: undefined, requestId: undefined },
-        mockSender
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'set-global-config', { success: false, error: 'Invalid web server port', requestId: 'r1' }, sender
       );
-      expect(mockSettingsService.updateWebServerAuth).toHaveBeenCalledWith(mockResult.updatedConfig, undefined);
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('global-config', mockResult.updatedConfig);
+      expect(mockSettings.updateWebServerAuth).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
     });
 
-    it('should handle set-global-config failure', async () => {
-      const payload = { config: { invalidPort: 99999 }, requestId: 'test-request-789' };
-      const mockResult = { success: false, error: 'Invalid web server port' };
+    it.each([
+      ['an Error', new Error('Database connection failed'), 'Database connection failed'],
+      ['a string', 'String error', 'String error']
+    ])('replies a failure when saving throws %s', async (_label, thrown, message) => {
+      mockSettings.updateGlobalConfig.mockRejectedValue(thrown);
 
-      mockSettingsService.updateGlobalConfig.mockResolvedValue(mockResult);
+      await handlers['set-global-config']({ config: {}, requestId: 'r1' }, sender);
 
-      await setConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.updateGlobalConfig).toHaveBeenCalledWith({ invalidPort: 99999 });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'set-global-config',
-        { success: false, error: 'Invalid web server port', requestId: 'test-request-789' },
-        mockSender
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'set-global-config', { success: false, error: message, requestId: 'r1' }, sender
       );
-      expect(mockSettingsService.updateWebServerAuth).not.toHaveBeenCalled();
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
-    });
-
-    it('should handle set-global-config error', async () => {
-      const payload = { config: { webServerPort: 3001 }, requestId: 'test-request-999' };
-      const errorMessage = 'Database connection failed';
-
-      mockSettingsService.updateGlobalConfig.mockRejectedValue(new Error(errorMessage));
-
-      await setConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.updateGlobalConfig).toHaveBeenCalledWith({ webServerPort: 3001 });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'set-global-config',
-        { success: false, error: errorMessage, requestId: 'test-request-999' },
-        mockSender
-      );
-      expect(mockSettingsService.updateWebServerAuth).not.toHaveBeenCalled();
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
-    });
-
-    it('should handle set-global-config with non-Error exception', async () => {
-      const payload = { config: { webServerPort: 3001 }, requestId: 'test-request-000' };
-
-      mockSettingsService.updateGlobalConfig.mockRejectedValue('String error');
-
-      await setConfigHandler(payload, mockSender);
-
-      expect(mockSettingsService.updateGlobalConfig).toHaveBeenCalledWith({ webServerPort: 3001 });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'set-global-config',
-        { success: false, error: 'String error', requestId: 'test-request-000' },
-        mockSender
-      );
-      expect(mockSettingsService.updateWebServerAuth).not.toHaveBeenCalled();
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
+      expect(mockSettings.updateWebServerAuth).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,34 +1,27 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-
-export interface Field {
-  key: string;
-  label: string;
-  type: 'text' | 'number' | 'boolean' | 'dropdown' | 'combo' | 'multi-toggle';
-  description: string;
-  category?: string;
-  options?: any[];
-  step?: number;
-  min?: number;
-  max?: number;
-}
+import { FieldDefinition } from '../../../../core/services/field-definitions.service';
+import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
 
 @Component({
   selector: 'app-rates-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FieldMessagesComponent],
   templateUrl: './rates-tab.component.html'
 })
 export class RatesTabComponent {
+  // Fields are addressed by key from the settings metadata, so this stays loosely typed.
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
-  @Input() ratesFields: Field[] = [];
+  @Input() ratesFields: FieldDefinition[] = [];
+  @Input() fieldErrors: FieldMessages = {};
+  @Input() fieldWarnings: FieldMessages = {};
 
   @Output() saveSettings = new EventEmitter<void>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
 
-  getFieldsByCategory(category: string): Field[] {
+  getFieldsByCategory(category: string): FieldDefinition[] {
     const categories: { [key: string]: string[] } = {
       'experience': [
         'xpMultiplier',
@@ -94,31 +87,14 @@ export class RatesTabComponent {
     const categoryKeys = categories[category] || [];
     return categoryKeys
       .map(key => this.ratesFields.find(field => field.key === key))
-      .filter((field): field is Field => field !== undefined);
-  }
-
-  hasFieldError(key: string): boolean {
-    // This would be implemented based on your validation logic
-    return false;
-  }
-
-  getFieldError(key: string): string {
-    return '';
-  }
-
-  hasFieldWarning(key: string): boolean {
-    return false;
-  }
-
-  getFieldWarning(key: string): string {
-    return '';
+      .filter((field): field is FieldDefinition => field !== undefined);
   }
 
   onSaveSettings(): void {
     this.saveSettings.emit();
   }
 
-  onValidateField(key: string, value: any): void {
+  onValidateField(key: string, value: unknown): void {
     this.validateField.emit({key, value});
   }
 }

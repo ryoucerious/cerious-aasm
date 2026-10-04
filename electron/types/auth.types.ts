@@ -3,7 +3,7 @@
  *
  * Shared by the main process (which owns the database and enforces permissions on the
  * message bus) and the web-server child process (which authenticates logins). The renderer
- * has its own mirror of the same vocabulary in src/app/core/models/auth.model.ts — keep the
+ * has its own mirror of the same vocabulary in src/app/core/models/auth.model.ts; keep the
  * two in step.
  */
 
@@ -93,6 +93,18 @@ export interface AuthenticatedUser extends User {
   permissions: Permission[];
 }
 
+/** What the web server child knows of a client from its session cookie; main re-resolves it. */
+export type SessionUser = Pick<AuthenticatedUser, 'id' | 'username' | 'displayName' | 'roleId' | 'roleName' | 'permissions' | 'active'>;
+
+/** The id given to a session from the single login that predates accounts. It acts as Admin. */
+export const LEGACY_ADMIN_ID = 'legacy-admin';
+
+/**
+ * A well-formed cost-12 bcrypt hash that no password matches. Comparing against it costs as
+ * much as a real check, so a missing account takes as long to refuse as a wrong password.
+ */
+export const UNMATCHABLE_BCRYPT_HASH = '$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinva';
+
 export const ROLE_IDS = {
   ADMIN: 'admin',
   SERVER_MANAGER: 'server-manager',
@@ -151,8 +163,4 @@ export function effectivePermissions(role: Pick<Role, 'id' | 'permissions'> | nu
   if (!role) return [];
   if (role.id === ROLE_IDS.ADMIN) return [...ALL_PERMISSIONS];
   return role.permissions || [];
-}
-
-export function hasPermission(permissions: Permission[] | undefined, required: Permission): boolean {
-  return !!permissions && permissions.includes(required);
 }

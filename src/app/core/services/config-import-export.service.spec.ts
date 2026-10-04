@@ -1,5 +1,5 @@
 import { ConfigImportExportService, ExportResult, ImportResult } from './config-import-export.service';
-import { MessagingService } from './messaging/messaging.service';
+import { FILE_TRANSFER_TIMEOUT_MS, MessagingService } from './messaging/messaging.service';
 import { of, throwError } from 'rxjs';
 
 describe('ConfigImportExportService', () => {
@@ -22,7 +22,7 @@ describe('ConfigImportExportService', () => {
 
       service.exportAsZip('server-1').subscribe((res) => {
         expect(res).toEqual(result);
-        expect(messaging.sendMessage).toHaveBeenCalledWith('export-server-config', { id: 'server-1' });
+        expect(messaging.sendMessage).toHaveBeenCalledWith('export-server-config', { id: 'server-1' }, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
         done();
       });
     });
@@ -36,18 +36,6 @@ describe('ConfigImportExportService', () => {
           done();
         }
       });
-    });
-
-    it('should complete after first emission (take 1)', () => {
-      const result: ExportResult = { success: true };
-      messaging.sendMessage.and.returnValue(of(result));
-      let completed = false;
-
-      service.exportAsZip('server-1').subscribe({
-        complete: () => { completed = true; }
-      });
-
-      expect(completed).toBeTrue();
     });
   });
 
@@ -91,71 +79,6 @@ describe('ConfigImportExportService', () => {
           done();
         }
       });
-    });
-  });
-
-  describe('downloadBase64AsFile', () => {
-    it('should create a download link and trigger click', () => {
-      const mockAnchor = jasmine.createSpyObj('HTMLAnchorElement', ['click']);
-      mockAnchor.href = '';
-      mockAnchor.download = '';
-      spyOn(document, 'createElement').and.returnValue(mockAnchor);
-      spyOn(document.body, 'appendChild');
-      spyOn(document.body, 'removeChild');
-      spyOn(URL, 'createObjectURL').and.returnValue('blob:mock-url');
-      spyOn(URL, 'revokeObjectURL');
-
-      // btoa('hello') === 'aGVsbG8='
-      service.downloadBase64AsFile('aGVsbG8=', 'test.zip');
-
-      expect(document.createElement).toHaveBeenCalledWith('a');
-      expect(mockAnchor.download).toBe('test.zip');
-      expect(mockAnchor.href).toBe('blob:mock-url');
-      expect(document.body.appendChild).toHaveBeenCalledWith(mockAnchor);
-      expect(mockAnchor.click).toHaveBeenCalled();
-      expect(document.body.removeChild).toHaveBeenCalledWith(mockAnchor);
-      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
-    });
-
-    it('should use provided mimeType for the Blob', () => {
-      const mockAnchor = jasmine.createSpyObj('HTMLAnchorElement', ['click']);
-      mockAnchor.href = '';
-      mockAnchor.download = '';
-      spyOn(document, 'createElement').and.returnValue(mockAnchor);
-      spyOn(document.body, 'appendChild');
-      spyOn(document.body, 'removeChild');
-
-      let capturedBlob: Blob | undefined;
-      spyOn(URL, 'createObjectURL').and.callFake((blob: Blob) => {
-        capturedBlob = blob;
-        return 'blob:mock-url';
-      });
-      spyOn(URL, 'revokeObjectURL');
-
-      service.downloadBase64AsFile('aGVsbG8=', 'test.ini', 'text/plain');
-
-      expect(capturedBlob).toBeDefined();
-      expect(capturedBlob!.type).toBe('text/plain');
-    });
-
-    it('should default mimeType to application/zip', () => {
-      const mockAnchor = jasmine.createSpyObj('HTMLAnchorElement', ['click']);
-      mockAnchor.href = '';
-      mockAnchor.download = '';
-      spyOn(document, 'createElement').and.returnValue(mockAnchor);
-      spyOn(document.body, 'appendChild');
-      spyOn(document.body, 'removeChild');
-
-      let capturedBlob: Blob | undefined;
-      spyOn(URL, 'createObjectURL').and.callFake((blob: Blob) => {
-        capturedBlob = blob;
-        return 'blob:mock-url';
-      });
-      spyOn(URL, 'revokeObjectURL');
-
-      service.downloadBase64AsFile('aGVsbG8=', 'test.zip');
-
-      expect(capturedBlob!.type).toBe('application/zip');
     });
   });
 });

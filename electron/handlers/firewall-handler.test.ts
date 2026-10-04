@@ -1,611 +1,185 @@
-
 import { messagingService } from '../services/messaging.service';
 import { firewallService } from '../services/firewall.service';
-import * as platformUtils from '../utils/platform.utils';
-import * as dockerNetworkUtils from '../utils/docker-network.utils';
+import { getPlatform } from '../utils/platform.utils';
+import { getDockerNetworkInfo } from '../utils/docker-network.utils';
 
-// Mock the services
-jest.mock('../services/messaging.service');
-jest.mock('../services/firewall.service');
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/firewall.service', () => ({
+  firewallService: { getArkServerFirewallInstructions: jest.fn(), getWebServerFirewallInstructions: jest.fn() }
+}));
+jest.mock('../utils/platform.utils', () => ({ getPlatform: jest.fn() }));
+jest.mock('../utils/docker-network.utils', () => ({ getDockerNetworkInfo: jest.fn() }));
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockFirewallService = firewallService as jest.Mocked<typeof firewallService>;
+const mockMessaging = jest.mocked(messagingService);
+const mockFirewall = jest.mocked(firewallService);
+const mockGetPlatform = jest.mocked(getPlatform);
 
-// Import the handler to register the event listeners
-import '../handlers/firewall-handler';
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
-// Get the registered event handlers
-const setupArkServerFirewallHandler = mockMessagingService.on.mock.calls.find(call => call[0] === 'setup-ark-server-firewall')?.[1] as (payload: any, sender: any) => Promise<void>;
-const setupWebServerFirewallHandler = mockMessagingService.on.mock.calls.find(call => call[0] === 'setup-web-server-firewall')?.[1] as (payload: any, sender: any) => Promise<void>;
-const getLinuxFirewallInstructionsHandler = mockMessagingService.on.mock.calls.find(call => call[0] === 'get-linux-firewall-instructions')?.[1] as (payload: any, sender: any) => Promise<void>;
-const checkFirewallEnabledHandler = mockMessagingService.on.mock.calls.find(call => call[0] === 'check-firewall-enabled')?.[1] as (payload: any, sender: any) => Promise<void>;
+const ARK_FAILURE = 'Failed to generate ARK server firewall instructions';
+const WEB_FAILURE = 'Failed to generate web server firewall instructions';
 
-const mockSender = {} as Electron.WebContents;
+describe('firewall-handler', () => {
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
-describe('Firewall Handler', () => {
+  beforeAll(() => {
+    require('./firewall-handler');
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
+  });
+
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.restoreAllMocks();
+    mockGetPlatform.mockReset();
+    mockGetPlatform.mockReturnValue('linux');
     // Not in Docker unless a test says so, even when the suite itself runs in a container.
-    jest.spyOn(dockerNetworkUtils, 'getDockerNetworkInfo').mockReturnValue(null);
+    jest.mocked(getDockerNetworkInfo).mockReturnValue(null);
   });
 
-  describe('setup-ark-server-firewall event', () => {
-    it('should handle undefined payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await setupArkServerFirewallHandler(undefined, mockSender);
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(undefined, undefined, undefined);
-    });
-    it('should handle null payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await setupArkServerFirewallHandler(null, mockSender);
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(undefined, undefined, undefined);
-    });
-    it('should handle setup ARK server firewall exception with string error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-string'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupArkServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Failed to generate ARK server firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup ARK server firewall exception with undefined error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-undef'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupArkServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Failed to generate ARK server firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup ARK server firewall exception with string error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-string'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupArkServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Failed to generate ARK server firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup ARK server firewall exception with undefined error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-undef'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupArkServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Failed to generate ARK server firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should setup ARK server firewall successfully', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: true,
-        platform: 'linux',
-        instructions: 'sudo ufw allow 7777/tcp\nsudo ufw allow 27015/udp\nsudo ufw allow 32330/tcp'
-      };
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
-      mockFirewallService.getArkServerFirewallInstructions.mockResolvedValue(expectedResult);
+  describe('setup-ark-server-firewall', () => {
+    const ports = { gamePort: 7777, queryPort: 27015, rconPort: 32330 };
 
-      await setupArkServerFirewallHandler(payload, mockSender);
+    it('replies with the instructions for the three ports', async () => {
+      const instructions = 'sudo ufw allow 7777/udp';
+      mockFirewall.getArkServerFirewallInstructions.mockResolvedValue({ success: true, platform: 'linux', instructions });
 
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: true,
-        platform: 'linux',
-        instructions: 'sudo ufw allow 7777/tcp\nsudo ufw allow 27015/udp\nsudo ufw allow 32330/tcp',
-        message: 'Linux firewall configuration instructions provided',
-        error: undefined,
-        requestId: 'test-123'
-      }, mockSender);
+      await handlers['setup-ark-server-firewall']({ ...ports, requestId: 'r1' }, sender);
+
+      expect(mockFirewall.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
+      expect(replies('setup-ark-server-firewall')).toEqual([{
+        success: true, platform: 'linux', instructions,
+        message: 'Linux firewall configuration instructions provided', error: undefined, requestId: 'r1'
+      }]);
     });
 
-    it('should handle setup ARK server firewall failure', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: false,
-        platform: 'linux',
-        error: 'Invalid ports'
-      };
+    it('passes on instructions the service could not make', async () => {
+      mockFirewall.getArkServerFirewallInstructions.mockResolvedValue({ success: false, platform: 'linux', error: 'Invalid ports' });
 
-      mockFirewallService.getArkServerFirewallInstructions.mockResolvedValue(expectedResult);
+      await handlers['setup-ark-server-firewall']({ ...ports, requestId: 'r1' }, sender);
 
-      await setupArkServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        instructions: undefined,
-        message: 'Failed to generate firewall instructions',
-        error: 'Invalid ports',
-        requestId: 'test-123'
-      }, mockSender);
+      expect(replies('setup-ark-server-firewall')).toEqual([{
+        success: false, platform: 'linux', instructions: undefined,
+        message: 'Failed to generate firewall instructions', error: 'Invalid ports', requestId: 'r1'
+      }]);
     });
 
-    it('should handle setup ARK server firewall exception (windows)', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const error = new Error('Network error');
+    it.each([
+      ['an Error on windows', new Error('Network error'), 'windows', 'Network error'],
+      ['a string', 'string error', 'linux', 'string error'],
+      ['nothing useful', undefined, 'linux', ARK_FAILURE]
+    ])('replies a failure with the platform when the service throws %s', async (_label, thrown, platform, error) => {
+      mockGetPlatform.mockReturnValue(platform as ReturnType<typeof getPlatform>);
+      mockFirewall.getArkServerFirewallInstructions.mockRejectedValue(thrown);
 
-      mockFirewallService.getArkServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['setup-ark-server-firewall']({ ...ports, requestId: 'r1' }, sender);
 
-      await setupArkServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle setup-ark-server-firewall:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'windows',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Network error',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(replies('setup-ark-server-firewall')).toEqual([{ success: false, platform, message: ARK_FAILURE, error, requestId: 'r1' }]);
     });
 
-    it('should handle setup ARK server firewall exception (linux)', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const error = new Error('Network error');
+    it.each([undefined, null])('answers a request without a payload (%p)', async payload => {
+      mockFirewall.getArkServerFirewallInstructions.mockResolvedValue({ success: true, platform: 'linux', instructions: '' });
 
-      mockFirewallService.getArkServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['setup-ark-server-firewall'](payload, sender);
 
-      await setupArkServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle setup-ark-server-firewall:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-ark-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate ARK server firewall instructions',
-        error: 'Network error',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(mockFirewall.getArkServerFirewallInstructions).toHaveBeenCalledWith(undefined, undefined, undefined);
+      expect(replies('setup-ark-server-firewall')).toEqual([expect.objectContaining({ success: true, requestId: undefined })]);
     });
   });
 
-  describe('setup-web-server-firewall event', () => {
-    it('should handle undefined payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await setupWebServerFirewallHandler(undefined, mockSender);
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(undefined);
-    });
-    it('should handle null payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await setupWebServerFirewallHandler(null, mockSender);
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(undefined);
-    });
-    it('should handle setup web server firewall exception with string error', async () => {
-      const payload = { port: 3000, requestId: 'test-err-string' };
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupWebServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Failed to generate web server firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup web server firewall exception with undefined error', async () => {
-      const payload = { port: 3000, requestId: 'test-err-undef' };
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupWebServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Failed to generate web server firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup web server firewall exception with string error', async () => {
-      const payload = { port: 3000, requestId: 'test-err-string' };
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupWebServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Failed to generate web server firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle setup web server firewall exception with undefined error', async () => {
-      const payload = { port: 3000, requestId: 'test-err-undef' };
-      jest.spyOn(mockFirewallService, 'getWebServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await setupWebServerFirewallHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Failed to generate web server firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should setup web server firewall successfully', async () => {
-      const payload = {
-        port: 3000,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: true,
-        platform: 'linux',
-        instructions: '# Linux Firewall Configuration for Web Server\n\n# For UFW (Ubuntu/Debian):\nsudo ufw allow 3000/tcp  # Web server port\n\n# For firewalld (CentOS/RHEL/Fedora):\nsudo firewall-cmd --permanent --add-port=3000/tcp\nsudo firewall-cmd --reload'
-      };
+  describe('setup-web-server-firewall', () => {
+    it('replies with the instructions for the port', async () => {
+      const instructions = 'sudo ufw allow 3000/tcp';
+      mockFirewall.getWebServerFirewallInstructions.mockResolvedValue({ success: true, platform: 'linux', instructions });
 
-      mockFirewallService.getWebServerFirewallInstructions.mockResolvedValue(expectedResult);
+      await handlers['setup-web-server-firewall']({ port: 3000, requestId: 'r1' }, sender);
 
-      await setupWebServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(3000);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: true,
-        platform: 'linux',
-        instructions: '# Linux Firewall Configuration for Web Server\n\n# For UFW (Ubuntu/Debian):\nsudo ufw allow 3000/tcp  # Web server port\n\n# For firewalld (CentOS/RHEL/Fedora):\nsudo firewall-cmd --permanent --add-port=3000/tcp\nsudo firewall-cmd --reload',
-        message: 'Linux firewall configuration instructions for port 3000 provided',
-        error: undefined,
-        requestId: 'test-123'
-      }, mockSender);
+      expect(mockFirewall.getWebServerFirewallInstructions).toHaveBeenCalledWith(3000);
+      expect(replies('setup-web-server-firewall')).toEqual([{
+        success: true, platform: 'linux', instructions,
+        message: 'Linux firewall configuration instructions for port 3000 provided', error: undefined, requestId: 'r1'
+      }]);
     });
 
-    it('should handle setup web server firewall failure', async () => {
-      const payload = {
-        port: 3000,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: false,
-        platform: 'linux',
-        error: 'Invalid port'
-      };
+    it('passes on instructions the service could not make', async () => {
+      mockFirewall.getWebServerFirewallInstructions.mockResolvedValue({ success: false, platform: 'linux', error: 'Invalid port' });
 
-      mockFirewallService.getWebServerFirewallInstructions.mockResolvedValue(expectedResult);
+      await handlers['setup-web-server-firewall']({ port: 80, requestId: 'r1' }, sender);
 
-      await setupWebServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(3000);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        instructions: undefined,
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Invalid port',
-        requestId: 'test-123'
-      }, mockSender);
+      expect(replies('setup-web-server-firewall')).toEqual([{
+        success: false, platform: 'linux', instructions: undefined, message: WEB_FAILURE, error: 'Invalid port', requestId: 'r1'
+      }]);
     });
 
-    it('should handle setup web server firewall exception (windows)', async () => {
-      const payload = {
-        port: 3000,
-        requestId: 'test-123'
-      };
-      const error = new Error('Permission denied');
+    it.each([
+      ['an Error', new Error('Network error'), 'Network error'],
+      ['nothing useful', undefined, WEB_FAILURE]
+    ])('replies a failure with the platform when the service throws %s', async (_label, thrown, error) => {
+      mockFirewall.getWebServerFirewallInstructions.mockRejectedValue(thrown);
 
-      mockFirewallService.getWebServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['setup-web-server-firewall']({ port: 3000, requestId: 'r1' }, sender);
 
-      await setupWebServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(3000);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle setup-web-server-firewall:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'windows',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Permission denied',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(replies('setup-web-server-firewall')).toEqual([{ success: false, platform: 'linux', message: WEB_FAILURE, error, requestId: 'r1' }]);
     });
 
-    it('should handle setup web server firewall exception (linux)', async () => {
-      const payload = {
-        port: 3000,
-        requestId: 'test-123'
-      };
-      const error = new Error('Permission denied');
+    it('answers a request without a payload', async () => {
+      mockFirewall.getWebServerFirewallInstructions.mockResolvedValue({ success: false, platform: 'linux', error: 'Invalid port' });
 
-      mockFirewallService.getWebServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['setup-web-server-firewall'](undefined, sender);
 
-      await setupWebServerFirewallHandler(payload, mockSender);
-
-      expect(mockFirewallService.getWebServerFirewallInstructions).toHaveBeenCalledWith(3000);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle setup-web-server-firewall:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('setup-web-server-firewall', {
-        success: false,
-        platform: 'linux',
-        message: 'Failed to generate web server firewall instructions',
-        error: 'Permission denied',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(mockFirewall.getWebServerFirewallInstructions).toHaveBeenCalledWith(undefined);
+      expect(replies('setup-web-server-firewall')).toEqual([expect.objectContaining({ success: false, requestId: undefined })]);
     });
   });
 
-  describe('get-linux-firewall-instructions event', () => {
-    it('should handle undefined payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await getLinuxFirewallInstructionsHandler(undefined, mockSender);
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(undefined, undefined, undefined);
-    });
-    it('should handle null payload (payload || {})', async () => {
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockResolvedValue({ success: true, platform: 'linux', instructions: '', error: undefined });
-      await getLinuxFirewallInstructionsHandler(null, mockSender);
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(undefined, undefined, undefined);
-    });
-    it('should handle get Linux firewall instructions exception with string error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-string'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'linux',
-        error: 'Failed to get Linux firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get Linux firewall instructions exception with undefined error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-undef'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'linux',
-        error: 'Failed to get Linux firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get Linux firewall instructions exception with string error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-string'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue('string error');
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'linux',
-        error: 'Failed to get Linux firewall instructions',
-        requestId: 'test-err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get Linux firewall instructions exception with undefined error', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-err-undef'
-      };
-      jest.spyOn(mockFirewallService, 'getArkServerFirewallInstructions').mockRejectedValue(undefined);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'linux',
-        error: 'Failed to get Linux firewall instructions',
-        requestId: 'test-err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should get Linux firewall instructions successfully', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: true,
-        platform: 'linux',
-        instructions: 'sudo ufw allow 7777/tcp\nsudo ufw allow 27015/udp\nsudo ufw allow 32330/tcp'
-      };
+  describe('get-linux-firewall-instructions', () => {
+    it('replies with the ARK server instructions', async () => {
+      mockFirewall.getArkServerFirewallInstructions.mockResolvedValue({ success: true, platform: 'linux', instructions: 'ufw' });
 
-      mockFirewallService.getArkServerFirewallInstructions.mockResolvedValue(expectedResult);
+      await handlers['get-linux-firewall-instructions']({ gamePort: 7777, queryPort: 27015, rconPort: 32330, requestId: 'r1' }, sender);
 
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: true,
-        instructions: 'sudo ufw allow 7777/tcp\nsudo ufw allow 27015/udp\nsudo ufw allow 32330/tcp',
-        platform: 'linux',
-        error: undefined,
-        requestId: 'test-123'
-      }, mockSender);
+      expect(mockFirewall.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
+      expect(replies('get-linux-firewall-instructions')).toEqual([
+        { success: true, instructions: 'ufw', platform: 'linux', error: undefined, requestId: 'r1' }
+      ]);
     });
 
-    it('should handle get Linux firewall instructions failure', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const expectedResult = {
-        success: false,
-        platform: 'linux',
-        error: 'Port conflict'
-      };
+    it.each([
+      ['an Error', new Error('System error'), 'System error'],
+      ['nothing useful', undefined, 'Failed to get Linux firewall instructions']
+    ])('replies a failure with the platform, without a message, when the service throws %s', async (_label, thrown, error) => {
+      mockFirewall.getArkServerFirewallInstructions.mockRejectedValue(thrown);
 
-      mockFirewallService.getArkServerFirewallInstructions.mockResolvedValue(expectedResult);
+      await handlers['get-linux-firewall-instructions']({ requestId: 'r1' }, sender);
 
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        instructions: undefined,
-        platform: 'linux',
-        error: 'Port conflict',
-        requestId: 'test-123'
-      }, mockSender);
+      expect(replies('get-linux-firewall-instructions')).toEqual([{ success: false, platform: 'linux', error, requestId: 'r1' }]);
     });
 
-    it('should handle get Linux firewall instructions exception (windows)', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const error = new Error('System error');
+    it('answers a request without a payload', async () => {
+      mockFirewall.getArkServerFirewallInstructions.mockResolvedValue({ success: true, platform: 'linux', instructions: '' });
 
-      mockFirewallService.getArkServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await handlers['get-linux-firewall-instructions'](undefined, sender);
 
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle get-linux-firewall-instructions:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'windows',
-        error: 'System error',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle get Linux firewall instructions exception (linux)', async () => {
-      const payload = {
-        gamePort: 7777,
-        queryPort: 27015,
-        rconPort: 32330,
-        requestId: 'test-123'
-      };
-      const error = new Error('System error');
-
-      mockFirewallService.getArkServerFirewallInstructions.mockRejectedValue(error);
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getLinuxFirewallInstructionsHandler(payload, mockSender);
-
-      expect(mockFirewallService.getArkServerFirewallInstructions).toHaveBeenCalledWith(7777, 27015, 32330);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle get-linux-firewall-instructions:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-linux-firewall-instructions', {
-        success: false,
-        platform: 'linux',
-        error: 'System error',
-        requestId: 'test-123'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(replies('get-linux-firewall-instructions')).toEqual([expect.objectContaining({ success: true, requestId: undefined })]);
     });
   });
-  describe('check-firewall-enabled event', () => {
+
+  describe('check-firewall-enabled', () => {
+    it.each([
+      ['linux', true, 'Firewall management available on Linux'],
+      ['windows', false, 'Firewall management not available on this platform']
+    ])('on %s replies enabled=%p', async (platform, enabled, message) => {
+      mockGetPlatform.mockReturnValue(platform as ReturnType<typeof getPlatform>);
+
+      await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
+
+      expect(replies('check-firewall-enabled')).toEqual([{ success: true, platform, enabled, message, requestId: 'r1' }]);
+    });
+
     it('adds the Docker port ranges when running in Docker', async () => {
       const docker = {
         mode: 'published' as const,
@@ -614,162 +188,36 @@ describe('Firewall Handler', () => {
         rconPorts: { start: 27020, end: 27050 },
         webPort: 3000
       };
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      (dockerNetworkUtils.getDockerNetworkInfo as jest.Mock).mockReturnValue(docker);
+      jest.mocked(getDockerNetworkInfo).mockReturnValue(docker);
 
-      await checkFirewallEnabledHandler({ requestId: 'd1' }, mockSender);
+      await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
 
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: true,
-        platform: 'linux',
-        enabled: true,
-        message: 'Firewall management available on Linux',
-        docker,
-        requestId: 'd1'
-      }, mockSender);
-    });
-    it('should handle undefined payload (payload || {})', async () => {
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      await checkFirewallEnabledHandler(undefined, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: true,
-        platform: 'windows',
-        enabled: false,
-        message: 'Firewall management not available on this platform',
-        requestId: undefined
-      }, mockSender);
-    });
-    it('should handle null payload (payload || {})', async () => {
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      await checkFirewallEnabledHandler(null, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: true,
-        platform: 'windows',
-        enabled: false,
-        message: 'Firewall management not available on this platform',
-        requestId: undefined
-      }, mockSender);
-    });
-    it('should handle check-firewall-enabled exception with string error', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      let callCount = 0;
-      jest.spyOn(platformUtils, 'getPlatform').mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) throw 'string error';
-        return 'linux';
-      });
-      await checkFirewallEnabledHandler({ requestId: 'err-string' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: false,
-        platform: 'linux',
-        enabled: false,
-        message: 'Failed to check firewall status',
-        error: 'Failed to check firewall status',
-        requestId: 'err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle check-firewall-enabled exception with undefined error', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      let callCount = 0;
-      jest.spyOn(platformUtils, 'getPlatform').mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) throw undefined;
-        return 'linux';
-      });
-      await checkFirewallEnabledHandler({ requestId: 'err-undef' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: false,
-        platform: 'linux',
-        enabled: false,
-        message: 'Failed to check firewall status',
-        error: 'Failed to check firewall status',
-        requestId: 'err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle check-firewall-enabled exception with string error', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      let callCount = 0;
-      jest.spyOn(platformUtils, 'getPlatform').mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) throw 'string error';
-        return 'linux';
-      });
-      await checkFirewallEnabledHandler({ requestId: 'err-string' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: false,
-        platform: 'linux',
-        enabled: false,
-        message: 'Failed to check firewall status',
-        error: 'Failed to check firewall status',
-        requestId: 'err-string'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle check-firewall-enabled exception with undefined error', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      let callCount = 0;
-      jest.spyOn(platformUtils, 'getPlatform').mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) throw undefined;
-        return 'linux';
-      });
-      await checkFirewallEnabledHandler({ requestId: 'err-undef' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: false,
-        platform: 'linux',
-        enabled: false,
-        message: 'Failed to check firewall status',
-        error: 'Failed to check firewall status',
-        requestId: 'err-undef'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should return enabled true and Linux message on linux platform', async () => {
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('linux');
-      await checkFirewallEnabledHandler({ requestId: 'linux-1' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: true,
-        platform: 'linux',
-        enabled: true,
-        message: 'Firewall management available on Linux',
-        requestId: 'linux-1'
-      }, mockSender);
+      expect(replies('check-firewall-enabled')).toEqual([{
+        success: true, platform: 'linux', enabled: true, message: 'Firewall management available on Linux', docker, requestId: 'r1'
+      }]);
     });
 
-    it('should return enabled false and non-Linux message on windows platform', async () => {
-      jest.spyOn(platformUtils, 'getPlatform').mockReturnValue('windows');
-      await checkFirewallEnabledHandler({ requestId: 'win-1' }, mockSender);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: true,
-        platform: 'windows',
-        enabled: false,
-        message: 'Firewall management not available on this platform',
-        requestId: 'win-1'
-      }, mockSender);
+    it.each([
+      ['an Error', new Error('Platform error'), 'Platform error'],
+      ['nothing useful', undefined, 'Failed to check firewall status']
+    ])('replies not enabled when checking throws %s', async (_label, thrown, error) => {
+      mockGetPlatform.mockImplementationOnce(() => { throw thrown; });
+
+      await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
+
+      expect(replies('check-firewall-enabled')).toEqual([{
+        success: false, platform: 'linux', enabled: false, message: 'Failed to check firewall status', error, requestId: 'r1'
+      }]);
     });
 
-    it('should handle exception and return error branch', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      const error = new Error('Platform error');
-      let callCount = 0;
-      jest.spyOn(platformUtils, 'getPlatform').mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) throw error; // throw on first call (try block)
-        return 'linux'; // return a valid platform string on second call (catch block)
-      });
-      await checkFirewallEnabledHandler({ requestId: 'err-1' }, mockSender);
-      expect(consoleSpy).toHaveBeenCalledWith('[firewall-handler] Failed to handle check-firewall-enabled:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-firewall-enabled', {
-        success: false,
-        platform: 'linux',
-        enabled: false,
-        message: 'Failed to check firewall status',
-        error: 'Platform error',
-        requestId: 'err-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
+    it.each([undefined, null])('answers a request without a payload (%p)', async payload => {
+      mockGetPlatform.mockReturnValue('windows');
+
+      await handlers['check-firewall-enabled'](payload, sender);
+
+      expect(replies('check-firewall-enabled')).toEqual([{
+        success: true, platform: 'windows', enabled: false, message: 'Firewall management not available on this platform', requestId: undefined
+      }]);
     });
   });
 });

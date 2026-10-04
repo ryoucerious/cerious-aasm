@@ -1,6 +1,9 @@
-import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { Injectable, OnDestroy } from '@angular/core';
+import { BehaviorSubject, Observable, Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { FirewallService } from './firewall.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
 /** Every page a selected server has. These are the route segments under /server/. */
 export type ServerTabId =
@@ -51,13 +54,18 @@ export const DEFAULT_SERVER_TAB: ServerTabId = 'console';
  * are held here where either can reach them without the two being coupled.
  */
 @Injectable({ providedIn: 'root' })
-export class ServerNavService {
+export class ServerNavService implements OnDestroy {
   private readonly expertModeSubject = new BehaviorSubject<boolean>(false);
   private readonly isLinuxSubject = new BehaviorSubject<boolean>(false);
   private lastTabValue: ServerTabId = DEFAULT_SERVER_TAB;
   private platformChecked = false;
+  private platformSub: Subscription | null = null;
 
-  constructor(private firewallService: FirewallService) {}
+  constructor(private firewallService: FirewallService, private webSocket: WebSocketService, private ipc: IpcService) {}
+
+  ngOnDestroy(): void {
+    this.platformSub?.unsubscribe();
+  }
 
   get expertMode(): boolean {
     return this.expertModeSubject.value;
@@ -100,11 +108,6 @@ export class ServerNavService {
     return SERVER_TABS.find(tab => tab.id === id);
   }
 
-  isConfigTab(id: ServerTabId): boolean {
-    const group = this.find(id)?.group;
-    return group === 'config' || group === 'ini';
-  }
-
   /**
    * Tabs to show for the current mode. Expert mode swaps the managed configuration pages for
    * the raw INI editors; Firewall only appears on Linux hosts.
@@ -121,13 +124,23 @@ export class ServerNavService {
   private ensurePlatformChecked(): void {
     if (this.platformChecked) return;
     this.platformChecked = true;
+    // The web UI asks whenever its socket comes up: a request sent before that, or while the
+    // session is refused, is dropped and would leave the platform unknown for good. The desktop
+    // app has no socket and asks once.
+    this.platformSub = this.webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.checkPlatform());
+    if (this.ipc.isElectron) this.checkPlatform();
+  }
+
+  private checkPlatform(): void {
+    // A failed check leaves what is known as it is: not Linux at first, and no downgrade after a reconnect.
+    const keepWhatIsKnown = () => { /* asked again on the next connect */ };
     try {
       this.firewallService.checkFirewallStatus().subscribe({
         next: status => this.isLinuxSubject.next(status?.platform === 'linux'),
-        error: () => this.isLinuxSubject.next(false)
+        error: keepWhatIsKnown
       });
     } catch {
-      this.isLinuxSubject.next(false);
+      keepWhatIsKnown();
     }
   }
 }

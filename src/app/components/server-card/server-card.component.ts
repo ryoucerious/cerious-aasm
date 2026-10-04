@@ -21,7 +21,7 @@ export interface CardStatus {
 
 /**
  * One server on the dashboard: map artwork, status, the four headline stats, a player
- * sparkline and the primary actions. Presentational — every decision is passed in and every
+ * sparkline and the primary actions. Presentational: every decision is passed in and every
  * action is emitted, so the dashboard owns the data and the lifecycle calls.
  */
 @Component({
@@ -65,7 +65,7 @@ export class ServerCardComponent {
 
   /**
    * The name players see in the server browser, shown only when it differs from the name
-   * this app uses — otherwise it is the same word twice.
+   * this app uses; otherwise it is the same word twice.
    */
   get sessionName(): string {
     const session = (this.server?.sessionName || '').trim();
@@ -121,10 +121,6 @@ export class ServerCardComponent {
     return this.hostMemoryTotalBytes ? `/ ${formatBytes(this.hostMemoryTotalBytes, 0)}` : '';
   }
 
-  get playerHistory(): number[] {
-    return this.history?.length ? this.history : [];
-  }
-
   toggleMenu(event: Event): void {
     event.stopPropagation();
     this.menuOpen = !this.menuOpen;
@@ -142,7 +138,7 @@ export class ServerCardComponent {
    * Place the menu against the viewport rather than the card.
    *
    * The card hides its overflow so the map artwork keeps the rounded corners, which also
-   * cut the menu off at the card's edge — the first item was all that showed.
+   * cut the menu off at the card's edge: the first item was all that showed.
    */
   private positionMenu(): void {
     const anchor = this.menuAnchor?.nativeElement;

@@ -1,26 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ArkPathUtils } from '../utils/ark.utils';
+import { getArkServerDir } from '../utils/ark/ark-server/ark-server-paths.utils';
 
-/**
- * Utility service for managing ARK server log files
- */
 export class LogService {
-  /**
-   * Clear all ARK server log files
-   */
+  /** Empties the shared install's ShooterGame logs; the files themselves are kept. */
   static clearArkLogFiles(): void {
     try {
-      const logsDir = path.join(ArkPathUtils.getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
+      const logsDir = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
       if (fs.existsSync(logsDir)) {
-        const logFiles = fs.readdirSync(logsDir).filter(f => /^ShooterGame(\_\d+)?\.log$/.test(f));
+        const logFiles = fs.readdirSync(logsDir).filter(f => /^ShooterGame(_\d+)?\.log$/.test(f));
         for (const logFile of logFiles) {
-          const logPath = path.join(logsDir, logFile);
-          fs.writeFileSync(logPath, '', 'utf8');
+          fs.writeFileSync(path.join(logsDir, logFile), '', 'utf8');
         }
       }
     } catch (e) {
-      console.error('[LogService] Failed to clear ARK log files:', e);
+      console.error('[log-service] Failed to clear ARK log files:', e);
     }
   }
 }

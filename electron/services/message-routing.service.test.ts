@@ -90,60 +90,12 @@ describe('MessageRoutingService', () => {
   });
 
   describe('createMessageResponse', () => {
-    it('should create basic received response', () => {
-      const response = service.createMessageResponse('received');
-
-      expect(response.status).toBe('received');
-      expect(response.transport).toBe('ipc');
-      expect(response.error).toBeUndefined();
+    it('acknowledges delivery with the channel alone', () => {
+      expect(service.createMessageResponse('received', 'my-channel')).toEqual({ status: 'received', channel: 'my-channel' });
     });
 
-    it('should create error response with message', () => {
-      const response = service.createMessageResponse('error', undefined, undefined, 'Something broke');
-
-      expect(response.status).toBe('error');
-      expect(response.error).toBe('Something broke');
-    });
-
-    it('should include channel when provided', () => {
-      const response = service.createMessageResponse('received', 'test-channel');
-
-      expect(response.channel).toBe('test-channel');
-    });
-
-    it('should include payload when provided', () => {
-      const response = service.createMessageResponse('received', 'ch', { data: 'test' });
-
-      expect(response.payload).toEqual({ data: 'test' });
-    });
-
-    it('should extract requestId from payload', () => {
-      const response = service.createMessageResponse('received', 'ch', { requestId: 'req123', data: 'x' });
-
-      expect(response.requestId).toBe('req123');
-    });
-
-    it('should not include requestId when payload has none', () => {
-      const response = service.createMessageResponse('received', 'ch', { data: 'x' });
-
-      expect(response.requestId).toBeUndefined();
-    });
-
-    it('should handle all parameters at once', () => {
-      const response = service.createMessageResponse(
-        'received',
-        'my-channel',
-        { requestId: 'r1', value: 42 },
-        undefined
-      );
-
-      expect(response).toEqual({
-        status: 'received',
-        transport: 'ipc',
-        channel: 'my-channel',
-        payload: { requestId: 'r1', value: 42 },
-        requestId: 'r1',
-      });
+    it('reports an error', () => {
+      expect(service.createMessageResponse('error', undefined, 'Something broke')).toEqual({ status: 'error', error: 'Something broke' });
     });
   });
 });

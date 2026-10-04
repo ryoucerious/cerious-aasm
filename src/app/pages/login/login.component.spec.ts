@@ -2,22 +2,35 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { LoginComponent } from './login.component';
+import { BehaviorSubject } from 'rxjs';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
+import { WebSocketService } from '../../core/services/web-socket.service';
+import { IpcService } from '../../core/services/ipc.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 
 describe('LoginComponent', () => {
   let component: LoginComponent;
   let fixture: ComponentFixture<LoginComponent>;
   let mockRouter: jasmine.SpyObj<Router>;
+  let webSocket: { connected$: BehaviorSubject<boolean>; reconnectNow: jasmine.Spy; whenConnected: jasmine.Spy };
+
+  const sentBody = () => JSON.parse(String(((window.fetch as jasmine.Spy).calls.mostRecent().args[1] as RequestInit).body));
 
   beforeEach(async () => {
     mockRouter = jasmine.createSpyObj('Router', ['navigate']);
     mockRouter.navigate.and.returnValue(Promise.resolve(true));
+    webSocket = {
+      connected$: new BehaviorSubject(false),
+      reconnectNow: jasmine.createSpy('reconnectNow'),
+      whenConnected: jasmine.createSpy('whenConnected').and.resolveTo(true)
+    };
 
     await TestBed.configureTestingModule({
       imports: [LoginComponent, FormsModule],
       providers: [
         { provide: MessagingService, useClass: MockMessagingService },
+        { provide: WebSocketService, useValue: webSocket },
+        { provide: IpcService, useValue: { isElectron: false } },
         { provide: Router, useValue: mockRouter }
       ]
     }).compileComponents();
@@ -48,9 +61,30 @@ describe('LoginComponent', () => {
 
   it('should set error when password is empty', async () => {
     component.username = 'user';
-    component.password = '   ';
+    component.password = '';
     await component.onLogin();
     expect(component.errorMessage).toBe('Please enter your username and password.');
+  });
+
+  it('sends the password exactly as typed, spaces included', async () => {
+    component.username = ' admin ';
+    component.password = '  pass word  ';
+    spyOn(window, 'fetch').and.returnValue(Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 })));
+
+    await component.onLogin();
+
+    expect(sentBody()).toEqual({ username: 'admin', password: '  pass word  ' });
+  });
+
+  it('treats a password of spaces as a password', async () => {
+    component.username = 'admin';
+    component.password = '   ';
+    spyOn(window, 'fetch').and.returnValue(Promise.resolve(new Response(JSON.stringify({ success: false }), { status: 401 })));
+
+    await component.onLogin();
+
+    expect(sentBody().password).toBe('   ');
+    expect(component.errorMessage).toBe('Incorrect username or password. Please try again.');
   });
 
   it('should navigate to /dashboard on successful login', async () => {
@@ -62,7 +96,9 @@ describe('LoginComponent', () => {
     } as Response));
 
     await component.onLogin();
+    expect(webSocket.reconnectNow).toHaveBeenCalled();
     expect(mockRouter.navigate).toHaveBeenCalledWith(['/dashboard']);
+    expect(component.isLoading).toBeFalse();
   });
 
   it('should set error on login failure with success: false', async () => {

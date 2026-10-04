@@ -1,39 +1,106 @@
-import { Component, ChangeDetectorRef, inject } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
-import { NotificationService } from '../../core/services/notification.service';
-import { UtilityService } from '../../core/services/utility.service';
+import { Component, ChangeDetectorRef, DestroyRef, OnInit, inject } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NgFor, NgIf, NgClass, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { MessagingService } from '../../core/services/messaging/messaging.service';
+import { Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
+import { NotificationService } from '../../core/services/notification.service';
+import { IpcService } from '../../core/services/ipc.service';
+import { WebSocketService } from '../../core/services/web-socket.service';
+import { INSTALL_TIMEOUT_MS, MessagingService } from '../../core/services/messaging/messaging.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
-import { ServerInstanceService } from '../../core/services/server-instance.service';
+import { LiveServersService } from '../../core/services/live-servers.service';
 import { ModalComponent } from '../../components/modal/modal.component';
 import { DrawerComponent } from '../../components/drawer/drawer.component';
 import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
-import { Subscription } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ThemeService, ThemePreference } from '../../core/services/theme.service';
+import { GlobalConfig } from '../../core/interfaces/global-config.interface';
+import { isBusyStatus } from '../../core/utils/server-status';
+
+/** The folder picker is a native dialog: the reply comes only once the user has chosen. */
+const DIRECTORY_DIALOG_TIMEOUT_MS = 10 * 60_000;
+const MIN_WEB_SERVER_PORT = 1024;
+const MAX_WEB_SERVER_PORT = 65535;
+
+interface SettingsTab {
+  id: SettingsSection;
+  label: string;
+  icon: string;
+  group: string;
+  showUpdateBadge?: boolean;
+}
+
+interface InstallProgress {
+  percent: number;
+  step: string;
+  message: string;
+  phase?: string;
+  success?: boolean;
+  failed?: boolean;
+}
+
+/** One message on the 'install' channel; `data` is the installer's progress report. */
+interface InstallEvent {
+  data?: {
+    step?: string;
+    message?: string;
+    error?: string;
+    phase?: string;
+    overallPhase?: string;
+    phasePercent?: number;
+    cancelled?: boolean;
+  };
+}
+
+interface ArkInstallationReply {
+  success?: boolean;
+  installed?: boolean;
+  installedBuildId?: string | null;
+  latestBuildId?: string | null;
+  updateAvailable?: boolean;
+  lastCheckedAt?: number | null;
+  installPath?: string;
+}
+
+interface WebServerReply {
+  success?: boolean;
+  running?: boolean;
+  port?: number;
+  message?: string;
+}
+
+/** `success` is present only on a failure. */
+interface OpenDirectoryReply {
+  success?: boolean;
+  configDir?: string;
+  error?: string;
+}
+
+interface SystemInfoReply {
+  nodeVersion?: string;
+  electronVersion?: string;
+  platform?: string;
+  configPath?: string;
+}
 
 @Component({
   selector: 'app-settings-page',
   standalone: true,
   imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent],
-  templateUrl: './settings.component.html'  
+  templateUrl: './settings.component.html'
 })
-export class SettingsPageComponent {
-  public isElectron: boolean;
-  tabs: any[] = [];
+export class SettingsPageComponent implements OnInit {
+  readonly isElectron: boolean;
+  readonly tabs: SettingsTab[];
 
-  arkUpdateAvailable = false;
   webServerRunning = false;
   webServerPort = 3000;
   startWebServerOnLoad = false;
   authenticationEnabled = false;
-  authenticationUsername = '';
-  authenticationPassword = '';
   /** True once at least one account exists, so we know whether anyone could sign in. */
   accountsInUse = false;
   maxBackupDownloadSizeMB = 100;
@@ -42,29 +109,21 @@ export class SettingsPageComponent {
   updateWarningMinutes = 15;
   serverStartDelaySeconds = 60;
 
-  // Appearance. Unlike the settings around it this is a per-device preference held in
-  // localStorage, not part of the server-side global config — see ThemeService.
+  // Unlike the settings around it this is a per-device preference held in localStorage, not
+  // part of the server-side global config (see ThemeService).
   themePreference: ThemePreference = 'system';
   readonly themeOptions: { value: ThemePreference; label: string; icon: string }[] = [
     { value: 'system', label: 'System', icon: 'brightness_auto' },
     { value: 'light', label: 'Light', icon: 'light_mode' },
     { value: 'dark', label: 'Dark', icon: 'dark_mode' }
   ];
-  // Backend-provided system info (populated when running in Electron)
   backendNodeVersion: string | null = null;
   backendElectronVersion: string | null = null;
   backendPlatform: string | null = null;
   backendConfigPath: string | null = null;
-  subscriptions: Subscription[] = [];
-  showSettings = true;
   /** Mirrors SettingsDrawerService so the template can bind without an async pipe. */
   drawerOpen = false;
-  private readonly settingsDrawer = inject(SettingsDrawerService);
-  private readonly auth = inject(AuthService);
-
-  get activeTabLabel(): string {
-    return this.tabs.find(tab => tab.id === this.activeTab)?.label || '';
-  }
+  activeTab = 'server-installation';
 
   /**
    * The rail, grouped under headings, preserving the order of `tabs`.
@@ -74,33 +133,7 @@ export class SettingsPageComponent {
    * registering at all. The tab objects themselves are mutated in place (the update badge),
    * so the grouping stays correct.
    */
-  tabGroups: { name: string; tabs: any[] }[] = [];
-
-  private buildTabGroups(): void {
-    const groups: { name: string; tabs: any[] }[] = [];
-    for (const tab of this.tabs) {
-      const name = tab.group || 'General';
-      let group = groups.find(g => g.name === name);
-      if (!group) {
-        group = { name, tabs: [] };
-        groups.push(group);
-      }
-      group.tabs.push(tab);
-    }
-    this.tabGroups = groups;
-  }
-
-  trackByGroupName(_index: number, group: { name: string }): string {
-    return group.name;
-  }
-
-  trackByTabId(_index: number, tab: { id: string }): string {
-    return tab.id;
-  }
-
-  onCloseDrawer(): void {
-    this.settingsDrawer.close();
-  }
+  tabGroups: { name: string; tabs: SettingsTab[] }[] = [];
 
   /** What is installed, what Steam has, and where it lives. Null until the first load. */
   arkInstallation: {
@@ -113,13 +146,133 @@ export class SettingsPageComponent {
   } | null = null;
   arkInstallationLoading = false;
 
+  showInstallModal = false;
+  installProgress: InstallProgress | null = null;
+  showSudoPasswordModal = false;
+  sudoPassword = '';
+  pendingInstallTarget = '';
+  /** Running, starting, queued or stopping: an install would change files a server is using. */
+  hasRunningServers = false;
+
+  private readonly settingsDrawer = inject(SettingsDrawerService);
+  private readonly auth = inject(AuthService);
+  private readonly webSocket = inject(WebSocketService);
+  private readonly destroyRef = inject(DestroyRef);
+  private installSub?: Subscription;
+  private arkInstallationRequest?: Subscription;
+
+  constructor(
+    private messaging: MessagingService,
+    private cdr: ChangeDetectorRef,
+    private ipc: IpcService,
+    private notification: NotificationService,
+    private configService: GlobalConfigService,
+    private liveServers: LiveServersService,
+    private themeService: ThemeService
+  ) {
+    this.themePreference = this.themeService.preference;
+    this.isElectron = this.ipc.isElectron;
+    // Grouped by what the operator is trying to change, rather than one catch-all "General".
+    this.tabs = [
+      { id: 'server-installation', label: 'ARK Installation', icon: 'inventory_2', showUpdateBadge: false, group: 'Server' },
+      { id: 'servers', label: 'Server Defaults', icon: 'tune', group: 'Server' },
+      { id: 'updates', label: 'Updates', icon: 'system_update_alt', group: 'Server' },
+      { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
+      { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
+      { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
+      ...(this.isElectron ? [{ id: 'web-server' as const, label: 'Web Server', icon: 'cloud', group: 'Access' }] : []),
+      { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
+      { id: 'about', label: 'About', icon: 'info', group: 'Application' }
+    ];
+    this.buildTabGroups();
+    this.destroyRef.onDestroy(() => this.installSub?.unsubscribe());
+  }
+
+  get activeTabLabel(): string {
+    return this.tabs.find(tab => tab.id === this.activeTab)?.label || '';
+  }
+
+  ngOnInit(): void {
+    this.auth.identity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(identity => {
+      this.accountsInUse = identity.accountsInUse;
+      this.cdr.markForCheck();
+    });
+
+    this.settingsDrawer.isOpen$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(open => {
+      this.drawerOpen = open;
+      if (open) this.loadArkInstallation();
+      this.cdr.markForCheck();
+    });
+    this.settingsDrawer.section$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(section => {
+      this.activeTab = section;
+      this.cdr.markForCheck();
+    });
+
+    this.liveServers.servers$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(servers => {
+      this.hasRunningServers = servers.some(server => isBusyStatus(server.state));
+      this.cdr.markForCheck();
+    });
+
+    // GlobalConfigService asks for the settings whenever the connection comes up, and replays
+    // the latest to a listener that arrives after them.
+    this.configService.config$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(config => this.applyConfig(config));
+
+    this.messaging.receiveMessage<{ hasUpdate?: boolean }>('ark-update-status').pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(status => status?.hasUpdate ? this.updateArkUpdateBadge() : this.clearArkUpdateBadge());
+
+    if (this.isElectron) {
+      this.messaging.receiveMessage<WebServerReply>('web-server-status').pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe(status => {
+          this.webServerRunning = !!status?.running;
+          if (typeof status?.port === 'number') this.webServerPort = status.port;
+          this.cdr.markForCheck();
+        });
+      // The status comes back on the channel above, without the request id a reply would carry.
+      this.messaging.sendNotification('web-server-status', {});
+    }
+
+    // The web UI asks whenever its socket comes up: a request made before that, or after the
+    // session was refused, is dropped and only times out. The desktop app has no socket and
+    // asks once.
+    this.webSocket.connected$.pipe(filter(connected => connected), takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => this.loadSystemInfo());
+    if (this.isElectron) this.loadSystemInfo();
+  }
+
+  trackByGroupName(_index: number, group: { name: string }): string {
+    return group.name;
+  }
+
+  trackByTabId(_index: number, tab: SettingsTab): string {
+    return tab.id;
+  }
+
+  onCloseDrawer(): void {
+    this.settingsDrawer.close();
+  }
+
+  private loadSystemInfo(): void {
+    this.messaging.sendMessage<SystemInfoReply>('get-system-info', {}).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: info => {
+        this.backendNodeVersion = info?.nodeVersion || null;
+        this.backendElectronVersion = info?.electronVersion || null;
+        this.backendPlatform = info?.platform || null;
+        this.backendConfigPath = info?.configPath || null;
+        this.cdr.markForCheck();
+      },
+      error: error => console.error('[settings] Could not get the system info:', error)
+    });
+  }
+
   /** Pull the installation status. Called when the drawer opens and after an install. */
   loadArkInstallation(): void {
     this.arkInstallationLoading = true;
     this.cdr.markForCheck();
-    this.subscriptions.push(
-      this.messaging.sendMessage<any>('get-ark-installation', {}).subscribe({
-        next: (res) => {
+    this.arkInstallationRequest?.unsubscribe();
+    this.arkInstallationRequest = this.messaging.sendMessage<ArkInstallationReply>('get-ark-installation', {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: res => {
           if (res && res.success !== false) {
             this.arkInstallation = {
               installed: !!res.installed,
@@ -137,8 +290,7 @@ export class SettingsPageComponent {
           this.arkInstallationLoading = false;
           this.cdr.markForCheck();
         }
-      })
-    );
+      });
   }
 
   get arkStatusLabel(): string {
@@ -157,175 +309,10 @@ export class SettingsPageComponent {
     return this.arkInstallation.updateAvailable ? 'tone-warning' : 'tone-success';
   }
 
-  async ngOnInit() {
-    this.subscriptions.push(this.auth.identity$.subscribe(identity => {
-      this.accountsInUse = identity.accountsInUse;
-      this.cdr.markForCheck();
-    }));
-
-    this.subscriptions.push(this.settingsDrawer.isOpen$.subscribe(open => {
-      this.drawerOpen = open;
-      if (open) this.loadArkInstallation();
-      this.cdr.markForCheck();
-    }));
-    this.subscriptions.push(this.settingsDrawer.section$.subscribe(section => {
-      this.activeTab = section;
-      this.cdr.markForCheck();
-    }));
-    // Track whether any server instances are running/starting
-    this.subscriptions.push(
-      this.serverInstanceService.getInstances().subscribe(instances => {
-        this.hasRunningServers = instances.some(i => {
-          const state = (i.state || i.status || '').toLowerCase();
-          return state === 'running' || state === 'starting' || state === 'stopping';
-        });
-        this.cdr.markForCheck();
-      })
-    );
-
-    // Load config first
-    const cfg: any = await this.configService.loadConfig();
-    if (cfg) {
-      this.webServerPort = cfg.webServerPort;
-      this.startWebServerOnLoad = cfg.startWebServerOnLoad;
-      this.authenticationEnabled = cfg.authenticationEnabled;
-      this.authenticationUsername = cfg.authenticationUsername;
-      this.authenticationPassword = cfg.authenticationPassword;
-      this.maxBackupDownloadSizeMB = cfg.maxBackupDownloadSizeMB;
-      this.serverDataDir = cfg.serverDataDir || '';
-      this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
-      this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
-      this.serverStartDelaySeconds = cfg.serverStartDelaySeconds || 60;
-      this.cdr.markForCheck();
-    }
-
-    // Reactively update UI on any global-config broadcast
-    this.subscriptions.push(this.messaging.receiveMessage('global-config').subscribe((cfg: any) => {
-      this.webServerPort = cfg.webServerPort;
-      this.startWebServerOnLoad = cfg.startWebServerOnLoad;
-      this.authenticationEnabled = cfg.authenticationEnabled;
-      this.authenticationUsername = cfg.authenticationUsername;
-      this.authenticationPassword = cfg.authenticationPassword;
-      this.maxBackupDownloadSizeMB = cfg.maxBackupDownloadSizeMB;
-      this.serverDataDir = cfg.serverDataDir || '';
-      this.autoUpdateArkServer = cfg.autoUpdateArkServer || false;
-      this.updateWarningMinutes = cfg.updateWarningMinutes || 15;
-      this.serverStartDelaySeconds = cfg.serverStartDelaySeconds || 60;
-      this.cdr.markForCheck();
-    })
-  );
-  this.subscriptions.push(this.messaging.receiveMessage('ark-update-status').subscribe((msg: any) => {
-      if (msg?.hasUpdate) {
-        this.updateArkUpdateBadge();
-      } else {
-        this.clearArkUpdateBadge();
-      }
-    }));
-    // Always refresh web server status on init if Electron
-    if (this.isElectron) {
-      // Listen for backend polling events
-      this.subscriptions.push(this.messaging.receiveMessage('web-server-status').subscribe((msg: any) => {
-        this.webServerRunning = !!msg?.running;
-        if (typeof msg?.port === 'number') {
-          this.webServerPort = msg.port;
-        }
-        this.cdr.markForCheck();
-      }));
-      // Initial status request
-      this.messaging.sendMessage('web-server-status', {});
-    }
-
-    // Request system info from backend to display accurate platform/node/electron versions
-    this.subscriptions.push(
-      this.messaging.sendMessage('get-system-info', {}).subscribe({
-        next: (res: any) => {
-          if (res) {
-            this.backendNodeVersion = res.nodeVersion || null;
-            this.backendElectronVersion = res.electronVersion || null;
-            this.backendPlatform = res.platform || null;
-            this.backendConfigPath = res.configPath || null;
-            this.cdr.markForCheck();
-          }
-        },
-        error: (err) => {
-          console.error('Failed to get system info:', err);
-          // ignore - fall back to client-side heuristics
-        }
-      })
-    );
-  }
-
-  ngOnDestroy() {
-    // Tolerate an entry that never produced a real Subscription: this component is always
-    // mounted now (it hosts the settings drawer), so a teardown error here would surface
-    // on every page it outlives.
-    this.subscriptions.forEach(sub => sub?.unsubscribe?.());
-    this.installSub?.unsubscribe?.();
-  }
-
-  activeTab = 'server-installation';
-
-  // Modal and progress state
-  showInstallModal = false;
-  installProgress: { percent: number, step: string, message: string, phase?: string, success?: boolean, failed?: boolean, blocked?: boolean } | null = null;
-  private installSub?: Subscription;
-  
-  // Sudo password collection state
-  showSudoPasswordModal = false;
-  sudoPassword = '';
-  pendingInstallTarget = '';
-  hasRunningServers = false;
-
-  constructor(
-    private messaging: MessagingService,
-    private cdr: ChangeDetectorRef,
-    private utility: UtilityService,
-    private notification: NotificationService,
-    private configService: GlobalConfigService,
-    private serverInstanceService: ServerInstanceService,
-    private themeService: ThemeService
-  ) {
-    this.themePreference = this.themeService.preference;
-    this.isElectron = this.utility.getPlatform() === 'Electron';
-    // Grouped by what the operator is trying to change, rather than one catch-all "General".
-    this.tabs = [
-      { id: 'server-installation', label: 'ARK Installation', icon: 'inventory_2', showUpdateBadge: false, group: 'Server' },
-      { id: 'servers', label: 'Server Defaults', icon: 'tune', group: 'Server' },
-      { id: 'updates', label: 'Updates', icon: 'system_update_alt', group: 'Server' },
-      { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
-      { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
-      { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
-      ...(this.isElectron ? [{ id: 'web-server', label: 'Web Server', icon: 'cloud', group: 'Access' }] : []),
-      { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
-      { id: 'about', label: 'About', icon: 'info', group: 'Application' }
-    ];
-    this.buildTabGroups();
-  }
-
-  /**
-   * Apply a theme choice. Takes effect immediately — there is no Save step, because the
-   * result is visible the moment it is clicked and is stored on this device only.
-   */
+  /** Takes effect at once with no Save step: the result is visible immediately and stays on this device. */
   onThemeChange(preference: ThemePreference) {
     this.themePreference = preference;
     this.themeService.setPreference(preference);
-    this.cdr.markForCheck();
-  }
-
-  private updateArkUpdateBadge() {
-    this.arkUpdateAvailable = true;
-    this.notification.info('A new ARK server update is available!', 'Update Available');
-    // Set badge on tab
-    const tab = this.tabs.find(t => t.id === 'server-installation');
-    if (tab) tab.showUpdateBadge = true;
-    this.cdr.markForCheck();
-  }
-
-  private clearArkUpdateBadge() {
-    this.arkUpdateAvailable = false;
-    // Remove badge from tab
-    const tab = this.tabs.find(t => t.id === 'server-installation');
-    if (tab) tab.showUpdateBadge = false;
     this.cdr.markForCheck();
   }
 
@@ -334,35 +321,30 @@ export class SettingsPageComponent {
     this.settingsDrawer.selectSection(tabId as SettingsSection);
   }
 
-  getActiveTabLabel() {
-    return this.tabs.find(tab => tab.id === this.activeTab)?.label || '';
-  }
-
   onInstallServer() {
-    // First check installation requirements
     this.checkInstallationRequirements('server');
   }
 
   checkInstallationRequirements(target: string) {
-    this.subscriptions.push(
-      this.messaging.sendMessage('check-install-requirements', { target }).subscribe({
-        next: (response: any) => {
-          if (response.requiresSudo && !response.canProceed) {
-            // Need sudo password
-            this.pendingInstallTarget = target;
-            this.sudoPassword = '';
-            this.showSudoPasswordModal = true;
-            this.cdr.markForCheck();
-          } else {
-            // Can proceed directly with installation
-            this.startInstallation(target);
-          }
-        },
-        error: (error) => {
-          this.notification.error('Failed to check installation requirements: ' + error.message, 'Installation Error');
+    this.messaging.sendMessage<{ success?: boolean; error?: string; requiresSudo?: boolean; canProceed?: boolean }>(
+      'check-install-requirements', { target }
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: response => {
+        if (response?.success === false) {
+          this.notification.error(`Failed to check installation requirements: ${response.error || 'Unknown error'}`, 'Installation Error');
+        } else if (response?.requiresSudo && !response.canProceed) {
+          this.pendingInstallTarget = target;
+          this.sudoPassword = '';
+          this.showSudoPasswordModal = true;
+          this.cdr.markForCheck();
+        } else {
+          this.startInstallation(target);
         }
-      })
-    );
+      },
+      error: error => {
+        this.notification.error('Failed to check installation requirements: ' + error.message, 'Installation Error');
+      }
+    });
   }
 
   onSudoPasswordConfirm() {
@@ -370,11 +352,9 @@ export class SettingsPageComponent {
       this.notification.warning('Please enter your sudo password', 'Password Required');
       return;
     }
-    
+
     this.showSudoPasswordModal = false;
     this.startInstallation(this.pendingInstallTarget, this.sudoPassword);
-    
-    // Clear sensitive data
     this.sudoPassword = '';
     this.pendingInstallTarget = '';
     this.cdr.markForCheck();
@@ -390,35 +370,22 @@ export class SettingsPageComponent {
   private startInstallation(target: string, sudoPassword?: string) {
     this.showInstallModal = true;
     this.installProgress = { percent: 0, step: 'Starting', message: 'Initializing install...' };
-    if (this.installSub) this.installSub.unsubscribe();
-    this.installSub = this.messaging.receiveMessage('install').subscribe((msg: any) => {
-      const progress = msg?.data;
+    this.installSub?.unsubscribe();
+    this.installSub = this.messaging.receiveMessage<InstallEvent>('install').subscribe(event => {
+      const progress = event?.data;
       if (!progress) return;
 
-      // Show toast for concurrent-install warning
       if (progress.message?.includes('already in progress')) {
         this.notification.warning(progress.message, 'Install Warning');
         this.onCloseInstall();
         return;
       }
 
-      // Handle error state – show toast and update modal with failure details
       if (progress.step === 'error' || progress.error) {
-        const errorMsg = progress.message || progress.error || 'Installation failed. Check server logs for details.';
-        this.notification.error(errorMsg, 'Installation Failed');
-        this.installProgress = {
-          percent: this.installProgress?.percent ?? 0,
-          step: 'Installation Failed',
-          message: errorMsg,
-          phase: progress.phase || 'error',
-          success: false,
-          failed: true
-        };
-        this.cdr.markForCheck();
+        this.showInstallFailure(progress.message || progress.error || 'Installation failed. Check server logs for details.', progress.phase);
         return;
       }
 
-      // Handle cancellation
       if (progress.cancelled) {
         this.showInstallModal = false;
         this.installProgress = null;
@@ -429,58 +396,68 @@ export class SettingsPageComponent {
       if (progress.step) {
         const isComplete = progress.phase === 'validation' && progress.overallPhase === 'Installation Complete';
         this.installProgress = {
-            percent: isComplete ? 100 : (progress.phasePercent ?? 0),
-            step: isComplete ? 'Installation Complete' : (progress.overallPhase || ''),
-            message: progress.message || '',
-            phase: progress.phase || '',
-            success: isComplete ? true : undefined
+          percent: isComplete ? 100 : (progress.phasePercent ?? 0),
+          step: isComplete ? 'Installation Complete' : (progress.overallPhase || ''),
+          message: progress.message || '',
+          phase: progress.phase || '',
+          success: isComplete ? true : undefined
         };
         // Show the new build straight away rather than the pre-install "Update available".
         if (isComplete) this.loadArkInstallation();
         this.cdr.markForCheck();
       }
     });
-    
-    // Start installation with sudo password if provided
+
     const installPayload = sudoPassword ? { target, sudoPassword } : { target };
-    this.subscriptions.push(this.messaging.sendMessage('install', installPayload).subscribe());
+    this.messaging.sendMessage('install', installPayload, { timeoutMs: INSTALL_TIMEOUT_MS })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        error: error => {
+          console.error('[settings] The install request failed:', error);
+          this.showInstallFailure('Installation failed. Check server logs for details.');
+        }
+      });
+  }
+
+  /** Between the start of an install and its success, failure or cancellation. */
+  get installRunning(): boolean {
+    return !!this.installProgress && !this.installProgress.success && !this.installProgress.failed;
+  }
+
+  /**
+   * Escape or a click beside the dialog. Ignored while the install runs: only the Cancel Install
+   * button should throw away a download of several gigabytes.
+   */
+  onDismissInstall() {
+    if (this.installRunning) return;
+    this.onCloseInstall();
   }
 
   onCloseInstall() {
     this.showInstallModal = false;
-    if (this.installSub) this.installSub.unsubscribe();
+    this.installSub?.unsubscribe();
   }
 
   onCancelInstall() {
     this.onCloseInstall();
     this.installProgress = null;
-    this.subscriptions.push(this.messaging.sendMessage('cancel-install', { target: 'server' }).subscribe());
+    this.messaging.sendMessage('cancel-install', { target: 'server' }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      error: error => console.error('[settings] Could not cancel the install:', error)
+    });
   }
 
   onOpenConfigDirectory() {
     if (!this.isElectron) return;
-    this.subscriptions.push(this.messaging.sendMessage('open-config-directory', {}).subscribe());
-  }
-
-  onCheckForUpdates() {
-    this.notification.info('Checking for ARK server updates...', 'Check for Updates');
-    this.subscriptions.push(this.messaging.sendMessage('check-ark-update', {}).subscribe({
-      next: (response: any) => {
-        if (response?.hasUpdate) {
-          this.updateArkUpdateBadge();
-        } else {
-          this.clearArkUpdateBadge();
-          this.notification.info('ARK server is up to date.', 'Check for Updates');
-        }
+    const failed = 'Could not open the config directory.';
+    this.messaging.sendMessage<OpenDirectoryReply>('open-config-directory', {}).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: reply => {
+        if (reply?.success === false) this.notification.error(reply.error || failed, 'Settings');
       },
-      error: () => {
-        this.notification.error('Failed to check for ARK server updates.', 'Check for Updates');
+      error: error => {
+        console.error('[settings] Could not open the config directory:', error);
+        this.notification.error(failed, 'Settings');
       }
-    }));
-  }
-
-  getBuildDate() {
-    return new Date().toLocaleDateString();
+    });
   }
 
   getAppVersion() {
@@ -488,7 +465,6 @@ export class SettingsPageComponent {
   }
 
   getPlatform() {
-    // Prefer backend-provided platform when available
     if (this.backendPlatform) return this.backendPlatform;
     if (typeof navigator !== 'undefined') {
       const platform = navigator.platform || navigator.userAgent;
@@ -500,56 +476,56 @@ export class SettingsPageComponent {
   }
 
   getNodeVersion() {
-    // Prefer backend-provided value (more accurate in Electron)
     if (this.backendNodeVersion) return this.backendNodeVersion;
-    // In Electron, we can access process.versions in renderer; fallback to that if available
-    if (this.isElectron && typeof (globalThis as any).process !== 'undefined') {
-      return (globalThis as any).process.versions?.node || 'Unknown';
-    }
+    if (this.isElectron) return this.ipc.versions?.node || 'Unknown';
     return 'Not Available (Browser)';
   }
 
   getElectronVersion() {
     if (this.backendElectronVersion) return this.backendElectronVersion;
-    if (this.isElectron && typeof (globalThis as any).process !== 'undefined') {
-      return (globalThis as any).process.versions?.electron || 'Unknown';
-    }
+    if (this.isElectron) return this.ipc.versions?.electron || 'Unknown';
     return 'Not Available (Browser)';
   }
 
   getConfigPath() {
     if (this.backendConfigPath) return this.backendConfigPath;
-    if (this.isElectron && typeof (globalThis as any).process !== 'undefined') {
-      try {
-        const os = (globalThis as any).require('os');
-        const path = (globalThis as any).require('path');
-        return path.join(os.homedir(), 'AppData', 'Roaming', 'Cerious AASM');
-      } catch (e) {
-        return 'Unknown';
-      }
-    }
-    return 'N/A (Browser Mode - No Local Config)';
+    return this.isElectron ? 'Unknown' : 'N/A (Browser Mode - No Local Config)';
   }
 
   onStartWebServer() {
     this.configService.webServerPort = this.webServerPort;
-    this.subscriptions.push(this.messaging.sendMessage('start-web-server', { port: this.webServerPort }).subscribe({
-      next: (res: any) => {
-        this.webServerRunning = true;
-        this.notification.success(`Web server started on port ${this.webServerPort}`, 'Web Server');
-        this.cdr.markForCheck();
-      },
-      error: () => {
-        this.webServerRunning = false;
-        this.notification.error('Failed to start web server.', 'Web Server');
-        this.cdr.markForCheck();
-      }
-    }));
+    this.messaging.sendMessage<WebServerReply>('start-web-server', { port: this.webServerPort })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: res => {
+          this.webServerRunning = !!res?.success;
+          if (res?.success) {
+            this.notification.success(`Web server started on port ${this.webServerPort}`, 'Web Server');
+          } else {
+            this.notification.error(res?.message || 'Failed to start web server.', 'Web Server');
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.webServerRunning = false;
+          this.notification.error('Failed to start web server.', 'Web Server');
+          this.cdr.markForCheck();
+        }
+      });
   }
 
-  onPortChange(newPort: number) {
-    this.webServerPort = newPort;
-    this.configService.webServerPort = newPort;
+  /** Saved when the field is committed ('change' fires on blur or Enter), never per keystroke. */
+  onPortChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const port = Number(input.value);
+    if (!input.value || !Number.isInteger(port) || port < MIN_WEB_SERVER_PORT || port > MAX_WEB_SERVER_PORT) {
+      this.notification.warning(`Enter a port between ${MIN_WEB_SERVER_PORT} and ${MAX_WEB_SERVER_PORT}.`, 'Web Server');
+      input.value = String(this.webServerPort);
+      return;
+    }
+    if (port === this.webServerPort) return;
+    this.webServerPort = port;
+    this.configService.webServerPort = port;
   }
 
   onStartOnLoadChange(newValue: boolean) {
@@ -558,24 +534,28 @@ export class SettingsPageComponent {
   }
 
   onStopWebServer() {
-    this.subscriptions.push(this.messaging.sendMessage('stop-web-server', {}).subscribe({
-      next: (res: any) => {
-        this.webServerRunning = false;
-        this.notification.info('Web server stopped.', 'Web Server');
-        this.cdr.markForCheck();
-      },
-      error: () => {
-        this.notification.error('Failed to stop web server.', 'Web Server');
-        this.cdr.markForCheck();
-      }
-    }));
+    this.messaging.sendMessage<WebServerReply>('stop-web-server', {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: res => {
+          if (res?.success) {
+            this.webServerRunning = false;
+            this.notification.info('Web server stopped.', 'Web Server');
+          } else {
+            this.notification.error(res?.message || 'Failed to stop web server.', 'Web Server');
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.notification.error('Failed to stop web server.', 'Web Server');
+          this.cdr.markForCheck();
+        }
+      });
   }
 
   /**
-   * Turning authentication on or off. Who may sign in comes from the accounts under Users &
-   * Roles; the single username and password this page used to collect is gone, and an
-   * install that still has one keeps it as a fallback until its owner replaces it with an
-   * account.
+   * Who may sign in comes from the accounts under Users & Roles; an install that still has the
+   * older single login keeps it as a fallback until its owner replaces it with an account.
    */
   onAuthenticationEnabledChange(newValue: boolean) {
     this.authenticationEnabled = newValue;
@@ -598,7 +578,7 @@ export class SettingsPageComponent {
     return now > first ? `${first}–${now}` : `${first}`;
   }
 
-  /** Jump to the accounts list, which is where web access is decided now. */
+  /** Jump to the accounts list, which is where web access is decided. */
   goToUsers(): void {
     this.settingsDrawer.open('users');
   }
@@ -611,7 +591,6 @@ export class SettingsPageComponent {
       this.notification.success(`Backup download size limit set to ${sizeValue}MB`, 'Settings');
     } else {
       this.notification.warning('Invalid size limit. Please enter a value between 1 and 2048 MB.', 'Settings');
-      // Reset to current value
       setTimeout(() => {
         this.maxBackupDownloadSizeMB = this.configService.maxBackupDownloadSizeMB || 100;
       }, 100);
@@ -630,8 +609,8 @@ export class SettingsPageComponent {
     this.notification.info('Server Data Directory reset to default. Restart required.', 'Settings');
   }
 
-  onAutoUpdateArkServerChange(event: any) {
-    const val = (event && typeof event === 'object' && event.target) ? event.target.checked : event;
+  onAutoUpdateArkServerChange(event: Event) {
+    const val = (event.target as HTMLInputElement).checked;
     this.autoUpdateArkServer = val;
     this.configService.autoUpdateArkServer = val;
     this.notification.info(`Auto-Update Ark Server is now ${val ? 'Enabled' : 'Disabled'}`, 'Settings');
@@ -667,20 +646,72 @@ export class SettingsPageComponent {
 
   selectServerDataDir() {
     if (!this.isElectron) return;
-    this.messaging.sendMessage('select-directory', { title: 'Select Server Data Directory' })
-      .subscribe({
-        next: (result: any) => {
-          if (result && result.path) {
-            this.onServerDataDir(result.path);
-          } else if (result && result.error) {
-            this.notification.error(result.error, 'Directory Selection Failed');
-          }
-        },
-        error: (err: any) => {
-          console.error('Failed to select directory:', err);
-          this.notification.error('Failed to select directory', 'Error');
+    this.messaging.sendMessage<{ path?: string; error?: string }>(
+      'select-directory', { title: 'Select Server Data Directory' }, { timeoutMs: DIRECTORY_DIALOG_TIMEOUT_MS }
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: result => {
+        if (result?.path) {
+          this.onServerDataDir(result.path);
+        } else if (result?.error) {
+          this.notification.error(result.error, 'Directory Selection Failed');
         }
-      });
+      },
+      error: error => {
+        console.error('[settings] Failed to select directory:', error);
+        this.notification.error('Failed to select directory', 'Error');
+      }
+    });
   }
 
+  private applyConfig(config: Partial<GlobalConfig> | null | undefined): void {
+    if (!config) return;
+    this.webServerPort = config.webServerPort ?? this.webServerPort;
+    this.startWebServerOnLoad = !!config.startWebServerOnLoad;
+    this.authenticationEnabled = !!config.authenticationEnabled;
+    this.maxBackupDownloadSizeMB = config.maxBackupDownloadSizeMB ?? 100;
+    this.serverDataDir = config.serverDataDir || '';
+    this.autoUpdateArkServer = !!config.autoUpdateArkServer;
+    this.updateWarningMinutes = config.updateWarningMinutes || 15;
+    this.serverStartDelaySeconds = config.serverStartDelaySeconds || 60;
+    this.cdr.markForCheck();
+  }
+
+  private buildTabGroups(): void {
+    const groups: { name: string; tabs: SettingsTab[] }[] = [];
+    for (const tab of this.tabs) {
+      let group = groups.find(g => g.name === tab.group);
+      if (!group) {
+        group = { name: tab.group, tabs: [] };
+        groups.push(group);
+      }
+      group.tabs.push(tab);
+    }
+    this.tabGroups = groups;
+  }
+
+  private showInstallFailure(message: string, phase?: string): void {
+    this.notification.error(message, 'Installation Failed');
+    this.installProgress = {
+      percent: this.installProgress?.percent ?? 0,
+      step: 'Installation Failed',
+      message,
+      phase: phase || 'error',
+      success: false,
+      failed: true
+    };
+    this.cdr.markForCheck();
+  }
+
+  private updateArkUpdateBadge() {
+    this.notification.info('A new ARK server update is available!', 'Update Available');
+    const tab = this.tabs.find(t => t.id === 'server-installation');
+    if (tab) tab.showUpdateBadge = true;
+    this.cdr.markForCheck();
+  }
+
+  private clearArkUpdateBadge() {
+    const tab = this.tabs.find(t => t.id === 'server-installation');
+    if (tab) tab.showUpdateBadge = false;
+    this.cdr.markForCheck();
+  }
 }

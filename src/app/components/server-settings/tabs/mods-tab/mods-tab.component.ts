@@ -1,12 +1,32 @@
-import { Component, Input, Output, EventEmitter, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
+import { Component, Input, Output, EventEmitter, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ModalComponent } from '../../../modal/modal.component';
 import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
-import { UtilityService } from '../../../../core/services/utility.service';
+import { IpcService } from '../../../../core/services/ipc.service';
+import { ModEntry } from '../../../../core/models/server-instance.model';
 import { environment } from '../../../../../environments/environment';
+
+/** One search result, as the backend's curseforge-search-mods handler shapes it. */
+export interface CurseForgeModSummary {
+  id: number;
+  name: string;
+  summary?: string;
+  downloadCount?: number;
+  thumbUrl?: string;
+  screenshotUrl?: string;
+  websiteUrl?: string;
+  authors?: string;
+  categories?: string[];
+}
+
+interface CurseForgeSearchReply {
+  success?: boolean;
+  mods?: CurseForgeModSummary[];
+  pagination?: { totalCount?: number };
+  error?: string;
+}
 
 @Component({
   selector: 'app-mods-tab',
@@ -16,27 +36,25 @@ import { environment } from '../../../../../environments/environment';
 })
 export class ModsTabComponent {
   @Input() isLocked = false;
-  @Input() modList: any[] = [];
+  @Input() modList: ModEntry[] = [];
 
   @Output() addMod = new EventEmitter<{id: string, name: string}>();
-  @Output() removeMod = new EventEmitter<any>();
-  @Output() toggleMod = new EventEmitter<any>();
-  @Output() updateModSettings = new EventEmitter<{mod: any, settings: any}>();
+  @Output() removeMod = new EventEmitter<ModEntry>();
+  @Output() toggleMod = new EventEmitter<ModEntry>();
+  @Output() updateModSettings = new EventEmitter<{mod: ModEntry, settings: Record<string, string>}>();
 
-  // Manual add modal
   showAddModModal = false;
   showSettingsModal = false;
   newModId = '';
   newModName = '';
-  selectedMod: any = null;
-  modSettings: any = {};
+  selectedMod: ModEntry | null = null;
+  modSettings: Record<string, string> = {};
   editingKey: string | null = null;
-  tempKeyValue: string = '';
+  tempKeyValue = '';
 
-  // CurseForge browser
   showBrowseModal = false;
   cfSearchQuery = '';
-  cfSearchResults: any[] = [];
+  cfSearchResults: CurseForgeModSummary[] = [];
   cfSearching = false;
   cfPage = 0;
   cfPageSize = 20;
@@ -66,9 +84,8 @@ export class ModsTabComponent {
 
   constructor(
     private messaging: MessagingService,
-    private globalConfig: GlobalConfigService,
     private notification: NotificationService,
-    private utility: UtilityService,
+    private ipc: IpcService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -100,12 +117,11 @@ export class ModsTabComponent {
     this.cfIsAccessError = false;
     this.cfSortDropdownOpen = false;
     this.cdr.markForCheck();
-    // Auto-load popular mods immediately
     setTimeout(() => this.searchCurseForge(), 0);
   }
 
-  isModInstalled(modId: any): boolean {
-    return (this.modList || []).some((m: any) => String(m.id) === String(modId));
+  isModInstalled(modId: string | number): boolean {
+    return (this.modList || []).some(m => String(m.id) === String(modId));
   }
 
   closeBrowseModal(): void {
@@ -115,8 +131,10 @@ export class ModsTabComponent {
 
   openUrl(url: string): void {
     if (!url) return;
-    if (this.utility.getPlatform() === 'Electron') {
-      this.messaging.sendMessage('curseforge-open-website', { url }).subscribe();
+    if (this.ipc.isElectron) {
+      this.messaging.sendMessage('curseforge-open-website', { url }).subscribe({
+        error: () => this.notification.error('Could not open the CurseForge page.', 'Mod Browser')
+      });
     } else {
       window.open(url, '_blank', 'noopener,noreferrer');
     }
@@ -132,14 +150,14 @@ export class ModsTabComponent {
     }
     this.cfSearching = true;
     this.cdr.markForCheck();
-    this.messaging.sendMessage('curseforge-search-mods', {
+    this.messaging.sendMessage<CurseForgeSearchReply>('curseforge-search-mods', {
       query: this.cfSearchQuery,
       apiKey,
       pageSize: this.cfPageSize,
       index: this.cfPage * this.cfPageSize,
       sortField: this.cfSortField,
     }).subscribe({
-      next: (res: any) => {
+      next: res => {
         if (res?.success) {
           if (reset) {
             this.cfSearchResults = res.mods || [];
@@ -148,18 +166,14 @@ export class ModsTabComponent {
           }
           this.cfHasMore = (res.pagination?.totalCount ?? 0) > (this.cfPage + 1) * this.cfPageSize;
         } else {
-          const msg = res?.error || 'Search failed.';
-          this.cfError = msg;
-          this.cfIsAccessError = msg.includes('403') || msg.toLowerCase().includes('restricted');
+          this.showSearchError(res?.error || 'Search failed.');
         }
         this.cfSearching = false;
         this.cdr.markForCheck();
       },
-      error: (err: any) => {
+      error: (err: unknown) => {
         this.cfSearching = false;
-        const msg = err?.message || 'Failed to search CurseForge.';
-        this.cfError = msg;
-        this.cfIsAccessError = msg.includes('403') || msg.toLowerCase().includes('restricted');
+        this.showSearchError(err instanceof Error && err.message ? err.message : 'Failed to search CurseForge.');
         this.cdr.markForCheck();
       },
     });
@@ -170,18 +184,17 @@ export class ModsTabComponent {
     this.searchCurseForge(false);
   }
 
-  addModFromCurseForge(mod: any): void {
-    const existing = (this.modList || []).find((m: any) => String(m.id) === String(mod.id));
-    if (existing) {
+  /** The page that owns the mod list confirms the addition, so this only reports a duplicate. */
+  addModFromCurseForge(mod: CurseForgeModSummary): void {
+    if (this.isModInstalled(mod.id)) {
       this.notification.warning(`Mod "${mod.name}" is already in the list.`, 'Mod Browser');
       return;
     }
     this.addMod.emit({ id: String(mod.id), name: mod.name });
-    this.notification.success(`Added "${mod.name}" (${mod.id}).`, 'Mod Browser');
     this.cdr.markForCheck();
   }
 
-  openSettingsModal(mod: any): void {
+  openSettingsModal(mod: ModEntry): void {
     this.selectedMod = mod;
     this.modSettings = mod.settings ? { ...mod.settings } : {};
     this.showSettingsModal = true;
@@ -208,17 +221,16 @@ export class ModsTabComponent {
     this.tempKeyValue = '';
   }
 
-  onRemoveMod(mod: any): void {
+  onRemoveMod(mod: ModEntry): void {
     this.removeMod.emit(mod);
   }
 
-  onToggleMod(mod: any): void {
+  onToggleMod(mod: ModEntry): void {
     this.toggleMod.emit(mod);
   }
 
   onSettingKeyChange(oldKey: string, newKey: string) {
     if (oldKey !== newKey && newKey.trim()) {
-      // Create new object with updated key
       const updatedSettings = { ...this.modSettings };
       updatedSettings[newKey.trim()] = updatedSettings[oldKey];
       delete updatedSettings[oldKey];
@@ -244,9 +256,11 @@ export class ModsTabComponent {
     this.tempKeyValue = '';
   }
 
+  /** Adds an empty setting named "SettingN", with the first N that no setting uses yet. */
   addSetting(): void {
-    const key = `Setting${Object.keys(this.modSettings).length + 1}`;
-    this.modSettings = { ...this.modSettings, [key]: '' };
+    let n = Object.keys(this.modSettings).length + 1;
+    while (`Setting${n}` in this.modSettings) n++;
+    this.modSettings = { ...this.modSettings, [`Setting${n}`]: '' };
   }
 
   removeSetting(key: string): void {
@@ -255,15 +269,20 @@ export class ModsTabComponent {
     this.modSettings = updatedSettings;
   }
 
-  trackByModId(index: number, mod: any): any {
-    return mod ? mod.id : index;
+  trackByModId(_index: number, mod: ModEntry): string {
+    return mod.id;
   }
 
-  trackBySetting(index: number, setting: string): string {
+  trackBySetting(_index: number, setting: string): string {
     return setting;
   }
 
-  objectKeys(obj: any): string[] {
+  objectKeys(obj: Record<string, string> | null | undefined): string[] {
     return obj ? Object.keys(obj) : [];
+  }
+
+  private showSearchError(message: string): void {
+    this.cfError = message;
+    this.cfIsAccessError = message.includes('403') || message.toLowerCase().includes('restricted');
   }
 }

@@ -13,13 +13,9 @@ export class RconControlComponent {
   @Input() serverState = '';
   @Input() knownCommands: string[] = [];
   @Input() lastResponse = '';
-  
-  @Output() sendMessage = new EventEmitter<string>();
-  @Output() inputFocus = new EventEmitter<void>();
-  @Output() inputBlur = new EventEmitter<void>();
-  @Output() commandFill = new EventEmitter<string>();
 
-  showRcon = true;
+  @Output() sendMessage = new EventEmitter<string>();
+
   rconMessage = '';
   inputFocused = false;
 
@@ -31,17 +27,15 @@ export class RconControlComponent {
 
   onInputFocus() {
     this.inputFocused = true;
-    this.inputFocus.emit();
   }
 
+  /** Delayed so a click on a suggestion lands before the list disappears. */
   onInputBlur() {
     setTimeout(() => this.inputFocused = false, 150);
-    this.inputBlur.emit();
   }
 
   fillCommand(cmd: string) {
     this.rconMessage = cmd;
     this.inputFocused = false;
-    this.commandFill.emit(cmd);
   }
 }

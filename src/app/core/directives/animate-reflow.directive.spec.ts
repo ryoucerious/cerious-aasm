@@ -35,7 +35,13 @@ describe('AnimateReflowDirective', () => {
   const cards = (): HTMLElement[] =>
     Array.from(fixture.nativeElement.querySelectorAll('.card')) as HTMLElement[];
 
+  let reducedMotion: boolean;
+
   beforeEach(async () => {
+    // Chrome reports the host OS setting (e.g. Windows with animations turned off), so pin it.
+    reducedMotion = false;
+    spyOn(window, 'matchMedia').and.callFake(query => ({ matches: reducedMotion, media: query } as MediaQueryList));
+
     await TestBed.configureTestingModule({ imports: [HostComponent] }).compileComponents();
     fixture = TestBed.createComponent(HostComponent);
     host = fixture.componentInstance;
@@ -86,7 +92,7 @@ describe('AnimateReflowDirective', () => {
   });
 
   it('respects a reduced-motion preference', () => {
-    spyOn(window, 'matchMedia').and.returnValue({ matches: true } as MediaQueryList);
+    reducedMotion = true;
 
     reflowTo(200);
 

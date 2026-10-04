@@ -1,12 +1,5 @@
-/* --- DASHBOARD, SERVER CARDS, SERVER HEADER, SETTINGS PANEL ---
- * Layout and chrome for the refreshed pages. Colours come from _theme.scss tokens; map
- * artwork gradients are inline (decorative, theme-independent).
- */
 @use 'variables' as *;
 
-// =========================
-// DASHBOARD FRAME
-// =========================
 .dashboard {
   display: flex;
   flex-direction: column;
@@ -63,9 +56,6 @@
   gap: 1.25rem;
 }
 
-// =========================
-// HERO
-// =========================
 .dash-hero {
   position: relative;
   overflow: hidden;
@@ -83,8 +73,7 @@
   gap: 2rem;
 }
 
-// The artwork is shown as it is; the welcome text carries its own shadow instead of a wash
-// across the photo.
+// No wash over the artwork; the hero text carries its own shadow instead.
 .dash-hero-art {
   display: none;
 }
@@ -95,8 +84,7 @@
   min-width: 0;
 }
 
-// Over photographs of every brightness, so the text is white with a shadow rather than a
-// theme colour that only works against one of them.
+// White with a shadow: the text sits on photos of every brightness, where no theme colour works.
 .dash-hero-title {
   margin: 0 0 0.35rem;
   font-size: 2rem;
@@ -125,8 +113,7 @@
   gap: 0.75rem;
   padding: 0.7rem 1rem;
   min-width: 150px;
-  // Its own dark ground, blurred over whatever part of the photograph it lands on, since
-  // the artwork behind it runs from bright sky to deep water.
+  // Its own blurred dark ground: the artwork behind runs from bright sky to deep water.
   background: rgba(8, 12, 20, 0.68);
   backdrop-filter: blur(6px);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -194,9 +181,6 @@
   font-style: normal;
 }
 
-// =========================
-// SERVERS SECTION
-// =========================
 .dash-section-header {
   display: flex;
   align-items: center;
@@ -248,7 +232,6 @@
   }
 }
 
-// The toolbar dropdowns are the shared app-dropdown sized to their content.
 .dash-toolbar .dash-select {
   display: block;
   width: 150px;
@@ -287,9 +270,6 @@
   p { margin: 0.5rem 0 1rem; }
 }
 
-// =========================
-// SERVER CARD
-// =========================
 .server-card {
   display: flex;
   flex-direction: column;
@@ -587,9 +567,6 @@
   }
 }
 
-// =========================
-// BOTTOM ROW: chart, uptime, promo
-// =========================
 .dash-bottom {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
@@ -748,9 +725,6 @@
   @include text-ellipsis;
 }
 
-// =========================
-// SIDE COLUMN
-// =========================
 .dash-quick-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -884,9 +858,6 @@
   margin-bottom: 1rem;
 }
 
-// =========================
-// SERVER HEADER (top of every server page)
-// =========================
 .server-header {
   display: flex;
   align-items: center;
@@ -996,9 +967,6 @@
   flex-shrink: 0;
 }
 
-// =========================
-// SETTINGS PANEL (toolbar above every configuration page)
-// =========================
 .settings-toolbar {
   display: flex;
   align-items: center;
@@ -1056,13 +1024,6 @@
   }
 }
 
-.console-card .card-header h2 {
-  letter-spacing: 0.08em;
-}
-
-// =========================
-// RESPONSIVE
-// =========================
 @media (max-width: 1280px) {
   .dash-grid {
     grid-template-columns: 1fr;

@@ -1,52 +1,63 @@
-
-
-
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
 import { randomUUID } from 'crypto';
-import type { Server as HttpServer } from 'http';
+import type { ChildProcess } from 'child_process';
+import type { IncomingMessage, Server as HttpServer } from 'http';
+import type { WebContents } from 'electron';
+import { RawData, WebSocket, WebSocketServer } from 'ws';
+import { authorizeChannel, identifySender } from './auth/permission-gate';
+import {
+  ApiProcessSender,
+  ChildToMainMessage,
+  MainToChildMessage,
+  MessageSender,
+  SOCKET_CLOSE,
+  SocketIdentity,
+  WebSocketClient
+} from '../types/messaging.types';
 
-// Use CommonJS require for WebSocketServer to avoid TS type import issues
-const WebSocketServer = require('ws').Server;
-
-let ipcMain: typeof import('electron').ipcMain | undefined;
-let BrowserWindow: typeof import('electron').BrowserWindow | undefined;
-
-// Check if we're in the main Electron process (not a forked child process)
-const isMainElectronProcess = !!(process && process.versions && process.versions.electron && !process.env.ELECTRON_RUN_AS_NODE);
-if (isMainElectronProcess) {
-  try {
-    // Note: Using require() for conditional loading in different process contexts
-    ({ ipcMain, BrowserWindow } = require('electron'));
-  } catch (error) {
-    console.warn('[MessagingService] Failed to import electron:', error);
-  }
+/** The activity feed's view of the bus. Set from main only, so its database never loads in the web server child. */
+export interface BusObserver {
+  noteAction(channel: string, payload: unknown, username: string | null): void;
+  recordFromBroadcast(channel: string, data: unknown): void;
 }
 
+type Socket = WebSocket & WebSocketClient;
+
+const SESSION_SWEEP_MS = 60_000;
+// Bounds the memory a stream of made-up origins can take; past it refusals are no longer logged.
+const MAX_LOGGED_REFUSALS = 50;
+
 export class MessagingService extends EventEmitter {
-  private wsServer: any = null;
-  private webContentsList: Set<any> = new Set();
-
-  // Public getters for handler access
-  public getWebContentsList() {
-    return this.webContentsList;
-  }
-  public getWsServer() {
-    return this.wsServer;
-  }
-
-  constructor() {
-    super();
-  }
-
-  private apiProcess: any = null;
+  private wsServer: WebSocketServer | null = null;
+  private readonly webContentsList = new Set<WebContents>();
+  private apiProcess: ChildProcess | null = null;
+  private observer: BusObserver | null = null;
+  private sessionSweep: NodeJS.Timeout | null = null;
+  private readonly loggedRefusals = new Set<string>();
 
   /**
-   * Set the child process used for web client broadcasts.
-   * @param apiProcess - The child process running the API server
+   * Resolves the account behind a WebSocket handshake. Installed by the web server child, which
+   * owns the session store; unset in the main process, where no sockets are accepted.
    */
-  setApiProcess(apiProcess: any) {
-    this.apiProcess = apiProcess;
+  resolveSocketUser: ((request: IncomingMessage) => SocketIdentity) | null = null;
+
+  /**
+   * Whether a socket's session still exists (not expired, signed out or dropped). Installed by the
+   * web server child; the account behind a socket is only checked again when a message arrives.
+   */
+  isSessionLive: ((token: string) => boolean) | null = null;
+
+  /** The web server child that relays web clients, or null while it is not running. */
+  setApiProcess(child: ChildProcess | null): void {
+    this.apiProcess = child;
+  }
+
+  getApiProcess(): ChildProcess | null {
+    return this.apiProcess;
+  }
+
+  setObserver(observer: BusObserver | null): void {
+    this.observer = observer;
   }
 
   /**
@@ -55,16 +66,11 @@ export class MessagingService extends EventEmitter {
    * This is the app's authorization boundary: the web UI can reach every channel over the
    * WebSocket, so the check has to live where all of them converge rather than in each
    * handler. A call with no sender comes from main-process code itself and is trusted.
-   *
-   * @param event - The event name
-   * @param args - The event arguments; [payload, sender] by convention
-   * @returns True if the event had listeners, false otherwise
    */
-  emit(event: string, ...args: any[]): boolean {
-    const [payload, sender] = args;
+  emit(event: string, ...args: unknown[]): boolean {
+    const [payload, sender] = args as [unknown, MessageSender];
 
     if (sender) {
-      const { authorizeChannel } = require('./auth/permission-gate');
       const decision = authorizeChannel(event, sender);
       if (!decision.allowed) {
         console.warn(`[messaging] Refused "${event}": ${decision.error}`);
@@ -72,22 +78,12 @@ export class MessagingService extends EventEmitter {
           success: false,
           error: decision.error,
           forbidden: true,
-          requestId: payload?.requestId
+          requestId: (payload as { requestId?: unknown } | null)?.requestId
         }, sender);
         return false;
       }
-    }
-
-    // Record who asked for what. This runs after authorization, so a refused call is never
-    // credited to anyone, and only for messages that carry a sender (real clients).
-    if (sender) {
-      try {
-        const { identifySender } = require('./auth/permission-gate');
-        const { activityLogService } = require('./activity-log.service');
-        activityLogService.noteAction(event, payload, identifySender(sender).user?.username || null);
-      } catch {
-        // The feed is a convenience; never let it stop a message.
-      }
+      // After authorization, so a refused call is never credited to anyone.
+      this.notifyObserver(observer => observer.noteAction(event, payload, identifySender(sender).user?.username || null));
     }
 
     return super.emit(event, ...args);
@@ -97,234 +93,244 @@ export class MessagingService extends EventEmitter {
    * Ask the web server to drop sessions whose rights just changed, so a demoted or deleted
    * user stops acting with their old permissions immediately rather than at next sign-in.
    */
-  invalidateWebSessions(filter: { userId?: string; roleId?: string }) {
-    this.apiProcess?.send?.({ type: 'invalidate-sessions', ...filter });
+  invalidateWebSessions(filter: { userId?: string; roleId?: string }): void {
+    this.sendToChild({ type: 'invalidate-sessions', ...filter });
   }
 
-  /**
-   * Add a webContents instance for IPC messaging.
-   * @param webContents - The webContents to add for IPC messaging
-   */
-  addWebContents(webContents: any) {
+  addWebContents(webContents: WebContents): void {
     this.webContentsList.add(webContents);
-    
-    // Remove when destroyed
     webContents.on('destroyed', () => {
       this.webContentsList.delete(webContents);
     });
   }
 
-  /**
-   * Attach a WebSocket server to the HTTP server.
-   * @param httpServer - The HTTP server to attach the WebSocket server to
-   */
-  /**
-   * Resolves the account behind a WebSocket handshake. Installed by the web server child,
-   * which owns the session store; unset in the main process, where no sockets are accepted.
-   */
-  public resolveSocketUser: ((request: any) => { user: any; authEnabled: boolean; allowed: boolean }) | null = null;
-
-  attachWebSocketServer(httpServer: HttpServer) {
-    this.wsServer = new WebSocketServer({ server: httpServer, path: '/ws' });
-    this.wsServer.on('connection', (ws: any, request: any) => {
-      ws._cid = randomUUID(); // assign a unique client id
-
-      // Resolve the account from the session cookie. The socket never passes through
-      // Express, so this is the only place a web client's identity can be established;
-      // without it every message would arrive anonymous and be refused.
-      const resolved = this.resolveSocketUser ? this.resolveSocketUser(request) : null;
-      ws._authEnabled = resolved ? resolved.authEnabled : false;
-      ws._user = resolved ? resolved.user : null;
-
-      if (resolved && !resolved.allowed) {
-        ws.send(JSON.stringify({ channel: 'unauthorized', error: 'Sign in to use this connection.' }));
-        ws.close(4401, 'Unauthorized');
-        return;
-      }
-
-      ws.send(JSON.stringify({ channel: 'welcome', cid: ws._cid }));
-      ws.on('message', (data: any) => {
-        try {
-          const { channel, payload } = JSON.parse(data.toString());
-          // Proxy all messages to Electron main process via IPC
-          if (typeof process !== 'undefined' && typeof process.send === 'function') {
-            process.send({
-              type: 'messaging-event',
-              channel,
-              payload,
-              cid: ws._cid,
-              user: ws._user || null,
-              authEnabled: ws._authEnabled !== false
-            });
-          } else {
-            // Fallback: handle locally (for main process or test)
-            this.handleMessage(channel, payload, ws).then((response) => {
-              ws.send(JSON.stringify({ channel, response }));
-            });
-          }
-        } catch (err) {
-          // Ignore JSON parse errors
-        }
-      });
-      ws.on('close', () => {});
-      ws.on('error', (err: any) => {});
+  attachWebSocketServer(httpServer: HttpServer): void {
+    this.wsServer = new WebSocketServer({
+      server: httpServer,
+      path: '/ws',
+      verifyClient: ({ req }: { req: IncomingMessage }) => this.verifyUpgrade(req)
     });
+    this.wsServer.on('connection', (ws: Socket, request: IncomingMessage) => this.acceptSocket(ws, request));
+    // ws re-emits the HTTP server's errors here (EADDRINUSE among them); unheard, one would be
+    // thrown and kill the child after it has already reported the failure.
+    this.wsServer.on('error', (error: Error) => {
+      console.error('[messaging] WebSocket server error:', error.message);
+    });
+
+    // A session is otherwise only checked when its socket sends something, so an idle socket
+    // would keep receiving broadcasts long after the session expired or was signed out.
+    this.stopSessionSweep();
+    this.sessionSweep = setInterval(() => this.closeEndedSessions(), SESSION_SWEEP_MS);
+    this.sessionSweep.unref();
+    this.wsServer.on('close', () => this.stopSessionSweep());
   }
 
-  /**
-   * Send a message to one web client by its connection id, falling back to a broadcast when
-   * the id is unknown — the HTTP /api/message route carries no id, so its replies still
-   * have to reach everyone.
-   * @param cid - The connection id of the intended recipient
-   * @param channel - The channel to send on
-   * @param data - The message data
-   */
-  sendToWebSocket(cid: string | undefined, channel: string, data: any) {
-    if (!cid || !this.wsServer) {
-      this.sendToAllWebSockets(channel, data);
+  private verifyUpgrade(request: IncomingMessage): boolean {
+    if (isSameOriginUpgrade(request)) return true;
+    const { origin, host } = request.headers;
+    const key = `${origin} ${host}`;
+    if (!this.loggedRefusals.has(key) && this.loggedRefusals.size < MAX_LOGGED_REFUSALS) {
+      this.loggedRefusals.add(key);
+      console.warn(`[messaging] Refused a WebSocket from origin "${origin}" to host "${host ?? ''}". ` +
+        'A reverse proxy must pass the Host header or set X-Forwarded-Host.');
+    }
+    return false;
+  }
+
+  private closeEndedSessions(): void {
+    const isSessionLive = this.isSessionLive;
+    if (!isSessionLive) return;
+    this.closeWebSockets(SOCKET_CLOSE.UNAUTHORIZED, 'Session ended',
+      socket => !!socket._sessionToken && !isSessionLive(socket._sessionToken));
+  }
+
+  private stopSessionSweep(): void {
+    if (this.sessionSweep) {
+      clearInterval(this.sessionSweep);
+      this.sessionSweep = null;
+    }
+  }
+
+  private acceptSocket(ws: Socket, request: IncomingMessage): void {
+    ws._cid = randomUUID();
+
+    // The socket never passes through Express, so this is the only place a web client's
+    // identity can be established. Without a resolver nobody can vouch for it: refuse.
+    const identity = this.resolveSocketUser?.(request) ?? { user: null, authEnabled: true, allowed: false };
+    ws._authEnabled = identity.authEnabled;
+    ws._user = identity.user;
+    ws._sessionToken = identity.sessionToken;
+
+    if (!identity.allowed) {
+      ws.send(JSON.stringify({ channel: 'unauthorized', error: 'Sign in to use this connection.' }));
+      ws.close(SOCKET_CLOSE.UNAUTHORIZED, 'Unauthorized');
       return;
     }
-    // Same envelope the broadcast uses; the client reads `data`, so anything else is
-    // silently dropped and the caller waits out its timeout.
-    const message = JSON.stringify({ channel, data });
-    let delivered = false;
-    this.wsServer.clients.forEach((client: any) => {
-      if (client.readyState === 1 && client._cid === cid) {
-        client.send(message);
-        delivered = true;
-      }
-    });
-    if (!delivered) {
-      // The client disconnected between asking and being answered; nothing to do.
-      console.debug(`[messaging] No socket for cid ${cid}; dropping "${channel}" reply.`);
-    }
+
+    ws.send(JSON.stringify({ channel: 'welcome', cid: ws._cid }));
+    ws.on('message', (data: RawData) => this.relayToMain(ws, data));
+    // An 'error' event without a listener is thrown, and would take the web server down.
+    ws.on('error', () => {});
   }
 
-  /**
-   * Handle incoming messages from clients.
-   * @param channel - The channel the message was sent on
-   * @param payload - The message payload
-   * @param sender - The sender of the message
-   * @returns A promise resolving to the response
-   */
-  async handleMessage(channel: string, payload: any, sender: any) {
-    // Emit for listeners in main process with sender context
-    this.emit(channel, payload, sender);
-    // Optionally, handle and return a response
-    return { status: 'received', channel, payload };
-  }
-
-  /**
-   * Send a message to the originator of an event.
-   * @param channel - The channel to send the message on
-   * @param data - The message data
-   * @param sender - The sender of the message
-   */
-  sendToOriginator(channel: string, data: any, sender: any) {
-    if (sender && typeof sender.send === 'function') {
-      // Electron IPC sender
-      sender.send(channel, data);
-    } else {
-      // No valid sender (web API) - send to all WebSocket clients
-      this.sendToAllWebSockets(channel, data);
-    }
-  }
-
-  /**
-   * Broadcast a message to all connected web clients via the API process.
-   * @param channel - The channel to broadcast on
-   * @param data - The message data
-   * @param excludeCid - Optional client ID to exclude from the broadcast
-   */
-  broadcastToWebClients(channel: string, data: any, excludeCid?: string) {
-    if (this.apiProcess) {
-      this.apiProcess.send({ type: 'broadcast-web', channel, data, excludeCid });
-    }
-  }
-
-  /**
-   * Send a message to all renderer processes.
-   * @param channel - The channel to send on
-   * @param data - The message data
-   */
-  sendToAllRenderers(channel: string, data: any) {
-    for (const wc of this.webContentsList) {
-      if (wc && typeof wc.send === 'function') {
-        wc.send(channel, data);
-      }
-    }
-  }
-
-  /**
-   * Send a message to all WebSocket clients.
-   * @param channel - The channel to send on
-   * @param data - The message data
-   * @param excludeCid - Optional client ID to exclude from the broadcast
-   */
-  sendToAllWebSockets(channel: string, data: any, excludeCid?: string) {
-    if (!this.wsServer) {
-      return;
-    }
-    let sent = 0;
-    const clients = Array.from(this.wsServer.clients).filter((client: any) => client.readyState === WebSocket.OPEN);
-    clients.forEach((client: any) => {
-      if (excludeCid && client._cid === excludeCid) return;
-      client.send(JSON.stringify({ channel, data }));
-      sent++;
-    });
-  }
-
-  /**
-   * Send a message to all connected clients.
-   * @param channel - The channel to send on
-   * @param data - The message data
-   */
-  sendToAll(channel: string, data: any) {
-    // The activity feed is built from the events the app already broadcasts, so this is the
-    // one place it needs to observe. It ignores everything except the handful it records.
+  private relayToMain(ws: Socket, data: RawData): void {
+    let message: { channel?: unknown; payload?: unknown } | null;
     try {
-      const { activityLogService } = require('./activity-log.service');
-      activityLogService.recordFromBroadcast(channel, data);
+      message = JSON.parse(data.toString());
     } catch {
-      // The feed is a convenience; a failure here must never stop a broadcast.
+      return;
     }
+    if (typeof message?.channel !== 'string' || typeof process.send !== 'function') {
+      return;
+    }
+    if (ws._sessionToken && this.isSessionLive?.(ws._sessionToken) === false) {
+      ws.close(SOCKET_CLOSE.UNAUTHORIZED, 'Session ended');
+      return;
+    }
+    const event: ChildToMainMessage = {
+      type: 'messaging-event',
+      channel: message.channel,
+      payload: message.payload,
+      cid: ws._cid,
+      user: ws._user || null,
+      authEnabled: ws._authEnabled !== false
+    };
+    process.send(event);
+  }
+
+  /** Send to the one web client with this connection id; without a match the reply is dropped. */
+  sendToWebSocket(cid: string | undefined, channel: string, data: unknown): void {
+    const client = cid ? this.openSockets().find(socket => socket._cid === cid) : undefined;
+    if (!client) {
+      // The client disconnected before its answer arrived, or never had an id. A broadcast
+      // would hand one client's reply to all of them.
+      console.debug(`[messaging] No socket for cid ${cid}; dropping "${channel}" reply.`);
+      return;
+    }
+    client.send(JSON.stringify({ channel, data }));
+  }
+
+  /** Close the open sockets that `matches` selects (all by default). Returns how many were closed. */
+  closeWebSockets(code: number, reason: string, matches: (client: WebSocketClient) => boolean = () => true): number {
+    const doomed = this.openSockets().filter(matches);
+    for (const client of doomed) {
+      client.close(code, reason);
+    }
+    return doomed.length;
+  }
+
+  /** Reply to whoever sent a message. With no sender (main-process code) there is nobody to answer. */
+  sendToOriginator(channel: string, data: unknown, sender: MessageSender): void {
+    if (!sender) {
+      console.debug(`[messaging] No sender for "${channel}"; dropping the reply.`);
+      return;
+    }
+    if (isWebSocketClient(sender)) {
+      sender.send(JSON.stringify({ channel, data }));
+      return;
+    }
+    sender.send(channel, data);
+  }
+
+  broadcastToWebClients(channel: string, data: unknown, excludeCid?: string): void {
+    this.sendToChild({ type: 'broadcast-web', channel, data, excludeCid });
+  }
+
+  sendToAllRenderers(channel: string, data: unknown): void {
+    for (const webContents of this.webContentsList) {
+      webContents.send(channel, data);
+    }
+  }
+
+  sendToAllWebSockets(channel: string, data: unknown, excludeCid?: string): void {
+    const message = JSON.stringify({ channel, data });
+    for (const client of this.openSockets()) {
+      if (!excludeCid || client._cid !== excludeCid) {
+        client.send(message);
+      }
+    }
+  }
+
+  sendToAll(channel: string, data: unknown): void {
+    // The activity feed is built from the events the app already broadcasts, so this is the
+    // one place it needs to observe.
+    this.notifyObserver(observer => observer.recordFromBroadcast(channel, data));
     this.sendToAllRenderers(channel, data);
     this.broadcastToWebClients(channel, data);
   }
 
-   /**
-   * Send a message to all renderers and web clients except the sender.
-   * @param channel The channel to send on
-   * @param data The data to send
-   * @param sender The sender to exclude (webContents or WebSocket)
-   */
-  sendToAllOthers(channel: string, data: any, sender: any) {
-    // Exclude sender renderer if sender is a renderer
-    if (sender && typeof sender.send === 'function' && this.webContentsList.has(sender)) {
-      for (const wc of this.webContentsList) {
-        if (wc && typeof wc.send === 'function' && wc !== sender) {
-          wc.send(channel, data);
-        }
-      }
-    } else {
-      for (const wc of this.webContentsList) {
-        if (wc && typeof wc.send === 'function') {
-          wc.send(channel, data);
-        }
+  /** Send to every renderer and web client except the sender. */
+  sendToAllOthers(channel: string, data: unknown, sender: MessageSender): void {
+    for (const webContents of this.webContentsList) {
+      if (webContents !== sender) {
+        webContents.send(channel, data);
       }
     }
-
-    // Exclude sender WebSocket client if sender has a cid (ws._cid or sender.cid)
-    let excludeCid = undefined;
-    if (sender && sender._cid) {
-      excludeCid = sender._cid;
-    } else if (sender && sender.cid) {
-      excludeCid = sender.cid;
-    }
+    const excludeCid = senderCid(sender);
     this.sendToAllWebSockets(channel, data, excludeCid);
     this.broadcastToWebClients(channel, data, excludeCid);
   }
+
+  private sendToChild(message: MainToChildMessage): void {
+    if (this.apiProcess?.connected) {
+      this.apiProcess.send(message);
+    }
+  }
+
+  private openSockets(): Socket[] {
+    if (!this.wsServer) return [];
+    return Array.from(this.wsServer.clients as Set<Socket>).filter(client => client.readyState === WebSocket.OPEN);
+  }
+
+  private notifyObserver(call: (observer: BusObserver) => void): void {
+    if (!this.observer) return;
+    try {
+      call(this.observer);
+    } catch (error) {
+      // The feed is a convenience; it must never stop a message.
+      console.debug('[messaging] Activity feed failed:', error);
+    }
+  }
 }
 
+/**
+ * Refuses a browser upgrade whose Origin names another host, so a page the operator happens to
+ * visit cannot drive the socket (with authentication off it would act as the desktop owner).
+ * No Origin means a non-browser client, which the session cookie still gates. X-Forwarded-Host
+ * covers a reverse proxy that rewrites Host; a page cannot set that header on a WebSocket.
+ */
+export function isSameOriginUpgrade(request: IncomingMessage): boolean {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return false;
+  }
+  const forwarded = request.headers['x-forwarded-host'];
+  const forwardedHost = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0].trim();
+  return [request.headers.host, forwardedHost].some(host => !!host && hostMatches(originUrl, host));
+}
+
+// Parsing the Host value under the origin's scheme normalises case and default ports alike.
+function hostMatches(origin: URL, host: string): boolean {
+  try {
+    return new URL(`${origin.protocol}//${host}`).host === origin.host;
+  } catch {
+    return false;
+  }
+}
+
+function isWebSocketClient(sender: NonNullable<MessageSender>): sender is WebSocketClient {
+  return 'readyState' in sender;
+}
+
+function senderCid(sender: MessageSender): string | undefined {
+  if (!sender) return undefined;
+  if (isWebSocketClient(sender)) return sender._cid;
+  return (sender as ApiProcessSender).type === 'api-process' ? (sender as ApiProcessSender).cid : undefined;
+}
 
 export const messagingService = new MessagingService();

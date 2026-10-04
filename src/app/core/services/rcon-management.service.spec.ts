@@ -31,12 +31,6 @@ describe('RconManagementService', () => {
     expect(service.getKnownCommands()).toEqual(service.knownRconCommands);
   });
 
-  it('should validate command', () => {
-    expect(service.isValidCommand('ListPlayers')).toBeTrue();
-    expect(service.isValidCommand('')).toBeFalse();
-    expect(service.isValidCommand('   ')).toBeFalse();
-  });
-
   it('should subscribe to RCON status', () => {
     const obs = service.subscribeToRconStatus();
     expect(messagingMock.receiveMessage).toHaveBeenCalledWith('rcon-status');

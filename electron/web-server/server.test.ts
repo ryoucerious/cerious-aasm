@@ -1,129 +1,49 @@
-import { startWebServer } from '../web-server/server';
+import { startWebServer } from './server';
+import { initializeAuth } from './auth-config';
+import { createApp, getServerPort, startServer } from './server-setup';
 
-// Mock dependencies
-jest.mock('../web-server/auth-config');
-jest.mock('../web-server/server-setup');
+jest.mock('./auth-config', () => ({ initializeAuth: jest.fn() }));
+jest.mock('./server-setup', () => ({ createApp: jest.fn(), getServerPort: jest.fn(), startServer: jest.fn() }));
 
-const mockAuthConfig = require('../web-server/auth-config');
-const mockServerSetup = require('../web-server/server-setup');
-
-describe('server', () => {
-  let consoleErrorSpy: jest.SpyInstance;
-  let processExitSpy: jest.SpyInstance;
+describe('startWebServer', () => {
+  let exit: jest.SpyInstance;
+  let on: jest.SpyInstance;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup console.error spy
-    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-
-    // Setup process.exit spy
-    processExitSpy = jest.spyOn(process, 'exit').mockImplementation();
-
-    // Setup default mocks
-    mockAuthConfig.initializeAuth = jest.fn().mockResolvedValue(undefined);
-    mockServerSetup.createApp = jest.fn().mockReturnValue('mock-app');
-    mockServerSetup.getServerPort = jest.fn().mockReturnValue(3000);
-    mockServerSetup.startServer = jest.fn();
+    exit = jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    on = jest.spyOn(process, 'on').mockImplementation(() => process);
+    jest.mocked(initializeAuth).mockResolvedValue(undefined);
+    jest.mocked(createApp).mockReturnValue('app' as never);
+    jest.mocked(getServerPort).mockReturnValue(3000);
   });
 
-  afterEach(() => {
-    consoleErrorSpy.mockRestore();
-    processExitSpy.mockRestore();
+  it('loads the login, then starts listening', async () => {
+    await startWebServer();
+
+    expect(jest.mocked(initializeAuth).mock.invocationCallOrder[0])
+      .toBeLessThan(jest.mocked(startServer).mock.invocationCallOrder[0]);
+    expect(startServer).toHaveBeenCalledWith('app', 3000);
+    expect(exit).not.toHaveBeenCalled();
   });
 
-  describe('startWebServer', () => {
-    it('should initialize auth, create app, and start server successfully', async () => {
-      await startWebServer();
+  it('exits when main goes away, so the port is not held by an orphan', async () => {
+    await startWebServer();
 
-      expect(mockAuthConfig.initializeAuth).toHaveBeenCalled();
-      expect(mockServerSetup.createApp).toHaveBeenCalled();
-      expect(mockServerSetup.getServerPort).toHaveBeenCalled();
-      expect(mockServerSetup.startServer).toHaveBeenCalledWith('mock-app', 3000);
+    const [, onDisconnect] = on.mock.calls.find(([event]) => event === 'disconnect')!;
+    onDisconnect();
 
-      expect(consoleErrorSpy).not.toHaveBeenCalled();
-      expect(processExitSpy).not.toHaveBeenCalled();
-    });
-
-    it('should handle auth initialization errors', async () => {
-      const testError = new Error('Auth init failed');
-      mockAuthConfig.initializeAuth.mockRejectedValue(testError);
-
-      await startWebServer();
-
-      expect(mockAuthConfig.initializeAuth).toHaveBeenCalled();
-      expect(mockServerSetup.createApp).not.toHaveBeenCalled();
-      expect(mockServerSetup.getServerPort).not.toHaveBeenCalled();
-      expect(mockServerSetup.startServer).not.toHaveBeenCalled();
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith('[Web Server] Failed to start:', testError);
-      expect(processExitSpy).toHaveBeenCalledWith(1);
-    });
-
-    it('should handle app creation errors', async () => {
-      const testError = new Error('App creation failed');
-      mockServerSetup.createApp.mockImplementation(() => {
-        throw testError;
-      });
-
-      await startWebServer();
-
-      expect(mockAuthConfig.initializeAuth).toHaveBeenCalled();
-      expect(mockServerSetup.createApp).toHaveBeenCalled();
-      expect(mockServerSetup.getServerPort).not.toHaveBeenCalled();
-      expect(mockServerSetup.startServer).not.toHaveBeenCalled();
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith('[Web Server] Failed to start:', testError);
-      expect(processExitSpy).toHaveBeenCalledWith(1);
-    });
-
-    it('should handle port retrieval errors', async () => {
-      const testError = new Error('Port retrieval failed');
-      mockServerSetup.getServerPort.mockImplementation(() => {
-        throw testError;
-      });
-
-      await startWebServer();
-
-      expect(mockAuthConfig.initializeAuth).toHaveBeenCalled();
-      expect(mockServerSetup.createApp).toHaveBeenCalled();
-      expect(mockServerSetup.getServerPort).toHaveBeenCalled();
-      expect(mockServerSetup.startServer).not.toHaveBeenCalled();
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith('[Web Server] Failed to start:', testError);
-      expect(processExitSpy).toHaveBeenCalledWith(1);
-    });
-
-    it('should handle server startup errors', async () => {
-      const testError = new Error('Server startup failed');
-      mockServerSetup.startServer.mockImplementation(() => {
-        throw testError;
-      });
-
-      await startWebServer();
-
-      expect(mockAuthConfig.initializeAuth).toHaveBeenCalled();
-      expect(mockServerSetup.createApp).toHaveBeenCalled();
-      expect(mockServerSetup.getServerPort).toHaveBeenCalled();
-      expect(mockServerSetup.startServer).toHaveBeenCalledWith('mock-app', 3000);
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith('[Web Server] Failed to start:', testError);
-      expect(processExitSpy).toHaveBeenCalledWith(1);
-    });
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
-  describe('module execution', () => {
-    it('should export startWebServer function', () => {
-      expect(typeof startWebServer).toBe('function');
-    });
-  });
+  it.each([
+    ['loading the login', () => jest.mocked(initializeAuth).mockRejectedValue(new Error('boom'))],
+    ['starting the server', () => jest.mocked(startServer).mockImplementation(() => { throw new Error('boom'); })]
+  ])('exits with an error when %s fails', async (_step, fail) => {
+    fail();
 
-  describe('exports', () => {
-    it('should export auth functions', () => {
-      const serverModule = require('../web-server/server');
+    await startWebServer();
 
-      expect(serverModule.updateAuthConfig).toBe(mockAuthConfig.updateAuthConfig);
-      expect(serverModule.hashPassword).toBe(mockAuthConfig.hashPassword);
-    });
+    expect(console.error).toHaveBeenCalledWith('[web-server] Failed to start:', expect.any(Error));
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });

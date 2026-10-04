@@ -1,49 +1,74 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ModalComponent } from './modal.component';
-import { MessagingService } from '../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../core/services/notification.service';
-import { ServerInstanceService } from '../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
 
 describe('ModalComponent', () => {
   let component: ModalComponent;
   let fixture: ComponentFixture<ModalComponent>;
+  let closed: jasmine.Spy;
+
+  const backdrop = () => fixture.nativeElement.querySelector('.modal-backdrop') as HTMLElement;
+  const dialog = () => fixture.nativeElement.querySelector('.modal') as HTMLElement;
+
+  function pressEscape(): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    return event;
+  }
+
+  function click(pressOn: HTMLElement, releaseOn: HTMLElement): void {
+    pressOn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    releaseOn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }
 
   beforeEach(async () => {
-    await TestBed.configureTestingModule({
-      imports: [ModalComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
-    }).compileComponents();
+    await TestBed.configureTestingModule({ imports: [ModalComponent] }).compileComponents();
     fixture = TestBed.createComponent(ModalComponent);
     component = fixture.componentInstance;
-    // Provide required @Input() values if any
-    component.show = true;
+    fixture.componentRef.setInput('title', 'Confirm Delete');
+    fixture.componentRef.setInput('show', true);
     fixture.detectChanges();
+    closed = jasmine.createSpy('close');
+    component.close.subscribe(closed);
   });
 
-  it('should create', () => {
-    expect(component).toBeTruthy();
+  it('is announced as a modal dialog named by its title', () => {
+    expect(dialog().getAttribute('role')).toBe('dialog');
+    expect(dialog().getAttribute('aria-modal')).toBe('true');
+    const title = document.getElementById(dialog().getAttribute('aria-labelledby') || '');
+    expect(title?.textContent).toContain('Confirm Delete');
   });
 
-  it('should emit close event', () => {
-    spyOn(component.close, 'emit');
-    component.close.emit();
-    expect(component.close.emit).toHaveBeenCalled();
+  it('closes on Escape and marks the key handled', () => {
+    const event = pressEscape();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBeTrue();
   });
 
-  it('should accept input properties', () => {
-    component.title = 'Test Title';
-    component.show = true;
-    expect(component.title).toBe('Test Title');
-    expect(component.show).toBeTrue();
+  it('leaves an Escape that something inside it already handled', () => {
+    dialog().addEventListener('keydown', event => event.preventDefault(), { once: true });
+    dialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('ignores Escape while hidden', () => {
+    fixture.componentRef.setInput('show', false);
+    fixture.detectChanges();
+    pressEscape();
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('closes on a click on the backdrop', () => {
+    click(backdrop(), backdrop());
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open for a click inside the dialog', () => {
+    click(dialog(), dialog());
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('stays open when a press inside the dialog is released over the backdrop', () => {
+    click(dialog(), backdrop());
+    expect(closed).not.toHaveBeenCalled();
   });
 });

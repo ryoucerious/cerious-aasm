@@ -1,121 +1,60 @@
 import { messagingService } from '../services/messaging.service';
 import { arkApiPluginService } from '../services/ark-api-plugin.service';
+import { isDesktopWindow } from '../services/auth/permission-gate';
+import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { validateInstanceId } from '../utils/validation.utils';
+import { onRequest } from './handler.utils';
 
-/**
- * Check whether AsaApiLoader.exe is installed for an instance.
- * Payload: { instanceId, requestId }
- */
-messagingService.on('get-asaapi-status', async (payload: any, sender: any) => {
-  const { instanceId, requestId } = payload || {};
-  try {
-    const { isAsaApiLoaderInstalled } = require('../utils/ark/ark-server/ark-server-paths.utils');
-    const installed = !!instanceId && isAsaApiLoaderInstalled(instanceId);
-    messagingService.sendToOriginator('get-asaapi-status', {
-      success: true,
-      installed,
-      loaderExe: installed ? 'AsaApiLoader.exe' : null,
-      requestId
-    }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] get-asaapi-status error:', errorMsg);
-    messagingService.sendToOriginator('get-asaapi-status', { success: false, error: errorMsg, requestId }, sender);
-  }
+const INVALID_ID = { success: false, error: 'Invalid instance ID' };
+
+onRequest('get-asaapi-status', payload => {
+  const { instanceId } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  const installed = isAsaApiLoaderInstalled(instanceId);
+  return { success: true, installed, loaderExe: installed ? 'AsaApiLoader.exe' : null };
 });
 
-/**
- * List installed ArkApi plugins for a server instance.
- * Payload: { instanceId, requestId }
- */
-messagingService.on('list-ark-api-plugins', async (payload: any, sender: any) => {
-  const { instanceId, requestId } = payload || {};
-  try {
-    const plugins = arkApiPluginService.listPlugins(instanceId);
-    messagingService.sendToOriginator('list-ark-api-plugins', { success: true, plugins, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] list-ark-api-plugins error:', errorMsg);
-    messagingService.sendToOriginator('list-ark-api-plugins', { success: false, error: errorMsg, requestId }, sender);
-  }
+onRequest('list-ark-api-plugins', payload => {
+  const { instanceId } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  return { success: true, plugins: arkApiPluginService.listPlugins(instanceId) };
 });
 
-/**
- * Remove (uninstall) an ArkApi plugin.
- * Payload: { instanceId, folderName, requestId }
- */
-messagingService.on('remove-ark-api-plugin', async (payload: any, sender: any) => {
-  const { instanceId, folderName, requestId } = payload || {};
-  try {
-    arkApiPluginService.removePlugin(instanceId, folderName);
-    messagingService.sendToOriginator('remove-ark-api-plugin', { success: true, folderName, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] remove-ark-api-plugin error:', errorMsg);
-    messagingService.sendToOriginator('remove-ark-api-plugin', { success: false, error: errorMsg, requestId }, sender);
-  }
+onRequest('remove-ark-api-plugin', payload => {
+  const { instanceId, folderName } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  arkApiPluginService.removePlugin(instanceId, folderName);
+  return { success: true, folderName };
 });
 
-/**
- * Fetch the latest AsaApi release metadata from GitHub.
- * Payload: { requestId }
- */
-messagingService.on('get-asaapi-latest', async (payload: any, sender: any) => {
-  const { requestId } = payload || {};
-  try {
-    const release = await arkApiPluginService.getLatestAsaApiRelease();
-    messagingService.sendToOriginator('get-asaapi-latest', { success: true, ...release, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] get-asaapi-latest error:', errorMsg);
-    messagingService.sendToOriginator('get-asaapi-latest', { success: false, error: errorMsg, requestId }, sender);
-  }
+onRequest('get-asaapi-latest', async () => {
+  const release = await arkApiPluginService.getLatestAsaApiRelease();
+  return { success: true, ...release };
 });
 
-/**
- * Download and install AsaApi for a server instance.
- * Payload: { instanceId, downloadUrl, requestId }
- */
-messagingService.on('download-asaapi', async (payload: any, sender: any) => {
-  const { instanceId, downloadUrl, requestId } = payload || {};
-  try {
-    messagingService.sendToOriginator('download-asaapi-progress', { status: 'downloading', requestId }, sender);
-    await arkApiPluginService.downloadAsaApi(instanceId, downloadUrl);
-    messagingService.sendToOriginator('download-asaapi', { success: true, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] download-asaapi error:', errorMsg);
-    messagingService.sendToOriginator('download-asaapi', { success: false, error: errorMsg, requestId }, sender);
-  }
+onRequest('download-asaapi', async (payload, { sender, requestId }) => {
+  const { instanceId, downloadUrl } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  messagingService.sendToOriginator('download-asaapi-progress', { status: 'downloading', requestId }, sender);
+  await arkApiPluginService.downloadAsaApi(instanceId, downloadUrl);
+  return { success: true };
 });
 
-/**
- * Install a plugin from a local ZIP file path (Electron exposes file.path on File objects).
- * Payload: { instanceId, zipPath, requestId }
- */
-messagingService.on('install-plugin-from-zip', async (payload: any, sender: any) => {
-  const { instanceId, zipPath, requestId } = payload || {};
-  try {
-    arkApiPluginService.installPluginFromZipPath(instanceId, zipPath);
-    messagingService.sendToOriginator('install-plugin-from-zip', { success: true, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] install-plugin-from-zip error:', errorMsg);
-    messagingService.sendToOriginator('install-plugin-from-zip', { success: false, error: errorMsg, requestId }, sender);
+// The desktop hands over the dropped file's path (Electron's File.path). A web client could name
+// any ZIP on the host, so it has to use a download URL.
+onRequest('install-plugin-from-zip', (payload, { sender }) => {
+  const { instanceId, zipPath } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  if (!isDesktopWindow(sender)) {
+    return { success: false, error: 'Only the desktop app can install a plugin from a file path. Use a download URL instead.' };
   }
+  arkApiPluginService.installPluginFromZipPath(instanceId, zipPath);
+  return { success: true };
 });
 
-/**
- * Install a plugin by downloading a ZIP from a URL.
- * Payload: { instanceId, url, requestId }
- */
-messagingService.on('install-plugin-from-url', async (payload: any, sender: any) => {
-  const { instanceId, url, requestId } = payload || {};
-  try {
-    await arkApiPluginService.installPluginFromUrl(instanceId, url);
-    messagingService.sendToOriginator('install-plugin-from-url', { success: true, requestId }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[ark-api-handler] install-plugin-from-url error:', errorMsg);
-    messagingService.sendToOriginator('install-plugin-from-url', { success: false, error: errorMsg, requestId }, sender);
-  }
+onRequest('install-plugin-from-url', async payload => {
+  const { instanceId, url } = payload;
+  if (!validateInstanceId(instanceId)) return INVALID_ID;
+  await arkApiPluginService.installPluginFromUrl(instanceId, url);
+  return { success: true };
 });

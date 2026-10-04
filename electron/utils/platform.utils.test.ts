@@ -1,38 +1,21 @@
 import * as os from 'os';
 import * as path from 'path';
-import { app } from 'electron';
+import * as fs from 'fs';
 import {
   getPlatform,
-  isWindows,
-  isLinux,
   getDefaultInstallDir,
-  getUserDataPath,
-  getHomeDir,
-  getTempDir,
-  getArchitecture,
   getTotalMemory,
   getFreeMemory,
   getProcessMemoryUsage,
   getProcessCpuSeconds,
   parseTasklistVerbose,
   parseDirFreeBytes,
-  clearProcessStatsCache,
-  getCpuInfo,
-  getUptime,
-  getNetworkInterfaces,
-  getEnvironmentPaths
+  isRunningInDocker
 } from '../utils/platform.utils';
 
-// Mock dependencies
 jest.mock('os');
 jest.mock('path');
-jest.mock('electron', () => ({
-  app: {
-    getPath: jest.fn()
-  }
-}));
 
-// Mock child_process module
 jest.mock('child_process', () => ({
   execSync: jest.fn(),
   execFile: jest.fn()
@@ -57,9 +40,7 @@ function mockExecFileFailure(error: Error): void {
 
 const mockOs = os as jest.Mocked<typeof os>;
 const mockPath = path as jest.Mocked<typeof path>;
-const mockApp = app as jest.Mocked<typeof app>;
 
-// Mock process.platform
 const originalPlatform = process.platform;
 Object.defineProperty(process, 'platform', {
   writable: true,
@@ -69,7 +50,6 @@ Object.defineProperty(process, 'platform', {
 describe('Platform Utils', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    // Reset process.platform to original value
     (process as any).platform = originalPlatform;
   });
 
@@ -87,30 +67,6 @@ describe('Platform Utils', () => {
     it('should throw error for unsupported platforms', () => {
       (process as any).platform = 'darwin';
       expect(() => getPlatform()).toThrow('Only Windows and Linux are supported. Current platform: darwin');
-    });
-  });
-
-  describe('isWindows', () => {
-    it('should return true when platform is windows', () => {
-      (process as any).platform = 'win32';
-      expect(isWindows()).toBe(true);
-    });
-
-    it('should return false when platform is not windows', () => {
-      (process as any).platform = 'linux';
-      expect(isWindows()).toBe(false);
-    });
-  });
-
-  describe('isLinux', () => {
-    it('should return true when platform is linux', () => {
-      (process as any).platform = 'linux';
-      expect(isLinux()).toBe(true);
-    });
-
-    it('should return false when platform is not linux', () => {
-      (process as any).platform = 'win32';
-      expect(isLinux()).toBe(false);
     });
   });
 
@@ -147,52 +103,6 @@ describe('Platform Utils', () => {
     });
   });
 
-  describe('getUserDataPath', () => {
-    it('should return Windows path when on Windows', () => {
-      (process as any).platform = 'win32';
-      mockApp.getPath.mockReturnValue('C:\\Users\\Test\\AppData\\Roaming');
-      mockPath.join.mockReturnValue('C:\\Users\\Test\\AppData\\Roaming\\Cerious AASM');
-
-      const result = getUserDataPath(mockApp);
-      expect(result).toBe('C:\\Users\\Test\\AppData\\Roaming\\Cerious AASM');
-      expect(mockApp.getPath).toHaveBeenCalledWith('appData');
-    });
-
-    it('should return Linux path when on Linux', () => {
-      (process as any).platform = 'linux';
-      mockOs.homedir.mockReturnValue('/home/test');
-      mockPath.join.mockReturnValue('/home/test/.local/share/cerious-aasm');
-
-      const result = getUserDataPath(mockApp);
-      expect(result).toBe('/home/test/.local/share/cerious-aasm');
-      expect(mockApp.getPath).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('getHomeDir', () => {
-    it('should return the home directory', () => {
-      mockOs.homedir.mockReturnValue('/home/test');
-      expect(getHomeDir()).toBe('/home/test');
-      expect(mockOs.homedir).toHaveBeenCalled();
-    });
-  });
-
-  describe('getTempDir', () => {
-    it('should return the temp directory', () => {
-      mockOs.tmpdir.mockReturnValue('/tmp');
-      expect(getTempDir()).toBe('/tmp');
-      expect(mockOs.tmpdir).toHaveBeenCalled();
-    });
-  });
-
-  describe('getArchitecture', () => {
-    it('should return the system architecture', () => {
-      mockOs.arch.mockReturnValue('x64');
-      expect(getArchitecture()).toBe('x64');
-      expect(mockOs.arch).toHaveBeenCalled();
-    });
-  });
-
   describe('getTotalMemory', () => {
     it('should return total system memory', () => {
       mockOs.totalmem.mockReturnValue(8589934592); // 8GB
@@ -206,58 +116,6 @@ describe('Platform Utils', () => {
       mockOs.freemem.mockReturnValue(4294967296); // 4GB
       expect(getFreeMemory()).toBe(4294967296);
       expect(mockOs.freemem).toHaveBeenCalled();
-    });
-  });
-
-  describe('getCpuInfo', () => {
-    it('should return CPU information', () => {
-      const mockCpus = [{ model: 'Intel Core i7', speed: 3200, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }];
-      mockOs.cpus.mockReturnValue(mockCpus as any);
-
-      const result = getCpuInfo();
-      expect(result).toEqual(mockCpus);
-      expect(mockOs.cpus).toHaveBeenCalled();
-    });
-  });
-
-  describe('getUptime', () => {
-    it('should return system uptime', () => {
-      mockOs.uptime.mockReturnValue(3600); // 1 hour
-      expect(getUptime()).toBe(3600);
-      expect(mockOs.uptime).toHaveBeenCalled();
-    });
-  });
-
-  describe('getNetworkInterfaces', () => {
-    it('should return network interfaces', () => {
-      const mockInterfaces = {
-        eth0: [{ address: '192.168.1.100', family: 'IPv4', netmask: '255.255.255.0', mac: '00:00:00:00:00:00', internal: false, cidr: '192.168.1.100/24' }]
-      };
-      mockOs.networkInterfaces.mockReturnValue(mockInterfaces as any);
-
-      const result = getNetworkInterfaces();
-      expect(result).toEqual(mockInterfaces as any);
-      expect(mockOs.networkInterfaces).toHaveBeenCalled();
-    });
-  });
-
-  describe('getEnvironmentPaths', () => {
-    it('should return all environment paths', () => {
-      (process as any).platform = 'linux';
-      mockOs.homedir.mockReturnValue('/home/test');
-      mockOs.tmpdir.mockReturnValue('/tmp');
-      mockOs.arch.mockReturnValue('x64');
-      mockPath.join.mockReturnValue('/home/test/.local/share/cerious-aasm');
-
-      const result = getEnvironmentPaths();
-
-      expect(result).toEqual({
-        home: '/home/test',
-        temp: '/tmp',
-        installDir: '/home/test/.local/share/cerious-aasm',
-        platform: 'linux',
-        arch: 'x64'
-      });
     });
   });
 
@@ -320,10 +178,10 @@ describe('Platform Utils', () => {
   describe('getProcessMemoryUsage', () => {
     const verboseRow = '"ShooterGameServer.exe","1234","Console","1","15,234 K","Running","HOST\\user","0:02:03","N/A"';
 
+    // Readings are cached per PID for two seconds, so every test asks about a PID of its own.
+    let pid = 1000;
     beforeEach(() => {
-      mockExecSync.mockClear();
-      mockExecFile.mockClear();
-      clearProcessStatsCache();
+      pid += 1;
     });
 
     describe('on Windows', () => {
@@ -334,10 +192,10 @@ describe('Platform Utils', () => {
       it('should return memory usage in MB for valid Windows tasklist output', async () => {
         mockExecFileStdout(verboseRow);
 
-        await expect(getProcessMemoryUsage(1234)).resolves.toBe(15); // 15,234 KB = 15 MB (rounded)
+        await expect(getProcessMemoryUsage(pid)).resolves.toBe(15); // 15,234 KB = 15 MB (rounded)
         expect(mockExecFile).toHaveBeenCalledWith(
           'tasklist',
-          ['/FI', 'PID eq 1234', '/FO', 'CSV', '/NH', '/V'],
+          ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH', '/V'],
           expect.objectContaining({ windowsHide: true }),
           expect.any(Function)
         );
@@ -346,7 +204,7 @@ describe('Platform Utils', () => {
       it('should not shell out to PowerShell', async () => {
         mockExecFileStdout(verboseRow);
 
-        await getProcessMemoryUsage(1234);
+        await getProcessMemoryUsage(pid);
         expect(mockExecFile.mock.calls[0][0]).toBe('tasklist');
         expect(mockExecSync).not.toHaveBeenCalled();
       });
@@ -354,21 +212,21 @@ describe('Platform Utils', () => {
       it('should reuse one lookup for the memory and CPU pollers', async () => {
         mockExecFileStdout(verboseRow);
 
-        await expect(getProcessMemoryUsage(1234)).resolves.toBe(15);
-        await expect(getProcessCpuSeconds(1234)).resolves.toBe(123);
+        await expect(getProcessMemoryUsage(pid)).resolves.toBe(15);
+        await expect(getProcessCpuSeconds(pid)).resolves.toBe(123);
         expect(mockExecFile).toHaveBeenCalledTimes(1);
       });
 
       it('should return null when process not found', async () => {
         mockExecFileStdout('INFO: No tasks are running which match the specified criteria.');
 
-        await expect(getProcessMemoryUsage(9999)).resolves.toBeNull();
+        await expect(getProcessMemoryUsage(pid)).resolves.toBeNull();
       });
 
       it('should return null when the command fails', async () => {
         mockExecFileFailure(new Error('Command failed'));
 
-        await expect(getProcessMemoryUsage(1234)).resolves.toBeNull();
+        await expect(getProcessMemoryUsage(pid)).resolves.toBeNull();
       });
     });
 
@@ -378,17 +236,61 @@ describe('Platform Utils', () => {
       });
 
       it('should return null for Linux (memory monitoring not supported)', async () => {
-        await expect(getProcessMemoryUsage(1234)).resolves.toBeNull();
+        await expect(getProcessMemoryUsage(pid)).resolves.toBeNull();
         expect(mockExecFile).not.toHaveBeenCalled();
         expect(mockExecSync).not.toHaveBeenCalled();
       });
 
+      // The tracked pid is xvfb-run or Proton; the CPU is spent by the Wine processes they start.
+      // The server is spawned detached, so all of them share the pid as their process group.
+      it('should sum CPU time over the whole process group', async () => {
+        const stat = (id: number, comm: string, pgrp: number, utime: number, stime: number) =>
+          `${id} (${comm}) S 1 ${pgrp} ${pgrp} 0 -1 4194560 0 0 0 0 ${utime} ${stime} 0 0 20 0 1 0 100 0 0`;
+        const stats: Record<string, string> = {
+          [`/proc/${pid}/stat`]: stat(pid, 'xvfb-run', pid, 10, 5),
+          '/proc/5240/stat': stat(5240, 'proton', pid, 20, 5),
+          '/proc/5300/stat': stat(5300, 'ArkAscendedServer.exe', pid, 900, 100),
+          '/proc/6000/stat': stat(6000, 'other game', 6000, 5000, 5000)
+        };
+        (fs.readdirSync as jest.Mock).mockReturnValue(['1', String(pid), '5240', '5300', '6000', '999', 'self', 'cpuinfo']);
+        (fs.readFileSync as jest.Mock).mockImplementation((file: string) => {
+          if (file in stats) return stats[file];
+          throw new Error('ENOENT');
+        });
+
+        await expect(getProcessCpuSeconds(pid)).resolves.toBe(10.4);
+      });
+
       it('should never invoke Windows tooling to read CPU time', async () => {
-        // /proc/1234/stat does not exist on the test host, so this exercises the failure path
+        // /proc/<pid>/stat does not exist on the test host, so this exercises the failure path
         // while proving no subprocess is spawned for it.
-        await expect(getProcessCpuSeconds(1234)).resolves.toBeNull();
+        await expect(getProcessCpuSeconds(pid)).resolves.toBeNull();
         expect(mockExecFile).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('isRunningInDocker', () => {
+    const originalFlag = process.env.AASM_DOCKER;
+
+    afterEach(() => {
+      if (originalFlag === undefined) delete process.env.AASM_DOCKER;
+      else process.env.AASM_DOCKER = originalFlag;
+    });
+
+    it('trusts the flag the image sets', () => {
+      process.env.AASM_DOCKER = '1';
+
+      expect(isRunningInDocker()).toBe(true);
+      expect(fs.existsSync).not.toHaveBeenCalled();
+    });
+
+    it.each([[true, true], [false, false]])('otherwise looks for /.dockerenv (present: %p)', (present, expected) => {
+      delete process.env.AASM_DOCKER;
+      jest.mocked(fs.existsSync).mockReturnValue(present);
+
+      expect(isRunningInDocker()).toBe(expected);
+      expect(fs.existsSync).toHaveBeenCalledWith('/.dockerenv');
     });
   });
 });

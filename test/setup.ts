@@ -1,9 +1,7 @@
 import { jest } from '@jest/globals';
 
-// Increase the Node.js process event listener limit to 20
 process.setMaxListeners(20);
 
-// Mock Electron APIs
 jest.mock('electron', () => ({
   app: {
     getPath: jest.fn((name: string) => `/mock/path/${name}`),
@@ -37,31 +35,17 @@ jest.mock('electron', () => ({
     handle: jest.fn(),
     removeAllListeners: jest.fn(),
   },
-  ipcRenderer: {
-    on: jest.fn(),
-    send: jest.fn(),
-    invoke: jest.fn(),
-  },
   dialog: {
     showOpenDialog: jest.fn(),
     showSaveDialog: jest.fn(),
     showMessageBox: jest.fn(),
   },
-  Menu: {
-    setApplicationMenu: jest.fn(),
-    buildFromTemplate: jest.fn(),
-  },
   shell: {
     openExternal: jest.fn(),
     showItemInFolder: jest.fn(),
   },
-  nativeTheme: {
-    shouldUseDarkColors: false,
-    on: jest.fn(),
-  },
 }));
 
-// Mock child_process
 jest.mock('child_process', () => ({
   fork: jest.fn(),
   spawn: jest.fn(),
@@ -69,7 +53,6 @@ jest.mock('child_process', () => ({
   execSync: jest.fn(),
 }));
 
-// Mock fs
 jest.mock('fs', () => ({
   existsSync: jest.fn(),
   readFileSync: jest.fn(),
@@ -82,7 +65,9 @@ jest.mock('fs', () => ({
   rmSync: jest.fn(),
   renameSync: jest.fn(),
   copyFileSync: jest.fn(),
-  // Async versions
+  openSync: jest.fn(),
+  fsyncSync: jest.fn(),
+  closeSync: jest.fn(),
   readFile: jest.fn(),
   writeFile: jest.fn(),
   mkdir: jest.fn(),
@@ -101,7 +86,6 @@ jest.mock('fs', () => ({
   },
 }));
 
-// Mock fs-extra
 jest.mock('fs-extra', () => ({
   pathExists: jest.fn(),
   readFile: jest.fn(),
@@ -111,21 +95,32 @@ jest.mock('fs-extra', () => ({
   copy: jest.fn(),
 }));
 
-// Mock path
-jest.mock('path', () => ({
-  join: jest.fn((...args: string[]) => args.join('/')),
-  dirname: jest.fn((p: string) => p.split('/').slice(0, -1).join('/')),
-  basename: jest.fn((p: string) => p.split('/').pop()),
-  extname: jest.fn((p: string) => {
-    const parts = p.split('.');
-    return parts.length > 1 ? '.' + parts.pop() : '';
-  }),
-  resolve: jest.fn((...args: string[]) => args.join('/')),
-}));
+// join and resolve stay plain '/'-joins because many tests assert exact joined paths;
+// relative/isAbsolute use the real posix rules so containment checks behave.
+jest.mock('path', () => {
+  const posix = (jest.requireActual('path') as typeof import('path')).posix;
+  return {
+    sep: '/',
+    join: jest.fn((...args: string[]) => args.join('/')),
+    dirname: jest.fn((p: string) => p.split('/').slice(0, -1).join('/')),
+    basename: jest.fn((p: string) => p.split('/').pop()),
+    extname: jest.fn((p: string) => {
+      const parts = p.split('.');
+      return parts.length > 1 ? '.' + parts.pop() : '';
+    }),
+    resolve: jest.fn((...args: string[]) => args.join('/')),
+    relative: jest.fn((from: string, to: string) => posix.relative(from, to)),
+    isAbsolute: jest.fn((p: string) => posix.isAbsolute(p)),
+  };
+});
 
-// Mock crypto
 jest.mock('crypto', () => ({
   randomBytes: jest.fn((size: number) => Buffer.alloc(size, 'mock-random-bytes')),
+  randomUUID: jest.fn(() => (jest.requireActual('crypto') as typeof import('crypto')).randomUUID()),
+  randomInt: jest.fn((min: number, max?: number) => {
+    const actual = jest.requireActual('crypto') as typeof import('crypto');
+    return max === undefined ? actual.randomInt(min) : actual.randomInt(min, max);
+  }),
   createHash: jest.fn(() => ({
     update: jest.fn().mockReturnThis(),
     digest: jest.fn(() => 'mock-hash'),
@@ -142,51 +137,16 @@ jest.mock('crypto', () => ({
   })),
 }));
 
-// Mock bcrypt
+// Real cost-12 hashes take a quarter second each, and auth-config.test relies on the
+// predictable `hashed_` output.
 jest.mock('bcrypt', () => ({
   hash: jest.fn((password: string, saltRounds: number) => Promise.resolve(`hashed_${password}`)),
   compare: jest.fn((password: string, hash: string) => Promise.resolve(true)),
   genSalt: jest.fn((rounds: number) => Promise.resolve('mock_salt')),
 }));
 
-// Global test utilities
-declare global {
-  var testUtils: {
-    mockFn: () => jest.MockedFunction<any>;
-    wait: (ms: number) => Promise<void>;
-    mockProcess: {
-      send: jest.MockedFunction<any>;
-      on: jest.MockedFunction<any>;
-      exit: jest.MockedFunction<any>;
-    };
-    resetAllMocks: () => void;
-  };
-}
-
-global.testUtils = {
-  // Helper to create mock functions with jest
-  mockFn: () => jest.fn(),
-
-  // Helper to wait for async operations
-  wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
-
-  // Helper to mock process methods
-  mockProcess: {
-    send: jest.fn(),
-    on: jest.fn(),
-    exit: jest.fn(),
-  },
-
-  // Helper to reset all mocks
-  resetAllMocks: () => {
-    jest.clearAllMocks();
-  },
-};
-
-// Set up global test environment
 beforeEach(() => {
   jest.clearAllMocks();
-  // Mock console methods to reduce noise in test output
   jest.spyOn(console, 'error').mockImplementation(() => {});
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -194,6 +154,5 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.clearAllTimers();
-  // Restore console methods after each test
   jest.restoreAllMocks();
 });

@@ -1,236 +1,93 @@
-import { jest } from '@jest/globals';
+import { messagingService } from '../services/messaging.service';
+import { whitelistService } from '../services/whitelist.service';
 
 jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-    sendToAll: jest.fn(),
-  },
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
 }));
-
 jest.mock('../services/whitelist.service', () => ({
   whitelistService: {
     loadWhitelistFromInstance: jest.fn(),
     addToInstanceWhitelist: jest.fn(),
     removeFromInstanceWhitelist: jest.fn(),
-    clearInstanceWhitelist: jest.fn(),
-  },
+    clearInstanceWhitelist: jest.fn()
+  }
 }));
 
-jest.mock('../services/server-instance/server-operations.service', () => ({
-  serverOperationsService: {},
-}));
+const mockMessaging = jest.mocked(messagingService);
+const mockWhitelist = jest.mocked(whitelistService);
 
-jest.mock('../utils/ark/instance.utils', () => ({
-  getInstancesBaseDir: jest.fn(() => '/base/instances'),
-}));
-
-import { messagingService } from '../services/messaging.service';
-import { whitelistService } from '../services/whitelist.service';
-
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const mockWhitelist = whitelistService as jest.Mocked<typeof whitelistService>;
-
-// Determine expected path separator for cross-platform tests
-const pathSep = process.platform === 'win32' ? '\\' : '/';
+type Listener = (payload: unknown, sender: unknown) => Promise<void> | void;
 
 describe('whitelist-handler', () => {
-  let handlers: Record<string, (...args: any[]) => Promise<void>>;
-  let mockSender: any;
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
     require('./whitelist-handler');
-
-    handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock).mock.calls) {
-      handlers[call[0] as string] = call[1] as any;
-    }
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    mockSender = { id: 'test-sender' };
-  });
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+  describe.each([
+    ['load-whitelist', mockWhitelist.loadWhitelistFromInstance, false, 'Instance ID is required', 'Failed to load whitelist'],
+    ['add-to-whitelist', mockWhitelist.addToInstanceWhitelist, true, 'Instance ID and Player ID are required', 'Failed to add player to whitelist'],
+    ['remove-from-whitelist', mockWhitelist.removeFromInstanceWhitelist, true, 'Instance ID and Player ID are required', 'Failed to remove player from whitelist'],
+    ['clear-whitelist', mockWhitelist.clearInstanceWhitelist, false, 'Instance ID is required', 'Failed to clear whitelist']
+  ])('%s', (channel, serviceMethod, needsPlayer, required, fallback) => {
+    const method = serviceMethod as jest.Mock;
+    const valid = { instanceId: 'a1', playerId: ' 0002abc ', requestId: 'r1' };
 
-  it('should register all expected handlers', () => {
-    expect(handlers['load-whitelist']).toBeDefined();
-    expect(handlers['add-to-whitelist']).toBeDefined();
-    expect(handlers['remove-from-whitelist']).toBeDefined();
-    expect(handlers['clear-whitelist']).toBeDefined();
-  });
+    it('works on the instance and replies without a requestId', async () => {
+      method.mockReturnValue({ success: true, playerIds: ['0002abc'], message: 'Done' });
 
-  describe('load-whitelist', () => {
-    it('should load whitelist successfully', async () => {
-      (mockWhitelist.loadWhitelistFromInstance as jest.Mock).mockReturnValue({
-        success: true,
-        playerIds: ['player1', 'player2'],
-        message: 'Loaded 2 players',
-      });
+      await handlers[channel](valid, sender);
 
-      await handlers['load-whitelist']({ instanceId: 'inst1' }, mockSender);
-
-      expect(mockWhitelist.loadWhitelistFromInstance).toHaveBeenCalledWith(
-        expect.stringContaining('inst1')
-      );
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'load-whitelist',
-        expect.objectContaining({
-          success: true,
-          playerIds: ['player1', 'player2'],
-        }),
-        mockSender
-      );
+      expect(method).toHaveBeenCalledWith('a1', ...(needsPlayer ? ['0002abc'] : []));
+      expect(replies(channel)).toEqual([{ success: true, playerIds: ['0002abc'], message: 'Done', error: undefined }]);
     });
 
-    it('should fail when no instanceId provided', async () => {
-      await handlers['load-whitelist']({ instanceId: undefined }, mockSender);
+    it('replies an empty list with the service\'s refusal', async () => {
+      method.mockReturnValue({ success: false, error: 'Player is already in the whitelist' });
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'load-whitelist',
-        expect.objectContaining({ success: false, error: 'Instance ID is required' }),
-        mockSender
-      );
+      await handlers[channel](valid, sender);
+
+      expect(replies(channel)).toEqual([
+        { success: false, playerIds: [], message: undefined, error: 'Player is already in the whitelist' }
+      ]);
     });
 
-    it('should handle service errors', async () => {
-      (mockWhitelist.loadWhitelistFromInstance as jest.Mock).mockImplementation(() => {
-        throw new Error('Disk read error');
-      });
+    it.each([
+      ['an Error', new Error('EACCES'), 'EACCES'],
+      ['nothing useful', undefined, fallback]
+    ])('replies a failure when the service throws %s', async (_label, thrown, error) => {
+      method.mockImplementation(() => { throw thrown; });
 
-      await handlers['load-whitelist']({ instanceId: 'inst1' }, mockSender);
+      await handlers[channel](valid, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'load-whitelist',
-        expect.objectContaining({ success: false, error: 'Disk read error' }),
-        mockSender
-      );
-    });
-  });
-
-  describe('add-to-whitelist', () => {
-    it('should add player successfully', async () => {
-      (mockWhitelist.addToInstanceWhitelist as jest.Mock).mockReturnValue({
-        success: true,
-        playerIds: ['player1', 'newplayer'],
-        message: 'Added',
-      });
-
-      await handlers['add-to-whitelist']({ instanceId: 'inst1', playerId: '  newplayer  ' }, mockSender);
-
-      // Should trim the playerId
-      expect(mockWhitelist.addToInstanceWhitelist).toHaveBeenCalledWith(
-        expect.stringContaining('inst1'),
-        'newplayer'
-      );
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'add-to-whitelist',
-        expect.objectContaining({ success: true }),
-        mockSender
-      );
+      expect(replies(channel)).toEqual([{ success: false, error }]);
     });
 
-    it('should fail when instanceId or playerId missing', async () => {
-      await handlers['add-to-whitelist']({ instanceId: 'inst1' }, mockSender);
+    const incomplete: Array<[string, unknown]> = [
+      ['no instance id', { playerId: 'p1' }],
+      ['no payload', undefined],
+      ...(needsPlayer ? [['no player id', { instanceId: 'a1' }], ['a player id that is not text', { instanceId: 'a1', playerId: 42 }]] as Array<[string, unknown]> : [])
+    ];
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'add-to-whitelist',
-        expect.objectContaining({
-          success: false,
-          error: 'Instance ID and Player ID are required',
-        }),
-        mockSender
-      );
+    it.each(incomplete)('refuses %s', async (_label, payload) => {
+      await handlers[channel](payload, sender);
+
+      expect(method).not.toHaveBeenCalled();
+      expect(replies(channel)).toEqual([{ success: false, error: required }]);
     });
 
-    it('should fail when both are missing', async () => {
-      await handlers['add-to-whitelist']({}, mockSender);
+    it('refuses an instance id that could leave the servers directory', async () => {
+      await handlers[channel]({ ...valid, instanceId: '../x' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'add-to-whitelist',
-        expect.objectContaining({ success: false }),
-        mockSender
-      );
-    });
-  });
-
-  describe('remove-from-whitelist', () => {
-    it('should remove player successfully', async () => {
-      (mockWhitelist.removeFromInstanceWhitelist as jest.Mock).mockReturnValue({
-        success: true,
-        playerIds: ['player2'],
-        message: 'Removed',
-      });
-
-      await handlers['remove-from-whitelist'](
-        { instanceId: 'inst1', playerId: ' player1 ' },
-        mockSender
-      );
-
-      expect(mockWhitelist.removeFromInstanceWhitelist).toHaveBeenCalledWith(
-        expect.stringContaining('inst1'),
-        'player1'
-      );
-    });
-
-    it('should fail when missing required fields', async () => {
-      await handlers['remove-from-whitelist']({ instanceId: 'inst1' }, mockSender);
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'remove-from-whitelist',
-        expect.objectContaining({ success: false }),
-        mockSender
-      );
-    });
-  });
-
-  describe('clear-whitelist', () => {
-    it('should clear whitelist successfully', async () => {
-      (mockWhitelist.clearInstanceWhitelist as jest.Mock).mockReturnValue({
-        success: true,
-        playerIds: [],
-        message: 'Cleared',
-      });
-
-      await handlers['clear-whitelist']({ instanceId: 'inst1' }, mockSender);
-
-      expect(mockWhitelist.clearInstanceWhitelist).toHaveBeenCalledWith(
-        expect.stringContaining('inst1')
-      );
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'clear-whitelist',
-        expect.objectContaining({ success: true, playerIds: [] }),
-        mockSender
-      );
-    });
-
-    it('should fail when no instanceId', async () => {
-      await handlers['clear-whitelist']({ instanceId: undefined }, mockSender);
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'clear-whitelist',
-        expect.objectContaining({ success: false, error: 'Instance ID is required' }),
-        mockSender
-      );
-    });
-
-    it('should handle errors during clear', async () => {
-      (mockWhitelist.clearInstanceWhitelist as jest.Mock).mockImplementation(() => {
-        throw new Error('Permission denied');
-      });
-
-      await handlers['clear-whitelist']({ instanceId: 'inst1' }, mockSender);
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'clear-whitelist',
-        expect.objectContaining({ success: false, error: 'Permission denied' }),
-        mockSender
-      );
+      expect(method).not.toHaveBeenCalled();
+      expect(replies(channel)).toEqual([{ success: false, error: 'Invalid instance ID' }]);
     });
   });
 });

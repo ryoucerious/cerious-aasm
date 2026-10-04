@@ -1,5 +1,4 @@
 <div class="dashboard">
-  <!-- Welcome banner -->
   <section class="dash-hero" [style.background-image]="heroBackground">
     <div class="dash-hero-art" aria-hidden="true"></div>
     <div class="dash-hero-content">
@@ -31,7 +30,6 @@
   </section>
 
   <div class="dash-grid">
-    <!-- Main column -->
     <div class="dash-main">
       <div class="dash-section-header">
         <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
@@ -127,7 +125,6 @@
       </div>
     </div>
 
-    <!-- Side column -->
     <aside class="dash-side">
       <div class="dash-card">
         <div class="dash-card-header"><h3>Quick Actions</h3></div>
@@ -135,7 +132,7 @@
           <button type="button" class="dash-action" (click)="showConfirmStartAll = true" [disabled]="!servers.length">
             <span class="dash-action-icon tone-success"><span class="material-icons">play_arrow</span></span> Start All Servers
           </button>
-          <button type="button" class="dash-action" (click)="showConfirmStopAll = true" [disabled]="!summary.online">
+          <button type="button" class="dash-action" (click)="showConfirmStopAll = true" [disabled]="!canStopAll">
             <span class="dash-action-icon tone-danger"><span class="material-icons">stop</span></span> Stop All Servers
           </button>
           <button type="button" class="dash-action" (click)="openBackupModal()" [disabled]="!servers.length">

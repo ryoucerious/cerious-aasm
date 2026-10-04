@@ -20,21 +20,30 @@ describe('RconService', () => {
   });
 
   it('connectRcon returns error for missing instance', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockResolvedValue(null);
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue(null);
     const result = await service.connectRcon('id');
     expect(result.success).toBe(false);
     expect(result.error).toBe('Instance not found');
   });
 
   it('connectRcon returns error for missing rcon config', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockResolvedValue({});
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id' });
     const result = await service.connectRcon('id');
     expect(result.success).toBe(false);
     expect(result.error).toBe('RCON not configured for this instance');
   });
 
+  // ARK authenticates RCON with ServerAdminPassword, which is all an instance may have.
+  it('connectRcon accepts an instance with only an admin password', async () => {
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id', rconPort: 123, serverAdminPassword: 'admin' });
+    const connect = jest.spyOn(rconUtils, 'connectRcon').mockImplementation((_id, _config, onStatus) => onStatus?.(true));
+    const result = await service.connectRcon('id');
+    expect(result).toEqual({ success: true, connected: true, instanceId: 'id', error: undefined });
+    expect(connect).toHaveBeenCalledWith('id', expect.objectContaining({ serverAdminPassword: 'admin' }), expect.any(Function));
+  });
+
   it('connectRcon resolves success if connected', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockResolvedValue({ rconPort: 123, rconPassword: 'pass' });
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id', rconPort: 123, rconPassword: 'pass' });
     (rconUtils.connectRcon as any) = (id: string, inst: any, cb: (connected: boolean) => void) => cb(true);
     const result = await service.connectRcon('id');
     expect(result.success).toBe(true);
@@ -43,7 +52,7 @@ describe('RconService', () => {
   });
 
   it('connectRcon resolves error if not connected', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockResolvedValue({ rconPort: 123, rconPassword: 'pass' });
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id', rconPort: 123, rconPassword: 'pass' });
     (rconUtils.connectRcon as any) = (id: string, inst: any, cb: (connected: boolean) => void) => cb(false);
     const result = await service.connectRcon('id');
     expect(result.success).toBe(true);
@@ -52,14 +61,14 @@ describe('RconService', () => {
   });
 
   it('disconnectRcon resolves success', async () => {
-    (rconUtils.disconnectRcon as any) = async (id: string) => {};
+    (rconUtils.disconnectRcon as any) = (id: string) => {};
     const result = await service.disconnectRcon('id');
     expect(result.success).toBe(true);
     expect(result.connected).toBe(false);
   });
 
   it('disconnectRcon handles error', async () => {
-    (rconUtils.disconnectRcon as any) = async (id: string) => { throw new Error('fail'); };
+    (rconUtils.disconnectRcon as any) = (id: string) => { throw new Error('fail'); };
     const result = await service.disconnectRcon('id');
     expect(result.success).toBe(false);
     expect(result.error).toBe('fail');
@@ -106,21 +115,64 @@ describe('RconService', () => {
     const result = await service.executeRconCommand('id', 'cmd');
     expect(result.success).toBe(false);
     expect(result.error).toBe('fail');
+    expect(result.notSent).toBeUndefined();
   });
 
-  it('autoConnectRcon calls connectRcon and onStatusChange', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockResolvedValue({ rconPort: 123, rconPassword: 'pass' });
-  (rconUtils.connectRcon as any) = (id: string, inst: any, cb: (connected: boolean) => void) => cb(true);
-    const cb = jest.fn();
-    await service.autoConnectRcon('id', cb);
-    expect(cb).toHaveBeenCalledWith(true);
+  describe('executeRconCommand says when a command provably never reached the server', () => {
+    it('with no connection', async () => {
+      jest.spyOn(rconUtils, 'isRconConnected').mockReturnValue(false);
+
+      await expect(service.executeRconCommand('id', 'DoExit')).resolves.toEqual({
+        success: false, instanceId: 'id', error: 'RCON not connected for this instance', notSent: true
+      });
+    });
+
+    it('when it timed out still queued', async () => {
+      jest.spyOn(rconUtils, 'isRconConnected').mockReturnValue(true);
+      jest.spyOn(rconUtils, 'sendRconCommand').mockRejectedValue(new rconUtils.RconCommandNotSentError('RCON command timed out after 30000ms'));
+
+      await expect(service.executeRconCommand('id', 'DoExit')).resolves.toEqual({
+        success: false, instanceId: 'id', error: 'RCON command timed out after 30000ms', notSent: true
+      });
+    });
   });
 
-  it('autoConnectRcon handles error and calls onStatusChange(false)', async () => {
-    jest.spyOn(instanceUtils, 'getInstance').mockRejectedValue(new Error('fail'));
-    const cb = jest.fn();
-    await service.autoConnectRcon('id', cb);
-    expect(cb).toHaveBeenCalledWith(false);
+  describe('reconnectRcon', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id', rconPort: 123, rconPassword: 'pass' });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('makes a single attempt', async () => {
+      const connect = jest.spyOn(rconUtils, 'connectRcon').mockImplementation((_id, _config, onStatus) => onStatus?.(true));
+
+      await expect(service.reconnectRcon('id', 5000)).resolves.toBe(true);
+      expect(connect).toHaveBeenCalledWith('id', expect.objectContaining({ rconPort: 123 }), expect.any(Function), 1);
+    });
+
+    it('gives up after the timeout', async () => {
+      let answer: ((connected: boolean) => void) | undefined;
+      jest.spyOn(rconUtils, 'connectRcon').mockImplementation((_id, _config, onStatus) => { answer = onStatus; });
+      const disconnect = jest.spyOn(rconUtils, 'disconnectRcon').mockImplementation(() => answer?.(false));
+
+      const reconnecting = service.reconnectRcon('id', 5000);
+      jest.advanceTimersByTime(5000);
+
+      await expect(reconnecting).resolves.toBe(false);
+      expect(disconnect).toHaveBeenCalledWith('id');
+    });
+
+    it('does not try without an RCON port', async () => {
+      jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id' });
+      const connect = jest.spyOn(rconUtils, 'connectRcon');
+
+      await expect(service.reconnectRcon('id', 5000)).resolves.toBe(false);
+      expect(connect).not.toHaveBeenCalled();
+    });
   });
 
   it('forceDisconnectRcon calls disconnectRcon', async () => {
@@ -131,7 +183,7 @@ describe('RconService', () => {
   });
 
   it('forceDisconnectRcon handles error', async () => {
-    (rconUtils.disconnectRcon as any) = async (id: string) => { throw new Error('fail'); };
+    (rconUtils.disconnectRcon as any) = (id: string) => { throw new Error('fail'); };
     await expect(service.forceDisconnectRcon('id')).resolves.toBeUndefined();
   });
 });

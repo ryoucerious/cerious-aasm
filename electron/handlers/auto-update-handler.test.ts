@@ -1,197 +1,133 @@
-import { jest } from '@jest/globals';
+import { messagingService } from '../services/messaging.service';
+import { autoUpdateService } from '../services/auto-update.service';
 
 jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-    sendToAll: jest.fn(),
-  },
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
 }));
-
 jest.mock('../services/auto-update.service', () => ({
   autoUpdateService: {
     checkForUpdates: jest.fn(),
     getLastStatus: jest.fn(),
     isUpdateReady: jest.fn(),
     quitAndInstall: jest.fn(),
-    downloadUpdate: jest.fn(),
-  },
+    downloadUpdate: jest.fn()
+  }
 }));
 
-import { messagingService } from '../services/messaging.service';
-import { autoUpdateService } from '../services/auto-update.service';
+const mockMessaging = jest.mocked(messagingService);
+const mockAutoUpdate = jest.mocked(autoUpdateService);
 
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const mockAutoUpdate = autoUpdateService as jest.Mocked<typeof autoUpdateService>;
+type Listener = (payload: unknown, sender: unknown) => Promise<void> | void;
 
 describe('auto-update-handler', () => {
-  let handlers: Record<string, (...args: any[]) => Promise<void>>;
-  let mockSender: any;
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
     require('./auto-update-handler');
-
-    handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
-      handlers[call[0] as string] = call[1] as any;
-    }
-  });
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    mockSender = { id: 'test-sender' };
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('should register all expected handlers', () => {
-    expect(handlers['check-for-app-update']).toBeDefined();
-    expect(handlers['get-app-update-status']).toBeDefined();
-    expect(handlers['install-app-update']).toBeDefined();
-    expect(handlers['download-app-update']).toBeDefined();
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
   describe('check-for-app-update', () => {
-    it('should check for updates successfully', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockResolvedValue(undefined);
+    it('checks and replies without a requestId', async () => {
+      mockAutoUpdate.checkForUpdates.mockResolvedValue(undefined);
 
-      await handlers['check-for-app-update']({}, mockSender);
+      await handlers['check-for-app-update']({ requestId: 'r1' }, sender);
 
       expect(mockAutoUpdate.checkForUpdates).toHaveBeenCalled();
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'check-for-app-update',
-        { success: true },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('check-for-app-update', { success: true }, sender);
     });
 
-    it('should handle check errors', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockRejectedValue(new Error('Network unavailable'));
+    it.each([
+      ['an Error', new Error('Network unavailable'), 'Network unavailable'],
+      ['a string', 'string error', 'string error']
+    ])('replies a failure when the check throws %s', async (_label, thrown, error) => {
+      mockAutoUpdate.checkForUpdates.mockRejectedValue(thrown);
 
-      await handlers['check-for-app-update']({}, mockSender);
+      await handlers['check-for-app-update']({}, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'check-for-app-update',
-        { success: false, error: 'Network unavailable' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('check-for-app-update', { success: false, error }, sender);
     });
 
-    it('should handle non-Error rejections', async () => {
-      (mockAutoUpdate.checkForUpdates as jest.Mock<any>).mockRejectedValue('string error');
+    it('answers a request without a payload', async () => {
+      mockAutoUpdate.checkForUpdates.mockResolvedValue(undefined);
 
-      await handlers['check-for-app-update']({}, mockSender);
+      await handlers['check-for-app-update'](undefined, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'check-for-app-update',
-        { success: false, error: 'string error' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('check-for-app-update', { success: true }, sender);
     });
   });
 
   describe('get-app-update-status', () => {
-    it('should return last status when available', () => {
-      const status = { status: 'available', version: '2.0.0' };
-      (mockAutoUpdate.getLastStatus as jest.Mock<any>).mockReturnValue(status);
+    it('replies on app-update-status with the last status', async () => {
+      const status = { status: 'available' as const, version: '2.0.0' };
+      mockAutoUpdate.getLastStatus.mockReturnValue(status);
 
-      handlers['get-app-update-status']({}, mockSender);
+      await handlers['get-app-update-status'](undefined, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'app-update-status',
-        status,
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('app-update-status', status, sender);
     });
 
-    it('should return up-to-date when no last status', () => {
-      (mockAutoUpdate.getLastStatus as jest.Mock<any>).mockReturnValue(null);
+    it('says up to date before anything has happened', async () => {
+      mockAutoUpdate.getLastStatus.mockReturnValue(null);
 
-      handlers['get-app-update-status']({}, mockSender);
+      await handlers['get-app-update-status']({}, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'app-update-status',
-        { status: 'up-to-date' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('app-update-status', { status: 'up-to-date' }, sender);
     });
   });
 
   describe('install-app-update', () => {
-    it('should fail if no update is ready', async () => {
-      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockReturnValue(false);
+    it('refuses before an update has been downloaded', async () => {
+      mockAutoUpdate.isUpdateReady.mockReturnValue(false);
 
-      await handlers['install-app-update']({}, mockSender);
+      await handlers['install-app-update']({}, sender);
 
       expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-app-update',
-        { success: false, error: 'No update has been downloaded yet.' },
-        mockSender
+        'install-app-update', { success: false, error: 'No update has been downloaded yet.' }, sender
       );
       expect(mockAutoUpdate.quitAndInstall).not.toHaveBeenCalled();
     });
 
-    it('should send success and schedule quit when update is ready', async () => {
+    it('replies, then restarts into the update a second later', async () => {
       jest.useFakeTimers();
-      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockReturnValue(true);
+      mockAutoUpdate.isUpdateReady.mockReturnValue(true);
 
-      await handlers['install-app-update']({}, mockSender);
+      await handlers['install-app-update']({}, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-app-update',
-        { success: true },
-        mockSender
-      );
-
-      // quitAndInstall should be called after setTimeout
-      jest.advanceTimersByTime(1000);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('install-app-update', { success: true }, sender);
+      jest.advanceTimersByTime(999);
+      expect(mockAutoUpdate.quitAndInstall).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
       expect(mockAutoUpdate.quitAndInstall).toHaveBeenCalled();
-
       jest.useRealTimers();
     });
 
-    it('should handle errors during install', async () => {
-      (mockAutoUpdate.isUpdateReady as jest.Mock<any>).mockImplementation(() => {
-        throw new Error('Internal error');
-      });
+    it('replies a failure when the update state cannot be read', async () => {
+      mockAutoUpdate.isUpdateReady.mockImplementation(() => { throw new Error('Internal error'); });
 
-      await handlers['install-app-update']({}, mockSender);
+      await handlers['install-app-update'](undefined, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'install-app-update',
-        { success: false, error: 'Internal error' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('install-app-update', { success: false, error: 'Internal error' }, sender);
     });
   });
 
   describe('download-app-update', () => {
-    it('should download update successfully', async () => {
-      (mockAutoUpdate.downloadUpdate as jest.Mock<any>).mockResolvedValue(undefined);
+    it('downloads and replies', async () => {
+      mockAutoUpdate.downloadUpdate.mockResolvedValue(undefined);
 
-      await handlers['download-app-update']({}, mockSender);
+      await handlers['download-app-update'](undefined, sender);
 
       expect(mockAutoUpdate.downloadUpdate).toHaveBeenCalled();
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'download-app-update',
-        { success: true },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('download-app-update', { success: true }, sender);
     });
 
-    it('should handle download errors', async () => {
-      (mockAutoUpdate.downloadUpdate as jest.Mock<any>).mockRejectedValue(new Error('Disk full'));
+    it('replies a failure when the download fails', async () => {
+      mockAutoUpdate.downloadUpdate.mockRejectedValue(new Error('Disk full'));
 
-      await handlers['download-app-update']({}, mockSender);
+      await handlers['download-app-update']({}, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'download-app-update',
-        { success: false, error: 'Disk full' },
-        mockSender
-      );
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('download-app-update', { success: false, error: 'Disk full' }, sender);
     });
   });
 });

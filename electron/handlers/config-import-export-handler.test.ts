@@ -1,259 +1,201 @@
-import { jest } from '@jest/globals';
-
-jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-    sendToAll: jest.fn(),
-    sendToAllRenderers: jest.fn(),
-  },
-}));
-
-jest.mock('../services/config-import-export.service', () => ({
-  configImportExportService: {
-    exportConfigAsZip: jest.fn(),
-    importFromIni: jest.fn(),
-  },
-}));
-
-jest.mock('../utils/ark/instance.utils', () => ({
-  getInstance: jest.fn(),
-}));
-
-jest.mock('../services/server-instance/server-management.service', () => ({
-  serverManagementService: {
-    saveInstance: jest.fn(),
-    getAllInstances: jest.fn(),
-  },
-}));
-
 import { messagingService } from '../services/messaging.service';
 import { configImportExportService } from '../services/config-import-export.service';
-import * as instanceUtils from '../utils/ark/instance.utils';
+import { serverInstanceService } from '../services/server-instance/server-instance.service';
 import { serverManagementService } from '../services/server-instance/server-management.service';
+import * as instanceUtils from '../utils/ark/instance.utils';
 
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const mockConfigService = configImportExportService as jest.Mocked<typeof configImportExportService>;
-const mockInstanceUtils = instanceUtils as jest.Mocked<typeof instanceUtils>;
-const mockServerMgmt = serverManagementService as jest.Mocked<typeof serverManagementService>;
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn() }
+}));
+jest.mock('../services/config-import-export.service', () => ({
+  configImportExportService: { exportConfigAsZip: jest.fn(), importFromIni: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-instance.service', () => ({
+  serverInstanceService: { broadcastInstances: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-management.service', () => ({
+  serverManagementService: { saveInstance: jest.fn() }
+}));
+jest.mock('../utils/ark/instance.utils', () => ({ getInstance: jest.fn() }));
+
+const mockMessaging = jest.mocked(messagingService);
+const mockConfigService = jest.mocked(configImportExportService);
+const mockGetInstance = jest.mocked(instanceUtils.getInstance);
+const mockSaveInstance = jest.mocked(serverManagementService.saveInstance);
+
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
 describe('config-import-export-handler', () => {
-  let handlers: Record<string, (...args: any[]) => Promise<void>>;
-  let mockSender: any;
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
     require('./config-import-export-handler');
-
-    handlers = {};
-    for (const call of (mockMessaging.on as jest.Mock<any>).mock.calls) {
-      handlers[call[0] as string] = call[1] as any;
-    }
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    mockSender = { id: 'test-sender' };
+    mockGetInstance.mockReset();
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('should register export and import handlers', () => {
-    expect(handlers['export-server-config']).toBeDefined();
-    expect(handlers['import-server-config']).toBeDefined();
-  });
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
   describe('export-server-config', () => {
-    it('should export config as zip successfully', async () => {
-      const config = { id: 'inst1', name: 'TestServer', maxPlayers: 10 };
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(config);
-      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({
-        success: true,
-        base64: 'dGVzdA==',
-      });
+    it('replies with the INI files as a base64 ZIP named after the server', async () => {
+      const config = { id: 'a1', name: 'TestServer', maxPlayers: 10 };
+      mockGetInstance.mockReturnValue(config);
+      mockConfigService.exportConfigAsZip.mockReturnValue({ success: true, base64: 'dGVzdA==' });
 
-      await handlers['export-server-config']({ id: 'inst1', requestId: 'r1' }, mockSender);
+      await handlers['export-server-config']({ id: 'a1', requestId: 'r1' }, sender);
 
-      expect(mockInstanceUtils.getInstance).toHaveBeenCalledWith('inst1');
+      expect(mockGetInstance).toHaveBeenCalledWith('a1');
       expect(mockConfigService.exportConfigAsZip).toHaveBeenCalledWith(config);
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'export-server-config',
-        {
-          success: true,
-          base64: 'dGVzdA==',
-          suggestedFileName: 'TestServer-config.zip',
-          requestId: 'r1',
-        },
-        mockSender
-      );
+      expect(replies('export-server-config')).toEqual([
+        { success: true, base64: 'dGVzdA==', suggestedFileName: 'TestServer-config.zip', requestId: 'r1' }
+      ]);
     });
 
-    it('should fail when no ID provided', async () => {
-      await handlers['export-server-config']({ requestId: 'r1' }, mockSender);
+    it('names the file "server" when the server has no name', async () => {
+      mockGetInstance.mockReturnValue({ id: 'a1' });
+      mockConfigService.exportConfigAsZip.mockReturnValue({ success: true, base64: 'abc' });
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'export-server-config',
-        expect.objectContaining({ success: false, error: 'Server instance ID is required' }),
-        mockSender
-      );
+      await handlers['export-server-config']({ id: 'a1', requestId: 'r1' }, sender);
+
+      expect(replies('export-server-config')).toEqual([expect.objectContaining({ suggestedFileName: 'server-config.zip' })]);
     });
 
-    it('should fail when instance not found', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(null);
+    it.each([
+      ['no id', { requestId: 'r1' }, 'Server instance ID is required'],
+      ['an invalid id', { id: '../x', requestId: 'r1' }, 'Invalid instance ID'],
+      ['an unknown server', { id: 'missing', requestId: 'r1' }, 'Server instance not found: missing']
+    ])('refuses %s without reading any config file', async (_label, payload, error) => {
+      mockGetInstance.mockReturnValue(null);
 
-      await handlers['export-server-config']({ id: 'missing', requestId: 'r1' }, mockSender);
+      await handlers['export-server-config'](payload, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'export-server-config',
-        expect.objectContaining({ success: false, error: 'Server instance not found: missing' }),
-        mockSender
-      );
+      expect(mockConfigService.exportConfigAsZip).not.toHaveBeenCalled();
+      expect(replies('export-server-config')).toEqual([{ success: false, error, requestId: 'r1' }]);
     });
 
-    it('should fail when zip creation fails', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ id: 'inst1', name: 'Test' });
-      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({
-        success: false,
-        error: 'Zip error',
-      });
+    it.each([['Zip error', 'Zip error'], [undefined, 'Failed to create ZIP']])(
+      'replies a failure when the ZIP cannot be made (%p)',
+      async (zipError, error) => {
+        mockGetInstance.mockReturnValue({ id: 'a1', name: 'Test' });
+        mockConfigService.exportConfigAsZip.mockReturnValue({ success: false, error: zipError });
 
-      await handlers['export-server-config']({ id: 'inst1', requestId: 'r1' }, mockSender);
+        await handlers['export-server-config']({ id: 'a1', requestId: 'r1' }, sender);
 
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'export-server-config',
-        expect.objectContaining({ success: false }),
-        mockSender
-      );
+        expect(replies('export-server-config')).toEqual([{ success: false, error, requestId: 'r1' }]);
+      }
+    );
+
+    it('replies a failure when the config cannot be read', async () => {
+      mockGetInstance.mockImplementation(() => { throw new Error('EACCES'); });
+
+      await handlers['export-server-config']({ id: 'a1', requestId: 'r1' }, sender);
+
+      expect(replies('export-server-config')).toEqual([{ success: false, error: 'EACCES', requestId: 'r1' }]);
     });
 
-    it('should use fallback name when config has no name', async () => {
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ id: 'inst1' });
-      (mockConfigService.exportConfigAsZip as jest.Mock<any>).mockReturnValue({ success: true, base64: 'abc' });
+    it('answers a request without a payload', async () => {
+      await handlers['export-server-config'](undefined, sender);
 
-      await handlers['export-server-config']({ id: 'inst1', requestId: 'r1' }, mockSender);
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'export-server-config',
-        expect.objectContaining({ suggestedFileName: 'server-config.zip' }),
-        mockSender
-      );
+      expect(replies('export-server-config')).toEqual([
+        { success: false, error: 'Server instance ID is required', requestId: undefined }
+      ]);
     });
   });
 
   describe('import-server-config', () => {
-    it('should import config without target (preview mode)', async () => {
-      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
-        success: true,
-        config: { maxPlayers: 20 },
-        warnings: [],
-      });
+    it('only returns the parsed settings when there is no target', async () => {
+      mockConfigService.importFromIni.mockReturnValue({ success: true, config: { maxPlayers: 20 }, warnings: ['x'] });
 
       await handlers['import-server-config'](
-        { content: '[ServerSettings]\nMaxPlayers=20', fileName: 'GameUserSettings.ini', requestId: 'r2' },
-        mockSender
+        { content: '[ServerSettings]\nMaxPlayers=20', fileName: 'GameUserSettings.ini', requestId: 'r1' }, sender
       );
 
       expect(mockConfigService.importFromIni).toHaveBeenCalledWith([
-        { fileName: 'GameUserSettings.ini', content: '[ServerSettings]\nMaxPlayers=20' },
+        { fileName: 'GameUserSettings.ini', content: '[ServerSettings]\nMaxPlayers=20' }
       ]);
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'import-server-config',
-        expect.objectContaining({ success: true, merged: false, config: { maxPlayers: 20 } }),
-        mockSender
-      );
-    });
-
-    it('should import and merge into existing instance', async () => {
-      const existing = { id: 'inst1', name: 'Server1', maxPlayers: 10 };
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(existing);
-      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
-        success: true,
-        config: { maxPlayers: 30 },
-        warnings: [],
-      });
-      (mockServerMgmt.saveInstance as jest.Mock<any>).mockResolvedValue({
-        success: true,
-        instance: { id: 'inst1', name: 'Server1', maxPlayers: 30 },
-      });
-      (mockServerMgmt.getAllInstances as jest.Mock<any>).mockResolvedValue({ instances: [] });
-
-      await handlers['import-server-config'](
-        { targetId: 'inst1', content: 'data', requestId: 'r2' },
-        mockSender
-      );
-
-      expect(mockServerMgmt.saveInstance).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'inst1', name: 'Server1', maxPlayers: 30 })
-      );
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'import-server-config',
-        expect.objectContaining({ success: true, merged: true }),
-        mockSender
-      );
-    });
-
-    it('should fail when no content provided', async () => {
-      await handlers['import-server-config']({ requestId: 'r2' }, mockSender);
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'import-server-config',
-        expect.objectContaining({ success: false, error: 'No INI content provided' }),
-        mockSender
-      );
-    });
-
-    it('should fail when target instance not found', async () => {
-      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
-        success: true,
-        config: {},
-        warnings: [],
-      });
-      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue(null);
-
-      await handlers['import-server-config'](
-        { targetId: 'missing', content: 'data', requestId: 'r2' },
-        mockSender
-      );
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'import-server-config',
-        expect.objectContaining({ success: false, error: 'Target server not found: missing' }),
-        mockSender
-      );
-    });
-
-    it('should fail when import parsing fails', async () => {
-      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
-        success: false,
-        error: 'Malformed INI',
-      });
-
-      await handlers['import-server-config'](
-        { content: 'bad data', requestId: 'r2' },
-        mockSender
-      );
-
-      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
-        'import-server-config',
-        expect.objectContaining({ success: false }),
-        mockSender
-      );
-    });
-
-    it('should use default filename when not provided', async () => {
-      (mockConfigService.importFromIni as jest.Mock<any>).mockReturnValue({
-        success: true,
-        config: {},
-        warnings: [],
-      });
-
-      await handlers['import-server-config']({ content: 'data', requestId: 'r2' }, mockSender);
-
-      expect(mockConfigService.importFromIni).toHaveBeenCalledWith([
-        { fileName: 'GameUserSettings.ini', content: 'data' },
+      expect(mockSaveInstance).not.toHaveBeenCalled();
+      expect(replies('import-server-config')).toEqual([
+        { success: true, config: { maxPlayers: 20 }, merged: false, warnings: ['x'], requestId: 'r1' }
       ]);
+      expect(mockMessaging.sendToAll).toHaveBeenCalledWith('notification', {
+        type: 'success', message: 'Server configuration imported successfully. (1 warnings)'
+      });
+    });
+
+    it('reads the file as GameUserSettings.ini when it has no name', async () => {
+      mockConfigService.importFromIni.mockReturnValue({ success: true, config: {}, warnings: [] });
+
+      await handlers['import-server-config']({ content: 'data', requestId: 'r1' }, sender);
+
+      expect(mockConfigService.importFromIni).toHaveBeenCalledWith([{ fileName: 'GameUserSettings.ini', content: 'data' }]);
+    });
+
+    it('merges into the target, keeping its id and name, and tells every client', async () => {
+      const saved = { id: 'a1', name: 'Server1', maxPlayers: 30 };
+      mockGetInstance.mockReturnValue({ id: 'a1', name: 'Server1', maxPlayers: 10 });
+      mockConfigService.importFromIni.mockReturnValue({
+        success: true, config: { id: 'other', name: 'Other', maxPlayers: 30 }, warnings: []
+      });
+      mockSaveInstance.mockResolvedValue({ success: true, instance: saved });
+
+      await handlers['import-server-config']({ targetId: 'a1', content: 'data', requestId: 'r1' }, sender);
+
+      expect(mockSaveInstance).toHaveBeenCalledWith({ id: 'a1', name: 'Server1', maxPlayers: 30 });
+      expect(serverInstanceService.broadcastInstances).toHaveBeenCalled();
+      expect(mockMessaging.sendToAll).toHaveBeenCalledWith('server-instance-updated', saved);
+      expect(replies('import-server-config')).toEqual([{ success: true, config: saved, merged: true, warnings: [], requestId: 'r1' }]);
+      const notification = mockMessaging.sendToAll.mock.calls.findIndex(([channel]) => channel === 'notification');
+      expect(mockMessaging.sendToOriginator.mock.invocationCallOrder[0])
+        .toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[notification]);
+      expect(mockMessaging.sendToAll.mock.calls[notification][1]).toEqual({
+        type: 'success', message: 'Server configuration imported successfully.'
+      });
+    });
+
+    it('passes on a merge the instance store refused, without notifications', async () => {
+      mockGetInstance.mockReturnValue({ id: 'a1', name: 'Server1' });
+      mockConfigService.importFromIni.mockReturnValue({ success: true, config: {}, warnings: [] });
+      mockSaveInstance.mockResolvedValue({ success: false, error: 'Invalid port' });
+
+      await handlers['import-server-config']({ targetId: 'a1', content: 'data', requestId: 'r1' }, sender);
+
+      expect(replies('import-server-config')).toEqual([{ success: false, error: 'Invalid port', requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no content', { requestId: 'r1' }, 'No INI content provided'],
+      ['an invalid target id', { targetId: '../x', content: 'data', requestId: 'r1' }, 'Invalid instance ID'],
+      ['an unknown target', { targetId: 'missing', content: 'data', requestId: 'r1' }, 'Target server not found: missing']
+    ])('refuses %s without saving or notifying', async (_label, payload, error) => {
+      mockConfigService.importFromIni.mockReturnValue({ success: true, config: {}, warnings: [] });
+      mockGetInstance.mockReturnValue(null);
+
+      await handlers['import-server-config'](payload, sender);
+
+      expect(mockSaveInstance).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+      expect(replies('import-server-config')).toEqual([{ success: false, error, requestId: 'r1' }]);
+    });
+
+    it('replies the parser\'s reason when the file cannot be read', async () => {
+      mockConfigService.importFromIni.mockReturnValue({ success: false, error: 'Malformed INI' });
+
+      await handlers['import-server-config']({ content: 'bad data', requestId: 'r1' }, sender);
+
+      expect(replies('import-server-config')).toEqual([{ success: false, error: 'Malformed INI', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      await handlers['import-server-config'](undefined, sender);
+
+      expect(replies('import-server-config')).toEqual([{ success: false, error: 'No INI content provided', requestId: undefined }]);
     });
   });
 });

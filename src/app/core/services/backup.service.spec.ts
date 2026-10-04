@@ -1,15 +1,16 @@
 import { BackupService } from './backup.service';
 import { MessagingService } from './messaging/messaging.service';
-import { UtilityService } from './utility.service';
+import { IpcService } from './ipc.service';
+import { BACKUP_TIMEOUT_MS } from './messaging/messaging.service';
 import { throwError } from 'rxjs';
 describe('BackupService', () => {
   let service: BackupService;
   let messaging: jasmine.SpyObj<MessagingService>;
-  let utility: jasmine.SpyObj<UtilityService>;
+  let ipc: { isElectron: boolean };
   beforeEach(() => {
     messaging = jasmine.createSpyObj('MessagingService', ['sendMessage', 'receiveMessage']);
-    utility = jasmine.createSpyObj('UtilityService', ['getPlatform', 'isArray', 'formatFileSize', 'getFormattedDate', 'downloadFileFromData']);
-    service = new BackupService(messaging, utility);
+    ipc = { isElectron: false };
+    service = new BackupService(messaging, ipc as IpcService);
   });
   it('should be created', () => {
     expect(service).toBeTruthy();
@@ -19,7 +20,7 @@ describe('BackupService', () => {
     messaging.sendMessage.and.returnValue(obs);
     const req = { instanceId: 'id', type: 'full' } as any;
     const result = service.createBackup(req);
-    expect(messaging.sendMessage).toHaveBeenCalledWith('create-backup', req);
+    expect(messaging.sendMessage).toHaveBeenCalledWith('create-backup', req, { timeoutMs: BACKUP_TIMEOUT_MS });
     expect(result).toBe(obs);
     result.subscribe();
     expect(obs.subscribe).toHaveBeenCalled();
@@ -60,7 +61,7 @@ describe('BackupService', () => {
     messaging.sendMessage.and.returnValue(obs);
     const req = { instanceId: 'id', backupId: 'bid' } as any;
     const result = service.restoreBackup(req);
-    expect(messaging.sendMessage).toHaveBeenCalledWith('restore-backup', req);
+    expect(messaging.sendMessage).toHaveBeenCalledWith('restore-backup', req, { timeoutMs: BACKUP_TIMEOUT_MS });
     expect(result).toBe(obs);
     result.subscribe();
     expect(obs.subscribe).toHaveBeenCalled();
@@ -178,34 +179,13 @@ describe('BackupService', () => {
     });
   });
 
-  it('should call messaging.sendMessage for getSchedulerStatus and subscribe', () => {
-    const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
-    messaging.sendMessage.and.returnValue(obs);
-    const result = service.getSchedulerStatus('id');
-    expect(messaging.sendMessage).toHaveBeenCalledWith('get-scheduler-status', { instanceId: 'id' });
-    expect(result).toBe(obs);
-    result.subscribe();
-    expect(obs.subscribe).toHaveBeenCalled();
-  });
-
-  it('should propagate errors from getSchedulerStatus', (done) => {
-    messaging.sendMessage.and.returnValue(throwError(() => 'fail'));
-    service.getSchedulerStatus('id').subscribe({
-      error: (err: any) => {
-        expect(err).toBe('fail');
-        done();
-      }
-    });
-  });
-
   it('should call messaging.sendMessage for downloadBackup with platform and subscribe', () => {
     const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
     messaging.sendMessage.and.returnValue(obs);
-    utility.getPlatform.and.returnValue('Electron');
+    ipc.isElectron = true;
     const req = { instanceId: 'id', backupId: 'bid' };
     const result = service.downloadBackup(req);
-    expect(utility.getPlatform).toHaveBeenCalled();
-    expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', backupId: 'bid', frontendEnvironment: 'electron' });
+    expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', backupId: 'bid', frontendEnvironment: 'electron' }, { timeoutMs: BACKUP_TIMEOUT_MS });
     expect(result).toBe(obs);
     result.subscribe();
     expect(obs.subscribe).toHaveBeenCalled();
@@ -213,7 +193,7 @@ describe('BackupService', () => {
 
   it('should propagate errors from downloadBackup', (done) => {
     messaging.sendMessage.and.returnValue(throwError(() => 'fail'));
-    utility.getPlatform.and.returnValue('Electron');
+    ipc.isElectron = true;
     service.downloadBackup({ instanceId: 'id', backupId: 'bid' }).subscribe({
       error: (err: any) => {
         expect(err).toBe('fail');
@@ -224,11 +204,10 @@ describe('BackupService', () => {
     it('should call downloadBackup with Web platform', () => {
       const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
       messaging.sendMessage.and.returnValue(obs);
-      utility.getPlatform.and.returnValue('Web');
+      ipc.isElectron = false;
       const req = { instanceId: 'id', backupId: 'bid' };
       const result = service.downloadBackup(req);
-      expect(utility.getPlatform).toHaveBeenCalled();
-      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', backupId: 'bid', frontendEnvironment: 'web' });
+      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', backupId: 'bid', frontendEnvironment: 'web' }, { timeoutMs: BACKUP_TIMEOUT_MS });
       expect(result).toBe(obs);
       result.subscribe();
       expect(obs.subscribe).toHaveBeenCalled();
@@ -237,10 +216,10 @@ describe('BackupService', () => {
     it('should handle missing instanceId in downloadBackup', () => {
       const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
       messaging.sendMessage.and.returnValue(obs);
-      utility.getPlatform.and.returnValue('Electron');
+      ipc.isElectron = true;
       const req = { backupId: 'bid' } as any;
       const result = service.downloadBackup(req);
-      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { backupId: 'bid', frontendEnvironment: 'electron' });
+      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { backupId: 'bid', frontendEnvironment: 'electron' }, { timeoutMs: BACKUP_TIMEOUT_MS });
       result.subscribe();
       expect(obs.subscribe).toHaveBeenCalled();
     });
@@ -248,10 +227,10 @@ describe('BackupService', () => {
     it('should handle missing backupId in downloadBackup', () => {
       const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
       messaging.sendMessage.and.returnValue(obs);
-      utility.getPlatform.and.returnValue('Electron');
+      ipc.isElectron = true;
       const req = { instanceId: 'id' } as any;
       const result = service.downloadBackup(req);
-      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', frontendEnvironment: 'electron' });
+      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { instanceId: 'id', frontendEnvironment: 'electron' }, { timeoutMs: BACKUP_TIMEOUT_MS });
       result.subscribe();
       expect(obs.subscribe).toHaveBeenCalled();
     });
@@ -259,10 +238,10 @@ describe('BackupService', () => {
     it('should handle completely empty request in downloadBackup', () => {
       const obs = { subscribe: jasmine.createSpy('subscribe') } as any;
       messaging.sendMessage.and.returnValue(obs);
-      utility.getPlatform.and.returnValue('Electron');
+      ipc.isElectron = true;
       const req = {} as any;
       const result = service.downloadBackup(req);
-      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { frontendEnvironment: 'electron' });
+      expect(messaging.sendMessage).toHaveBeenCalledWith('download-backup', { frontendEnvironment: 'electron' }, { timeoutMs: BACKUP_TIMEOUT_MS });
       result.subscribe();
       expect(obs.subscribe).toHaveBeenCalled();
     });

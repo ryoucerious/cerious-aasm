@@ -1,43 +1,58 @@
+import { Injectable, NgZone } from '@angular/core';
+import type { ElectronApi, ElectronInvokeChannel, ElectronListener, ElectronSendChannel } from '../types/electron-api';
 
-import { Injectable } from '@angular/core';
-import { Observable, from } from 'rxjs';
-
+/** The desktop app's bridge to the main process. Every call is a no-op or a rejection in the web UI. */
 @Injectable({ providedIn: 'root' })
 export class IpcService {
-	private ipcRenderer: any;
+  private readonly api: ElectronApi | undefined = window.electronAPI;
+  private readonly unsubscribers = new Map<string, Map<ElectronListener, () => void>>();
 
-	constructor() {
-		if ((window as any).require) {
-			try {
-				this.ipcRenderer = (window as any).require('electron').ipcRenderer;
-			} catch (e) {
-				this.ipcRenderer = null;
-			}
-		}
-	}
+  constructor(private zone: NgZone) {}
 
-	send(channel: string, ...args: any[]): void {
-		if (!this.ipcRenderer) return;
-		this.ipcRenderer.send(channel, ...args);
-	}
+  /** True in the desktop app, where the preload script provides the bridge. */
+  get isElectron(): boolean {
+    return !!this.api;
+  }
 
-	invoke(channel: string, ...args: any[]): Promise<any> {
-		if (!this.ipcRenderer) return Promise.reject('Not running in Electron');
-		return this.ipcRenderer.invoke(channel, ...args);
-	}
+  /** Node, Electron and Chrome versions of the desktop app; null in the web UI. */
+  get versions(): ElectronApi['versions'] | null {
+    return this.api?.versions ?? null;
+  }
 
-	on(channel: string, listener: (...args: any[]) => void): void {
-		if (!this.ipcRenderer) return;
-		this.ipcRenderer.on(channel, listener);
-	}
+  invoke(channel: ElectronInvokeChannel, ...args: unknown[]): Promise<unknown> {
+    if (!this.api) return Promise.reject(new Error('Not running in Electron'));
+    return this.api.invoke(channel, ...args);
+  }
 
-	removeListener(channel: string, listener: (...args: any[]) => void): void {
-		if (!this.ipcRenderer) return;
-		this.ipcRenderer.removeListener(channel, listener);
-	}
+  send(channel: ElectronSendChannel, ...args: unknown[]): void {
+    this.api?.send(channel, ...args);
+  }
 
-	// Observable wrapper for invoke
-	invoke$(channel: string, ...args: any[]): Observable<any> {
-		return from(this.invoke(channel, ...args));
-	}
+  /** Listens on `channel` until the returned function is called. The listener runs inside Angular's zone. */
+  on(channel: string, listener: ElectronListener): () => void {
+    if (!this.api) return () => {};
+    this.removeListener(channel, listener);
+
+    // The bridge calls back from outside Angular's zone, so change detection would not run.
+    const unsubscribe = this.api.on(channel, (event, ...args) => this.zone.run(() => listener(event, ...args)));
+    const forChannel = this.unsubscribers.get(channel) ?? new Map<ElectronListener, () => void>();
+    this.unsubscribers.set(channel, forChannel);
+    forChannel.set(listener, unsubscribe);
+
+    // Only this registration: the same listener may have been registered again since.
+    return () => {
+      if (this.unsubscribers.get(channel)?.get(listener) === unsubscribe) {
+        this.removeListener(channel, listener);
+      }
+    };
+  }
+
+  removeListener(channel: string, listener: ElectronListener): void {
+    const forChannel = this.unsubscribers.get(channel);
+    const unsubscribe = forChannel?.get(listener);
+    if (!forChannel || !unsubscribe) return;
+    unsubscribe();
+    forChannel.delete(listener);
+    if (forChannel.size === 0) this.unsubscribers.delete(channel);
+  }
 }

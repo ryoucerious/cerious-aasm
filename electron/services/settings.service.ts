@@ -1,30 +1,27 @@
-import * as globalConfigUtils from '../utils/global-config.utils';
-import { validatePort, sanitizeString } from '../utils/validation.utils';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getDefaultInstallDir } from '../utils/platform.utils';
 import * as bcrypt from 'bcrypt';
+import type { ChildProcess } from 'child_process';
+import * as globalConfigUtils from '../utils/global-config.utils';
+import type { GlobalConfig } from '../utils/global-config.utils';
+import { validatePort, sanitizeString } from '../utils/validation.utils';
+import { getDefaultInstallDir } from '../utils/platform.utils';
+import { readJsonOrQuarantine, writeJsonAtomic } from '../utils/fs.utils';
+import type { MainToChildMessage, WebAuthConfigUpdate } from '../types/messaging.types';
+import type { WebServerAuthOptions } from './web-server.service';
 
-/**
- * Settings Service - Handles all business logic for application settings
- */
+const SALT_ROUNDS = 12;
+
+/** The global config as clients see it: the web password is never sent, only whether one is set. */
+export type PublicGlobalConfig = Omit<GlobalConfig, 'authenticationPassword'> & { authenticationPasswordSet: boolean };
+
+export function toPublicGlobalConfig(config: GlobalConfig): PublicGlobalConfig {
+  const { authenticationPassword, ...rest } = config;
+  return { ...rest, authenticationPasswordSet: !!authenticationPassword };
+}
+
 export class SettingsService {
-  private readonly SALT_ROUNDS = 12;
-  
-  /**
-   * Hash a password using bcrypt
-   */
-  private async hashPassword(password: string): Promise<string> {
-    if (!password || typeof password !== 'string') {
-      throw new Error('Password must be a non-empty string');
-    }
-    return await bcrypt.hash(password, this.SALT_ROUNDS);
-  }
-  
-  /**
-   * Get the current global configuration
-   */
-  getGlobalConfig(): any {
+  getGlobalConfig(): GlobalConfig {
     try {
       return globalConfigUtils.loadGlobalConfig();
     } catch (error) {
@@ -33,113 +30,120 @@ export class SettingsService {
   }
 
   /**
-   * Update the global application configuration with validation and persistence
-   * @param config - The configuration object containing updated settings
-   * @returns Promise resolving to an object with success status, error message, and updated config
+   * Validates and saves a config from a client, then returns the stored result. Without
+   * canChangeLogin the stored web login (enabled, username, password) is kept whatever the client sent.
    */
-  async updateGlobalConfig(config: any): Promise<{ success: boolean; error?: string; updatedConfig?: any }> {
+  async updateGlobalConfig(
+    config: unknown,
+    { canChangeLogin }: { canChangeLogin: boolean }
+  ): Promise<{ success: boolean; error?: string; updatedConfig?: GlobalConfig }> {
     try {
-      // Validate config object
       if (!config || typeof config !== 'object') {
         return { success: false, error: 'Invalid config object' };
       }
+      const incoming: Partial<GlobalConfig> & { authenticationPasswordSet?: unknown } = { ...config };
+      delete incoming.authenticationPasswordSet;
 
-      // Validate individual config fields
-      if (config.webServerPort !== undefined) {
-        if (!validatePort(config.webServerPort)) {
-          return { success: false, error: 'Invalid web server port' };
-        }
+      if (!canChangeLogin) {
+        const { authenticationEnabled, authenticationUsername, authenticationPassword } = globalConfigUtils.loadGlobalConfig();
+        Object.assign(incoming, { authenticationEnabled, authenticationUsername, authenticationPassword });
       }
 
-      // Validate server data directory (if provided and different from default)
-      if (config.serverDataDir && typeof config.serverDataDir === 'string') {
-        const resolvedPath = path.resolve(config.serverDataDir);
+      if (incoming.webServerPort !== undefined && !validatePort(incoming.webServerPort)) {
+        return { success: false, error: 'Invalid web server port' };
+      }
+
+      if (incoming.serverDataDir && typeof incoming.serverDataDir === 'string') {
+        const resolvedPath = path.resolve(incoming.serverDataDir);
         try {
           if (!fs.existsSync(resolvedPath)) {
-            // Attempt to create it if it doesn't exist
             fs.mkdirSync(resolvedPath, { recursive: true });
           }
-          // Check writable
           fs.accessSync(resolvedPath, fs.constants.W_OK);
-          config.serverDataDir = resolvedPath;
+          incoming.serverDataDir = resolvedPath;
         } catch (e) {
-           return { success: false, error: `Invalid Server Data Directory: ${e instanceof Error ? e.message : 'Path not writable'}` };
+          return { success: false, error: `Invalid Server Data Directory: ${e instanceof Error ? e.message : 'Path not writable'}` };
         }
       }
 
-      // Sanitize string fields
-      if (config.authenticationUsername !== undefined && typeof config.authenticationUsername === 'string') {
-        config.authenticationUsername = sanitizeString(config.authenticationUsername);
+      if (typeof incoming.authenticationUsername === 'string') {
+        incoming.authenticationUsername = sanitizeString(incoming.authenticationUsername);
       }
 
-      if (config.authenticationPassword !== undefined && typeof config.authenticationPassword === 'string') {
-        config.authenticationPassword = sanitizeString(config.authenticationPassword);
+      // Clients never receive the stored password (see toPublicGlobalConfig), so an absent or
+      // empty one means "unchanged". A new one is kept exactly as typed.
+      if (typeof incoming.authenticationPassword !== 'string' || incoming.authenticationPassword === '') {
+        incoming.authenticationPassword = globalConfigUtils.loadGlobalConfig().authenticationPassword;
       }
 
-      // Save the configuration
-      const success = globalConfigUtils.saveGlobalConfig(config);
-      
-      if (!success) {
+      if (!globalConfigUtils.saveGlobalConfig(incoming as GlobalConfig)) {
         return { success: false, error: 'Failed to save configuration' };
       }
 
-      // Get the updated configuration
-      const updatedConfig = globalConfigUtils.loadGlobalConfig();
-      
-      return { success: true, updatedConfig };
+      return { success: true, updatedConfig: globalConfigUtils.loadGlobalConfig() };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
-  /**
-   * Get authentication configuration for web server
-   */
-  getWebServerAuthConfig(config: any): { enabled: boolean; username: string; password: string } {
+  /** The plain login, for the web server child's environment when main forks it. */
+  getWebServerAuthConfig(config: Partial<GlobalConfig>): WebServerAuthOptions {
     return {
       enabled: config.authenticationEnabled || false,
       username: config.authenticationUsername || '',
-      password: config.authenticationPassword || '' // Send plain password, let server hash it
+      password: config.authenticationPassword || ''
     };
   }
 
-  /**
-   * Update the web server authentication configuration and notify the running API process
-   * @param config - The configuration object containing authentication settings
-   * @param apiProcess - Optional reference to the API server child process to notify of changes
-   * @returns Promise that resolves when the update is complete
-   */
-  async updateWebServerAuth(config: any, apiProcess?: any): Promise<void> {
-    const authConfig = this.getWebServerAuthConfig(config);
-    
-    // Save auth config to web server's config file for persistence
-    try {
-      const authConfigFile = path.join(getDefaultInstallDir(), 'data', 'auth-config.json');
-      fs.mkdirSync(path.dirname(authConfigFile), { recursive: true });
-      
-      // Create the config object for the web server
-      const webServerAuthConfig = {
-        enabled: authConfig.enabled,
-        username: authConfig.username,
-        passwordHash: authConfig.password ? await this.hashPassword(authConfig.password) : ''
-      };
-      
-      fs.writeFileSync(authConfigFile, JSON.stringify(webServerAuthConfig, null, 2), 'utf-8');
-    } catch (error) {
-      console.error('[Settings] Failed to save web server auth config:', error);
-    }
-    
-    // Send auth config to web server process if it's running
-    if (apiProcess && !apiProcess.killed) {
-      apiProcess.send({
-        type: 'update-auth-config',
-        authConfig
-      });
-    }
+  /** The login as the web server stores it. Hashed here so plaintext never crosses the IPC channel. */
+  async buildWebAuthConfig(config: GlobalConfig): Promise<WebAuthConfigUpdate> {
+    const { enabled, username, password } = this.getWebServerAuthConfig(config);
+    return {
+      enabled,
+      username,
+      passwordHash: password ? await this.hashUnlessUnchanged(password) : ''
+    };
   }
 
+  // bcrypt salts every hash, so re-hashing an unchanged password would look like a new login to
+  // the web server, which then makes every client reconnect. Keep the saved hash while it matches.
+  private async hashUnlessUnchanged(password: string): Promise<string> {
+    let savedHash: unknown;
+    try {
+      savedHash = readJsonOrQuarantine<{ passwordHash?: unknown }>(authConfigPath())?.passwordHash;
+    } catch {
+      savedHash = undefined;
+    }
+    if (typeof savedHash === 'string' && savedHash && await bcrypt.compare(password, savedHash).catch(() => false)) {
+      return savedHash;
+    }
+    return bcrypt.hash(password, SALT_ROUNDS);
+  }
 
+  /**
+   * Saves the web login to auth-config.json and hands it to a running web server, which also
+   * writes that file. Both write the same hash, atomically and readable only by the owner.
+   */
+  async updateWebServerAuth(config: GlobalConfig, child: ChildProcess | null): Promise<void> {
+    const authConfig = await this.buildWebAuthConfig(config);
+
+    try {
+      const authConfigFile = authConfigPath();
+      fs.mkdirSync(path.dirname(authConfigFile), { recursive: true });
+      writeJsonAtomic(authConfigFile, authConfig, { mode: 0o600 });
+    } catch (error) {
+      console.error('[settings] Failed to save web server auth config:', error);
+    }
+
+    if (child?.connected) {
+      const message: MainToChildMessage = { type: 'update-auth-config', authConfig };
+      child.send(message);
+    }
+  }
 }
 
-// Export singleton instance
+function authConfigPath(): string {
+  return path.join(getDefaultInstallDir(), 'data', 'auth-config.json');
+}
+
 export const settingsService = new SettingsService();

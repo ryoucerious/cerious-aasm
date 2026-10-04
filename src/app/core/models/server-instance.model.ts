@@ -2,7 +2,7 @@ export interface ServerInstance {
   id: string;
   name: string;
   status?: 'online' | 'offline' | 'loading';
-  state?: string; // Added for sidebar status icon
+  state?: string;
   type?: string;
 
   // Minimal ARK server config fields
@@ -23,6 +23,10 @@ export interface ServerInstance {
   allowThirdPersonPlayer?: boolean;
   crossplay?: string[]; // e.g., ['Steam', 'Epic', 'Xbox', 'PlayStation']
   mods?: string[];
+  /** Ids from `mods` that are loaded; older configs lack it, which means all of them. */
+  enabledMods?: string[];
+  /** Per mod id: its INI settings, plus the display name under `_name`. */
+  modSettings?: Record<string, ModSettings>;
 
   // Whitelist/Exclusive Join configuration
   useExclusiveList?: boolean; // Enable exclusive join mode (UseExclusiveList=true)
@@ -135,7 +139,7 @@ export interface ServerInstance {
   pveStructureDecayPeriodMultiplier?: number;
   pveStructureDecayDelay?: number;
 
-  // Steam subsystem escape hatch (Issue #6)
+  // Steam subsystem escape hatch
   disableSteamSubsystem?: boolean;
   bServerGameLogEnabled?: boolean;
   bShowCreativeMode?: boolean;
@@ -143,7 +147,6 @@ export interface ServerInstance {
   bUseSingleplayerSettings?: boolean;
   bXPMultiplier?: number;
 
-  // Missing ARK Ascended settings
   showFloatingDamageText?: boolean;
   supplyCrateLootQualityMultiplier?: number;
   fishingLootQualityMultiplier?: number;
@@ -167,7 +170,6 @@ export interface ServerInstance {
   // Server ordering for sidebar display
   sortOrder?: number; // Order of this server in the sidebar list
 
-  // Additional missing ARK Ascended config settings
   perPlatformMaxStructuresMultiplier?: number;
   platformSaddleBuildAreaBoundsMultiplier?: number;
   maxPlatformSaddleStructureLimit?: number;
@@ -230,7 +232,7 @@ export interface ServerInstance {
   crashDetectionInterval?: number; // How often to check process health (seconds)
   maxRestartAttempts?: number; // Max restart attempts before giving up
   scheduledRestartEnabled?: boolean; // Enable scheduled restarts
-  restartFrequency?: 'daily' | 'weekly' | 'custom'; // How often to restart
+  restartFrequency?: 'none' | 'daily' | 'weekly' | 'custom'; // How often to restart
   restartTime?: string; // Time to restart (HH:MM format)
   restartDays?: number[]; // Days of week to restart (0=Sunday, 1=Monday, etc.)
   restartWarningMinutes?: number; // Minutes to warn players before restart
@@ -266,4 +268,55 @@ export interface ServerInstance {
       enabled: boolean;
     }>;
   };
+}
+
+export type ModSettings = Record<string, string> & { _name?: string };
+
+/** A row of the mods page. */
+export interface ModEntry {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** The mod's INI settings, without `_name`. */
+  settings: Record<string, string>;
+}
+
+/** A server's settings before the backend has assigned it an id. */
+export type ServerInstanceDraft = Omit<ServerInstance, 'id'> & { id?: string };
+
+/** Reply to save-server-instance, or the local answer when nothing changed. */
+export interface SaveInstanceResult {
+  success: boolean;
+  instance?: ServerInstance;
+  error?: string;
+  /** True when the save was skipped because nothing differed from the last saved copy. */
+  unchanged?: boolean;
+}
+
+/** Per-instance broadcasts. Every field is optional: they arrive over the wire unchecked. */
+export interface InstanceStateEvent {
+  instanceId?: string;
+  state?: string;
+}
+
+export interface InstancePlayersEvent {
+  instanceId?: string;
+  players?: number;
+  /** Older backends sent the count under this name. */
+  count?: number;
+}
+
+export interface InstanceMemoryEvent {
+  instanceId?: string;
+  memory?: number;
+}
+
+export interface InstanceCpuEvent {
+  instanceId?: string;
+  cpu?: number;
+}
+
+export interface RconStatusEvent {
+  instanceId?: string;
+  connected?: boolean;
 }

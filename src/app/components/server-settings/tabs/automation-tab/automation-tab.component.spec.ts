@@ -1,13 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AutomationTabComponent } from './automation-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { ServerInstanceService } from '../../../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
 
 describe('AutomationTabComponent', () => {
   let component: AutomationTabComponent;
@@ -15,13 +7,7 @@ describe('AutomationTabComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [AutomationTabComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [AutomationTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(AutomationTabComponent);
     component = fixture.componentInstance;
@@ -56,10 +42,13 @@ describe('AutomationTabComponent', () => {
     expect(component.validateField.emit).toHaveBeenCalledWith({key: 'autoStart', value: true});
   });
 
-  it('should emit restartDayToggle', () => {
+  it('emits the toggled restart day and whether it is now selected', () => {
     spyOn(component.restartDayToggle, 'emit');
-    component.onRestartDayToggle(2, { target: { checked: true } });
-    expect(component.restartDayToggle.emit).toHaveBeenCalledWith({dayIndex: 2, event: { target: { checked: true } }});
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = true;
+    component.onRestartDayToggle(2, { target: checkbox } as unknown as Event);
+    expect(component.restartDayToggle.emit).toHaveBeenCalledWith({ dayIndex: 2, checked: true });
   });
 
   it('should emit restartFrequencySelect', () => {
@@ -96,11 +85,16 @@ describe('AutomationTabComponent', () => {
     expect(component.getScheduledRestartStatus()).toBe('Disabled');
   });
 
-  it('should get selected days text', () => {
-    component.serverInstance = { restartDays: [0, 2, 4] };
-    expect((component as any).getSelectedDaysText()).toContain('Sunday');
-    component.serverInstance = { restartDays: [] };
-    expect((component as any).getSelectedDaysText()).toBe('No days selected');
+  it('lists the restart days in week order without reordering the saved ones', () => {
+    const restartDays = [3, 1];
+    component.serverInstance = { scheduledRestartEnabled: true, restartFrequency: 'weekly', restartTime: '03:00', restartDays };
+    expect(component.getScheduledRestartStatus()).toBe('Weekly Monday, Wednesday at 03:00');
+    expect(restartDays).toEqual([3, 1]);
+  });
+
+  it('says so when no restart day is selected', () => {
+    component.serverInstance = { scheduledRestartEnabled: true, restartFrequency: 'weekly', restartTime: '03:00', restartDays: [] };
+    expect(component.getScheduledRestartStatus()).toBe('Weekly No days selected at 03:00');
   });
 
   it('should check restart day selected', () => {
@@ -116,13 +110,11 @@ describe('AutomationTabComponent', () => {
     expect(component.getRestartFrequencyDisplayName('other')).toBe('other');
   });
 
-  it('should return false for hasFieldError and hasFieldWarning', () => {
-    expect(component.hasFieldError('autoStart')).toBeFalse();
-    expect(component.hasFieldWarning('autoStart')).toBeFalse();
-  });
-
-  it('should return empty string for getFieldError and getFieldWarning', () => {
-    expect(component.getFieldError('autoStart')).toBe('');
-    expect(component.getFieldWarning('autoStart')).toBe('');
+  it('shows validation messages for its fields', () => {
+    component.serverInstance = { crashDetectionEnabled: true };
+    component.fieldErrors = { crashDetectionInterval: 'Crash detection interval must be between 30 and 300 seconds' };
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.validation-error')?.textContent)
+      .toContain('Crash detection interval must be between 30 and 300 seconds');
   });
 });

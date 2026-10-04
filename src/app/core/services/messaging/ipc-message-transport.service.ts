@@ -1,26 +1,31 @@
-
 import { Injectable } from '@angular/core';
-import { Observable, from } from 'rxjs';
+import { Observable, from, map } from 'rxjs';
 import { IpcService } from '../ipc.service';
 import { MessageTransport } from './message-transport.interface';
-import { Observable as RxObservable } from 'rxjs';
+
+/** What main answers on 'message': whether the message reached the bus, not the reply itself. */
+interface DeliveryAck {
+  status?: 'received' | 'error';
+  error?: string;
+}
 
 @Injectable()
 export class IpcMessageTransport implements MessageTransport {
   constructor(private ipc: IpcService) {}
 
-  sendMessage(channel: string, payload: any): Observable<any> {
-    // Always call the generic 'message' channel and pass { channel, payload }
-    return from(this.ipc.invoke('message', { channel, payload }));
+  /**
+   * Resolves once the main process has the message; the reply comes back as an event on `channel`.
+   * Errors if main refused it (a bad channel name), since no reply will follow.
+   */
+  sendMessage(channel: string, payload: unknown): Observable<unknown> {
+    return from(this.ipc.invoke('message', { channel, payload })).pipe(map(ack => {
+      const { status, error } = (ack ?? {}) as DeliveryAck;
+      if (status === 'error') throw new Error(error || `The main process refused the message on ${channel}`);
+      return ack;
+    }));
   }
 
-  receiveMessage<T = any>(channel: string): Observable<T> {
-    return new RxObservable<T>((subscriber) => {
-      const listener = (_event: any, data: T) => {
-        subscriber.next(data);
-      };
-      this.ipc.on(channel, listener);
-      return () => this.ipc.removeListener(channel, listener);
-    });
+  receiveMessage<T>(channel: string): Observable<T> {
+    return new Observable<T>(subscriber => this.ipc.on(channel, (_event, data) => subscriber.next(data as T)));
   }
 }

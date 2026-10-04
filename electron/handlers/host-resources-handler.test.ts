@@ -1,55 +1,50 @@
-import { jest } from '@jest/globals';
+import { messagingService } from '../services/messaging.service';
+import { platformService } from '../services/platform.service';
+import * as platformUtils from '../utils/platform.utils';
 
 jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-  },
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
 }));
-
 jest.mock('../services/platform.service', () => ({
-  platformService: {
-    getConfigPath: jest.fn(() => 'C:/config'),
-  },
+  platformService: { getConfigPath: jest.fn() }
 }));
-
 jest.mock('../utils/platform.utils', () => ({
   sampleCpuTimes: jest.fn(),
   cpuPercentFromSamples: jest.fn(),
   getTotalMemory: jest.fn(),
   getFreeMemory: jest.fn(),
-  getDiskUsage: jest.fn(),
+  getDiskUsage: jest.fn()
 }));
 
-import { messagingService } from '../services/messaging.service';
-import { platformService } from '../services/platform.service';
-import * as platformUtils from '../utils/platform.utils';
+const mockMessaging = jest.mocked(messagingService);
+const utils = jest.mocked(platformUtils);
 
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const utils = platformUtils as jest.Mocked<typeof platformUtils>;
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
 describe('host-resources-handler', () => {
-  let handler: (payload: any, sender: any) => Promise<void>;
-  const sender = { id: 'sender-1' };
+  const sender = { send: jest.fn() };
+  let handler: Listener;
 
   beforeAll(() => {
     require('./host-resources-handler');
-    handler = (mockMessaging.on as jest.Mock).mock.calls.find(call => call[0] === 'get-host-resources')?.[1] as any;
+    handler = mockMessaging.on.mock.calls.find(([channel]) => channel === 'get-host-resources')![1] as Listener;
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.mocked(platformService.getConfigPath).mockReturnValue('C:/config');
+    utils.sampleCpuTimes.mockReturnValue({ idle: 1, total: 2 });
+    utils.cpuPercentFromSamples.mockReturnValue(0);
+    utils.getTotalMemory.mockReturnValue(10);
+    utils.getFreeMemory.mockReturnValue(4);
+    utils.getDiskUsage.mockResolvedValue({ total: 10, free: 5 });
   });
 
-  it('registers the get-host-resources channel', () => {
-    expect(handler).toBeDefined();
-  });
+  function reply(): Record<string, unknown> {
+    return mockMessaging.sendToOriginator.mock.calls[0][1] as Record<string, unknown>;
+  }
 
-  it('reports cpu, memory and disk usage to the originator', async () => {
-    utils.sampleCpuTimes
-      .mockReturnValueOnce({ idle: 100, total: 200 })
-      .mockReturnValueOnce({ idle: 150, total: 300 });
+  it('reports cpu over a short window, memory and disk usage to the requester', async () => {
+    utils.sampleCpuTimes.mockReturnValueOnce({ idle: 100, total: 200 }).mockReturnValueOnce({ idle: 150, total: 300 });
     utils.cpuPercentFromSamples.mockReturnValue(50);
     utils.getTotalMemory.mockReturnValue(32_000);
     utils.getFreeMemory.mockReturnValue(12_000);
@@ -67,42 +62,34 @@ describe('host-resources-handler', () => {
     }, sender);
   });
 
-  it('returns a null disk entry when disk usage cannot be read', async () => {
-    utils.sampleCpuTimes.mockReturnValue({ idle: 1, total: 2 });
-    utils.cpuPercentFromSamples.mockReturnValue(0);
-    utils.getTotalMemory.mockReturnValue(10);
-    utils.getFreeMemory.mockReturnValue(4);
+  it('reports a null disk when disk usage cannot be read', async () => {
     utils.getDiskUsage.mockResolvedValue(null);
 
     await handler({ requestId: 'r2' }, sender);
 
-    const payload = (mockMessaging.sendToOriginator as jest.Mock).mock.calls[0][1] as any;
-    expect(payload.disk).toBeNull();
-    expect(payload.memory).toEqual({ used: 6, total: 10 });
+    expect(reply()).toMatchObject({ disk: null, memory: { used: 6, total: 10 } });
   });
 
-  it('still measures disk when the config path cannot be resolved', async () => {
-    (platformService.getConfigPath as jest.Mock).mockImplementationOnce(() => { throw new Error('no app'); });
-    utils.sampleCpuTimes.mockReturnValue({ idle: 1, total: 2 });
-    utils.cpuPercentFromSamples.mockReturnValue(0);
-    utils.getTotalMemory.mockReturnValue(10);
-    utils.getFreeMemory.mockReturnValue(4);
-    utils.getDiskUsage.mockResolvedValue({ total: 10, free: 5 });
+  it('still measures a disk when the config path cannot be resolved', async () => {
+    jest.mocked(platformService.getConfigPath).mockImplementationOnce(() => { throw new Error('no app'); });
 
     await handler({ requestId: 'r3' }, sender);
 
     expect(utils.getDiskUsage).toHaveBeenCalledWith('');
-    expect((mockMessaging.sendToOriginator as jest.Mock).mock.calls[0][1]).toMatchObject({ disk: { used: 5, total: 10 } });
+    expect(reply()).toMatchObject({ disk: { used: 5, total: 10 } });
   });
 
-  it('sends an error payload when sampling throws', async () => {
+  it('replies { error } without success when sampling throws', async () => {
     utils.sampleCpuTimes.mockImplementation(() => { throw new Error('cpus unavailable'); });
 
     await handler({ requestId: 'r4' }, sender);
 
-    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-host-resources', {
-      error: 'cpus unavailable',
-      requestId: 'r4'
-    }, sender);
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-host-resources', { error: 'cpus unavailable', requestId: 'r4' }, sender);
+  });
+
+  it('answers a request without a payload', async () => {
+    await handler(undefined, sender);
+
+    expect(reply()).toMatchObject({ cpuPercent: 0, requestId: undefined });
   });
 });

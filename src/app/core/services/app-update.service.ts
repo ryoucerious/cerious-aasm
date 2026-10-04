@@ -1,6 +1,9 @@
-import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { Injectable, OnDestroy } from '@angular/core';
+import { BehaviorSubject, Observable, Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { MessagingService } from './messaging/messaging.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
 export interface AppUpdateStatus {
   status: 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error';
@@ -26,15 +29,24 @@ export interface AppUpdateStatus {
  * in one subscription so a late listener still sees an update found before it loaded.
  */
 @Injectable({ providedIn: 'root' })
-export class AppUpdateService {
+export class AppUpdateService implements OnDestroy {
   private readonly statusSubject = new BehaviorSubject<AppUpdateStatus | null>(null);
+  private readonly subs: Subscription[] = [];
 
-  constructor(private messaging: MessagingService) {
-    this.messaging.receiveMessage<AppUpdateStatus>('app-update-status').subscribe(status => {
+  constructor(private messaging: MessagingService, webSocket: WebSocketService, ipc: IpcService) {
+    this.subs.push(this.messaging.receiveMessage<AppUpdateStatus>('app-update-status').subscribe(status => {
       if (status) this.statusSubject.next(status);
-    });
-    // The main process may have found the update before the UI was listening.
-    this.messaging.sendNotification('get-app-update-status', {});
+    }));
+
+    // The main process may have found the update before the UI was listening. The web UI asks
+    // whenever its socket comes up: before that, or while the session is refused, the request
+    // is dropped and never repeated. The desktop app has no socket and asks once.
+    this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.requestStatus()));
+    if (ipc.isElectron) this.requestStatus();
+  }
+
+  ngOnDestroy(): void {
+    this.subs.forEach(sub => sub.unsubscribe());
   }
 
   get status$(): Observable<AppUpdateStatus | null> {
@@ -59,5 +71,9 @@ export class AppUpdateService {
 
   install(): void {
     this.messaging.sendNotification('install-app-update', {});
+  }
+
+  private requestStatus(): void {
+    this.messaging.sendNotification('get-app-update-status', {});
   }
 }

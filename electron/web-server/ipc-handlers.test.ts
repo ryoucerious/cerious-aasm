@@ -1,186 +1,111 @@
-import { setupIPCHandlers } from '../web-server/ipc-handlers';
+import { setupIPCHandlers } from './ipc-handlers';
+import { messagingService } from '../services/messaging.service';
+import { getAuthConfig, updateAuthConfig } from './auth-config';
+import { resolveAuthVerify } from './user-bridge';
+import { invalidateSessionsFor } from '../utils/session-store.utils';
+import type { MainToChildMessage } from '../types/messaging.types';
 
-// Mock dependencies
-jest.mock('../services/messaging.service');
-jest.mock('../web-server/auth-config');
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { sendToWebSocket: jest.fn(), sendToAllWebSockets: jest.fn(), closeWebSockets: jest.fn() }
+}));
+jest.mock('./auth-config', () => ({ updateAuthConfig: jest.fn(), getAuthConfig: jest.fn() }));
+jest.mock('./user-bridge', () => ({ resolveAuthVerify: jest.fn() }));
+jest.mock('../utils/session-store.utils', () => ({ invalidateSessionsFor: jest.fn(() => []) }));
 
-
-const mockMessagingService = require('../services/messaging.service');
-const mockAuthConfig = require('../web-server/auth-config');
-
-// Setup the mock messaging service
-mockMessagingService.messagingService = {
-  sendToAllWebSockets: jest.fn(),
-  // Replies are addressed to the client that asked, rather than broadcast to everyone.
-  sendToWebSocket: jest.fn()
-};
-
-// Mock process globally
-let originalProcess: any;
-beforeAll(() => {
-  originalProcess = global.process;
-});
-
-afterAll(() => {
-  global.process = originalProcess;
-});
+const off = { enabled: false, username: '', passwordHash: '' };
+const on = { enabled: true, username: 'admin', passwordHash: 'hash' };
 
 describe('ipc-handlers', () => {
-  let mockProcess: any;
+  let onMessage: (message: unknown) => void;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Setup mock process
-    mockProcess = {
-      on: jest.fn()
-    };
-    global.process = mockProcess;
-
-  // Setup default mocks
-  mockMessagingService.messagingService.sendToAllWebSockets = jest.fn();
-  mockMessagingService.messagingService.sendToWebSocket = jest.fn();
-    mockAuthConfig.updateAuthConfig = jest.fn();
-    mockAuthConfig.hashPassword = jest.fn().mockResolvedValue('hashedpassword');
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    const on = jest.spyOn(process, 'on').mockImplementation(() => process);
+    setupIPCHandlers();
+    const registration = on.mock.calls.find(([event]) => event === 'message');
+    onMessage = registration![1] as (message: unknown) => void;
   });
 
-  afterEach(() => {
-    // Restore original process
-    global.process = originalProcess;
+  function receive(message: MainToChildMessage) {
+    onMessage(message);
+  }
+
+  it('sends a reply only to the socket that asked', () => {
+    receive({ type: 'messaging-response', channel: 'get-users', data: { users: [] }, cid: 'c1' });
+
+    expect(messagingService.sendToWebSocket).toHaveBeenCalledWith('c1', 'get-users', { users: [] });
+    expect(messagingService.sendToAllWebSockets).not.toHaveBeenCalled();
   });
 
-  describe('setupIPCHandlers', () => {
-    it('should setup process message listener', () => {
-      setupIPCHandlers();
+  it('broadcasts to every socket but the excluded one', () => {
+    receive({ type: 'broadcast-web', channel: 'server-instances', data: [], excludeCid: 'c1' });
 
-      expect(mockProcess.on).toHaveBeenCalled();
-      expect(mockProcess.on.mock.calls[0][0]).toBe('message');
-      expect(typeof mockProcess.on.mock.calls[0][1]).toBe('function');
-    });
+    expect(messagingService.sendToAllWebSockets).toHaveBeenCalledWith('server-instances', [], 'c1');
   });
 
-  describe('message handling', () => {
-    let messageHandler: any;
+  it('hands a credential check result to the waiting login', () => {
+    receive({ type: 'auth-verify-result', requestId: 'auth-1', user: null });
 
-    beforeEach(() => {
-      setupIPCHandlers();
-      messageHandler = mockProcess.on.mock.calls[0][1];
-    });
+    expect(resolveAuthVerify).toHaveBeenCalledWith('auth-1', null);
+  });
 
-    it('should handle messaging-response messages', () => {
-      const message = {
-        type: 'messaging-response',
-        channel: 'test-channel',
-        data: { test: 'data' }
-      };
+  it('drops the sessions of a changed account or role and closes their sockets', () => {
+    jest.mocked(invalidateSessionsFor).mockReturnValueOnce(['t1']);
 
-      messageHandler(message);
+    receive({ type: 'invalidate-sessions', userId: 'u1' });
 
-  // A reply goes only to the client that asked, identified by its connection id.
-  expect(mockMessagingService.messagingService.sendToWebSocket)
-    .toHaveBeenCalledWith(undefined, 'test-channel', { test: 'data' });
-    });
+    expect(invalidateSessionsFor).toHaveBeenCalledWith({ userId: 'u1', roleId: undefined });
+    expect(messagingService.closeWebSockets).toHaveBeenCalledWith(4401, 'Session ended', expect.any(Function));
+    const matches = jest.mocked(messagingService.closeWebSockets).mock.calls[0][2]!;
+    expect(matches({ _sessionToken: 't1', readyState: 1, send: jest.fn(), close: jest.fn() })).toBe(true);
+    expect(matches({ _sessionToken: 't2', readyState: 1, send: jest.fn(), close: jest.fn() })).toBe(false);
+    expect(matches({ readyState: 1, send: jest.fn(), close: jest.fn() })).toBe(false);
+  });
 
-    it('should handle broadcast-web messages', () => {
-      const message = {
-        type: 'broadcast-web',
-        channel: 'test-channel',
-        data: { test: 'data' },
-        excludeCid: 'exclude-123'
-      };
+  it('closes nothing when no session was dropped', () => {
+    receive({ type: 'invalidate-sessions', roleId: 'viewer' });
 
-      messageHandler(message);
+    expect(messagingService.closeWebSockets).not.toHaveBeenCalled();
+  });
 
-  expect(mockMessagingService.messagingService.sendToAllWebSockets).toHaveBeenCalledWith('test-channel', { test: 'data' }, 'exclude-123');
-    });
+  it('applies a login update', () => {
+    jest.mocked(getAuthConfig).mockReturnValueOnce(on).mockReturnValueOnce(on);
 
-    it('should handle update-auth-config messages with plain password', async () => {
-      const message = {
-        type: 'update-auth-config',
-        authConfig: {
-          enabled: true,
-          password: 'plainpassword'
-        }
-      };
+    receive({ type: 'update-auth-config', authConfig: on });
 
-      await messageHandler(message);
+    expect(updateAuthConfig).toHaveBeenCalledWith(on);
+  });
 
-      expect(mockAuthConfig.hashPassword).toHaveBeenCalledWith('plainpassword');
-      expect(mockAuthConfig.updateAuthConfig).toHaveBeenCalledWith({
-        enabled: true,
-        passwordHash: 'hashedpassword'
-      });
-    });
+  it('makes every socket sign in again when the login changes', () => {
+    // A socket opened while authentication was off would otherwise keep the owner's rights.
+    jest.mocked(getAuthConfig).mockReturnValueOnce(off).mockReturnValueOnce(on);
 
-    it('should handle update-auth-config messages with hashed password', async () => {
-      const message = {
-        type: 'update-auth-config',
-        authConfig: {
-          enabled: true,
-          passwordHash: 'alreadyhashed'
-        }
-      };
+    receive({ type: 'update-auth-config', authConfig: on });
 
-      await messageHandler(message);
+    expect(messagingService.closeWebSockets).toHaveBeenCalledWith(1012, 'Sign-in settings changed');
+  });
 
-      expect(mockAuthConfig.hashPassword).not.toHaveBeenCalled();
-      expect(mockAuthConfig.updateAuthConfig).toHaveBeenCalledWith({
-        enabled: true,
-        passwordHash: 'alreadyhashed'
-      });
-    });
+  it('leaves the sockets open when the login did not change', () => {
+    jest.mocked(getAuthConfig).mockReturnValue(on);
 
-    it('should handle update-auth-config messages with no valid password', async () => {
-      const message = {
-        type: 'update-auth-config',
-        authConfig: {
-          enabled: true
-          // No password or passwordHash
-        }
-      };
+    receive({ type: 'update-auth-config', authConfig: on });
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    expect(messagingService.closeWebSockets).not.toHaveBeenCalled();
+  });
 
-      await messageHandler(message);
+  it('never stores fields beyond the login itself', () => {
+    // An older main sent the plaintext password along, and spreading the message saved it to disk.
+    const authConfig = { enabled: false, username: 'admin', passwordHash: 'hash', password: 'plaintext' };
+    jest.mocked(getAuthConfig).mockReturnValue(off);
 
-      expect(consoleSpy).toHaveBeenCalledWith('[Auth] No valid password or passwordHash provided');
-      expect(mockAuthConfig.updateAuthConfig).not.toHaveBeenCalled();
+    receive({ type: 'update-auth-config', authConfig });
 
-      consoleSpy.mockRestore();
-    });
+    expect(updateAuthConfig).toHaveBeenCalledWith({ enabled: false, username: 'admin', passwordHash: 'hash' });
+  });
 
-    it('should handle auth config update errors', async () => {
-      const message = {
-        type: 'update-auth-config',
-        authConfig: {
-          enabled: true,
-          password: 'plainpassword'
-        }
-      };
-
-      mockAuthConfig.hashPassword.mockRejectedValue(new Error('Hash error'));
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      await messageHandler(message);
-
-      expect(consoleSpy).toHaveBeenCalled();
-      expect(consoleSpy.mock.calls[0][0]).toBe('[Auth] Failed to update auth config:');
-      expect(typeof consoleSpy.mock.calls[0][1]).toBe('object');
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should ignore unknown message types', () => {
-      const message = {
-        type: 'unknown-type',
-        data: 'test'
-      };
-
-      messageHandler(message);
-
-  expect(mockMessagingService.messagingService.sendToAllWebSockets).not.toHaveBeenCalled();
-      expect(mockAuthConfig.updateAuthConfig).not.toHaveBeenCalled();
-    });
+  it('ignores messages it does not know', () => {
+    expect(() => onMessage({ type: 'unknown-type' })).not.toThrow();
+    expect(() => onMessage(undefined)).not.toThrow();
+    expect(updateAuthConfig).not.toHaveBeenCalled();
   });
 });

@@ -1,20 +1,7 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, map, shareReplay } from 'rxjs';
-
-interface FieldDefinition {
-  tab: string;
-  label: string;
-  key: string;
-  type: string;
-  default?: any;
-  description?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-  options?: any[];
-  placeholder?: string;
-}
+import { ServerInstance } from '../models/server-instance.model';
+import { FieldDefinition, FieldDefinitionsService } from './field-definitions.service';
+import { STAT_MULTIPLIER_TYPES, StatMultiplierKey } from './stat-multiplier.service';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -30,44 +17,93 @@ export interface FieldValidation {
   label?: string;
 }
 
+/** Settings as the forms hold them: any field may be missing or of the wrong type. */
+type ServerSettingsInput = { [K in keyof ServerInstance]?: unknown } & { maxBackupsToKeep?: unknown };
+
+const MULTIPLIER_FIELDS = [
+  'xpMultiplier',
+  'tamingSpeedMultiplier',
+  'harvestAmountMultiplier',
+  'dinoCharacterFoodDrainMultiplier',
+  'dinoCharacterStaminaDrainMultiplier',
+  'dinoCharacterHealthRecoveryMultiplier',
+  'dinoCountMultiplier',
+  'playerCharacterFoodDrainMultiplier',
+  'playerCharacterStaminaDrainMultiplier',
+  'playerCharacterHealthRecoveryMultiplier',
+  'playerCharacterWaterDrainMultiplier',
+  'playerCharacterDamageMultiplier',
+  'playerCharacterResistanceMultiplier',
+  'dinoCharacterDamageMultiplier',
+  'dinoCharacterResistanceMultiplier',
+  'structureResistanceMultiplier',
+  'structureDamageMultiplier',
+  'dayCycleSpeedScale',
+  'dayTimeSpeedScale',
+  'nightTimeSpeedScale',
+  'dinoHarvestingDamageMultiplier',
+  'playerHarvestingDamageMultiplier',
+  'resourcesRespawnPeriodMultiplier',
+  'raidDinoCharacterFoodDrainMultiplier',
+  'passiveTameIntervalMultiplier',
+  'globalSpoilingTimeMultiplier',
+  'globalItemDecompositionTimeMultiplier',
+  'globalCorpseDecompositionTimeMultiplier',
+  'cropGrowthSpeedMultiplier',
+  'cropDecaySpeedMultiplier',
+  'matingIntervalMultiplier',
+  'matingSpeedMultiplier',
+  'eggHatchSpeedMultiplier',
+  'babyMatureSpeedMultiplier',
+  'babyFoodConsumptionSpeedMultiplier',
+  'babyCuddleIntervalMultiplier',
+  'babyImprintingStatScaleMultiplier',
+  'babyCuddleGracePeriodMultiplier',
+  'babyCuddleLoseImprintQualitySpeedMultiplier',
+  'babyImprintAmountMultiplier',
+  'babyMaxIntervalMultiplier',
+  'fuelConsumptionIntervalMultiplier',
+  'autoDestroyOldStructuresMultiplier',
+  'oviraptorEggConsumptionMultiplier',
+  'supplyCrateLootQualityMultiplier',
+  'fishingLootQualityMultiplier',
+  'layEggIntervalMultiplier',
+  'tamedDinoCharacterFoodDrainMultiplier',
+  'tamedDinoTorporDrainMultiplier'
+] as const satisfies readonly (keyof ServerInstance)[];
+
+const PASSWORD_FIELDS = ['serverPassword', 'serverAdminPassword', 'rconPassword'] as const;
+
 @Injectable({
   providedIn: 'root'
 })
 export class ArkServerValidationService {
-  private fieldDefinitions$: Observable<FieldDefinition[]> | null = null;
   private fieldDefinitions: FieldDefinition[] = [];
 
-  constructor(private http: HttpClient) {
-    // Load field definitions on service creation
-    this.loadFieldDefinitions();
-  }
-
-  private loadFieldDefinitions() {
-    this.fieldDefinitions$ = this.http.get<FieldDefinition[]>('assets/advanced-settings-meta.json').pipe(
-      shareReplay(1)
-    );
-    // Load synchronously for immediate access
-    this.http.get<FieldDefinition[]>('assets/advanced-settings-meta.json').subscribe(definitions => {
-      this.fieldDefinitions = definitions;
+  constructor(fieldDefinitionsService: FieldDefinitionsService) {
+    // Labels are looked up synchronously while validating; until the file arrives, keys stand in.
+    fieldDefinitionsService.getFieldDefinitions().subscribe({
+      next: definitions => this.fieldDefinitions = definitions,
+      error: () => { /* keep using keys as labels */ }
     });
   }
 
   private getFieldLabel(key: string): string {
     const field = this.fieldDefinitions.find(f => f.key === key);
-    return field ? field.label : key; // Fallback to key if not found
+    return field ? field.label : key;
   }
-  validateServerConfiguration(server: any): ValidationResult {
+
+  validateServerConfiguration(server: ServerSettingsInput): ValidationResult {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // Validate individual fields
-    const fieldValidations = [
+    const fieldValidations: FieldValidation[] = [
       this.validateServerName(server.name),
       this.validateSessionName(server.sessionName),
       this.validatePorts(server),
       this.validateMultiHome(server.multiHome),
       this.validatePlayerLimits(server),
-      this.validateMultipliers(server),
+      ...this.validateMultipliers(server),
       this.validateStatArrays(server),
       this.validatePasswords(server),
       this.validateAutomationSettings(server),
@@ -75,17 +111,14 @@ export class ArkServerValidationService {
       this.validateClusterSettings(server)
     ];
 
-    // Collect errors and warnings
     fieldValidations.forEach(validation => {
       if (!validation.isValid && validation.error) {
         const fieldLabel = validation.label || this.getFieldLabel(validation.field) || validation.field;
-        const errorWithLabel = validation.error.replace(validation.field, fieldLabel);
-        errors.push(errorWithLabel);
+        errors.push(validation.error.replace(validation.field, fieldLabel));
       }
       if (validation.warning) {
         const fieldLabel = validation.label || this.getFieldLabel(validation.field) || validation.field;
-        const warningWithLabel = validation.warning.replace(validation.field, fieldLabel);
-        warnings.push(warningWithLabel);
+        warnings.push(validation.warning.replace(validation.field, fieldLabel));
       }
     });
 
@@ -96,10 +129,7 @@ export class ArkServerValidationService {
     };
   }
 
-  /**
-   * Validate server name
-   */
-  validateServerName(name: string, label?: string): FieldValidation {
+  validateServerName(name: unknown, label?: string): FieldValidation {
     const fieldLabel = label || this.getFieldLabel('name') || 'Server name';
 
     if (!name || typeof name !== 'string') {
@@ -114,7 +144,6 @@ export class ArkServerValidationService {
       return { field: 'name', isValid: false, error: `${fieldLabel} cannot exceed 100 characters`, label };
     }
 
-    // Check for invalid characters
     const invalidChars = /[<>:"/\\|?*]/;
     if (invalidChars.test(name)) {
       return { field: 'name', isValid: false, error: `${fieldLabel} contains invalid characters`, label };
@@ -123,10 +152,7 @@ export class ArkServerValidationService {
     return { field: 'name', isValid: true, label };
   }
 
-  /**
-   * Validate session name
-   */
-  validateSessionName(sessionName: string, label?: string): FieldValidation {
+  validateSessionName(sessionName: unknown, label?: string): FieldValidation {
     const fieldLabel = label || this.getFieldLabel('sessionName') || 'Session name';
 
     if (!sessionName || typeof sessionName !== 'string') {
@@ -144,10 +170,7 @@ export class ArkServerValidationService {
     return { field: 'sessionName', isValid: true, label };
   }
 
-  /**
-   * Validate map name
-   */
-  validateMapName(mapName: string, label?: string): FieldValidation {
+  validateMapName(mapName: unknown, label?: string): FieldValidation {
     const fieldLabel = label || this.getFieldLabel('mapName') || 'Server Map';
 
     if (!mapName || typeof mapName !== 'string') {
@@ -159,23 +182,17 @@ export class ArkServerValidationService {
       return { field: 'mapName', isValid: false, error: `${fieldLabel} cannot be empty`, label };
     }
 
-    // Check for invalid characters (basic validation)
     const invalidChars = /[<>:"/\\|?*]/;
     if (invalidChars.test(trimmedName)) {
       return { field: 'mapName', isValid: false, error: `${fieldLabel} contains invalid characters`, label };
     }
 
-    // For predefined maps, validate against options
-    const mapField = this.fieldDefinitions?.find(field => field.key === 'mapName');
-    if (mapField?.options) {
-      const validMaps = mapField.options.map((opt: any) => opt.value);
-      // If it's a predefined map, ensure it matches exactly
-      if (validMaps.includes(mapName)) {
-        return { field: 'mapName', isValid: true, label };
-      }
+    const mapField = this.fieldDefinitions.find(field => field.key === 'mapName');
+    const knownMaps = mapField?.options?.map(option => typeof option === 'string' ? option : option.value) ?? [];
+    if (knownMaps.includes(mapName)) {
+      return { field: 'mapName', isValid: true, label };
     }
 
-    // For custom maps, just ensure it's a reasonable length and format
     if (trimmedName.length > 100) {
       return { field: 'mapName', isValid: false, error: `${fieldLabel} cannot exceed 100 characters`, label };
     }
@@ -187,13 +204,12 @@ export class ArkServerValidationService {
    * Validate the MultiHome bind address.
    *
    * Empty means "bind all interfaces" (0.0.0.0) and is always valid. A value must be a
-   * dotted-quad IPv4 address — it is interpolated into the server's launch URL, and ARK's
+   * dotted-quad IPv4 address: it is interpolated into the server's launch URL, and ARK's
    * MultiHome parameter does not handle IPv6 literals reliably.
    */
-  validateMultiHome(value: any, label?: string): FieldValidation {
-    // multiHome has no advanced-settings-meta.json entry (the field is hand-written in
-    // the general tab), so both label lookups fall back to the raw key — use a
-    // human-readable name instead of putting "multiHome" in front of the user.
+  validateMultiHome(value: unknown, label?: string): FieldValidation {
+    // multiHome has no advanced-settings-meta.json entry, so both label lookups fall back
+    // to the raw key; show a readable name instead of "multiHome".
     const fieldLabel = label && label !== 'multiHome' ? label : 'MultiHome IP';
 
     if (value === undefined || value === null || String(value).trim() === '') {
@@ -220,21 +236,18 @@ export class ArkServerValidationService {
     return { field: 'multiHome', isValid: true, label };
   }
 
-  /**
-   * Validate port numbers
-   */
-  validatePorts(server: any): FieldValidation {
+  validatePorts(server: ServerSettingsInput): FieldValidation {
     const ports = [
       { field: 'gamePort', value: server.gamePort, default: 7777, required: true },
       { field: 'queryPort', value: server.queryPort, default: 27015, required: false },
       { field: 'rconPort', value: server.rconPort, default: 27020, required: true }
     ];
+    // QueryPort is optional: ASA may not use it. 0 or unset means "not used".
+    const isUnset = (port: typeof ports[number]) =>
+      !port.required && (port.value === 0 || port.value === null || port.value === undefined);
 
     for (const port of ports) {
-      // QueryPort is optional — ASA may not use it. Skip validation when 0 or unset.
-      if (!port.required && (port.value === 0 || port.value === null || port.value === undefined)) {
-        continue;
-      }
+      if (isUnset(port)) continue;
       const portValue = port.value !== undefined ? port.value : port.default;
       const fieldLabel = this.getFieldLabel(port.field) || port.field;
 
@@ -247,13 +260,10 @@ export class ArkServerValidationService {
       }
     }
 
-    // Check for port conflicts (only among ports with values)
-    const usedPorts = new Set();
+    const usedPorts = new Set<unknown>();
     for (const port of ports) {
+      if (isUnset(port)) continue;
       const portValue = port.value !== undefined ? port.value : port.default;
-      if (!port.required && (port.value === 0 || port.value === null || port.value === undefined)) {
-        continue;
-      }
       if (usedPorts.has(portValue)) {
         return { field: 'ports', isValid: false, error: 'Port numbers must be unique' };
       }
@@ -263,15 +273,12 @@ export class ArkServerValidationService {
     return { field: 'ports', isValid: true };
   }
 
-  /**
-   * Validate player limits
-   */
-  validatePlayerLimits(server: any): FieldValidation {
+  validatePlayerLimits(server: ServerSettingsInput): FieldValidation {
     const maxPlayers = server.maxPlayers;
     const fieldLabel = this.getFieldLabel('maxPlayers') || 'Max players';
 
     if (maxPlayers === undefined || maxPlayers === null) {
-      return { field: 'maxPlayers', isValid: true }; // Optional field
+      return { field: 'maxPlayers', isValid: true };
     }
 
     if (typeof maxPlayers !== 'number' || !Number.isInteger(maxPlayers)) {
@@ -285,109 +292,39 @@ export class ArkServerValidationService {
     return { field: 'maxPlayers', isValid: true };
   }
 
-  /**
-   * Validate multiplier values
-   */
-  validateMultipliers(server: any): FieldValidation {
-    const multiplierFields = [
-      'xpMultiplier',
-      'tamingSpeedMultiplier',
-      'harvestAmountMultiplier',
-      'dinoCharacterFoodDrainMultiplier',
-      'dinoCharacterStaminaDrainMultiplier',
-      'dinoCharacterHealthRecoveryMultiplier',
-      'dinoCountMultiplier',
-      'playerCharacterFoodDrainMultiplier',
-      'playerCharacterStaminaDrainMultiplier',
-      'playerCharacterHealthRecoveryMultiplier',
-      'playerCharacterWaterDrainMultiplier',
-      'playerCharacterDamageMultiplier',
-      'playerCharacterResistanceMultiplier',
-      'dinoCharacterDamageMultiplier',
-      'dinoCharacterResistanceMultiplier',
-      'structureResistanceMultiplier',
-      'structureDamageMultiplier',
-      'dayCycleSpeedScale',
-      'dayTimeSpeedScale',
-      'nightTimeSpeedScale',
-      'dinoHarvestingDamageMultiplier',
-      'playerHarvestingDamageMultiplier',
-      'resourcesRespawnPeriodMultiplier',
-      'raidDinoCharacterFoodDrainMultiplier',
-      'passiveTameIntervalMultiplier',
-      'globalSpoilingTimeMultiplier',
-      'globalItemDecompositionTimeMultiplier',
-      'globalCorpseDecompositionTimeMultiplier',
-      'cropGrowthSpeedMultiplier',
-      'cropDecaySpeedMultiplier',
-      'matingIntervalMultiplier',
-      'matingSpeedMultiplier',
-      'eggHatchSpeedMultiplier',
-      'babyMatureSpeedMultiplier',
-      'babyFoodConsumptionSpeedMultiplier',
-      'babyCuddleIntervalMultiplier',
-      'babyImprintingStatScaleMultiplier',
-      'babyCuddleGracePeriodMultiplier',
-      'babyCuddleLoseImprintQualitySpeedMultiplier',
-      'babyImprintAmountMultiplier',
-      'babyMaxIntervalMultiplier',
-      'fuelConsumptionIntervalMultiplier',
-      'autoDestroyOldStructuresMultiplier',
-      'oviraptorEggConsumptionMultiplier',
-      'supplyCrateLootQualityMultiplier',
-      'fishingLootQualityMultiplier',
-      'layEggIntervalMultiplier',
-      'tamedDinoCharacterFoodDrainMultiplier',
-      'tamedDinoTorporDrainMultiplier',
-      'dinoCountMultiplier'
-    ];
+  /** One entry per multiplier that is invalid or suspiciously high; empty when all are fine. */
+  validateMultipliers(server: ServerSettingsInput): FieldValidation[] {
+    const problems: FieldValidation[] = [];
 
-    for (const field of multiplierFields) {
+    for (const field of MULTIPLIER_FIELDS) {
       const value = server[field];
       const fieldLabel = this.getFieldLabel(field) || field;
 
-      if (value === undefined || value === null) {
-        continue; // Optional field
-      }
+      if (value === undefined || value === null) continue;
 
       if (typeof value !== 'number') {
-        return { field, isValid: false, error: `${fieldLabel} must be a valid number` };
-      }
-
-      if (value < 0) {
-        return { field, isValid: false, error: `${fieldLabel} cannot be negative` };
-      }
-
-      // Warn about extreme values
-      if (value >= 100) {
-        return { field, isValid: true, warning: `${fieldLabel} is set to a very high value (${value}). This may cause performance issues.` };
+        problems.push({ field, isValid: false, error: `${fieldLabel} must be a valid number` });
+      } else if (value < 0) {
+        problems.push({ field, isValid: false, error: `${fieldLabel} cannot be negative` });
+      } else if (value >= 100) {
+        problems.push({
+          field,
+          isValid: true,
+          warning: `${fieldLabel} is set to a very high value (${value}). This may cause performance issues.`
+        });
       }
     }
 
-    return { field: 'multipliers', isValid: true };
+    return problems;
   }
 
-  /**
-   * Validate stat multiplier arrays
-   */
-  validateStatArrays(server: any): FieldValidation {
-    const statArrayFields = [
-      'perLevelStatsMultiplier_Player',
-      'perLevelStatsMultiplier_DinoTamed',
-      'perLevelStatsMultiplier_DinoWild',
-      'perLevelStatsMultiplier_DinoTamed_Add',
-      'perLevelStatsMultiplier_DinoTamed_Affinity',
-      'perLevelStatsMultiplier_DinoTamed_Torpidity',
-      'perLevelStatsMultiplier_DinoTamed_Clamp'
-    ];
-
-    for (const field of statArrayFields) {
+  validateStatArrays(server: ServerSettingsInput): FieldValidation {
+    for (const type of STAT_MULTIPLIER_TYPES) {
+      const field: StatMultiplierKey = `perLevelStatsMultiplier_${type}`;
       const value = server[field];
       const fieldLabel = this.getFieldLabel(field) || field;
 
-      if (value === undefined || value === null) {
-        continue; // Optional field
-      }
+      if (value === undefined || value === null) continue;
 
       if (!Array.isArray(value)) {
         return { field, isValid: false, error: `${fieldLabel} must be an array` };
@@ -398,7 +335,7 @@ export class ArkServerValidationService {
       }
 
       for (let i = 0; i < value.length; i++) {
-        const statValue = value[i];
+        const statValue: unknown = value[i];
         if (typeof statValue !== 'number') {
           return { field, isValid: false, error: `${fieldLabel}[${i}] must be a valid number` };
         }
@@ -412,18 +349,11 @@ export class ArkServerValidationService {
     return { field: 'statArrays', isValid: true };
   }
 
-  /**
-   * Validate passwords
-   */
-  validatePasswords(server: any): FieldValidation {
-    const passwordFields = ['serverPassword', 'serverAdminPassword', 'rconPassword'];
-
-    for (const field of passwordFields) {
+  validatePasswords(server: ServerSettingsInput): FieldValidation {
+    for (const field of PASSWORD_FIELDS) {
       const value = server[field];
 
-      if (value === undefined || value === null || value === '') {
-        continue; // Optional field
-      }
+      if (value === undefined || value === null || value === '') continue;
 
       if (typeof value !== 'string') {
         return { field, isValid: false, error: `${field} must be a string` };
@@ -433,9 +363,8 @@ export class ArkServerValidationService {
         return { field, isValid: false, error: `${field} cannot exceed 100 characters` };
       }
 
-      // Check for potentially problematic characters.
-      // '?' is the ARK travel-URL parameter separator — including it in a password
-      // would break command-line parsing and corrupt configuration.
+      // '?' is the ARK travel-URL parameter separator: in a password it would break
+      // command-line parsing and corrupt the configuration.
       const problematicChars = /[<>"'?]/;
       if (problematicChars.test(value)) {
         return { field, isValid: false, error: `${field} contains invalid characters (< > " ' ? are not allowed)` };
@@ -445,27 +374,23 @@ export class ArkServerValidationService {
     return { field: 'passwords', isValid: true };
   }
 
-  /**
-   * Validate automation settings
-   */
-  validateAutomationSettings(server: any): FieldValidation {
-    // Crash detection interval
-    if (server.crashDetectionInterval !== undefined) {
-      if (typeof server.crashDetectionInterval !== 'number' || server.crashDetectionInterval < 30 || server.crashDetectionInterval > 300) {
+  validateAutomationSettings(server: ServerSettingsInput): FieldValidation {
+    const { crashDetectionInterval, maxRestartAttempts, restartWarningMinutes } = server;
+
+    if (crashDetectionInterval !== undefined) {
+      if (typeof crashDetectionInterval !== 'number' || crashDetectionInterval < 30 || crashDetectionInterval > 300) {
         return { field: 'crashDetectionInterval', isValid: false, error: 'Crash detection interval must be between 30 and 300 seconds' };
       }
     }
 
-    // Max restart attempts
-    if (server.maxRestartAttempts !== undefined) {
-      if (typeof server.maxRestartAttempts !== 'number' || server.maxRestartAttempts < 1 || server.maxRestartAttempts > 10) {
+    if (maxRestartAttempts !== undefined) {
+      if (typeof maxRestartAttempts !== 'number' || maxRestartAttempts < 1 || maxRestartAttempts > 10) {
         return { field: 'maxRestartAttempts', isValid: false, error: 'Max restart attempts must be between 1 and 10' };
       }
     }
 
-    // Restart warning minutes
-    if (server.restartWarningMinutes !== undefined) {
-      if (typeof server.restartWarningMinutes !== 'number' || server.restartWarningMinutes < 1 || server.restartWarningMinutes > 60) {
+    if (restartWarningMinutes !== undefined) {
+      if (typeof restartWarningMinutes !== 'number' || restartWarningMinutes < 1 || restartWarningMinutes > 60) {
         return { field: 'restartWarningMinutes', isValid: false, error: 'Restart warning must be between 1 and 60 minutes' };
       }
     }
@@ -473,13 +398,10 @@ export class ArkServerValidationService {
     return { field: 'automation', isValid: true };
   }
 
-  /**
-   * Validate backup settings
-   */
-  validateBackupSettings(server: any): FieldValidation {
-    // Max backups to keep
-    if (server.maxBackupsToKeep !== undefined) {
-      if (typeof server.maxBackupsToKeep !== 'number' || server.maxBackupsToKeep < 1 || server.maxBackupsToKeep > 1000) {
+  validateBackupSettings(server: ServerSettingsInput): FieldValidation {
+    const { maxBackupsToKeep } = server;
+    if (maxBackupsToKeep !== undefined) {
+      if (typeof maxBackupsToKeep !== 'number' || maxBackupsToKeep < 1 || maxBackupsToKeep > 1000) {
         return { field: 'maxBackupsToKeep', isValid: false, error: 'Max backups to keep must be between 1 and 1000' };
       }
     }
@@ -487,51 +409,41 @@ export class ArkServerValidationService {
     return { field: 'backup', isValid: true };
   }
 
-  /**
-   * Validate cluster settings
-   */
-  validateClusterSettings(server: any): FieldValidation {
-    // Cluster directory override
-    if (server.clusterDirOverride !== undefined && server.clusterDirOverride !== '') {
-      if (typeof server.clusterDirOverride !== 'string') {
+  validateClusterSettings(server: ServerSettingsInput): FieldValidation {
+    const { clusterDirOverride, clusterId, clusterName } = server;
+
+    if (clusterDirOverride !== undefined && clusterDirOverride !== '') {
+      if (typeof clusterDirOverride !== 'string') {
         return { field: 'clusterDirOverride', isValid: false, error: 'Cluster directory must be a string' };
       }
-      if (server.clusterDirOverride.length > 255) {
+      if (clusterDirOverride.length > 255) {
         return { field: 'clusterDirOverride', isValid: false, error: 'Cluster directory path cannot exceed 255 characters' };
       }
-      // Check for invalid path characters (allow : after drive letter for Windows paths like C:\ARK)
-      // Strip the drive letter prefix (e.g., "C:") before checking for invalid chars
-      let pathToCheck = server.clusterDirOverride;
-      if (/^[a-zA-Z]:/.test(pathToCheck)) {
-        pathToCheck = pathToCheck.substring(2);
-      }
-      const invalidPathChars = /[<>:"|?*]/;
-      if (invalidPathChars.test(pathToCheck)) {
+      // A Windows drive prefix ("C:") is the one place ':' is allowed, so strip it before
+      // checking for invalid characters.
+      const pathToCheck = /^[a-zA-Z]:/.test(clusterDirOverride) ? clusterDirOverride.substring(2) : clusterDirOverride;
+      if (/[<>:"|?*]/.test(pathToCheck)) {
         return { field: 'clusterDirOverride', isValid: false, error: 'Cluster directory contains invalid characters' };
       }
     }
 
-    // Cluster ID
-    if (server.clusterId !== undefined && server.clusterId !== '') {
-      if (typeof server.clusterId !== 'string') {
+    if (clusterId !== undefined && clusterId !== '') {
+      if (typeof clusterId !== 'string') {
         return { field: 'clusterId', isValid: false, error: 'Cluster ID must be a string' };
       }
-      if (server.clusterId.length > 100) {
+      if (clusterId.length > 100) {
         return { field: 'clusterId', isValid: false, error: 'Cluster ID cannot exceed 100 characters' };
       }
-      // Check for invalid characters
-      const invalidChars = /[<>:"/\\|?*]/;
-      if (invalidChars.test(server.clusterId)) {
+      if (/[<>:"/\\|?*]/.test(clusterId)) {
         return { field: 'clusterId', isValid: false, error: 'Cluster ID contains invalid characters' };
       }
     }
 
-    // Cluster name
-    if (server.clusterName !== undefined && server.clusterName !== '') {
-      if (typeof server.clusterName !== 'string') {
+    if (clusterName !== undefined && clusterName !== '') {
+      if (typeof clusterName !== 'string') {
         return { field: 'clusterName', isValid: false, error: 'Cluster name must be a string' };
       }
-      if (server.clusterName.length > 100) {
+      if (clusterName.length > 100) {
         return { field: 'clusterName', isValid: false, error: 'Cluster name cannot exceed 100 characters' };
       }
     }
@@ -539,12 +451,9 @@ export class ArkServerValidationService {
     return { field: 'cluster', isValid: true };
   }
 
-  /**
-   * Validate a single field
-   */
-  validateField(fieldName: string, value: any, server?: any, label?: string): FieldValidation {
+  validateField(fieldName: string, value: unknown, server?: ServerSettingsInput, label?: string): FieldValidation {
     const fieldLabel = label || fieldName;
-    
+
     switch (fieldName) {
       case 'name':
         return this.validateServerName(value);
@@ -582,14 +491,12 @@ export class ArkServerValidationService {
         }
         return { field: fieldName, isValid: true, label };
       default:
-        // For multiplier fields
         if (fieldName.includes('Multiplier') || fieldName.includes('Scale')) {
           if (typeof value !== 'number' || value < 0) {
             return { field: fieldName, isValid: false, error: `${fieldLabel} must be a positive number`, label };
           }
           return { field: fieldName, isValid: true, label };
         }
-        // For stat arrays
         if (fieldName.startsWith('perLevelStatsMultiplier_')) {
           if (!Array.isArray(value) || value.length !== 12) {
             return { field: fieldName, isValid: false, error: `${fieldLabel} must be an array of 12 numbers`, label };

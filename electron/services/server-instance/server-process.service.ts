@@ -1,635 +1,484 @@
-import { ChildProcess, spawn, execSync } from 'child_process';
-import * as path from 'path';
+import { ChildProcess, SpawnOptions, execFile, spawn } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
 import { validateInstanceId } from '../../utils/validation.utils';
-import { ArkPathUtils, buildArkServerArgs, ARK_APP_ID } from '../../utils/ark.utils';
-import { ServerInstanceResult } from '../../types/server-instance.types';
-import { snapshotLogFiles, detectAndRegisterLogFile, unregisterLogFile } from '../../utils/ark/ark-server/ark-server-logging.utils';
+import { getPlatform } from '../../utils/platform.utils';
+import * as instanceUtils from '../../utils/ark/instance.utils';
+import { buildArkServerArgs } from '../../utils/ark/ark-args.utils';
+import * as stateUtils from '../../utils/ark/ark-server/ark-server-state.utils';
+import {
+  ARK_APP_ID,
+  getInstanceAltSaveDirName,
+  getInstanceLogsDir,
+  prepareArkServerCommand,
+  resolveServerLaunch
+} from '../../utils/ark/ark-server/ark-server-paths.utils';
+import {
+  detectAndRegisterLogFile,
+  readLogTail,
+  setupLogTailing,
+  snapshotLogFiles,
+  unregisterLogFile
+} from '../../utils/ark/ark-server/ark-server-logging.utils';
+import {
+  cleanupOrphanedArkProcesses,
+  holdStartsUntil,
+  killInstanceProcesses,
+  rememberInstanceProcessMarker
+} from '../../utils/ark/ark-server/ark-server-cleanup.utils';
+import type { InstanceConfig, ServerInstanceResult } from '../../types/server-instance.types';
+import { discordService } from '../discord.service';
+import { messagingService } from '../messaging.service';
+import { rconService } from '../rcon.service';
 
-/**
- * Server Process Service - Handles low-level process management and state tracking
- */
+type StateCallback = (state: string) => void;
+type LogCallback = (line: string) => void;
+
+const SAVE_WORLD_TIMEOUT_MS = 30000;
+// Most servers finish writing the save within 5-10 s of SaveWorld answering.
+const SAVE_FLUSH_MS = 5000;
+const DO_EXIT_TIMEOUT_MS = 15000;
+const STOP_RECONNECT_TIMEOUT_MS = 5000;
+const TASKKILL_TIMEOUT_MS = 5000;
+const GRACEFUL_EXIT_TIMEOUT_MS = 120000;
+const SIGTERM_GRACE_MS = 5000;
+// Safety net for a startup line that is never seen (Proton swallowing output, an unknown log
+// format): long enough for the slowest first Proton boot, and still a single RCON attempt.
+const STARTUP_SAFETY_NET_MS = 15 * 60 * 1000;
+const STDERR_TAIL_LINES = 50;
+
 export class ServerProcessService {
   private arkServerProcesses: Record<string, ChildProcess> = {};
   private processStartTimes: Record<string, number> = {};
+  // False when the tracked process is ArkAscendedServer.exe itself on Windows: nothing can
+  // outlive it, so its exit needs no leftover sweep (a PowerShell run each time).
+  private leftoversPossible: Record<string, boolean> = {};
+  // The callback the server was started with: a force kill reports through it, since the exit that
+  // follows is ignored once the process is untracked.
+  private stateCallbacks: Record<string, StateCallback> = {};
+  private readonly stopsInProgress = new Set<string>();
 
-  /**
-   * Set instance state
-   */
   setInstanceState(instanceId: string, state: string): void {
-  const { setInstanceState } = require('../../utils/ark/ark-server/ark-server-state.utils');
-  setInstanceState(instanceId, state);
+    stateUtils.setInstanceState(instanceId, state);
   }
 
-  /**
-   * Get instance state
-   */
   getInstanceState(instanceId: string): string | null {
-  const { getInstanceState } = require('../../utils/ark/ark-server/ark-server-state.utils');
-  return getInstanceState(instanceId);
+    return stateUtils.getInstanceState(instanceId);
   }
 
-  /**
-   * Get normalized instance state, mapping unknown/null to 'stopped'
-   */
+  /** The state, with 'stopped' for an instance that never ran. */
   getNormalizedInstanceState(instanceId: string): string {
-  const { getNormalizedInstanceState } = require('../../utils/ark/ark-server/ark-server-state.utils');
-  return getNormalizedInstanceState(instanceId);
+    return stateUtils.getNormalizedInstanceState(instanceId);
   }
 
-  /**
-   * Get server process reference
-   */
   getServerProcess(instanceId: string): ChildProcess | null {
     return this.arkServerProcesses[instanceId] || null;
   }
 
-  /**
-   * Epoch milliseconds at which the tracked process for this instance was spawned, or null
-   * when no process is tracked. Drives the uptime shown on the dashboard.
-   */
+  /** Epoch ms at which the tracked process was spawned; drives the dashboard's uptime. */
   getProcessStartTime(instanceId: string): number | null {
     return this.processStartTimes[instanceId] ?? null;
   }
 
-  /**
-   * Get the number of active (tracked) server processes
-   */
   getActiveProcessCount(): number {
     return Object.keys(this.arkServerProcesses).length;
   }
 
-  /**
-   * Whether a live ChildProcess is still tracked for this instance.
-   */
   hasActiveProcess(instanceId: string): boolean {
-    const proc = this.arkServerProcesses[instanceId];
-    return !!(proc && !proc.killed && proc.exitCode === null);
+    const child = this.arkServerProcesses[instanceId];
+    return !!(child && !child.killed && child.exitCode === null);
   }
 
   /**
-   * Aggressively kill a server process, clear tracking, disconnect RCON, and broadcast stopped.
-   * Used by cluster-update timeout, pre-SteamCMD verification, and manual force-stop.
+   * Kills the server's whole process tree at once, with no save, and reports it stopped. Used for
+   * a manual force stop, a stop that timed out, and before SteamCMD touches the files.
    */
-  async forceKillServerProcess(
-    instanceId: string,
-    options?: { broadcast?: boolean }
-  ): Promise<void> {
-    const broadcast = options?.broadcast !== false;
-    const rconService = require('../rcon.service').rconService;
+  async forceKillServerProcess(instanceId: string, options?: { broadcast?: boolean }): Promise<void> {
+    await rconService.forceDisconnectRcon(instanceId);
 
-    try {
-      await rconService.forceDisconnectRcon(instanceId);
-    } catch (e) {
-      // Continue — kill must proceed even if RCON disconnect fails
-    }
+    const child = this.arkServerProcesses[instanceId];
+    const sweepNeeded = !child || this.leftoversPossible[instanceId] !== false;
+    const report = options?.broadcast === false ? null : this.stateCallbacks[instanceId] ?? broadcastStopped(instanceId);
+    // Untracked first, so the exit that follows is ignored rather than reported as a crash.
+    this.untrack(instanceId);
+    // Registered before the first await below: a start arriving during taskkill would otherwise
+    // spawn, then have its log tailer torn down and its state set back to stopped by this kill.
+    const kill = this.killUntracked(instanceId, child, sweepNeeded, report);
+    void holdStartsUntil(instanceId, kill);
+    await kill;
+  }
 
-    const proc = this.arkServerProcesses[instanceId];
-    if (proc?.pid) {
-      const { getPlatform } = require('../../utils/platform.utils');
-      const platform = getPlatform();
-      try {
-        if (platform === 'linux') {
-          try {
-            process.kill(-proc.pid, 'SIGKILL');
-          } catch {
-            try { proc.kill('SIGKILL'); } catch { /* already gone */ }
-          }
-          try {
-            execSync(`kill -9 ${proc.pid}`, { stdio: 'ignore' });
-          } catch { /* already gone */ }
-        } else {
-          // Windows: kill the full process tree (Proton/Wine children included when applicable)
-          try {
-            execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
-          } catch {
-            try { proc.kill('SIGKILL'); } catch { /* already gone */ }
-          }
-        }
-      } catch (e) {
-        console.warn(`[server-process-service] forceKill for ${instanceId} encountered an error:`, e);
-      }
-    } else if (proc && !proc.killed) {
-      try { proc.kill('SIGKILL'); } catch { /* already gone */ }
-    }
+  /** `report` is told 'stopped' once the kill is done; null reports nothing. */
+  private async killUntracked(instanceId: string, child: ChildProcess | undefined, sweepNeeded: boolean, report: StateCallback | null): Promise<void> {
+    // The launcher can go before Wine/ARK, which then still holds the ports.
+    const sweep = sweepNeeded ? killInstanceProcesses(instanceId) : undefined;
+    if (child) await killProcessTree(child);
+    unregisterLogFile(instanceId);
+    await sweep;
+    stateUtils.setInstanceState(instanceId, 'stopped');
 
-    delete this.arkServerProcesses[instanceId];
-    delete this.processStartTimes[instanceId];
-    this.releaseInstancePorts(instanceId);
-    this.setInstanceState(instanceId, 'stopped');
-
-    if (broadcast) {
-      try {
-        const messagingService = require('../messaging.service').messagingService;
-        messagingService.sendToAll('server-instance-state', { state: 'stopped', instanceId });
-        messagingService.sendToAll('rcon-status', { instanceId, connected: false });
-      } catch (e) {
-        console.warn(`[server-process-service] Failed to broadcast stopped state for ${instanceId}:`, e);
-      }
+    if (report) {
+      report('stopped');
+      messagingService.sendToAll('rcon-status', { instanceId, connected: false });
     }
   }
 
-  /**
-   * Kill leftover Wine/ARK processes for this instance so the RCON listen port
-   * is released after a crash or a launcher that exits before the game does.
-   */
-  releaseInstancePorts(instanceId: string): void {
-    if (!validateInstanceId(instanceId)) return;
-    const { getPlatform } = require('../../utils/platform.utils');
-    try {
-      if (getPlatform() === 'linux') {
-        execSync(`pkill -f ${instanceId}`, { stdio: 'ignore' });
-      } else {
-        execSync(
-          `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${instanceId}*' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
-          { stdio: 'ignore' }
-        );
-      }
-    } catch {
-      // pkill/Stop-Process exit non-zero when nothing matched
-    }
-  }
+  async startServerProcess(instanceId: string, instance: InstanceConfig): Promise<ServerInstanceResult> {
+    stateUtils.setInstanceState(instanceId, 'starting');
+    const startedAt = Date.now();
+    const instanceDir = instanceUtils.getInstanceDir(instanceId);
 
-  /**
-   * Start the actual server process
-   */
-  async startServerProcess(instanceId: string, instance: any): Promise<ServerInstanceResult> {
-    // Set state to starting and record timestamp for crash detection
-    this.setInstanceState(instanceId, 'starting');
-    const startTimestamp = Date.now();
+    // ARK appends AltSaveDirectoryName to <runtimeRoot>/ShooterGame/Saved/, and the runtime root
+    // differs between isolated and shared-install instances; resolving it here keeps worlds in the
+    // instance's own SavedArks either way.
+    const altSaveDirName = getInstanceAltSaveDirName(instanceId);
+    const args = buildArkServerArgs({ ...instance, altSaveDirName });
 
-    // Write ARK config files and set up directories
-    const baseDir = require('../../utils/ark/instance.utils').getInstancesBaseDir();
-    const instanceDir = path.join(baseDir, instanceId);
-
-    // Set up save directory for this instance.
-    // ARK appends AltSaveDirectoryName to <runtimeRoot>/ShooterGame/Saved/, and the runtime
-    // root differs between isolated and shared-install instances — resolving it here keeps
-    // worlds in the instance's own SavedArks folder either way instead of nesting a second
-    // Servers/<id>/ level inside the instance.
-    const { getInstanceAltSaveDirName, getInstanceLogsDir } = require('../../utils/ark/ark-server/ark-server-paths.utils');
-    const saveDir = getInstanceAltSaveDirName(instanceId);
-    const formattedSaveDir = saveDir.replace(/\\/g, '/');
-    const formattedConfigDir = instanceDir.replace(/\\/g, '/');
-    const formattedLogDir = getInstanceLogsDir(instanceId).replace(/\\/g, '/');
-    
-    // Build the ARK server command arguments
-    const args = buildArkServerArgs({
-      ...instance,
-      saveDir: formattedSaveDir,
-      configDir: formattedConfigDir,
-      logDir: formattedLogDir,
-      altSaveDirName: saveDir
-    });
-
-    // Prefer AsaApiLoader.exe when installed for this instance; otherwise ArkAscendedServer.exe.
-    // cwd must be the instance Win64 folder so AsaApi DLLs/plugins resolve correctly.
-    const { prepareArkServerCommand, resolveServerLaunch } = require('../../utils/ark/ark-server/ark-server-paths.utils');
+    // AsaApiLoader.exe when AsaApi is installed for the instance, with cwd its Win64 folder so the
+    // AsaApi DLLs and plugins resolve.
     const launch = resolveServerLaunch(instanceId);
-    const commandInfo = prepareArkServerCommand(launch.executable, args, instanceId);
-
+    const command = prepareArkServerCommand(launch.executable, args, instanceId);
     if (launch.usesAsaApiLoader) {
-      console.log(`[server-process-service] Launching instance ${instanceId} via AsaApiLoader: ${launch.executable}`);
+      console.log(`[server-process] Launching ${instanceId} via AsaApiLoader: ${launch.executable}`);
     }
 
-    // Set up spawn options with proper environment and working directory
-    const { getPlatform } = require('../../utils/platform.utils');
-    const cwd = launch.cwd;
-
-    // Ensure steam_appid.txt exists in the working directory so the Steam
-    // subsystem can initialize for every server instance, not just the first.
+    // The Steam subsystem only initialises for every instance, not just the first, when
+    // steam_appid.txt sits in the working directory.
     try {
-      fs.mkdirSync(cwd, { recursive: true });
-      fs.writeFileSync(path.join(cwd, 'steam_appid.txt'), ARK_APP_ID, 'utf8');
-    } catch (e) {
-      console.warn(`[server-process-service] Could not write steam_appid.txt to ${cwd}:`, e);
+      fs.mkdirSync(launch.cwd, { recursive: true });
+      fs.writeFileSync(path.join(launch.cwd, 'steam_appid.txt'), ARK_APP_ID, 'utf8');
+    } catch (error) {
+      console.warn(`[server-process] Could not write steam_appid.txt to ${launch.cwd}:`, error);
     }
 
-    const spawnOptions: any = {
-      cwd,
-      // Use 'ignore' for stdout/stderr — we tail the log file directly and never
-      // read from these pipes.  On Linux, xvfb-run + Proton + Wine are extremely
-      // verbose on stderr; if the 64 KB pipe buffer fills up and the parent never
-      // drains it, the child process blocks on its next write() call, which freezes
-      // ARK and causes it to stop writing to ShooterGame.log.
-      //
-      // Redirect stderr to a per-instance log file so crash diagnostics are captured
-      // without pipe buffer risk (Issue #6).
-      stdio: ['ignore', 'ignore', 'ignore'] as any,
+    // stdout is never read: the log file is tailed instead. A pipe nobody drains blocks the child
+    // once 64 KB are waiting, which freezes ARK (xvfb-run, Proton and Wine are very chatty under
+    // Linux). stderr goes to a file: it is the only diagnostic when ARK aborts before it creates
+    // ShooterGame.log.
+    const stderrFd = openStderrLog(instanceDir, instanceId);
+    const spawnOptions: SpawnOptions = {
+      cwd: launch.cwd,
+      stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'],
       env: {
         ...process.env,
-        ...(commandInfo.env || {}), // Add Proton env vars on Linux
+        ...command.env,
         SteamAppId: ARK_APP_ID,
-        ARK_SAVE_PATH: formattedSaveDir,
-        ARK_CONFIG_PATH: formattedConfigDir,
-        ARK_LOG_PATH: formattedLogDir
+        ARK_SAVE_PATH: altSaveDirName.replace(/\\/g, '/'),
+        ARK_CONFIG_PATH: instanceDir.replace(/\\/g, '/'),
+        ARK_LOG_PATH: getInstanceLogsDir(instanceId).replace(/\\/g, '/')
       },
+      // Its own process group on Linux, so the group holds xvfb-run, Proton and Wine together.
       detached: getPlatform() === 'linux',
       windowsHide: true
     };
 
-    // Redirect stderr to a per-instance log file for diagnostics on every platform.
-    // Writing to a file rather than a pipe keeps the pipe-buffer hazard described above
-    // out of play, and it is the only diagnostic available when ARK aborts before it
-    // creates ShooterGame.log — previously Windows captured nothing at all, so a server
-    // that could not launch reported only "Could not detect log file".
-    let stderrFd: number | null = null;
-    try {
-      const stderrLogPath = path.join(instanceDir, 'stderr.log');
-      fs.mkdirSync(instanceDir, { recursive: true });
-      stderrFd = fs.openSync(stderrLogPath, 'w');
-      spawnOptions.stdio = ['ignore', 'ignore', stderrFd] as any;
-    } catch (e) {
-      console.warn(`[server-process-service] Could not create stderr log for ${instanceId}:`, e);
-    }
-
-    // Snapshot log files BEFORE starting so we can detect which new file belongs to this instance
+    // Taken before the spawn, to tell this instance's log file from its neighbours'.
     const logSnapshot = snapshotLogFiles(instanceId);
+    rememberInstanceProcessMarker(instanceId);
 
-    // Start the server process
-    let serverProcess;
+    let child: ChildProcess;
     try {
-      serverProcess = spawn(commandInfo.command, commandInfo.args, spawnOptions);
+      child = spawn(command.command, command.args, spawnOptions);
     } finally {
-      // The child has inherited the descriptor by the time spawn() returns, so release the
-      // parent's copy. Without this every start/restart leaks an fd for the app's lifetime.
+      // The child has its own copy by now. Without this every start leaks a descriptor.
       if (stderrFd !== null) {
         try {
           fs.closeSync(stderrFd);
         } catch {
-          // Already closed / never valid — nothing to release
+          // Already closed
         }
       }
     }
 
-    // Detect and register the log file for this instance (async, retries internally)
-    const sessionName = instance.sessionName || instance.serverName || 'My Server';
-    detectAndRegisterLogFile(instanceId, sessionName, logSnapshot);
-
-    // Notify Discord
-    const { discordService } = require('../discord.service');
+    detectAndRegisterLogFile(instanceId, logSnapshot);
     discordService.sendNotification(instanceId, 'start', 'Server is starting up...');
 
-    // Store the process reference
-    this.arkServerProcesses[instanceId] = serverProcess;
-    this.processStartTimes[instanceId] = startTimestamp;
-
+    this.arkServerProcesses[instanceId] = child;
+    this.processStartTimes[instanceId] = startedAt;
+    this.leftoversPossible[instanceId] = getPlatform() !== 'windows' || launch.usesAsaApiLoader;
     return { success: true, instanceId };
   }
 
-  /**
-   * Set up process monitoring, event handlers, and log tailing
-   */
-  setupProcessMonitoring(
-    instanceId: string,
-    instance: any,
-    onLog?: (data: string) => void,
-    onState?: (state: string) => void
-  ): void {
-    const serverProcess = this.arkServerProcesses[instanceId];
-    if (!serverProcess) return;
+  /** Watches the spawned server: its log, its exit, and RCON once it is up. */
+  setupProcessMonitoring(instanceId: string, onLog?: LogCallback, onState?: StateCallback): void {
+    const child = this.arkServerProcesses[instanceId];
+    if (!child) return;
+    if (onState) this.stateCallbacks[instanceId] = onState;
 
-    // Set up process event handlers
-    serverProcess.on('exit', async (code, signal) => {
-      const uptimeMs = this.processStartTimes[instanceId] ? Date.now() - this.processStartTimes[instanceId] : 0;
-      const uptimeSec = Math.round(uptimeMs / 1000);
-      const previousState = this.getInstanceState(instanceId);
-      const isRapidCrash = previousState === 'starting' && uptimeSec < 60 && code !== 0 && code !== null;
-
-      // Log exit details for diagnostics
-      console.log(`[server-process-service] Server ${instanceId} exited — code=${code}, signal=${signal}, uptime=${uptimeSec}s, previousState=${previousState}`);
-
-      // Determine final state: crashed vs stopped
-      const finalState = (code !== 0 && code !== null && previousState === 'starting') ? 'crashed' : 'stopped';
-      this.setInstanceState(instanceId, finalState);
-      unregisterLogFile(instanceId);
-      delete this.processStartTimes[instanceId];
-      delete this.arkServerProcesses[instanceId];
-      onState?.(finalState);
-
-      // On rapid crash, read stderr.log and send diagnostics to UI
-      if (isRapidCrash) {
-        const baseDir = require('../../utils/ark/instance.utils').getInstancesBaseDir();
-        const stderrLogPath = path.join(baseDir, instanceId, 'stderr.log');
-        let stderrContents = '';
-        try {
-          if (fs.existsSync(stderrLogPath)) {
-            const raw = fs.readFileSync(stderrLogPath, 'utf8');
-            // Send last ~50 lines to avoid flooding
-            const lines = raw.split('\n');
-            stderrContents = lines.slice(-50).join('\n').trim();
-          }
-        } catch (e) {
-          console.warn(`[server-process-service] Could not read stderr.log for ${instanceId}:`, e);
-        }
-
-        console.error(`[server-process-service] Rapid crash detected for ${instanceId} — process exited in ${uptimeSec}s with code ${code}`);
-        if (stderrContents) {
-          console.error(`[server-process-service] stderr.log tail:\n${stderrContents}`);
-        }
-
-        // Send crash notification and stderr log to the UI
-        const messagingService = require('../messaging.service').messagingService;
-        const instanceConfig = require('../../utils/ark/instance.utils').getInstance(instanceId);
-        const instanceName = instanceConfig?.name || instanceId;
-        messagingService.sendToAll('notification', {
-          type: 'error',
-          message: `${instanceName} crashed during startup (exit code ${code}). Check the logs for details.`
-        });
-        if (stderrContents) {
-          messagingService.sendToAll('server-instance-log', {
-            log: `[CRASH] Process exited with code ${code} after ${uptimeSec}s. stderr output:\n${stderrContents}`,
-            instanceId
-          });
-        } else {
-          messagingService.sendToAll('server-instance-log', {
-            log: `[CRASH] Process exited with code ${code} after ${uptimeSec}s. No stderr output captured.`,
-            instanceId
-          });
-        }
-      }
-      
-      // Notify Discord
-      const { discordService } = require('../discord.service');
-      discordService.sendNotification(instanceId, finalState === 'crashed' ? 'crash' : 'stop',
-        finalState === 'crashed' ? `Server crashed during startup (exit code ${code})` : 'Server has stopped');
-
-      // The tracked launcher can exit while Wine/ARK is still bound to the RCON port.
-      this.releaseInstancePorts(instanceId);
-
-      // Disconnect RCON connection since server has exited
-      try {
-        const rconService = require('../rcon.service').rconService;
-        await rconService.disconnectRcon(instanceId);
-        
-        // Notify UI that RCON is now disconnected
-        const messagingService = require('../messaging.service').messagingService;
-        messagingService.sendToAll('rcon-status', { instanceId, connected: false });
-      } catch (error) {
-        console.warn(`[server-process-service] Failed to disconnect RCON for ${instanceId} on exit:`, error);
-      }
-    });
-
-    serverProcess.on('error', async (err) => {
-      console.error('[server-process-service] ARK server process error:', err);
-      this.setInstanceState(instanceId, 'error');
-      unregisterLogFile(instanceId);
-      onState?.('error');
-
-      // Notify Discord
-      const { discordService } = require('../discord.service');
-      discordService.sendNotification(instanceId, 'crash', `Server Process Error: ${err.message || err}`);
-      
-      this.releaseInstancePorts(instanceId);
-
-      // Disconnect RCON connection since server has errored
-      try {
-        const rconService = require('../rcon.service').rconService;
-        await rconService.disconnectRcon(instanceId);
-        
-        // Notify UI that RCON is now disconnected
-        const messagingService = require('../messaging.service').messagingService;
-        messagingService.sendToAll('rcon-status', { instanceId, connected: false });
-      } catch (error) {
-        console.warn(`[server-process-service] Failed to disconnect RCON for ${instanceId} on error:`, error);
-      }
-    });
-
-    // ---- RCON: connect when server signals it is fully started ----
-    // Log tailing fires onState('running') the moment the startup-complete log line
-    // is seen.  We intercept that here and connect RCON immediately — no polling,
-    // no time-based delay.
-    //
-    // Safety net: if log tailing never finds/parses the startup line (e.g. Proton
-    // swallows all stdout) we attempt RCON once after 15 minutes — long enough to
-    // cover even the slowest first-boot Proton load, but still a single attempt
-    // rather than a wall of retries.
-    let rconTriggered = false;
-
-    const triggerRconConnect = () => {
-      rconTriggered = true;
-      const rconSvc = require('../rcon.service').rconService;
-      const instanceConfig = require('../../utils/ark/instance.utils').getInstance(instanceId);
-      if (!instanceConfig?.rconPort || !instanceConfig?.rconPassword) {
-        console.log(`[server-process-service] RCON not configured for ${instanceId} — skipping connect`);
-        return;
-      }
-      console.log(`[server-process-service] Server ${instanceId} is up — attempting RCON connection`);
-      rconSvc.connectRcon(instanceId).catch(() => {
-        // rcon.utils already logs failures
-      });
-    };
-
-    const wrappedOnState = (state: string) => {
+    let rconRequested = false;
+    const handleState = (state: string) => {
       onState?.(state);
-      if (state === 'running' && !rconTriggered) {
-        triggerRconConnect();
+      if (state === 'running' && !rconRequested && stateUtils.getInstanceState(instanceId) === 'running') {
+        rconRequested = true;
+        this.connectRcon(instanceId);
       }
     };
 
-    const safetyNetTimer = setTimeout(() => {
-      if (rconTriggered) return;
-      const currentState = this.getInstanceState(instanceId);
-      if (currentState === 'starting' && serverProcess && !serverProcess.killed && serverProcess.exitCode === null) {
-        console.log(`[server-process-service] Safety net: server ${instanceId} still 'starting' after 15 min — forcing 'running' and attempting RCON`);
-        this.setInstanceState(instanceId, 'running');
-        onState?.('running');
-        triggerRconConnect();
+    const safetyNet = setTimeout(() => {
+      if (rconRequested || this.arkServerProcesses[instanceId] !== child) return;
+      if (stateUtils.getInstanceState(instanceId) !== 'starting') return;
+      console.log(`[server-process] ${instanceId} still starting after 15 minutes; assuming it is up`);
+      stateUtils.setInstanceState(instanceId, 'running');
+      handleState('running');
+    }, STARTUP_SAFETY_NET_MS);
+
+    child.on('exit', (code, signal) => {
+      clearTimeout(safetyNet);
+      // A process that was force-killed and replaced: its exit belongs to the old run.
+      if (this.arkServerProcesses[instanceId] !== child) return;
+      try {
+        this.handleExit(instanceId, code, signal, onState);
+      } catch (error) {
+        console.error(`[server-process] Failed to handle the exit of ${instanceId}:`, error);
       }
-    }, 15 * 60 * 1000);
-
-    // Set up log monitoring after a brief delay
-    setTimeout(() => {
-      if (!serverProcess || serverProcess.killed) return;
-
-      const monitoringService = require('./server-monitoring.service').serverMonitoringService;
-      monitoringService.setupLogMonitoring(instanceId, instance, 
-        // onLog callback - forward log lines to messaging service
-        (line: string) => {
-          const messagingService = require('../messaging.service').messagingService;
-          messagingService.sendToAll('server-instance-log', { log: line, instanceId });
-        },
-        // onState callback — triggers RCON connect when 'running' is detected
-        wrappedOnState
-      );
-    }, 500); // Wait 500ms for log file to be created
-
-    // Clean up safety-net timer on process exit / error
-    serverProcess.once('exit', () => {
-      clearTimeout(safetyNetTimer);
     });
-    serverProcess.once('error', () => {
-      clearTimeout(safetyNetTimer);
+
+    child.on('error', error => {
+      if (this.arkServerProcesses[instanceId] !== child) return;
+      console.error(`[server-process] ${instanceId} process error:`, error);
+      // Other errors are a failed kill of a process that is still running. A spawn failure leaves
+      // no process, and 'exit' may never follow it.
+      if (child.pid !== undefined) return;
+      clearTimeout(safetyNet);
+      this.untrack(instanceId);
+      unregisterLogFile(instanceId);
+      stateUtils.setInstanceState(instanceId, 'error');
+      onState?.('error');
+      discordService.sendNotification(instanceId, 'crash', `Server process error: ${error.message}`);
+    });
+
+    setupLogTailing(instanceId, line => onLog?.(line), handleState);
+  }
+
+  private handleExit(instanceId: string, code: number | null, signal: NodeJS.Signals | null, onState?: StateCallback): void {
+    const startedAt = this.processStartTimes[instanceId];
+    const uptimeSec = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
+    const sweepNeeded = this.leftoversPossible[instanceId] !== false;
+    this.untrack(instanceId);
+
+    // Read the rest of the log first: an unread shutdown line decides between stopped and crashed.
+    unregisterLogFile(instanceId);
+    const previousState = stateUtils.getInstanceState(instanceId);
+    // Every stop this app makes marks the instance 'stopping' first or untracks the process, so an
+    // exit while starting or running is one nobody asked for.
+    const crashed = previousState === 'starting' || previousState === 'running';
+    const finalState = crashed ? 'crashed' : 'stopped';
+    const exit = describeExit(code, signal);
+    console.log(`[server-process] ${instanceId} exited (${exit}) after ${uptimeSec}s while ${previousState}`);
+
+    stateUtils.setInstanceState(instanceId, finalState);
+    onState?.(finalState);
+
+    if (crashed && previousState === 'starting') {
+      this.reportStartupCrash(instanceId, exit, uptimeSec);
+    }
+    if (crashed) {
+      const during = previousState === 'starting' ? ' during startup' : '';
+      discordService.sendNotification(instanceId, 'crash', `Server crashed${during} (${exit})`);
+    } else {
+      discordService.sendNotification(instanceId, 'stop', 'Server has stopped');
+    }
+
+    // The tracked launcher can exit while Wine/ARK is still bound to the RCON port. The next start
+    // of this instance waits for the sweep.
+    if (sweepNeeded) {
+      void killInstanceProcesses(instanceId);
+    }
+
+    void rconService.disconnectRcon(instanceId).then(() => {
+      messagingService.sendToAll('rcon-status', { instanceId, connected: false });
     });
   }
 
+  /** Shows the end of stderr.log: the only diagnostic when ARK dies before writing its log. */
+  private reportStartupCrash(instanceId: string, exit: string, uptimeSec: number): void {
+    const stderrTail = readLogTail(path.join(instanceUtils.getInstanceDir(instanceId), 'stderr.log'), STDERR_TAIL_LINES).join('\n');
+    console.error(`[server-process] ${instanceId} crashed during startup (${exit}) after ${uptimeSec}s`);
+    if (stderrTail) {
+      console.error(`[server-process] stderr.log tail:\n${stderrTail}`);
+    }
+
+    const name = instanceUtils.getInstance(instanceId)?.name || instanceId;
+    messagingService.sendToAll('notification', {
+      type: 'error',
+      message: `${name} crashed during startup (${exit}). Check the logs for details.`
+    });
+    messagingService.sendToAll('server-instance-log', {
+      log: stderrTail
+        ? `[CRASH] Process exited (${exit}) after ${uptimeSec}s. stderr output:\n${stderrTail}`
+        : `[CRASH] Process exited (${exit}) after ${uptimeSec}s. No stderr output captured.`,
+      instanceId
+    });
+  }
+
+  private connectRcon(instanceId: string): void {
+    console.log(`[server-process] ${instanceId} is up; connecting RCON`);
+    void rconService.connectRcon(instanceId)
+      .then(result => {
+        if (!result.connected) {
+          console.warn(`[server-process] RCON for ${instanceId} did not connect: ${result.error}`);
+        }
+        messagingService.sendToAll('rcon-status', { instanceId, connected: result.connected });
+      })
+      .catch(error => console.error(`[server-process] RCON connect for ${instanceId} failed:`, error));
+  }
+
   /**
-   * Stop server process with graceful shutdown
+   * SaveWorld, DoExit, up to 2 minutes for the process to go, then SIGTERM and finally a force kill.
+   * Worst case about 190 s.
    */
   async stopServerProcess(instanceId: string): Promise<ServerInstanceResult> {
     if (!validateInstanceId(instanceId)) {
       return { success: false, error: 'Invalid instance ID', instanceId };
     }
 
-    const process = this.arkServerProcesses[instanceId];
-    if (!process) {
-      // Check if it's already stopped according to state
-      const state = this.getInstanceState(instanceId);
+    const child = this.arkServerProcesses[instanceId];
+    if (!child) {
+      const state = stateUtils.getInstanceState(instanceId);
       if (state === 'stopped' || state === 'error' || state === 'crashed') {
         return { success: true, instanceId };
       }
       return { success: false, error: 'Server process not found', instanceId };
     }
 
-    // Set state to stopping
-    this.setInstanceState(instanceId, 'stopping');
-    const rconService = require('../rcon.service').rconService;
-
-    // 1. Try graceful "SaveWorld" via RCON (bounded — hung RCON must not block the stop path)
+    stateUtils.setInstanceState(instanceId, 'stopping');
+    this.stopsInProgress.add(instanceId);
     try {
-      console.log(`[server-process-service] Stopping instance ${instanceId}: Sending SaveWorld...`);
-      const saveResult = await rconService.executeRconCommand(instanceId, 'SaveWorld', 30000);
-      if (saveResult?.success) {
-        // Wait for save to flush; most servers finish within 5-10 seconds
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } else {
-        console.warn(`[server-process-service] RCON SaveWorld failed for ${instanceId}:`, saveResult?.error);
+      const hadRcon = rconService.getRconStatus(instanceId).connected;
+      if ((await this.sendStopCommand(instanceId, 'SaveWorld', SAVE_WORLD_TIMEOUT_MS)).success) {
+        await delay(SAVE_FLUSH_MS);
       }
-    } catch (error) {
-      console.warn(`[server-process-service] RCON SaveWorld failed for ${instanceId}:`, error);
-    }
-
-    // 2. Try graceful "DoExit" via RCON
-    try {
-      console.log(`[server-process-service] Stopping instance ${instanceId}: Sending DoExit...`);
-      const exitResult = await rconService.executeRconCommand(instanceId, 'DoExit', 15000);
-      if (!exitResult?.success) {
-        console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, exitResult?.error);
+      // A SaveWorld that timed out drops the connection; DoExit still has to get through.
+      if (hadRcon && !rconService.getRconStatus(instanceId).connected) {
+        await rconService.reconnectRcon(instanceId, STOP_RECONNECT_TIMEOUT_MS);
       }
-    } catch (error) {
-      console.warn(`[server-process-service] RCON DoExit failed for ${instanceId}:`, error);
-    }
+      const doExit = await this.sendStopCommand(instanceId, 'DoExit', DO_EXIT_TIMEOUT_MS);
 
-    // 3. Wait for process exit (max 2 minutes) using Promise.race for hard timeout
-    const shutdownTimeoutMs = 120000;
-    const checkIntervalMs = 1000;
-
-    const waitForExit = async () => {
-      const startTime = Date.now();
-      while ((Date.now() - startTime) < shutdownTimeoutMs) {
+      // Nothing makes a server exit that DoExit never reached (no RCON yet while it starts, say).
+      const exited = doExit.notSent ? hasExited(child) : await waitForExit(child, GRACEFUL_EXIT_TIMEOUT_MS);
+      if (!exited) {
+        console.warn(doExit.notSent
+          ? `[server-process] ${instanceId} could not be sent DoExit; terminating it`
+          : `[server-process] ${instanceId} did not stop within ${GRACEFUL_EXIT_TIMEOUT_MS / 1000}s; terminating it`);
         try {
-          if (process.killed || process.exitCode !== null) return true;
-          if (!this.arkServerProcesses[instanceId]) return true;
-        } catch (e) {
-          return true;
+          child.kill('SIGTERM');
+        } catch {
+          // Already gone
         }
-        await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
-      }
-      return false;
-    };
-
-    const hardTimeout = new Promise<boolean>(resolve => setTimeout(() => resolve(false), shutdownTimeoutMs + 5000));
-    const exited = await Promise.race([waitForExit(), hardTimeout]);
-
-    // 4. Force kill if still running
-    if (this.arkServerProcesses[instanceId]) {
-      console.warn(`[server-process-service] Instance ${instanceId} did not stop gracefully (exited=${exited}). Force killing...`);
-      try {
-        process.kill('SIGTERM');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } catch (e) {
-        // SIGTERM may fail if process already gone
-      }
-
-      if (this.arkServerProcesses[instanceId]) {
-        try {
-          process.kill('SIGKILL');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        } catch (e) {
-          // SIGKILL may fail if process already gone
+        if (!(await waitForExit(child, SIGTERM_GRACE_MS)) && this.arkServerProcesses[instanceId] === child) {
+          await this.forceKillServerProcess(instanceId);
         }
       }
-
-      // Windows fallback: taskkill by PID if process.kill didn't work
-      if (this.arkServerProcesses[instanceId] && process.pid) {
-        const { getPlatform } = require('../../utils/platform.utils');
-        if (getPlatform() === 'windows') {
-          try {
-            console.warn(`[server-process-service] Instance ${instanceId}: using taskkill /F /PID ${process.pid}`);
-            execSync(`taskkill /F /PID ${process.pid}`, { stdio: 'ignore' });
-          } catch (e) {
-            // Process may already be gone
-          }
-        } else {
-          try {
-            execSync(`kill -9 ${process.pid}`, { stdio: 'ignore' });
-          } catch (e) {
-            // Process may already be gone
-          }
-        }
-      }
-    }
-
-    // Process 'exit' handler (setupProcessMonitoring) will handle cleanup, state update, and RCON disconnect
-    // But we manually ensure cleanup + UI broadcast here if the exit handler didn't fire
-    if (this.arkServerProcesses[instanceId]) {
-      await this.forceKillServerProcess(instanceId);
+    } finally {
+      this.stopsInProgress.delete(instanceId);
     }
 
     return { success: true, instanceId };
   }
 
-  /**
-   * Clean up orphaned processes on application shutdown
-   */
-  cleanupOrphanedProcesses(): void {
-    // Clean up all tracked processes
-    for (const [instanceId, process] of Object.entries(this.arkServerProcesses)) {
-      if (process && !process.killed) {
-        try {
-          process.kill('SIGTERM');
-        } catch (e) {
-          console.error(`[server-process-service] Failed to cleanup process ${instanceId}:`, e);
-        }
+  /** True while stopServerProcess runs for the instance: its 'stopping' mark belongs to that stop. */
+  isStopInProgress(instanceId: string): boolean {
+    return this.stopsInProgress.has(instanceId);
+  }
+
+  private async sendStopCommand(instanceId: string, command: string, timeoutMs: number): Promise<{ success: boolean; notSent: boolean }> {
+    console.log(`[server-process] Stopping ${instanceId}: sending ${command}`);
+    const result = await rconService.executeRconCommand(instanceId, command, timeoutMs);
+    if (!result.success) {
+      console.warn(`[server-process] ${command} failed for ${instanceId}: ${result.error}`);
+    }
+    return { success: result.success, notSent: !!result.notSent };
+  }
+
+  /** Terminates every tracked server. For app exit: there is no time to save or wait. */
+  killAllProcesses(): void {
+    for (const [instanceId, child] of Object.entries(this.arkServerProcesses)) {
+      // Untracked first: these exits are not crashes.
+      this.untrack(instanceId);
+      stateUtils.setInstanceState(instanceId, 'stopped');
+      try {
+        child.kill('SIGTERM');
+      } catch (error) {
+        console.error(`[server-process] Failed to terminate ${instanceId}:`, error);
       }
     }
-
-    // On Linux, also perform system-level cleanup for any orphaned processes
-    const { getPlatform } = require('../../utils/platform.utils');
+    // SIGTERM reaches only the launcher under Linux; Wine keeps running without it. pkill is
+    // spawned at once, so it runs even though the app is about to exit.
     if (getPlatform() === 'linux') {
-      try {
-        // Kill any remaining AsaApiLoader / ARK server processes that might have been orphaned
-        try {
-          require('child_process').execSync('pkill -f AsaApiLoader', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
+      void cleanupOrphanedArkProcesses();
+    }
+  }
 
-        try {
-          require('child_process').execSync('pkill -f ArkAscendedServer', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
+  private untrack(instanceId: string): void {
+    delete this.arkServerProcesses[instanceId];
+    delete this.processStartTimes[instanceId];
+    delete this.leftoversPossible[instanceId];
+    delete this.stateCallbacks[instanceId];
+  }
+}
 
-        // Kill any remaining Proton processes running ARK
-        try {
-          require('child_process').execSync('pkill -f "proton.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
+function broadcastStopped(instanceId: string): StateCallback {
+  return state => messagingService.sendToAll('server-instance-state', { state, instanceId });
+}
 
-        // Kill any remaining xvfb processes that might be stuck
-        try {
-          require('child_process').execSync('pkill -f "Xvfb.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-      } catch (e) {
-        console.error('[server-process-service] System-level cleanup failed:', e);
-      }
+function openStderrLog(instanceDir: string, instanceId: string): number | null {
+  try {
+    fs.mkdirSync(instanceDir, { recursive: true });
+    return fs.openSync(path.join(instanceDir, 'stderr.log'), 'w');
+  } catch (error) {
+    console.warn(`[server-process] Could not create stderr.log for ${instanceId}:`, error);
+    return null;
+  }
+}
+
+async function killProcessTree(child: ChildProcess): Promise<void> {
+  const { pid } = child;
+  try {
+    if (pid === undefined) {
+      child.kill('SIGKILL');
+    } else if (getPlatform() === 'linux') {
+      // Detached at spawn, so the pid leads a group holding xvfb-run, Proton and Wine.
+      process.kill(-pid, 'SIGKILL');
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        execFile('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS },
+          error => (error ? reject(error) : resolve()));
+      });
+    }
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone
     }
   }
 }
 
-// Export singleton instance
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      resolve(false);
+    }, timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function describeExit(code: number | null, signal: NodeJS.Signals | null): string {
+  return code !== null ? `exit code ${code}` : `signal ${signal}`;
+}
+
 export const serverProcessService = new ServerProcessService();

@@ -4,10 +4,7 @@ import {
   BackupPathUtils
 } from '../utils/backup.utils';
 
-// Mock path module
 jest.mock('path');
-
-// Backups now live under the app data directory, not the server instance folder.
 jest.mock('./platform.utils', () => ({
   getDefaultInstallDir: jest.fn(() => '/install/dir')
 }));
@@ -33,8 +30,42 @@ describe('backup.utils', () => {
         expect(result).toBe('MyBackup.zip');
       });
 
+      // Each of these used to produce a file the backup list hides (".zip", ".x.zip", a name parsed
+      // as a broken structured one) or one Windows cannot create.
+      it.each([
+        ['only invalid characters', '<>:|?*', 'backup.zip'],
+        ['control characters', 'a\u0000b\u001fc\u007fd', 'abcd.zip'],
+        ['a leading dot', '...hidden', 'hidden.zip'],
+        ['trailing dots and spaces', 'Before update. . ', 'Before update.zip'],
+        ['a reserved device name', 'CON', '_CON.zip'],
+        ['a reserved device name with an extension', 'nul.old', '_nul.old.zip'],
+        ['a numbered reserved name', 'lpt9', '_lpt9.zip'],
+        ['a reserved name numbered 0', 'COM0', '_COM0.zip'],
+        ['a reserved name numbered 0, lower case', 'lpt0', '_lpt0.zip'],
+        ['a reserved name with a superscript digit', 'COM\u00B9', '_COM\u00B9.zip'],
+        ['a reserved name with a superscript digit and an extension', 'lpt\u00B3.txt', '_lpt\u00B3.txt.zip'],
+        ['the prefix of a structured name', 'manual_before update', 'manual-before update.zip'],
+        ['the prefix of a scheduled name', 'scheduled_20250101010101_x', 'scheduled-20250101010101_x.zip']
+      ])('makes a listable file name from %s', (_label, name, expected) => {
+        expect(BackupFilenameUtils.generateFilename('manual', name)).toBe(expected);
+      });
+
+      it('keeps names that only start like a reserved one', () => {
+        expect(BackupFilenameUtils.generateFilename('manual', 'Console')).toBe('Console.zip');
+      });
+
+      // Cut between the two halves of an emoji, the name held a lone surrogate, which is not valid
+      // UTF-16 and cannot be written as a file name everywhere.
+      it('never cuts a character in half', () => {
+        expect(BackupFilenameUtils.generateFilename('manual', `${'a'.repeat(49)}\uD83D\uDE00tail`))
+          .toBe(`${'a'.repeat(49)}\uD83D\uDE00.zip`);
+      });
+
+      it('cuts long names to 50 characters without leaving a trailing space', () => {
+        expect(BackupFilenameUtils.generateFilename('manual', `${'a'.repeat(49)} tail`)).toBe(`${'a'.repeat(49)}.zip`);
+      });
+
       it('should generate scheduled backup filename with timestamp', () => {
-        // Mock Date to return a consistent timestamp
         const mockDate = new Date('2025-09-27T10:30:45.000Z');
         jest.spyOn(global, 'Date').mockImplementation(() => mockDate as any);
 
@@ -55,7 +86,6 @@ describe('backup.utils', () => {
       });
 
       it('should handle manual backup without custom name', () => {
-        // Mock Date to return a consistent timestamp
         const mockDate = new Date('2025-09-27T10:30:45.000Z');
         jest.spyOn(global, 'Date').mockImplementation(() => mockDate as any);
 
@@ -69,21 +99,26 @@ describe('backup.utils', () => {
     describe('parseFilename', () => {
       const mockFilePath = '/path/to/backup.zip';
       const instanceId = 'instance1';
+      const modifiedAt = new Date('2025-01-02T03:04:05Z');
 
-      it('should parse simple manual backup filename', () => {
-        const result = BackupFilenameUtils.parseFilename('MyBackup.zip', mockFilePath, instanceId);
+      // It used to be the time of listing, so every manual backup looked newest and retention
+      // deleted the scheduled ones first.
+      it('dates a simple manual backup by its file time', () => {
+        const result = BackupFilenameUtils.parseFilename('MyBackup.zip', mockFilePath, instanceId, modifiedAt);
 
-        expect(result?.id).toBe('MyBackup');
-        expect(result?.instanceId).toBe('instance1');
-        expect(result?.name).toBe('MyBackup');
-        expect(result?.createdAt).toBeInstanceOf(Date);
-        expect(result?.size).toBe(0);
-        expect(result?.type).toBe('manual');
-        expect(result?.filePath).toBe(mockFilePath);
+        expect(result).toEqual({
+          id: 'MyBackup',
+          instanceId: 'instance1',
+          name: 'MyBackup',
+          createdAt: modifiedAt,
+          size: 0,
+          type: 'manual',
+          filePath: mockFilePath
+        });
       });
 
       it('should parse structured manual backup filename', () => {
-        const result = BackupFilenameUtils.parseFilename('manual_20250927103045_MyBackup.zip', mockFilePath, instanceId);
+        const result = BackupFilenameUtils.parseFilename('manual_20250927103045_MyBackup.zip', mockFilePath, instanceId, modifiedAt);
 
         expect(result).toEqual({
           id: 'manual_20250927103045_MyBackup',
@@ -97,7 +132,7 @@ describe('backup.utils', () => {
       });
 
       it('should parse scheduled backup filename', () => {
-        const result = BackupFilenameUtils.parseFilename('scheduled_20250927103045_DailyBackup.zip', mockFilePath, instanceId);
+        const result = BackupFilenameUtils.parseFilename('scheduled_20250927103045_DailyBackup.zip', mockFilePath, instanceId, modifiedAt);
 
         expect(result).toEqual({
           id: 'scheduled_20250927103045_DailyBackup',
@@ -111,7 +146,7 @@ describe('backup.utils', () => {
       });
 
       it('should handle custom names with underscores', () => {
-        const result = BackupFilenameUtils.parseFilename('scheduled_20250927103045_My_Custom_Backup.zip', mockFilePath, instanceId);
+        const result = BackupFilenameUtils.parseFilename('scheduled_20250927103045_My_Custom_Backup.zip', mockFilePath, instanceId, modifiedAt);
 
         expect(result).toEqual({
           id: 'scheduled_20250927103045_My_Custom_Backup',
@@ -126,20 +161,20 @@ describe('backup.utils', () => {
 
       it('should return null for invalid structured filename with too few parts', () => {
         const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        const result = BackupFilenameUtils.parseFilename('manual_20250927.zip', mockFilePath, instanceId);
+        const result = BackupFilenameUtils.parseFilename('manual_20250927.zip', mockFilePath, instanceId, modifiedAt);
 
         expect(result).toBeNull();
-        expect(consoleSpy).toHaveBeenCalledWith('[backup-filename-utils] Invalid structured backup filename format: manual_20250927.zip');
+        expect(consoleSpy).toHaveBeenCalledWith('[backup-utils] Invalid structured backup filename format: manual_20250927.zip');
 
         consoleSpy.mockRestore();
       });
 
       it('should return null for invalid timestamp format', () => {
         const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        const result = BackupFilenameUtils.parseFilename('scheduled_invalid_MyBackup.zip', mockFilePath, instanceId);
+        const result = BackupFilenameUtils.parseFilename('scheduled_invalid_MyBackup.zip', mockFilePath, instanceId, modifiedAt);
 
         expect(result).toBeNull();
-        expect(consoleSpy).toHaveBeenCalledWith('[backup-filename-utils] Invalid timestamp format in filename: scheduled_invalid_MyBackup.zip');
+        expect(consoleSpy).toHaveBeenCalledWith('[backup-utils] Invalid timestamp format in filename: scheduled_invalid_MyBackup.zip');
 
         consoleSpy.mockRestore();
       });
@@ -203,17 +238,6 @@ describe('backup.utils', () => {
         const result = BackupPathUtils.getSettingsFilePath(serverPath);
         expect(mockPath.join).toHaveBeenCalledWith(serverPath, 'backup-settings.json');
         expect(result).toBe('/path/to/server/backup-settings.json');
-      });
-    });
-
-    describe('getBackupFilePath', () => {
-      it('should return the full backup file path', () => {
-        const filename = 'MyBackup.zip';
-        const result = BackupPathUtils.getBackupFilePath(serverPath, filename);
-
-        expect(mockPath.join).toHaveBeenCalledWith('/install/dir', 'backups', 'server');
-        expect(mockPath.join).toHaveBeenCalledWith('/install/dir/backups/server', filename);
-        expect(result).toBe('/install/dir/backups/server/MyBackup.zip');
       });
     });
   });

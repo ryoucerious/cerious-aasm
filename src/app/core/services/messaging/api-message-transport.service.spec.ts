@@ -1,41 +1,29 @@
 import { ApiMessageTransport } from './api-message-transport.service';
-import { ApiService } from '../api.service';
 import { WebSocketService } from '../web-socket.service';
-import { of, Subject } from 'rxjs';
+import { Subject } from 'rxjs';
 
 describe('ApiMessageTransport', () => {
   let transport: ApiMessageTransport;
-  let apiMock: jasmine.SpyObj<ApiService>;
   let wsMock: jasmine.SpyObj<WebSocketService>;
 
   beforeEach(() => {
-    apiMock = jasmine.createSpyObj('ApiService', ['post']);
     wsMock = jasmine.createSpyObj('WebSocketService', ['sendMessage', 'receiveMessage']);
-    apiMock.post.and.returnValue(of({}));
-    wsMock.sendMessage.and.callFake(() => {});
     wsMock.receiveMessage.and.returnValue(new Subject<any>());
-    transport = new ApiMessageTransport(apiMock, wsMock);
+    transport = new ApiMessageTransport(wsMock);
   });
 
-  it('should be created', () => {
-    expect(transport).toBeTruthy();
-  });
-
-  it('should send message via WebSocket if available', (done) => {
+  it('sends over the WebSocket and completes at once', (done) => {
     const obs = transport.sendMessage('chan', { foo: 'bar' });
-    expect(wsMock.sendMessage).toHaveBeenCalledWith('chan', { foo: 'bar' });
+    expect(wsMock.sendMessage).toHaveBeenCalledWith('chan', { foo: 'bar' }, undefined);
     obs.subscribe({ complete: () => done() });
   });
 
-  it('should send message via API if WebSocket not available', (done) => {
-    const wsNull = null as any;
-    transport = new ApiMessageTransport(apiMock, wsNull);
-    const obs = transport.sendMessage('chan', { foo: 'bar' });
-    expect(apiMock.post).toHaveBeenCalledWith('/api/message', { channel: 'chan', payload: { foo: 'bar' } });
-    obs.subscribe(() => done());
+  it('tells the WebSocket how long the caller will wait', () => {
+    transport.sendMessage('chan', { foo: 'bar' }, { timeoutMs: 5000 });
+    expect(wsMock.sendMessage).toHaveBeenCalledWith('chan', { foo: 'bar' }, 5000);
   });
 
-  it('should receive message via WebSocket', () => {
+  it('receives over the WebSocket', () => {
     transport.receiveMessage('chan');
     expect(wsMock.receiveMessage).toHaveBeenCalledWith('chan');
   });

@@ -1,5 +1,4 @@
 <div class="profile-settings settings-pane">
-  <!-- Who you are -->
   <section class="settings-card">
   <div class="profile-identity">
     <span class="profile-avatar">{{ displayName.charAt(0).toUpperCase() }}</span>
@@ -47,7 +46,6 @@
     <p class="settings-card-hint">This password is set on the command line and cannot be changed here. Other people can still be given their own accounts under Users &amp; Roles.</p>
   </section>
 
-  <!-- Change your own password -->
   <section class="settings-card" *ngIf="hasAccount && !identity?.user?.cliLocked">
     <h3 class="settings-card-title">Change your password</h3>
     <p class="settings-card-hint">Signing in elsewhere continues until those sessions end.</p>
@@ -59,7 +57,7 @@
     <div class="form-group">
       <label class="form-control-label">New password</label>
       <input type="password" class="form-control" [(ngModel)]="form.next" [disabled]="saving"
-             placeholder="At least 8 characters" autocomplete="new-password" />
+             placeholder="At least {{ minPasswordLength }} characters" autocomplete="new-password" />
     </div>
     <div class="form-group">
       <label class="form-control-label">Confirm new password</label>

@@ -1,189 +1,68 @@
-import { jest } from '@jest/globals';
-
-// Mock the services
-jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    on: jest.fn(),
-    sendToOriginator: jest.fn(),
-  },
-}));
-
-jest.mock('../services/platform.service', () => ({
-  platformService: {
-    getNodeVersion: jest.fn(),
-    getElectronVersion: jest.fn(),
-    getPlatform: jest.fn(),
-    getConfigPath: jest.fn(),
-  },
-}));
-
 import { messagingService } from '../services/messaging.service';
 import { platformService } from '../services/platform.service';
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockPlatformService = platformService as jest.Mocked<typeof platformService>;
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/platform.service', () => ({
+  platformService: { getNodeVersion: jest.fn(), getElectronVersion: jest.fn(), getPlatform: jest.fn(), getConfigPath: jest.fn() }
+}));
+
+const mockMessaging = jest.mocked(messagingService);
+const mockPlatform = jest.mocked(platformService);
+
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
 describe('system-info-handler', () => {
-  let getSystemInfoHandler: (...args: any[]) => void;
-  let mockSender: any;
+  const sender = { send: jest.fn() };
+  let handler: Listener;
 
   beforeAll(() => {
-    // Import the handler to register the event listeners
     require('./system-info-handler');
-
-    // Store the handler for testing
-    getSystemInfoHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'get-system-info'
-    )?.[1] as (...args: any[]) => void;
+    handler = mockMessaging.on.mock.calls.find(([channel]) => channel === 'get-system-info')![1] as Listener;
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Mock console.error to suppress expected errors from error handling tests
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-
-    mockSender = { id: 'test-sender' };
+    mockPlatform.getNodeVersion.mockReturnValue('16.16.0');
+    mockPlatform.getElectronVersion.mockReturnValue('21.4.4');
+    mockPlatform.getPlatform.mockReturnValue('windows');
+    mockPlatform.getConfigPath.mockReturnValue('C:\\Users\\user\\AppData\\Roaming\\Cerious AASM');
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  it('replies with the versions, platform and config path', async () => {
+    await handler({ requestId: 'r1' }, sender);
+
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-system-info', {
+      nodeVersion: '16.16.0',
+      electronVersion: '21.4.4',
+      platform: 'windows',
+      configPath: 'C:\\Users\\user\\AppData\\Roaming\\Cerious AASM',
+      requestId: 'r1'
+    }, sender);
   });
 
-  describe('get-system-info handler', () => {
-    it('should handle get-system-info successfully', async () => {
-      const payload = { requestId: 'test-request-123' };
-      const mockSystemInfo = {
-        nodeVersion: '18.17.0',
-        electronVersion: '25.0.0',
-        platform: 'Windows',
-        configPath: 'C:\\Users\\user\\AppData\\Roaming\\Cerious AASM'
-      };
+  it('passes on versions the platform cannot tell', async () => {
+    mockPlatform.getElectronVersion.mockReturnValue(null);
 
-      mockPlatformService.getNodeVersion.mockReturnValue(mockSystemInfo.nodeVersion);
-      mockPlatformService.getElectronVersion.mockReturnValue(mockSystemInfo.electronVersion);
-      mockPlatformService.getPlatform.mockReturnValue(mockSystemInfo.platform);
-      mockPlatformService.getConfigPath.mockReturnValue(mockSystemInfo.configPath);
+    await handler({ requestId: 'r1' }, sender);
 
-      expect(getSystemInfoHandler).toBeDefined();
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-system-info', expect.objectContaining({ electronVersion: null }), sender);
+  });
 
-      getSystemInfoHandler(payload, mockSender);
+  it.each([
+    ['an Error', new Error('Platform service unavailable'), 'Platform service unavailable'],
+    ['a string', 'String error', 'String error']
+  ])('replies { error } without success when reading throws %s', async (_label, thrown, error) => {
+    mockPlatform.getNodeVersion.mockImplementation(() => { throw thrown; });
 
-      expect(mockPlatformService.getNodeVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getElectronVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getPlatform).toHaveBeenCalled();
-      expect(mockPlatformService.getConfigPath).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-system-info',
-        {
-          nodeVersion: mockSystemInfo.nodeVersion,
-          electronVersion: mockSystemInfo.electronVersion,
-          platform: mockSystemInfo.platform,
-          configPath: mockSystemInfo.configPath,
-          requestId: 'test-request-123'
-        },
-        mockSender
-      );
-    });
+    await handler({ requestId: 'r1' }, sender);
 
-    it('should handle get-system-info with undefined payload', async () => {
-      const mockSystemInfo = {
-        nodeVersion: '18.17.0',
-        electronVersion: '25.0.0',
-        platform: 'Linux',
-        configPath: '/home/user/.config/Cerious AASM'
-      };
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-system-info', { error, requestId: 'r1' }, sender);
+  });
 
-      mockPlatformService.getNodeVersion.mockReturnValue(mockSystemInfo.nodeVersion);
-      mockPlatformService.getElectronVersion.mockReturnValue(mockSystemInfo.electronVersion);
-      mockPlatformService.getPlatform.mockReturnValue(mockSystemInfo.platform);
-      mockPlatformService.getConfigPath.mockReturnValue(mockSystemInfo.configPath);
+  it('answers a request without a payload', async () => {
+    await handler(undefined, sender);
 
-      getSystemInfoHandler(undefined, mockSender);
-
-      expect(mockPlatformService.getNodeVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getElectronVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getPlatform).toHaveBeenCalled();
-      expect(mockPlatformService.getConfigPath).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-system-info',
-        {
-          nodeVersion: mockSystemInfo.nodeVersion,
-          electronVersion: mockSystemInfo.electronVersion,
-          platform: mockSystemInfo.platform,
-          configPath: mockSystemInfo.configPath,
-          requestId: undefined
-        },
-        mockSender
-      );
-    });
-
-    it('should handle get-system-info with null versions', async () => {
-      const payload = { requestId: 'test-request-456' };
-      const mockSystemInfo = {
-        nodeVersion: null,
-        electronVersion: null,
-        platform: 'macOS',
-        configPath: '/Users/user/Library/Application Support/Cerious AASM'
-      };
-
-      mockPlatformService.getNodeVersion.mockReturnValue(mockSystemInfo.nodeVersion);
-      mockPlatformService.getElectronVersion.mockReturnValue(mockSystemInfo.electronVersion);
-      mockPlatformService.getPlatform.mockReturnValue(mockSystemInfo.platform);
-      mockPlatformService.getConfigPath.mockReturnValue(mockSystemInfo.configPath);
-
-      getSystemInfoHandler(payload, mockSender);
-
-      expect(mockPlatformService.getNodeVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getElectronVersion).toHaveBeenCalled();
-      expect(mockPlatformService.getPlatform).toHaveBeenCalled();
-      expect(mockPlatformService.getConfigPath).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-system-info',
-        {
-          nodeVersion: null,
-          electronVersion: null,
-          platform: mockSystemInfo.platform,
-          configPath: mockSystemInfo.configPath,
-          requestId: 'test-request-456'
-        },
-        mockSender
-      );
-    });
-
-    it('should handle get-system-info error', async () => {
-      const payload = { requestId: 'test-request-789' };
-      const errorMessage = 'Platform service unavailable';
-
-      mockPlatformService.getNodeVersion.mockImplementation(() => {
-        throw new Error(errorMessage);
-      });
-
-      getSystemInfoHandler(payload, mockSender);
-
-      expect(mockPlatformService.getNodeVersion).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-system-info',
-        { error: errorMessage, requestId: 'test-request-789' },
-        mockSender
-      );
-    });
-
-    it('should handle get-system-info with non-Error exception', async () => {
-      const payload = { requestId: 'test-request-000' };
-
-      mockPlatformService.getNodeVersion.mockImplementation(() => {
-        throw 'String error';
-      });
-
-      getSystemInfoHandler(payload, mockSender);
-
-      expect(mockPlatformService.getNodeVersion).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'get-system-info',
-        { error: 'String error', requestId: 'test-request-000' },
-        mockSender
-      );
-    });
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-system-info', expect.objectContaining({ platform: 'windows', requestId: undefined }), sender);
   });
 });

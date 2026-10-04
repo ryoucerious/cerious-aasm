@@ -19,9 +19,7 @@
 
     <div class="settings-content">
 
-    <!-- Server Installation Tab -->
     <div *ngIf="activeTab === 'server-installation'" class="settings-pane ark-install">
-      <!-- Status summary -->
       <div class="settings-card">
         <div class="ark-install-head">
           <span class="ark-install-icon" [ngClass]="arkInstallation?.updateAvailable ? 'tone-warning' : 'tone-primary'">
@@ -80,8 +78,6 @@
       </div>
     </div>
 
-    <!-- General Settings Tab -->
-    <!-- Appearance -->
     <div *ngIf="activeTab === 'appearance'" class="settings-pane">
       <section class="settings-card">
         <h3 class="settings-card-title">Theme</h3>
@@ -107,7 +103,6 @@
       </section>
     </div>
 
-    <!-- Storage -->
     <div *ngIf="activeTab === 'storage'" class="settings-pane">
       <section class="settings-card">
         <h3 class="settings-card-title">Server Data Directory</h3>
@@ -129,7 +124,6 @@
       </section>
     </div>
 
-    <!-- Updates -->
     <div *ngIf="activeTab === 'updates'" class="settings-pane">
       <section class="settings-card">
         <h3 class="settings-card-title">Automatic ARK Updates</h3>
@@ -152,7 +146,6 @@
       </section>
     </div>
 
-    <!-- Servers -->
     <div *ngIf="activeTab === 'servers'" class="settings-pane">
       <section class="settings-card">
         <h3 class="settings-card-title">Starting Servers</h3>
@@ -185,7 +178,7 @@
 
         <div class="form-group">
           <label class="form-control-label">Port</label>
-          <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (ngModelChange)="onPortChange($event)"
+          <input type="number" min="1024" max="65535" [ngModel]="webServerPort" (change)="onPortChange($event)"
                  [disabled]="webServerRunning" class="form-control input" />
           <label class="form-control-label desc">Between 1024 and 65535. The server has to be stopped to change it.</label>
         </div>
@@ -263,16 +256,12 @@
       </section>
     </div>
 
-    <!-- My Account -->
     <app-profile-settings *ngIf="activeTab === 'profile'"></app-profile-settings>
 
-    <!-- Users & Roles -->
     <app-users-settings *ngIf="activeTab === 'users'"></app-users-settings>
 
-    <!-- About Tab -->
     <div *ngIf="activeTab === 'about'" class="settings-pane">
       <div class="about-container">
-        <!-- Header Section -->
         <div class="about-header">
           <div class="about-title-section">
             <img src="assets/logo.png" alt="Cerious AASM Logo" class="about-logo">
@@ -282,9 +271,7 @@
           </div>
         </div>
 
-        <!-- Content Grid -->
         <div class="about-content-grid">
-          <!-- System Info Section -->
           <div class="about-section system-info-section settings-card">
             <h3 class="settings-card-title">System</h3>
             <div class="system-info-list">
@@ -313,7 +300,7 @@
     </div>
   </div>
 
-    <!-- Foot of the whole panel, on every section rather than only About. -->
+    <!-- On every section, not only About. -->
     <footer class="settings-footer">
       <a class="about-discord" href="https://discord.gg/8PJsyVvTp" target="_blank" rel="noopener noreferrer"
          title="Join the Cerious-AASM Discord">
@@ -330,7 +317,7 @@
 <app-modal
   [title]="'Installing Ark Ascended Server'"
   [show]="showInstallModal"
-  (close)="onCancelInstall()">
+  (close)="onDismissInstall()">
   <div class="install-phase">
     <div class="install-phase-header"
          [class.text-error]="installProgress?.failed"
@@ -346,8 +333,8 @@
     </div>
   </div>
   <div class="action-group-modal">
-    <button class="btn" (click)="onCancelInstall()" *ngIf="installProgress && !installProgress.blocked && !installProgress.success && !installProgress.failed">Cancel Install</button>
-    <button class="btn" (click)="onCloseInstall()" *ngIf="installProgress?.blocked || installProgress?.success || installProgress?.failed">Close</button>
+    <button class="btn" (click)="onCancelInstall()" *ngIf="installRunning">Cancel Install</button>
+    <button class="btn" (click)="onCloseInstall()" *ngIf="installProgress && !installRunning">Close</button>
   </div>
 </app-modal>
 

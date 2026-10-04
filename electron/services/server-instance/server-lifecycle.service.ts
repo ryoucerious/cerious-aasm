@@ -1,66 +1,89 @@
-import { ChildProcess, spawn, execSync } from 'child_process';
-import * as path from 'path';
 import * as fs from 'fs';
-import { validateInstanceId } from '../../utils/validation.utils';
-import { ArkPathUtils, ArkCommandUtils, buildArkServerArgs } from '../../utils/ark.utils';
-import { isPortInUse } from '../../utils/network.utils';
-import { getPlatform } from '../../utils/platform.utils';
-import { rconService } from '../rcon.service';
-import { ServerInstanceResult } from '../../types/server-instance.types';
+import { parsePort, validateInstanceId } from '../../utils/validation.utils';
+import { getMultiHomeAddress } from '../../utils/ark/ark-args.utils';
+import { getArkExecutablePath, validateInstanceRuntimeTree } from '../../utils/ark/ark-server/ark-server-paths.utils';
+import { waitForProcessSweeps } from '../../utils/ark/ark-server/ark-server-cleanup.utils';
+import { SERVER_FILES_UPDATING, areServerFilesUpdating } from '../../utils/ark/ark-server/ark-server-state.utils';
+import { isTcpPortInUse, isUdpPortInUse } from '../../utils/network.utils';
+import { loadGlobalConfig } from '../../utils/global-config.utils';
+import type { InstanceConfig, ServerInstanceResult } from '../../types/server-instance.types';
+import { getStandardEventCallbacks } from './instance-events';
+import { serverManagementService } from './server-management.service';
+import { serverProcessService } from './server-process.service';
 
-/**
- * Server Lifecycle Service - Handles server start, stop, and restart operations
- */
+// ARK's own ports when the config leaves one out (or holds something that is not a port).
+const DEFAULT_GAME_PORT = 7777;
+const DEFAULT_QUERY_PORT = 27015;
+const DEFAULT_RCON_PORT = 27020;
+const DEFAULT_START_DELAY_SECONDS = 60;
+
+const ALREADY_UP = 'Instance is already running or starting';
+
 export class ServerLifecycleService {
+  private readonly startsInProgress = new Set<string>();
 
-  /**
-   * Start ARK server instance
-   */
   async startServerInstance(
     instanceId: string,
-    instance: any,
-    onLog?: (data: string) => void,
+    instance: InstanceConfig,
+    onLog?: (line: string) => void,
+    onState?: (state: string) => void
+  ): Promise<ServerInstanceResult> {
+    // Claimed before the first await: the state only turns 'starting' once the process spawns,
+    // after the port checks and file preparation, so a second request could otherwise get through.
+    if (this.startsInProgress.has(instanceId)) {
+      return { success: false, error: ALREADY_UP, instanceId };
+    }
+    this.startsInProgress.add(instanceId);
+    try {
+      return await this.start(instanceId, instance, onLog, onState);
+    } finally {
+      this.startsInProgress.delete(instanceId);
+    }
+  }
+
+  /** True from the start request until it has spawned the process or been refused. */
+  isStartInProgress(instanceId: string): boolean {
+    return this.startsInProgress.has(instanceId);
+  }
+
+  private async start(
+    instanceId: string,
+    instance: InstanceConfig,
+    onLog?: (line: string) => void,
     onState?: (state: string) => void
   ): Promise<ServerInstanceResult> {
     try {
-      // Validate prerequisites
-      const validationResult = await this.validateStartPrerequisites(instanceId, instance);
-      if (!validationResult.success) {
-        return validationResult;
+      const prerequisites = await this.validateStartPrerequisites(instanceId, instance);
+      if (!prerequisites.success) {
+        return prerequisites;
       }
 
-      // Prepare instance configuration
-      const managementService = require('./server-management.service').serverManagementService;
-      await managementService.prepareInstanceConfiguration(instanceId, instance);
+      await serverManagementService.prepareInstanceConfiguration(instanceId, instance);
 
-      // Preparation reports its own failures to the console and deliberately continues, so
-      // confirm the tree ARK will launch from is actually usable before spawning. Without
-      // this a missing Content/EOS/Engine folder only surfaced as ARK exiting before it
-      // wrote a log, which reached the user as "Could not detect log file".
+      // Checked again after the last await: an install or update can begin during the port checks,
+      // sweeps or preparation. Also ahead of the tree check, which would report files mid-replace.
+      if (areServerFilesUpdating()) {
+        return { success: false, error: SERVER_FILES_UPDATING, instanceId };
+      }
+
+      // Preparation logs its own failures and carries on, so confirm the tree ARK launches from
+      // is usable. Otherwise a missing Content/EOS/Engine folder only showed as ARK exiting before
+      // it wrote a log: "Could not detect log file".
       const treeCheck = this.validateRuntimeTree(instanceId);
       if (!treeCheck.success) {
         return treeCheck;
       }
 
-      // Start the server process
-      const processService = require('./server-process.service').serverProcessService;
-      const processResult = await processService.startServerProcess(instanceId, instance);
+      const processResult = await serverProcessService.startServerProcess(instanceId, instance);
       if (!processResult.success) {
         return processResult;
       }
 
-      // Set up monitoring and event handling
-      processService.setupProcessMonitoring(instanceId, instance, onLog, onState);
-
-      return {
-        success: true,
-        instanceId
-      };
-
+      serverProcessService.setupProcessMonitoring(instanceId, onLog, onState);
+      return { success: true, instanceId };
     } catch (error) {
-      console.error(`[server-lifecycle-service] Failed to start ARK server instance ${instanceId}:`, error);
-      const processService = require('./server-process.service').serverProcessService;
-      processService.setInstanceState(instanceId, 'error');
+      console.error(`[server-lifecycle] Failed to start ${instanceId}:`, error);
+      serverProcessService.setInstanceState(instanceId, 'error');
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to start server instance',
@@ -69,18 +92,13 @@ export class ServerLifecycleService {
     }
   }
 
-  /**
-   * Verify the instance's launch tree has the game folders ARK needs, turning what was a
-   * silent early exit into an actionable message.
-   */
   private validateRuntimeTree(instanceId: string): ServerInstanceResult {
     let result;
     try {
-      const { validateInstanceRuntimeTree } = require('../../utils/ark/ark-server/ark-server-paths.utils');
       result = validateInstanceRuntimeTree(instanceId);
     } catch (error) {
-      // Never block a start because the check itself failed
-      console.warn(`[server-lifecycle-service] Runtime tree check failed for ${instanceId}:`, error);
+      // A failing check must not block a start.
+      console.warn(`[server-lifecycle] Runtime tree check failed for ${instanceId}:`, error);
       return { success: true, instanceId };
     }
 
@@ -89,278 +107,115 @@ export class ServerLifecycleService {
     }
 
     const missing = result.missing.join(', ');
-    const error = result.sharedInstallBroken
-      ? `The ARK installation is incomplete — missing or empty: ${missing}. ` +
-        `Reinstall/verify the ARK server from the Install tab, then start the server again.`
-      : `This server's game files are incomplete — missing or empty: ${missing}. ` +
-        `Reinstall/verify the ARK server from the Install tab, then start the server again.`;
-
-    console.error(`[server-lifecycle-service] Refusing to start ${instanceId}: ${error}`);
+    const subject = result.sharedInstallBroken ? 'The ARK installation is' : "This server's game files are";
+    const error = `${subject} incomplete - missing or empty: ${missing}. ` +
+      'Reinstall/verify the ARK server from the Install tab, then start the server again.';
+    console.error(`[server-lifecycle] Refusing to start ${instanceId}: ${error}`);
     return { success: false, error, instanceId };
   }
 
-  /**
-   * Validate all prerequisites before starting a server instance
-   */
-  private async validateStartPrerequisites(instanceId: string, instance: any): Promise<ServerInstanceResult> {
+  private async validateStartPrerequisites(instanceId: string, instance: InstanceConfig): Promise<ServerInstanceResult> {
     if (!validateInstanceId(instanceId)) {
-      return {
-        success: false,
-        error: 'Invalid instance ID',
-        instanceId
-      };
+      return { success: false, error: 'Invalid instance ID', instanceId };
     }
 
-    // Check if ARK server is installed
-    const arkExecutablePath = ArkPathUtils.getArkExecutablePath();
-    if (!fs.existsSync(arkExecutablePath)) {
-      return {
-        success: false,
-        error: 'ARK server is not installed',
-        instanceId
-      };
+    if (!fs.existsSync(getArkExecutablePath())) {
+      return { success: false, error: 'ARK server is not installed', instanceId };
     }
 
-    // Check if instance is already running
-    const processService = require('./server-process.service').serverProcessService;
-    const currentState = processService.getNormalizedInstanceState(instanceId);
-    if (['starting', 'running'].includes(currentState)) {
-      return {
-        success: false,
-        error: 'Instance is already running or starting',
-        instanceId
-      };
+    // SteamCMD is replacing the files a new server would load.
+    if (areServerFilesUpdating()) {
+      return { success: false, error: SERVER_FILES_UPDATING, instanceId };
     }
 
-    // Validate ports
-    return await this.validateInstancePorts(instance, instanceId);
+    const state = serverProcessService.getNormalizedInstanceState(instanceId);
+    if (state === 'starting' || state === 'running') {
+      return { success: false, error: ALREADY_UP, instanceId };
+    }
+    if (state === 'stopping' && serverProcessService.hasActiveProcess(instanceId)) {
+      return { success: false, error: 'Instance is still stopping', instanceId };
+    }
+
+    // A leftover sweep matches by command line: one still running after the spawn would kill the
+    // new process. It also frees the ports being checked.
+    await waitForProcessSweeps(instanceId);
+    return this.validateInstancePorts(instance, instanceId);
   }
 
-  /**
-   * Validate that required ports are available
-   */
-  private async validateInstancePorts(instance: any, instanceId: string): Promise<ServerInstanceResult> {
-    const gamePort = parseInt(instance.gamePort);
-    const rconPort = parseInt(instance.rconPort);
-    const queryPort = parseInt(instance.queryPort || 27015);
+  /** Bind tests on the address ARK will bind: UDP for the game and query ports, TCP for RCON. */
+  private async validateInstancePorts(instance: InstanceConfig, instanceId: string): Promise<ServerInstanceResult> {
+    const address = getMultiHomeAddress(instance) ?? '0.0.0.0';
+    const gamePort = parsePort(instance.gamePort) ?? DEFAULT_GAME_PORT;
+    const rconPort = parsePort(instance.rconPort) ?? DEFAULT_RCON_PORT;
+    const queryPort = parsePort(instance.queryPort) ?? DEFAULT_QUERY_PORT;
 
-    if (await isPortInUse(gamePort)) {
-      return {
-        success: false,
-        error: `Game port ${gamePort} is already in use`,
-        instanceId
-      };
+    if (await isUdpPortInUse(gamePort, address)) {
+      return { success: false, error: `Game port ${gamePort} is already in use`, instanceId };
     }
-    if (await isPortInUse(rconPort)) {
-      return {
-        success: false,
-        error: `RCON port ${rconPort} is already in use`,
-        instanceId
-      };
+    if (await isTcpPortInUse(rconPort, address)) {
+      return { success: false, error: `RCON port ${rconPort} is already in use`, instanceId };
     }
-    if (await isPortInUse(queryPort)) {
-      return {
-        success: false,
-        error: `Query port ${queryPort} (Steam discovery) is already in use`,
-        instanceId
-      };
+    if (await isUdpPortInUse(queryPort, address)) {
+      return { success: false, error: `Query port ${queryPort} (Steam discovery) is already in use`, instanceId };
     }
 
     return { success: true, instanceId };
   }
 
-  /**
-   * Stop ARK server instance
-   */
+  /** Graceful: SaveWorld, DoExit, then a kill if needed. Can take about 3 minutes. */
   async stopServerInstance(instanceId: string): Promise<ServerInstanceResult> {
-    const processService = require('./server-process.service').serverProcessService;
-    return await processService.stopServerProcess(instanceId);
+    return serverProcessService.stopServerProcess(instanceId);
   }
 
-  /**
-   * Restart ARK server instance
-   */
-  async restartServerInstance(
-    instanceId: string,
-    instance: any,
-    onLog?: (data: string) => void,
-    onState?: (state: string) => void
-  ): Promise<ServerInstanceResult> {
-    try {
-      // Stop the server first
-      const stopResult = await this.stopServerInstance(instanceId);
-      if (!stopResult.success) {
-        return stopResult;
-      }
-
-      // Wait a moment before restarting
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // Start the server again
-      return await this.startServerInstance(instanceId, instance, onLog, onState);
-
-    } catch (error) {
-      console.error(`[server-lifecycle-service] Failed to restart ARK server instance ${instanceId}:`, error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to restart server instance',
-        instanceId
-      };
-    }
-  }
-
-  /**
-   * Cleanup orphaned ARK processes on startup
-   */
-  cleanupOrphanedArkProcesses(): void {
-    if (getPlatform() === 'linux') {
-      try {
-        // Kill any ARK server processes
-        try {
-          execSync('pkill -f ArkAscendedServer', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-
-        // Kill any Proton processes running ARK
-        try {
-          execSync('pkill -f "proton.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-
-        // Kill any xvfb processes that might be stuck
-        try {
-          execSync('pkill -f "Xvfb.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-
-        // Kill any wine processes that might be related to ARK (if somehow still present)
-        try {
-          execSync('pkill -f "wine.*ArkAscendedServer"', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-      } catch (e) {
-        console.error('[server-lifecycle-service] Orphaned process cleanup failed:', e);
-      }
-    } else {
-      // On Windows, use taskkill for orphaned processes
-      try {
-        try {
-          execSync('taskkill /F /IM AsaApiLoader.exe', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-        try {
-          execSync('taskkill /F /IM ArkAscendedServer.exe', { stdio: 'ignore' });
-        } catch (e) {
-          // Ignore if no processes found
-        }
-      } catch (e) {
-        console.error('[server-lifecycle-service] Windows orphaned process cleanup failed:', e);
-      }
-    }
-  }
-
-  /**
-   * Start ARK server instance (legacy method for backward compatibility)
-   */
-  async startArkServerInstance(
-    instanceId: string,
-    onLog?: (data: string) => void,
-    onState?: (state: string) => void
-  ): Promise<{ started: boolean, portError?: string }> {
-    const instance = require('../../utils/ark/instance.utils').getInstance(instanceId);
-    if (!instance) {
-      return { started: false, portError: 'Instance not found' };
-    }
-
-    const result = await this.startServerInstance(instanceId, instance, onLog, onState);
-    return {
-      started: result.success,
-      portError: result.error
-    };
-  }
-
-  // ====================================================================
-  // Feature #7: Cluster Control (Start/Stop All)
-  // ====================================================================
-
-  /**
-   * Start all server instances with staggered delay to prevent CPU overload
-   */
-  async startAllInstances(delayMs?: number): Promise<{ started: string[], failed: string[] }> {
-    const managementService = require('./server-management.service').serverManagementService;
-    const processService = require('./server-process.service').serverProcessService;
-
-    // Use configured delay from global config, fallback to parameter, then default 60s
-    if (delayMs === undefined) {
-      try {
-        const { loadGlobalConfig } = require('../../utils/global-config.utils');
-        const cfg = loadGlobalConfig();
-        delayMs = (cfg.serverStartDelaySeconds ?? 60) * 1000;
-      } catch {
-        delayMs = 60000;
-      }
-    }
-    
-    const instances = (await managementService.getAllInstances()).instances;
+  /** Starts every server that is not up, one at a time, `delayMs` apart (the configured delay by default). */
+  async startAllInstances(delayMs?: number): Promise<{ started: string[]; failed: string[] }> {
+    const staggerMs = delayMs ?? (loadGlobalConfig().serverStartDelaySeconds ?? DEFAULT_START_DELAY_SECONDS) * 1000;
+    const { instances } = await serverManagementService.getAllInstances();
     const started: string[] = [];
     const failed: string[] = [];
 
-    for (const instance of instances) {
-        const state = processService.getNormalizedInstanceState(instance.id);
-        if (state !== 'running' && state !== 'starting') {
-            try {
-                console.log(`[Lifecycle] Starting instance ${instance.id} as part of Start All...`);
-                // Use standard callback hooks
-                const callbacks = require('./server-instance.service').serverInstanceService.getStandardEventCallbacks(instance.id);
-                
-                await this.startServerInstance(instance.id, instance, callbacks.onLog, callbacks.onState);
-                started.push(instance.id);
-                
-                // Stagger delay
-                await new Promise(resolve => setTimeout(resolve, delayMs));
-            } catch (e) {
-                console.error(`[Lifecycle] Failed to start ${instance.id}:`, e);
-                failed.push(instance.id);
-            }
+    for (const instance of instances as InstanceConfig[]) {
+      const state = serverProcessService.getNormalizedInstanceState(instance.id);
+      if (state === 'running' || state === 'starting') continue;
+
+      console.log(`[server-lifecycle] Starting ${instance.id} (Start All)`);
+      const callbacks = getStandardEventCallbacks(instance.id);
+      const result = await this.startServerInstance(instance.id, instance, callbacks.onLog, callbacks.onState);
+      if (!result.success) {
+        console.error(`[server-lifecycle] Start All could not start ${instance.id}: ${result.error}`);
+        failed.push(instance.id);
+        // The request marked it 'queued'; a start refused before spawning leaves that behind.
+        if (serverProcessService.getNormalizedInstanceState(instance.id) === 'queued') {
+          serverProcessService.setInstanceState(instance.id, 'stopped');
+          callbacks.onState('stopped');
         }
+        continue;
+      }
+      started.push(instance.id);
+      await new Promise(resolve => setTimeout(resolve, staggerMs));
     }
     return { started, failed };
   }
 
-  /**
-   * Stop all running server instances in parallel
-   */
-  async stopAllInstances(): Promise<{ stopped: string[], failed: string[] }> {
-    const managementService = require('./server-management.service').serverManagementService;
-    const processService = require('./server-process.service').serverProcessService;
-    
-    const instances = (await managementService.getAllInstances()).instances;
+  async stopAllInstances(): Promise<{ stopped: string[]; failed: string[] }> {
+    const { instances } = await serverManagementService.getAllInstances();
     const stopped: string[] = [];
     const failed: string[] = [];
 
-    const stopPromises = instances.map(async (instance: any) => {
-        const state = processService.getNormalizedInstanceState(instance.id);
-        if (state === 'running' || state === 'starting') {
-            try {
-                console.log(`[Lifecycle] Stopping instance ${instance.id} as part of Stop All...`);
-                await this.stopServerInstance(instance.id);
-                stopped.push(instance.id);
-            } catch (e) {
-                console.error(`[Lifecycle] Failed to stop ${instance.id}:`, e);
-                failed.push(instance.id);
-            }
-        }
-    });
-
-    await Promise.all(stopPromises);
+    await Promise.all((instances as InstanceConfig[]).map(async instance => {
+      const state = serverProcessService.getNormalizedInstanceState(instance.id);
+      if (state !== 'running' && state !== 'starting') return;
+      try {
+        console.log(`[server-lifecycle] Stopping ${instance.id} (Stop All)`);
+        await this.stopServerInstance(instance.id);
+        stopped.push(instance.id);
+      } catch (error) {
+        console.error(`[server-lifecycle] Failed to stop ${instance.id}:`, error);
+        failed.push(instance.id);
+      }
+    }));
     return { stopped, failed };
   }
 }
 
-// Export singleton instance
 export const serverLifecycleService = new ServerLifecycleService();

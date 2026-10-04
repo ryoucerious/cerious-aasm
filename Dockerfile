@@ -1,16 +1,8 @@
-# =============================================================================
-# Cerious AASM — Linux Docker image
-# =============================================================================
-# Targets:
-#   base    — Debian Bookworm system packages (Electron, xvfb, SteamCMD i386)
-#   build   — npm ci, Angular production build, Electron TypeScript, native rebuild
-#   runtime — Headless app with the web UI, launched as a non-root user
-#   test    — Electron Jest tests
-# =============================================================================
+# Cerious AASM - Linux Docker image.
+# Targets: base (Debian Bookworm packages: Electron libs, xvfb, SteamCMD i386 libs),
+# build (npm ci, Angular and Electron compile, native rebuild),
+# runtime (headless app with the web UI, non-root), test (Electron Jest tests).
 
-# ---------------------------------------------------------------------------
-# Stage: base — system dependencies
-# ---------------------------------------------------------------------------
 FROM node:22-bookworm AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -39,9 +31,6 @@ ENV PYTHON=/usr/bin/python3 \
 
 WORKDIR /app
 
-# ---------------------------------------------------------------------------
-# Stage: build — application compile and native modules
-# ---------------------------------------------------------------------------
 FROM base AS build
 
 COPY package.json package-lock.json ./
@@ -54,31 +43,31 @@ RUN npm ci
 
 COPY . .
 
-# Optional. Leave the placeholder when unset so the image still builds.
-ARG CURSEFORGE_API_KEY=
-RUN if [ -n "$CURSEFORGE_API_KEY" ]; then \
-      node -e "const fs=require('fs'); const p='src/environments/environment.prod.ts'; const key=process.env.CURSEFORGE_API_KEY; fs.writeFileSync(p, fs.readFileSync(p,'utf8').replaceAll('CURSEFORGE_KEY_PLACEHOLDER', key));"; \
+# Optional CurseForge key, a build secret rather than an ARG so it stays out of
+# image history. If unset the placeholder remains and the image still builds.
+# See docs/DOCKER.md.
+RUN --mount=type=secret,id=curseforge_api_key \
+    if [ -s /run/secrets/curseforge_api_key ]; then \
+      node -e " \
+        const fs = require('fs'); \
+        const p = 'src/environments/environment.prod.ts'; \
+        const key = fs.readFileSync('/run/secrets/curseforge_api_key', 'utf8').trim(); \
+        fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('CURSEFORGE_KEY_PLACEHOLDER', key)); \
+      "; \
     fi
 
 RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build \
-    && find electron -name '*.js' -delete \
     && npx tsc -p tsconfig.electron.json \
     && npx electron-rebuild --force --only node-pty,bcrypt
 
 RUN chown -R aasm:aasm /app /home/aasm
 
-# ---------------------------------------------------------------------------
-# Stage: test — electron-side Jest tests
-# ---------------------------------------------------------------------------
 FROM build AS test
 
 USER aasm
 
-CMD ["npx", "jest", "--config", "jest.config.js", "--testPathPatterns", "\\.test\\.ts$", "--forceExit"]
+CMD ["npm", "run", "test:electron"]
 
-# ---------------------------------------------------------------------------
-# Stage: runtime — headless web UI
-# ---------------------------------------------------------------------------
 FROM base AS runtime
 
 ENV NODE_ENV=production
@@ -97,6 +86,10 @@ RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3000
+
+# start-period covers Xvfb plus Electron startup before the web server is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${AASM_PORT:-3000}/api/auth-status" || exit 1
 
 VOLUME ["/home/aasm/.local/share/cerious-aasm", "/home/aasm/.config"]
 

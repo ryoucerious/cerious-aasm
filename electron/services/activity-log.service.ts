@@ -1,4 +1,5 @@
 import { userDatabaseService } from './auth/user-database.service';
+import { messagingService } from './messaging.service';
 
 export type ActivityKind =
   | 'start' | 'stop' | 'crash' | 'backup' | 'join' | 'leave' | 'update' | 'error' | 'info' | 'account';
@@ -21,28 +22,34 @@ const MAX_ENTRIES = 500;
  * A request like start-server-instance is answered immediately, but the event it causes
  * ("Ragnarok started") arrives seconds later on a different channel. Remembering the caller
  * for a short window lets the outcome name them, while anything that happens later with
- * nobody asking — a crash, a scheduled restart — correctly has no actor.
+ * nobody asking (a crash, a scheduled restart) correctly has no actor.
  */
 const ACTOR_TTL_MS = 90_000;
+
+type Fields = Record<string, unknown>;
+
+function fieldsOf(value: unknown): Fields {
+  return value && typeof value === 'object' ? value as Fields : {};
+}
 
 /**
  * Channels worth recording in their own right, because they change something without
  * producing a state broadcast the feed would otherwise notice.
  */
-const ACTION_MESSAGES: Record<string, (payload: any) => string> = {
+const ACTION_MESSAGES: Record<string, (payload: Fields) => string> = {
   'save-server-instance': () => 'Server settings changed',
-  'save-ini-file': (p) => `Edited ${p?.filename || 'an INI file'}`,
-  'rcon-command': (p) => `Ran RCON command: ${String(p?.command || '').slice(0, 80)}`,
+  'save-ini-file': (p) => `Edited ${p.filename || 'an INI file'}`,
+  'rcon-command': (p) => `Ran RCON command: ${String(p.command || '').slice(0, 80)}`,
   'restore-backup': () => 'Restored a backup',
   'delete-backup': () => 'Deleted a backup',
   'save-backup-settings': () => 'Backup schedule changed',
   'set-global-config': () => 'Application settings changed',
-  'install': (p) => `Started installing ${p?.target || 'the ARK server'}`,
-  'create-user': (p) => `Created the user "${p?.username || ''}"`,
+  'install': (p) => `Started installing ${p.target || 'the ARK server'}`,
+  'create-user': (p) => `Created the user "${p.username || ''}"`,
   'update-user': () => 'Updated a user account',
   'delete-user': () => 'Deleted a user account',
-  'create-role': (p) => `Created the role "${p?.name || ''}"`,
-  'update-role': (p) => `Updated the role "${p?.name || ''}"`,
+  'create-role': (p) => `Created the role "${p.name || ''}"`,
+  'update-role': (p) => `Updated the role "${p.name || ''}"`,
   'delete-role': () => 'Deleted a role',
   'add-to-whitelist': () => 'Added a player to the whitelist',
   'remove-from-whitelist': () => 'Removed a player from the whitelist',
@@ -63,16 +70,8 @@ const ACTION_KINDS: Record<string, ActivityKind> = {
 };
 
 /**
- * The Recent Activity feed, recorded server-side.
- *
- * It used to be assembled in the browser and cached per device, so each machine saw a
- * different history and anything that happened while no UI was open was lost. Recording it
- * here means the feed is shared by everyone, survives restarts, and captures events that
- * occur with nobody watching — a scheduled backup, or a server crashing overnight.
- *
- * Events are picked up from the broadcasts the app already sends, so nothing at the call
- * sites had to change: {@link recordFromBroadcast} is handed every outgoing message and
- * keeps the few that are worth remembering.
+ * The Recent Activity feed, shared by every client and kept across restarts. Built from the
+ * broadcasts the app already sends: {@link recordFromBroadcast} keeps the few worth remembering.
  */
 export class ActivityLogService {
   /** Last seen state per instance, so a repeated broadcast is not logged twice. */
@@ -102,9 +101,10 @@ export class ActivityLogService {
    * `username` is null for the desktop app, which is the machine owner rather than an
    * account; those entries are left unattributed rather than invented.
    */
-  noteAction(channel: string, payload: any, username: string | null): void {
+  noteAction(channel: string, payload: unknown, username: string | null): void {
     try {
-      const instanceId = this.instanceIdFrom(payload);
+      const fields = fieldsOf(payload);
+      const instanceId = this.instanceIdFrom(fields);
       if (username) {
         const at = Date.now();
         this.recentActors[instanceId || '*'] = { username, at };
@@ -116,7 +116,7 @@ export class ActivityLogService {
       const describe = ACTION_MESSAGES[channel];
       if (describe) {
         const suffix = instanceId ? ` (${this.nameOf(instanceId)})` : '';
-        this.record(ACTION_KINDS[channel] || 'info', `${describe(payload)}${suffix}`, instanceId, username);
+        this.record(ACTION_KINDS[channel] || 'info', `${describe(fields)}${suffix}`, instanceId, username);
       }
     } catch (error) {
       console.debug('[activity-log] Could not note action:', error);
@@ -130,8 +130,7 @@ export class ActivityLogService {
     return Date.now() - entry.at <= ACTOR_TTL_MS ? entry.username : null;
   }
 
-  private instanceIdFrom(payload: any): string | null {
-    if (!payload || typeof payload !== 'object') return null;
+  private instanceIdFrom(payload: Fields): string | null {
     const id = payload.instanceId || payload.id || payload.serverId;
     return typeof id === 'string' && id ? id : null;
   }
@@ -141,20 +140,25 @@ export class ActivityLogService {
    * Called for every broadcast, so it stays cheap and ignores the noisy channels (logs,
    * memory and cpu samples) outright.
    */
-  recordFromBroadcast(channel: string, data: any): void {
+  recordFromBroadcast(channel: string, data: unknown): void {
     try {
+      if (channel === 'server-instances') {
+        if (Array.isArray(data)) this.noteInstanceNames(data);
+        return;
+      }
+      const event = fieldsOf(data);
       switch (channel) {
-        case 'server-instances':
-          if (Array.isArray(data)) this.noteInstanceNames(data);
-          return;
-
         case 'server-instance-state': {
-          const instanceId = data?.instanceId;
-          const state = String(data?.state || '').toLowerCase();
-          if (!instanceId || !state) return;
+          const instanceId = event.instanceId;
+          const state = String(event.state || '').toLowerCase();
+          if (typeof instanceId !== 'string' || !instanceId || !state) return;
           const previous = this.lastState[instanceId];
           this.lastState[instanceId] = state;
           if (previous === state) return;
+          // A run's count starts at 0, and a server that went down took its players with it. A
+          // stop that turns back to running keeps the count: nobody left.
+          if (state === 'starting') this.lastPlayers[instanceId] = 0;
+          else if (state === 'stopped' || state === 'crashed') delete this.lastPlayers[instanceId];
           const name = this.nameOf(instanceId);
           // A crash is nobody's doing, so it is never credited to whoever last acted.
           const actor = this.actorFor(instanceId);
@@ -165,10 +169,10 @@ export class ActivityLogService {
         }
 
         case 'server-instance-players': {
-          const instanceId = data?.instanceId;
-          const players = typeof data?.players === 'number' ? data.players
-            : (typeof data?.count === 'number' ? data.count : null);
-          if (!instanceId || players === null) return;
+          const instanceId = event.instanceId;
+          const players = typeof event.players === 'number' ? event.players
+            : (typeof event.count === 'number' ? event.count : null);
+          if (typeof instanceId !== 'string' || !instanceId || players === null) return;
           const previous = this.lastPlayers[instanceId];
           this.lastPlayers[instanceId] = players;
           if (typeof previous !== 'number' || previous === players) return;
@@ -180,12 +184,13 @@ export class ActivityLogService {
         }
 
         case 'backup-created': {
-          if (!data?.instanceId) return;
-          const scheduled = data.type === 'scheduled';
+          const instanceId = event.instanceId;
+          if (typeof instanceId !== 'string' || !instanceId) return;
+          const scheduled = event.type === 'scheduled';
           const label = scheduled ? 'Scheduled backup' : 'Backup';
           // A scheduled backup has no actor by definition.
-          this.record('backup', `${label} completed (${this.nameOf(data.instanceId)})`, data.instanceId,
-            scheduled ? null : this.actorFor(data.instanceId));
+          this.record('backup', `${label} completed (${this.nameOf(instanceId)})`, instanceId,
+            scheduled ? null : this.actorFor(instanceId));
           return;
         }
 
@@ -194,7 +199,7 @@ export class ActivityLogService {
         // A waiting update is shown by the mark in the sidebar and the ARK Installation page.
 
         case 'notification': {
-          if (data?.type === 'error' && data?.message) this.record('error', String(data.message));
+          if (event.type === 'error' && event.message) this.record('error', String(event.message));
           return;
         }
 
@@ -241,3 +246,6 @@ export class ActivityLogService {
 }
 
 export const activityLogService = new ActivityLogService();
+
+// Registered from here rather than imported by the bus, which also loads in the web server child.
+messagingService.setObserver(activityLogService);

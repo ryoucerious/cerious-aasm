@@ -31,6 +31,9 @@ export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
 
 export const ADMIN_ROLE_ID = 'admin';
 
+/** The backend refuses shorter account passwords. */
+export const MIN_PASSWORD_LENGTH = 8;
+
 export interface Role {
   id: string;
   name: string;

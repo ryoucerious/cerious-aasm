@@ -1,175 +1,280 @@
-// RCON Utilities - Uses the 'rcon' npm package (EventEmitter API)
-// Note: Using require() due to lack of proper TypeScript definitions
-const Rcon = require('rcon');
+import type { Socket } from 'net';
+import Rcon from 'rcon';
+import { parsePort } from './validation.utils';
 
-export const rconClients: Record<string, any> = {};
-
-// Tracks instances that have an active connection retry loop in progress.
-// Prevents multiple concurrent retry chains when connectRcon is called
-// again before the previous attempt chain has finished (e.g. player poll
-// passive reconnect fires while the initial startup loop is still running).
-const rconConnecting = new Set<string>();
-
-/**
- * Connect to RCON for a given instance.
- */
-export function connectRcon(instanceId: string, config: any, onStatus?: (connected: boolean) => void) {
-  if (rconClients[instanceId]) {
-    if (onStatus) onStatus(true);
-    return;
-  }
-  // Already have an active retry loop — don't start another one.
-  if (rconConnecting.has(instanceId)) {
-    return;
-  }
-  const port = parseInt(String(config.rconPort || 27020), 10);
-  // RCON authenticates with ServerAdminPassword — same as the in-game admin password.
-  // Fall back to legacy rconPassword field for backward compatibility.
-  // Coerce to string — passwords may be stored as numbers in config JSON.
-  const password = String(config.serverAdminPassword || config.rconPassword || '');
-  
-  // Debug logging to help diagnose authentication issues
-  console.log(`[RCON] Attempting to connect to ${instanceId}`);
-  console.log(`[RCON] Port: ${port}`);
-  console.log(`[RCON] Password source: ${config.serverAdminPassword ? 'serverAdminPassword' : config.rconPassword ? 'rconPassword' : 'none'}`);
-  console.log(`[RCON] Password length: ${password.length}`);
-  
-  if (!password) {
-    console.error(`[RCON] No password configured for ${instanceId}! RCON authentication will fail.`);
-  }
-  
-  // Use explicit IPv4 loopback — on Linux, 'localhost' may resolve to ::1 (IPv6)
-  // which fails if ARK/Wine only binds to IPv4.
-  const host = '127.0.0.1';
-  // 30 attempts × 3 s = 90 s total window.
-  // ARK on Linux/Proton can take 60+ seconds after the "advertising" log line before
-  // the RCON port is actually bound, so 30 s (the old 15 × 2 s) was too short.
-  const maxAttempts = 30;
-  const retryDelayMs = 3000;
-  let attempt = 0;
-
-  rconConnecting.add(instanceId);
-
-  function tryConnect() {
-    attempt++;
-    const rcon = new Rcon(host, port, password);
-    let connected = false;
-    rcon.on('auth', () => {
-      connected = true;
-      rconConnecting.delete(instanceId);
-      rconClients[instanceId] = rcon;
-      if (onStatus) onStatus(true);
-    });
-    rcon.on('end', () => {
-      if (!connected && attempt < maxAttempts) {
-        setTimeout(tryConnect, retryDelayMs);
-        return;
-      }
-      rconConnecting.delete(instanceId);
-      delete rconClients[instanceId];
-      if (onStatus) onStatus(false);
-    });
-    rcon.on('error', (err: any) => {
-      if (!connected && attempt < maxAttempts) {
-        // Only log first attempt and every 5th to avoid log spam while server is starting
-        if (attempt === 1 || attempt % 5 === 0) {
-          console.log(`[RCON] Waiting for server ${instanceId} (attempt ${attempt}/${maxAttempts}): ${err.code || err.message}`);
-        }
-        setTimeout(tryConnect, retryDelayMs);
-        return;
-      }
-      console.error(`[RCON] All ${maxAttempts} connection attempts failed for ${instanceId}:`, err);
-      rconConnecting.delete(instanceId);
-      delete rconClients[instanceId];
-      if (onStatus) onStatus(false);
-    });
-    rcon.connect();
-  }
-
-  tryConnect();
-}
-
-/**
- * Disconnect from RCON for a given instance.
- */
-export function disconnectRcon(instanceId: string) {
-  rconConnecting.delete(instanceId);
-  if (rconClients[instanceId]) {
-    try {
-      rconClients[instanceId].disconnect();
-    } catch (error) {
-      console.error(`[rcon-utils] Error disconnecting RCON for ${instanceId}:`, error);
-    }
-    delete rconClients[instanceId];
-  }
-}
-
-/** Default max wait for an RCON command response before rejecting. */
+/** How long a command may wait, queued or in flight, before it rejects. */
 export const DEFAULT_RCON_COMMAND_TIMEOUT_MS = 30000;
 
+/** A command that failed before it was written to the socket, so the server never saw it. */
+export class RconCommandNotSentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RconCommandNotSentError';
+  }
+}
+
+// IPv4 loopback: on Linux 'localhost' can resolve to ::1, which ARK under Wine does not bind.
+const RCON_HOST = '127.0.0.1';
+const DEFAULT_RCON_PORT = 27020;
+// 30 attempts x 3 s = a 90 s window. ARK under Proton can take 60+ s after the "advertising" log
+// line before the RCON port is actually bound.
+const MAX_CONNECT_ATTEMPTS = 30;
+const RETRY_DELAY_MS = 3000;
+// node-rcon's error for a password the server rejected. Retrying cannot fix it.
+const AUTH_FAILED = 'Authentication failed';
+
+export interface RconConfig {
+  rconPort?: unknown;
+  rconPassword?: unknown;
+  serverAdminPassword?: unknown;
+}
+
+interface Connection {
+  client: Rcon;
+  /** Fails the command waiting on this client, if there is one. */
+  abort?: (reason: Error) => void;
+}
+
+/** One per instance: later connect requests join it instead of starting a second chain. */
+interface ConnectLoop {
+  port: number;
+  password: string;
+  maxAttempts: number;
+  cancelled: boolean;
+  client?: Rcon;
+  retryTimer?: NodeJS.Timeout;
+  callbacks: Array<(connected: boolean) => void>;
+}
+
+const connections = new Map<string, Connection>();
+const connectLoops = new Map<string, ConnectLoop>();
+// Commands run one at a time per instance: node-rcon tags every packet with the same id, so a
+// response cannot be matched to anything but the single command in flight.
+const commandQueues = new Map<string, Promise<void>>();
+
+/** ARK authenticates RCON with ServerAdminPassword; older configs only carry rconPassword. */
+export function getRconPassword(config: RconConfig): string {
+  return String(config.serverAdminPassword || config.rconPassword || '');
+}
+
 /**
- * Send an RCON command to a connected instance.
- * Rejects on error, disconnect (`end`), or timeout so callers cannot hang forever.
+ * Connects RCON for an instance, retrying every 3 s (up to `maxAttempts`) while the server brings
+ * its port up. `onStatus` is always called once.
+ */
+export function connectRcon(
+  instanceId: string,
+  config: RconConfig,
+  onStatus?: (connected: boolean) => void,
+  maxAttempts = MAX_CONNECT_ATTEMPTS
+): void {
+  const report = onStatus ?? (() => undefined);
+  if (connections.has(instanceId)) {
+    report(true);
+    return;
+  }
+  const running = connectLoops.get(instanceId);
+  if (running) {
+    running.callbacks.push(report);
+    return;
+  }
+
+  const port = config.rconPort ? parsePort(config.rconPort) : DEFAULT_RCON_PORT;
+  if (port === undefined) {
+    console.error(`[rcon] ${instanceId} has an invalid RCON port: ${String(config.rconPort)}`);
+    report(false);
+    return;
+  }
+  const password = getRconPassword(config);
+  if (!password) {
+    console.error(`[rcon] No admin password configured for ${instanceId}; authentication will fail`);
+  }
+
+  const loop: ConnectLoop = { port, password, maxAttempts, cancelled: false, callbacks: [report] };
+  connectLoops.set(instanceId, loop);
+  tryConnect(instanceId, loop, 1);
+}
+
+function tryConnect(instanceId: string, loop: ConnectLoop, attempt: number): void {
+  if (loop.cancelled) return;
+
+  const client = new Rcon(RCON_HOST, loop.port, loop.password);
+  loop.client = client;
+  let settled = false;
+
+  // False when this attempt already settled or the connect was cancelled.
+  const settle = (): boolean => {
+    if (settled) return false;
+    settled = true;
+    loop.client = undefined;
+    return !loop.cancelled;
+  };
+
+  const fail = (reason: string) => {
+    const proceed = settle();
+    destroyClient(client);
+    if (!proceed) return;
+    if (reason === AUTH_FAILED) {
+      console.error(`[rcon] ${instanceId} rejected the admin password`);
+      finishLoop(instanceId, loop, false);
+      return;
+    }
+    if (attempt >= loop.maxAttempts) {
+      console.warn(`[rcon] Gave up connecting to ${instanceId} after ${attempt} attempt(s): ${reason}`);
+      finishLoop(instanceId, loop, false);
+      return;
+    }
+    // The first and every fifth attempt only, while the server is still starting.
+    if (attempt === 1 || attempt % 5 === 0) {
+      console.log(`[rcon] Waiting for ${instanceId} (attempt ${attempt}/${loop.maxAttempts}): ${reason}`);
+    }
+    loop.retryTimer = setTimeout(() => tryConnect(instanceId, loop, attempt + 1), RETRY_DELAY_MS);
+  };
+
+  client.on('auth', () => {
+    if (!settle()) {
+      destroyClient(client);
+      return;
+    }
+    adoptClient(instanceId, client);
+    finishLoop(instanceId, loop, true);
+  });
+  client.on('error', (error: NodeJS.ErrnoException) => fail(error.code || error.message));
+  client.on('end', () => fail('connection closed'));
+  try {
+    client.connect();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function finishLoop(instanceId: string, loop: ConnectLoop, connected: boolean): void {
+  if (connectLoops.get(instanceId) === loop) connectLoops.delete(instanceId);
+  for (const callback of loop.callbacks.splice(0)) {
+    try {
+      callback(connected);
+    } catch (error) {
+      console.error(`[rcon] Connect callback for ${instanceId} failed:`, error);
+    }
+  }
+}
+
+function adoptClient(instanceId: string, client: Rcon): void {
+  const connection: Connection = { client };
+  client.removeAllListeners();
+  client.on('error', (error: Error) => dropConnection(instanceId, connection, error));
+  client.on('end', () => dropConnection(instanceId, connection, new Error('RCON connection closed before response')));
+  connections.set(instanceId, connection);
+}
+
+function dropConnection(instanceId: string, connection: Connection, reason: Error): void {
+  if (connections.get(instanceId) !== connection) return;
+  connections.delete(instanceId);
+  connection.abort?.(reason);
+  destroyClient(connection.client);
+}
+
+function destroyClient(client: Rcon): void {
+  client.removeAllListeners();
+  // node-rcon re-emits socket errors; without a listener a late one would throw in the main process.
+  client.on('error', () => undefined);
+  try {
+    client.disconnect();
+  } catch {
+    // Socket never opened
+  }
+  // node-rcon has no destroy(), and disconnect() only half-closes: a hung server would keep it open.
+  (client as unknown as { _tcpSocket?: Socket })._tcpSocket?.destroy();
+}
+
+export function disconnectRcon(instanceId: string): void {
+  const loop = connectLoops.get(instanceId);
+  if (loop) {
+    loop.cancelled = true;
+    clearTimeout(loop.retryTimer);
+    if (loop.client) destroyClient(loop.client);
+    finishLoop(instanceId, loop, false);
+  }
+  const connection = connections.get(instanceId);
+  if (connection) {
+    dropConnection(instanceId, connection, new Error('RCON connection closed before response'));
+  }
+}
+
+/**
+ * Sends a command once the ones queued before it have finished. Rejects when the connection drops
+ * or `timeoutMs` passes (queued time included), with RconCommandNotSentError if it never went out.
+ * A timeout on a sent command drops the connection: a server that stopped answering keeps its
+ * socket open, and dropping it lets polling reconnect.
  */
 export function sendRconCommand(
   instanceId: string,
   command: string,
   timeoutMs: number = DEFAULT_RCON_COMMAND_TIMEOUT_MS
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const rcon = rconClients[instanceId];
-    if (!rcon) return reject(new Error('RCON not connected'));
-
+  return new Promise<string>((resolve, reject) => {
     let settled = false;
-    const cleanup = () => {
-      rcon.removeListener('response', onResponse);
-      rcon.removeListener('error', onError);
-      rcon.removeListener('end', onEnd);
-      clearTimeout(timer);
-    };
-    const settle = (fn: () => void) => {
+    let inFlight: Connection | undefined;
+
+    const settle = (outcome: () => void) => {
       if (settled) return;
       settled = true;
-      cleanup();
-      fn();
+      clearTimeout(timer);
+      outcome();
     };
 
-    const onResponse = (str: string) => settle(() => resolve(str));
-    const onError = (err: any) => settle(() => reject(err));
-    const onEnd = () => settle(() => reject(new Error('RCON connection closed before response')));
     const timer = setTimeout(() => {
-      settle(() => reject(new Error(`RCON command timed out after ${timeoutMs}ms`)));
+      const message = `RCON command timed out after ${timeoutMs}ms`;
+      settle(() => reject(inFlight ? new Error(message) : new RconCommandNotSentError(message)));
+      if (inFlight) dropConnection(instanceId, inFlight, new Error('RCON command timed out'));
     }, timeoutMs);
 
-    rcon.once('response', onResponse);
-    rcon.once('error', onError);
-    rcon.once('end', onEnd);
-    rcon.send(command);
+    enqueue(instanceId, () => new Promise<void>(done => {
+      const connection = connections.get(instanceId);
+      if (settled || !connection) {
+        settle(() => reject(new RconCommandNotSentError('RCON not connected')));
+        done();
+        return;
+      }
+      inFlight = connection;
+      const { client } = connection;
+      const finish = (outcome: () => void) => {
+        client.removeListener('response', onResponse);
+        connection.abort = undefined;
+        inFlight = undefined;
+        settle(outcome);
+        done();
+      };
+      const onResponse = (response: string) => finish(() => resolve(response));
+      connection.abort = reason => finish(() => reject(reason));
+      client.once('response', onResponse);
+      try {
+        client.send(command);
+      } catch (error) {
+        finish(() => reject(error));
+      }
+    }));
   });
 }
 
-/**
- * Check if RCON is connected for a given instance.
- */
+function enqueue(instanceId: string, task: () => Promise<void>): void {
+  const next = (commandQueues.get(instanceId) ?? Promise.resolve()).then(task);
+  commandQueues.set(instanceId, next);
+  void next.then(() => {
+    if (commandQueues.get(instanceId) === next) commandQueues.delete(instanceId);
+  });
+}
+
 export function isRconConnected(instanceId: string): boolean {
-  return !!rconClients[instanceId];
+  return connections.has(instanceId);
 }
 
-/**
- * Check if a RCON connection attempt is currently in progress for a given instance.
- */
 export function isRconConnecting(instanceId: string): boolean {
-  return rconConnecting.has(instanceId);
+  return connectLoops.has(instanceId);
 }
 
-// Inline exports are used above
-
-/**
- * Cleanup function to disconnect all RCON clients
- * Should be called when the Electron app is shutting down
- */
+/** Closes every client and cancels every pending connect. For app shutdown. */
 export function cleanupAllRconConnections(): void {
-  Object.keys(rconClients).forEach((instanceId) => {
+  for (const instanceId of new Set([...connections.keys(), ...connectLoops.keys()])) {
     disconnectRcon(instanceId);
-  });
+  }
 }

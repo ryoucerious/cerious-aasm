@@ -4,7 +4,7 @@ import { PERMISSIONS, Permission } from '../../types/auth.types';
  * What each message channel requires.
  *
  * The message bus is the app's whole API: the web UI can reach every channel over the
- * WebSocket, so this map is the authorization boundary. It is deny-by-default — a channel
+ * WebSocket, so this map is the authorization boundary. It is deny-by-default: a channel
  * missing from here is refused for everyone except a full Admin, so adding a handler
  * without adding an entry fails closed rather than open.
  *
@@ -12,7 +12,7 @@ import { PERMISSIONS, Permission } from '../../types/auth.types';
  * only the handshake-ish reads the UI needs to render at all).
  */
 export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
-  // ---- Reads every signed-in user needs ----
+  // Reads every signed-in user needs
   'get-system-info': null,
   'get-log-file-path': null,
   'get-host-resources': null,
@@ -23,7 +23,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'get-activity': null,
   'clear-activity': PERMISSIONS.SETTINGS_MANAGE,
 
-  // ---- Servers: reading ----
+  // Servers: reading
   'get-server-instances': PERMISSIONS.SERVERS_VIEW,
   'get-server-instance': PERMISSIONS.SERVERS_VIEW,
   'get-server-instance-state': PERMISSIONS.SERVERS_VIEW,
@@ -32,15 +32,16 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'get-rcon-status': PERMISSIONS.SERVERS_VIEW,
   'get-ini-file': PERMISSIONS.SERVERS_VIEW,
 
-  // ---- Servers: control ----
+  // Servers: control
   'start-server-instance': PERMISSIONS.SERVERS_CONTROL,
+  'stop-server-instance': PERMISSIONS.SERVERS_CONTROL,
   'force-stop-server-instance': PERMISSIONS.SERVERS_CONTROL,
   'start-all-instances': PERMISSIONS.SERVERS_CONTROL,
   'stop-all-instances': PERMISSIONS.SERVERS_CONTROL,
   'connect-rcon': PERMISSIONS.SERVERS_CONTROL,
   'disconnect-rcon': PERMISSIONS.SERVERS_CONTROL,
 
-  // ---- Servers: lifecycle and configuration ----
+  // Servers: lifecycle and configuration
   'save-server-instance': PERMISSIONS.SERVERS_CONFIGURE,
   'save-ini-file': PERMISSIONS.SERVERS_CONFIGURE,
   'reorder-server-instances': PERMISSIONS.SERVERS_CONFIGURE,
@@ -55,7 +56,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'delete-server-instance': PERMISSIONS.SERVERS_DELETE,
   'import-server-from-backup': PERMISSIONS.SERVERS_CREATE,
 
-  // ---- RCON and players ----
+  // RCON and players
   'rcon-command': PERMISSIONS.RCON_USE,
   'get-online-players': PERMISSIONS.PLAYERS_VIEW,
   'load-whitelist': PERMISSIONS.PLAYERS_VIEW,
@@ -63,7 +64,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'remove-from-whitelist': PERMISSIONS.PLAYERS_MANAGE,
   'clear-whitelist': PERMISSIONS.PLAYERS_MANAGE,
 
-  // ---- Backups ----
+  // Backups
   'get-backup-list': PERMISSIONS.BACKUPS_VIEW,
   'get-backup-settings': PERMISSIONS.BACKUPS_VIEW,
   'get-scheduler-status': PERMISSIONS.BACKUPS_VIEW,
@@ -75,7 +76,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'restore-backup': PERMISSIONS.BACKUPS_RESTORE,
   'delete-backup': PERMISSIONS.BACKUPS_DELETE,
 
-  // ---- Mods and plugins ----
+  // Mods and plugins
   'curseforge-search-mods': PERMISSIONS.MODS_MANAGE,
   'curseforge-get-mod': PERMISSIONS.MODS_MANAGE,
   'curseforge-open-website': PERMISSIONS.MODS_MANAGE,
@@ -87,7 +88,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'install-plugin-from-zip': PERMISSIONS.MODS_MANAGE,
   'install-plugin-from-url': PERMISSIONS.MODS_MANAGE,
 
-  // ---- Automation ----
+  // Automation
   'get-automation-status': PERMISSIONS.AUTOMATION_MANAGE,
   'configure-autostart': PERMISSIONS.AUTOMATION_MANAGE,
   'configure-crash-detection': PERMISSIONS.AUTOMATION_MANAGE,
@@ -96,7 +97,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'configure-broadcasts': PERMISSIONS.AUTOMATION_MANAGE,
   'auto-start-on-app-launch': PERMISSIONS.AUTOMATION_MANAGE,
 
-  // ---- Installation ----
+  // Installation
   'install': PERMISSIONS.APP_INSTALL,
   'cancel-install': PERMISSIONS.APP_INSTALL,
   'check-install-requirements': PERMISSIONS.APP_INSTALL,
@@ -108,11 +109,12 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'install-linux-deps': PERMISSIONS.APP_INSTALL,
   'validate-sudo-password': PERMISSIONS.APP_INSTALL,
   'check-for-app-update': PERMISSIONS.APP_INSTALL,
-  'get-app-update-status': PERMISSIONS.APP_INSTALL,
+  // Every page asks for this on load; every built-in role holds settings.view.
+  'get-app-update-status': PERMISSIONS.SETTINGS_VIEW,
   'download-app-update': PERMISSIONS.APP_INSTALL,
   'install-app-update': PERMISSIONS.APP_INSTALL,
 
-  // ---- Application settings ----
+  // Application settings
   'get-global-config': PERMISSIONS.SETTINGS_VIEW,
   'open-config-directory': PERMISSIONS.SETTINGS_VIEW,
   'set-global-config': PERMISSIONS.SETTINGS_MANAGE,
@@ -120,7 +122,7 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'stop-web-server': PERMISSIONS.SETTINGS_MANAGE,
   'web-server-status': PERMISSIONS.SETTINGS_VIEW,
 
-  // ---- Accounts ----
+  // Accounts
   'get-users': PERMISSIONS.USERS_MANAGE,
   'create-user': PERMISSIONS.USERS_MANAGE,
   'update-user': PERMISSIONS.USERS_MANAGE,
@@ -138,10 +140,11 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
  * The permission a channel needs.
  *
  * Returns `undefined` for a channel with no entry, which callers must treat as
- * "admin only" — see the deny-by-default note above.
+ * "admin only"; see the deny-by-default note above.
  */
 export function permissionForChannel(channel: string): Permission | null | undefined {
-  return CHANNEL_PERMISSIONS[channel];
+  // Own entries only: a plain lookup would find 'constructor' and friends on Object.prototype.
+  return Object.prototype.hasOwnProperty.call(CHANNEL_PERMISSIONS, channel) ? CHANNEL_PERMISSIONS[channel] : undefined;
 }
 
 /** True when a channel is known and callable with the given permissions. */

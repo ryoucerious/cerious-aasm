@@ -2,11 +2,15 @@ export interface AutomationSettings {
   autoStartOnAppLaunch: boolean;
   autoStartOnBoot: boolean;
   crashDetectionEnabled: boolean;
+  /** Seconds between crash checks. */
   crashDetectionInterval: number;
   maxRestartAttempts: number;
   scheduledRestartEnabled: boolean;
-  restartFrequency: 'daily' | 'weekly' | 'custom';
+  /** 'custom' is what older versions stored for weekly on chosen days; 'none' never restarts. */
+  restartFrequency: 'none' | 'daily' | 'weekly' | 'custom';
+  /** HH:MM, host local time. */
   restartTime: string;
+  /** Weekdays for a weekly restart, 0 = Sunday. */
   restartDays: number[];
   restartWarningMinutes: number;
 }
@@ -31,8 +35,16 @@ export interface AutomationConfigResult {
   error?: string;
 }
 
+export interface AutomationStatus {
+  settings: AutomationSettings;
+  status: ServerAutomation['status'];
+  restartAttempts: number;
+  lastCrashTime?: Date;
+  manuallyStopped: boolean;
+}
+
 export interface AutomationStatusResult {
   success: boolean;
-  status?: any;
+  status?: AutomationStatus;
   error?: string;
 }

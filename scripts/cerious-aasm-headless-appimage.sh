@@ -15,11 +15,9 @@
 #   sudo dnf install xorg-x11-server-Xvfb   (Fedora/RHEL)
 #
 # After installing xvfb, put this script somewhere on $PATH and run:
-#   cerious-aasm-headless-appimage.sh --auth-enabled --password=admin123 --port=3000
+#   cerious-aasm-headless-appimage.sh --auth-enabled --password=<your-password> --port=3000
 
-# --------------------------------------------------------------------------
-# Locate the Cerious AASM binary  (AppImage, or system-installed executable)
-# --------------------------------------------------------------------------
+# Locate the binary: an AppImage or a system-installed executable.
 APP_BIN=""
 
 # 1. Explicit override via $CERIOUS_AASM_BIN
@@ -49,11 +47,9 @@ echo "[cerious-aasm] Using binary: $APP_BIN"
 # AppImages cannot SUID chrome-sandbox under /tmp/.mount_* (Ubuntu 24.04 FATAL).
 export ELECTRON_DISABLE_SANDBOX=1
 
-# --------------------------------------------------------------------------
-# Launch with xvfb-run if no display is available
-# --------------------------------------------------------------------------
+# Without a display, GTK needs xvfb-run's virtual framebuffer (see the top of this file).
 if [ -z "$DISPLAY" ] && command -v xvfb-run &>/dev/null; then
-  echo "[cerious-aasm] No display detected — launching via xvfb-run (virtual framebuffer)"
+  echo "[cerious-aasm] No display detected - launching via xvfb-run (virtual framebuffer)"
   exec xvfb-run -a "$APP_BIN" --no-sandbox --disable-setuid-sandbox --headless --disable-audio-output "$@"
 elif [ -z "$DISPLAY" ]; then
   echo "[cerious-aasm] WARNING: No display and xvfb-run not found."
@@ -61,6 +57,6 @@ elif [ -z "$DISPLAY" ]; then
   echo "  Then re-run this script."
   exit 1
 else
-  echo "[cerious-aasm] Display detected ($DISPLAY) — launching normally"
+  echo "[cerious-aasm] Display detected ($DISPLAY) - launching normally"
   exec "$APP_BIN" --no-sandbox --disable-setuid-sandbox --headless --disable-audio-output "$@"
 fi

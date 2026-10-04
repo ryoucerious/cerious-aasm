@@ -1,294 +1,129 @@
-// Mock the services
-jest.mock('../services/messaging.service');
-jest.mock('../services/web-server.service', () => ({
-  webServerService: {
-    startWebServer: jest.fn(),
-    stopWebServer: jest.fn(),
-    getStatus: jest.fn(),
-    cleanup: jest.fn()
-  }
-}));
-jest.mock('../services/settings.service', () => ({
-  settingsService: {
-    getGlobalConfig: jest.fn(),
-    getWebServerAuthConfig: jest.fn()
-  }
-}));
-
 import { messagingService } from '../services/messaging.service';
 import { webServerService } from '../services/web-server.service';
 import { settingsService } from '../services/settings.service';
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockWebServerService = webServerService as jest.Mocked<typeof webServerService>;
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/web-server.service', () => ({
+  webServerService: { startWebServer: jest.fn(), stopWebServer: jest.fn(), getStatus: jest.fn() }
+}));
+jest.mock('../services/settings.service', () => ({
+  settingsService: { getGlobalConfig: jest.fn(), getWebServerAuthConfig: jest.fn() }
+}));
 
-// Store handler functions for testing
-let startWebServerHandler: Function;
-let stopWebServerHandler: Function;
-let webServerStatusHandler: Function;
+const mockMessaging = jest.mocked(messagingService);
+const mockWebServer = jest.mocked(webServerService);
+const noLogin = { enabled: false, username: '', password: '' };
 
-describe('Web Server Handler', () => {
-  let mockSender: any;
+type Listener = (payload: unknown, sender: unknown) => Promise<void> | void;
+
+describe('web-server-handler', () => {
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
-    // Import handler to register events
     require('./web-server-handler');
-
-    // Capture the registered event handlers
-    const mockOn = mockMessagingService.on as jest.Mock;
-    mockOn.mock.calls.forEach(([event, handler]) => {
-      if (event === 'start-web-server') {
-        startWebServerHandler = handler;
-      } else if (event === 'stop-web-server') {
-        stopWebServerHandler = handler;
-      } else if (event === 'web-server-status') {
-        webServerStatusHandler = handler;
-      }
-    });
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockSender = {
-      send: jest.fn()
-    };
+    jest.mocked(settingsService.getWebServerAuthConfig).mockReturnValue(noLogin);
+    mockWebServer.getStatus.mockReturnValue({ running: false, port: 8080 });
+  });
 
-    // Set up default mock responses
-    (settingsService.getGlobalConfig as jest.Mock).mockReturnValue({
-      authenticationEnabled: false,
-      authenticationUsername: '',
-      authenticationPassword: ''
+  function replies(channel: string) {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
+
+  describe('start-web-server', () => {
+    it('starts on the requested port with the configured login', async () => {
+      mockWebServer.startWebServer.mockResolvedValue({ success: true, message: 'Server started', port: 8080 });
+
+      await handlers['start-web-server']({ port: 8080, requestId: 'r1' }, sender);
+
+      expect(mockWebServer.startWebServer).toHaveBeenCalledWith(8080, noLogin);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('start-web-server', {
+        success: true, port: 8080, message: 'Server started', requestId: 'r1'
+      }, sender);
     });
-    (settingsService.getWebServerAuthConfig as jest.Mock).mockReturnValue({
-      enabled: false,
-      username: '',
-      password: ''
+
+    it.each([[{}], [undefined]])('defaults to port 3000 (payload %p)', async payload => {
+      mockWebServer.startWebServer.mockResolvedValue({ success: true, message: 'Server started', port: 3000 });
+
+      await handlers['start-web-server'](payload, sender);
+
+      expect(mockWebServer.startWebServer).toHaveBeenCalledWith(3000, noLogin);
+    });
+
+    it('passes on a failed start', async () => {
+      mockWebServer.startWebServer.mockResolvedValue({ success: false, message: 'listen EADDRINUSE', port: 8080 });
+
+      await handlers['start-web-server']({ port: 8080 }, sender);
+
+      expect(replies('start-web-server')).toEqual([{ success: false, port: 8080, message: 'listen EADDRINUSE', requestId: undefined }]);
+    });
+
+    it.each([80, 70000, 'abc', 3000.5])('refuses port %p without starting anything', async port => {
+      await handlers['start-web-server']({ port, requestId: 'r1' }, sender);
+
+      expect(mockWebServer.startWebServer).not.toHaveBeenCalled();
+      expect(replies('start-web-server')).toEqual([{
+        success: false, port, message: 'Failed to start web server: Invalid web server port', requestId: 'r1'
+      }]);
+    });
+
+    it('replies with the reason when starting throws', async () => {
+      mockWebServer.startWebServer.mockRejectedValue(new Error('Start failed'));
+
+      await handlers['start-web-server']({ port: 8080 }, sender);
+
+      expect(replies('start-web-server')).toEqual([{
+        success: false, port: 8080, message: 'Failed to start web server: Start failed', requestId: undefined
+      }]);
     });
   });
 
-  afterEach(() => {
-    // Clean up any intervals started by the service
-    mockWebServerService.cleanup();
-  });
+  describe('stop-web-server', () => {
+    it('stops the server and reports the status to the caller', async () => {
+      mockWebServer.stopWebServer.mockResolvedValue({ success: true, message: 'Web server stopped successfully' });
 
-  describe('start-web-server event', () => {
-    it('should start web server successfully with port only', async () => {
-      const payload = { port: 8080 };
-      const expectedResult = { success: true, message: 'Server started', port: 8080 };
+      await handlers['stop-web-server']({ requestId: 'r1' }, sender);
 
-      mockWebServerService.startWebServer.mockResolvedValue(expectedResult);
-
-      await startWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.startWebServer).toHaveBeenCalledWith(8080, {
-        enabled: false,
-        username: '',
-        password: ''
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('start-web-server', {
-        success: true,
-        port: 8080,
-        message: 'Server started',
-        requestId: undefined
-      });
+      expect(replies('stop-web-server')).toEqual([{ success: true, message: 'Web server stopped successfully', requestId: 'r1' }]);
+      expect(replies('web-server-status')).toEqual([{ running: false, port: 8080, message: 'Web server stopped successfully' }]);
     });
 
-    it('should start web server successfully with default port when no port provided', async () => {
-      const payload = {};
-      const expectedResult = { success: true, message: 'Server started', port: 3000 };
+    it('answers a request without a payload', async () => {
+      mockWebServer.stopWebServer.mockResolvedValue({ success: true, message: 'Web server was not running' });
 
-      mockWebServerService.startWebServer.mockResolvedValue(expectedResult);
+      await handlers['stop-web-server'](undefined, sender);
 
-      await startWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.startWebServer).toHaveBeenCalledWith(3000, {
-        enabled: false,
-        username: '',
-        password: ''
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('start-web-server', {
-        success: true,
-        port: 3000,
-        message: 'Server started',
-        requestId: undefined
-      });
+      expect(replies('stop-web-server')).toEqual([{ success: true, message: 'Web server was not running', requestId: undefined }]);
     });
 
-    it('should start web server successfully with requestId', async () => {
-      const payload = { port: 8080, requestId: 'test-123' };
-      const expectedResult = { success: true, message: 'Server started', port: 8080 };
+    it('reports the current status when stopping throws', async () => {
+      mockWebServer.stopWebServer.mockRejectedValue(new Error('Stop failed'));
+      mockWebServer.getStatus.mockReturnValue({ running: true, port: 8080 });
 
-      mockWebServerService.startWebServer.mockResolvedValue(expectedResult);
+      await handlers['stop-web-server']({}, sender);
 
-      await startWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.startWebServer).toHaveBeenCalledWith(8080, {
-        enabled: false,
-        username: '',
-        password: ''
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('start-web-server', {
-        success: true,
-        port: 8080,
-        message: 'Server started',
-        requestId: 'test-123'
-      });
-    });
-
-    it('should handle web server start failure', async () => {
-      const payload = { port: 8080 };
-      const expectedResult = { success: false, message: 'Failed to start server', port: 8080 };
-
-      mockWebServerService.startWebServer.mockResolvedValue(expectedResult);
-
-      await startWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.startWebServer).toHaveBeenCalledWith(8080, {
-        enabled: false,
-        username: '',
-        password: ''
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('start-web-server', {
-        success: false,
-        port: 8080,
-        message: 'Failed to start server',
-        requestId: undefined
-      });
-    });
-
-    it('should handle start web server exception', async () => {
-      const payload = { port: 8080 };
-      const error = new Error('Start failed');
-
-      mockWebServerService.startWebServer.mockRejectedValue(error);
-
-      await startWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.startWebServer).toHaveBeenCalledWith(8080, {
-        enabled: false,
-        username: '',
-        password: ''
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('start-web-server', {
-        success: false,
-        port: 8080,
-        message: 'Failed to start web server: Error: Start failed',
-        requestId: undefined
-      });
+      expect(replies('stop-web-server')).toEqual([{
+        success: false, message: 'Error stopping web server: Stop failed', requestId: undefined
+      }]);
+      expect(replies('web-server-status')).toEqual([{
+        running: true, port: 8080, message: 'Error stopping web server: Stop failed'
+      }]);
     });
   });
 
-  describe('stop-web-server event', () => {
-    beforeEach(() => {
-      mockWebServerService.getStatus.mockReturnValue({ running: false, port: 8080 });
-    });
+  describe('web-server-status', () => {
+    it('replies with the status and no requestId', () => {
+      mockWebServer.getStatus.mockReturnValue({ running: true, port: 8080 });
 
-    it('should stop web server successfully', async () => {
-      const payload = {};
-      const expectedResult = { success: true, message: 'Web server stopped successfully' };
+      handlers['web-server-status']({ requestId: 'r1' }, sender);
 
-      mockWebServerService.stopWebServer.mockResolvedValue(expectedResult);
-
-      await stopWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.stopWebServer).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('stop-web-server', {
-        success: true,
-        message: 'Web server stopped successfully',
-        requestId: undefined
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', {
-        running: false,
-        port: 8080,
-        message: 'Web server stopped successfully'
-      });
-    });
-
-    it('should stop web server successfully with requestId', async () => {
-      const payload = { requestId: 'test-123' };
-      const expectedResult = { success: true, message: 'Web server stopped successfully' };
-
-      mockWebServerService.stopWebServer.mockResolvedValue(expectedResult);
-
-      await stopWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.stopWebServer).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('stop-web-server', {
-        success: true,
-        message: 'Web server stopped successfully',
-        requestId: 'test-123'
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', {
-        running: false,
-        port: 8080,
-        message: 'Web server stopped successfully'
-      });
-    });
-
-    it('should handle web server stop failure', async () => {
-      const payload = {};
-      const expectedResult = { success: false, message: 'Failed to stop web server' };
-
-      mockWebServerService.stopWebServer.mockResolvedValue(expectedResult);
-
-      await stopWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.stopWebServer).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('stop-web-server', {
-        success: false,
-        message: 'Failed to stop web server',
-        requestId: undefined
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', {
-        running: false,
-        port: 8080,
-        message: 'Failed to stop web server'
-      });
-    });
-
-    it('should handle stop web server exception', async () => {
-      const payload = {};
-      const error = new Error('Stop failed');
-
-      mockWebServerService.stopWebServer.mockRejectedValue(error);
-
-      await stopWebServerHandler(payload, mockSender);
-
-      expect(mockWebServerService.stopWebServer).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('stop-web-server', {
-        success: false,
-        message: 'Error stopping web server: Error: Stop failed',
-        requestId: undefined
-      });
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', {
-        running: false,
-        port: 8080,
-        message: 'Error stopping web server: Error: Stop failed'
-      });
-    });
-  });
-
-  describe('web-server-status event', () => {
-    it('should return web server status when running', () => {
-      const expectedStatus = { running: true, port: 8080 };
-
-      mockWebServerService.getStatus.mockReturnValue(expectedStatus);
-
-      webServerStatusHandler({}, mockSender);
-
-      expect(mockWebServerService.getStatus).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', expectedStatus);
-    });
-
-    it('should return web server status when not running', () => {
-      const expectedStatus = { running: false, port: 0 };
-
-      mockWebServerService.getStatus.mockReturnValue(expectedStatus);
-
-      webServerStatusHandler({}, mockSender);
-
-      expect(mockWebServerService.getStatus).toHaveBeenCalled();
-      expect(mockSender.send).toHaveBeenCalledWith('web-server-status', expectedStatus);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('web-server-status', { running: true, port: 8080 }, sender);
     });
   });
 });

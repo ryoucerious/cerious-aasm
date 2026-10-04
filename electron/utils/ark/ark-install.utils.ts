@@ -1,10 +1,13 @@
-// --- Imports ---
-import * as path from 'path';
 import * as fs from 'fs';
-import { getSteamCmdDir } from '../steamcmd.utils';
-import { runInstaller } from '../installer.utils';
-import { ArkPathUtils, ARK_APP_ID } from './ark-path.utils';
+import * as path from 'path';
+import { InstallCancelledError, InstallProgress, reportSafely, runInstaller } from '../installer.utils';
 import { getPlatform } from '../platform.utils';
+import { getSteamCmdDir, getSteamCmdExecutable } from '../steamcmd.utils';
+import { ARK_APP_ID, getArkExecutablePath, getArkServerDir } from './ark-server/ark-server-paths.utils';
+
+const MAX_RETRIES = 2;
+// SteamCMD prints a progress line every few seconds while it works, so this much silence is a hang.
+const STALL_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
  * ASA's dedicated server depot is Windows-only. On Linux, SteamCMD must request
@@ -23,6 +26,10 @@ function arkUpdateArgs(installDir: string): string[] {
   return args;
 }
 
+function manifestPath(installDir: string): string {
+  return path.join(installDir, 'steamapps', `appmanifest_${ARK_APP_ID}.acf`);
+}
+
 /**
  * A failed update leaves UpdateResult 6 ("no connection") in the app manifest.
  * SteamCMD then keeps requesting that old manifest, which the CDN rejects with
@@ -30,188 +37,115 @@ function arkUpdateArgs(installDir: string): string[] {
  * lets the next run fetch the current public build. Installed files stay put.
  */
 function clearStuckArkManifest(installDir: string): void {
-  const manifestPath = path.join(installDir, 'steamapps', `appmanifest_${ARK_APP_ID}.acf`);
-  if (!fs.existsSync(manifestPath)) return;
-  let content = '';
+  const manifest = manifestPath(installDir);
+  if (!fs.existsSync(manifest)) return;
+  let content: string;
   try {
-    content = fs.readFileSync(manifestPath, 'utf8');
+    content = fs.readFileSync(manifest, 'utf8');
   } catch {
     return;
   }
   if (!/"UpdateResult"\s+"6"/.test(content)) return;
   try {
-    fs.unlinkSync(manifestPath);
+    fs.unlinkSync(manifest);
     console.warn('[ark-install] Removed stuck Steam appmanifest so the server download can start again.');
   } catch (error) {
     console.warn('[ark-install] Could not remove stuck Steam appmanifest:', error);
   }
 }
 
-// --- Installation Utilities ---
-
-/**
- * Get the ARK server installation directory
- */
-export function getArkServerDir(): string {
-  return ArkPathUtils.getArkServerDir();
+function parseSteamCmdProgress(chunk: string): InstallProgress | null {
+  if (chunk.includes('Update state (0x61) downloading')) {
+    const match = /progress: (\d+(?:\.\d+)?)/i.exec(chunk);
+    if (!match) return null;
+    const percent = Math.min(parseFloat(match[1]), 100);
+    return { percent: Math.floor(percent), step: 'downloading', message: `Downloading Ark Server (${percent.toFixed(1)}%)` };
+  }
+  if (chunk.includes('Update state (0x81) verifying')) {
+    return { percent: 100, step: 'downloading', message: 'Verifying Ark Server installation...' };
+  }
+  return null;
 }
 
-/**
- * Check if ARK server is installed
- */
 export function isArkServerInstalled(): boolean {
-  const arkExecutable = ArkPathUtils.getArkExecutablePath();
-  return fs.existsSync(arkExecutable);
+  return fs.existsSync(getArkExecutablePath());
 }
 
 /**
- * Get current installed ARK server version
+ * The installed build: the manifest's build id, else version.txt. The build id comes first
+ * because it is what Steam reports. Read from the install under the Server Data Directory: with
+ * the default dir the manifest was never found and an update always looked pending.
  */
 export async function getCurrentInstalledVersion(): Promise<string | null> {
   try {
-    const serverPath = getArkServerDir();
-    const versionFile = path.join(serverPath, 'version.txt');
+    const serverDir = getArkServerDir();
+    const manifest = manifestPath(serverDir);
+    if (fs.existsSync(manifest)) {
+      const buildId = /"buildid"\s+"(\d+)"/.exec(fs.readFileSync(manifest, 'utf8'))?.[1];
+      if (buildId) return buildId;
+    }
+
+    const versionFile = path.join(serverDir, 'version.txt');
     if (fs.existsSync(versionFile)) {
       const version = fs.readFileSync(versionFile, 'utf8').trim();
       if (version) return version;
     }
-    const steamappsPath = path.join(serverPath, 'steamapps');
-    if (fs.existsSync(steamappsPath)) {
-      const manifestPath = path.join(steamappsPath, `appmanifest_${ARK_APP_ID}.acf`);
-      if (fs.existsSync(manifestPath)) {
-        const manifestContent = fs.readFileSync(manifestPath, 'utf8');
-        const buildIdMatch = manifestContent.match(/"buildid"\s+"(\d+)"/);
-        if (buildIdMatch) {
-          return buildIdMatch[1];
-        }
-      }
-    }
     return null;
   } catch (error) {
-    console.error('[ark.utils] Error getting current version:', error);
+    console.error('[ark-install] Could not read the installed version:', error);
     return null;
   }
 }
 
 /**
- * Install ARK server using SteamCMD
+ * Installs or updates the shared ARK server with SteamCMD. The caller holds the install lock.
+ * Aborting `signal` stops the running attempt and ends the install without another retry.
  */
 export function installArkServer(
-  callback: (err: Error | null, output?: string) => void,
-  onData?: (data: any) => void
+  callback: (err: Error | null) => void,
+  onProgress?: (progress: InstallProgress) => void,
+  signal?: AbortSignal
 ): void {
-  const steamcmdPath = getSteamCmdDir();
-  const steamcmdExe = process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh';
-  const steamcmdExecutable = path.join(steamcmdPath, steamcmdExe);
-  if (!fs.existsSync(steamcmdExecutable)) {
-    const error = new Error('SteamCMD not found. Please install SteamCMD first.');
-    callback(error);
+  const steamCmd = getSteamCmdExecutable();
+  if (!fs.existsSync(steamCmd)) {
+    callback(new Error('SteamCMD not found. Please install SteamCMD first.'));
     return;
   }
   const installDir = getArkServerDir();
-  let arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };
-  const installerOptions = {
-    command: steamcmdExecutable,
-    args: arkUpdateArgs(installDir),
-    cwd: steamcmdPath,
-    estimatedTotal: 100,
-    phaseSplit: 80,
-    parseProgress: (data: string, lastPercent: number) => {
-      const steamcmdPatterns = [
-        /Update state.*?progress: (\d+\.\d+)/i,
-        /\[\s*(\d+)%\]\s+Downloading update/i,
-        /\[\s*(\d+)%\]\s+Download complete/i,
-        /progress: (\d+\.\d+)/i,
-        /(\d+)% complete/i,
-        /downloading.*?(\d+)%/i,
-      ];
-      for (const pattern of steamcmdPatterns) {
-        const match = pattern.exec(data);
-        if (match) {
-          let percent = parseFloat(match[1]);
-          if (percent > 100) percent = 100;
-          if (data.includes('Update state (0x61) downloading')) {
-            if (!arkProgressState.largeDownloadStarted) {
-              arkProgressState.largeDownloadStarted = true;
-              if (onData) {
-                onData({
-                  percent: 0,
-                  step: 'downloading',
-                  message: 'Starting Ark Server download...'
-                });
-              }
-            }
-            if (percent >= lastPercent) {
-              if (onData) {
-                onData({
-                  percent: Math.floor(percent),
-                  step: 'downloading',
-                  message: `Downloading Ark Server (${percent.toFixed(1)}%)`
-                });
-              }
-              return Math.floor(percent);
-            } else {
-              return null;
-            }
-          } else if (data.includes('Update state (0x81) verifying')) {
-            if (onData) {
-              onData({
-                percent: 100,
-                step: 'downloading',
-                message: `Verifying Ark Server installation...`
-              });
-            }
-            return 100;
-          } else {
-            return null;
-          }
-        }
-      }
-      return null;
-    },
-    validatePhase: () => ({
-      command: steamcmdExecutable,
-      args: arkUpdateArgs(installDir),
-      cwd: steamcmdPath,
-    })
-  };
-  const MAX_RETRIES = 2;
-  let attempts = 0;
+  const report = reportSafely(onProgress);
+  let attempt = 0;
 
-  function attemptInstall() {
-    attempts++;
+  const tryInstall = () => {
+    attempt++;
     clearStuckArkManifest(installDir);
-    // Reset progress state for retries so progress reporting works correctly
-    if (attempts > 1) {
-      arkProgressState = { maxBootstrap: 0, largeDownloadStarted: false };
-      console.log(`[ark-install] Retrying SteamCMD install (attempt ${attempts}/${MAX_RETRIES + 1})...`);
-      if (onData) {
-        onData({
-          percent: 0,
-          step: 'download',
-          message: `Retrying ARK server install (attempt ${attempts})...`
-        });
-      }
+    if (attempt === 1) {
+      report({ percent: 0, step: 'download', message: 'Checking Ark Server...' });
+    } else {
+      console.log(`[ark-install] Retrying SteamCMD install (attempt ${attempt}/${MAX_RETRIES + 1})`);
+      report({ percent: 0, step: 'download', message: `Retrying ARK server install (attempt ${attempt})...` });
     }
 
     runInstaller(
-      installerOptions,
-      (progress) => {
-        if (onData) {
-          onData(progress);
-        }
+      {
+        command: steamCmd,
+        args: arkUpdateArgs(installDir),
+        cwd: getSteamCmdDir(),
+        parseProgress: parseSteamCmdProgress,
+        stallTimeoutMs: STALL_TIMEOUT_MS,
+        signal
       },
-      (err, output) => {
-        if (err && attempts <= MAX_RETRIES) {
-          // SteamCMD may exit non-zero during self-update; retry automatically
-          console.warn(`[ark-install] Attempt ${attempts} failed: ${err.message}`);
-          attemptInstall();
-        } else {
-          callback(err ?? null, output);
+      report,
+      err => {
+        // SteamCMD may exit non-zero during self-update; retry automatically. A cancel is final.
+        if (err && !(err instanceof InstallCancelledError) && !signal?.aborted && attempt <= MAX_RETRIES) {
+          console.warn(`[ark-install] Attempt ${attempt} failed: ${err.message}`);
+          tryInstall();
+          return;
         }
+        callback(err);
       }
     );
-  }
+  };
 
-  attemptInstall();
+  tryInstall();
 }

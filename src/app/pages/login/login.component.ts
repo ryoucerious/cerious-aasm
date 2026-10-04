@@ -2,8 +2,6 @@ import { Component, inject } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { MessagingService } from '../../core/services/messaging/messaging.service';
-import { WebSocketService } from '../../core/services/web-socket.service';
 import { AuthService } from '../../core/services/auth.service';
 
 @Component({
@@ -13,8 +11,6 @@ import { AuthService } from '../../core/services/auth.service';
   templateUrl: './login.component.html'
 })
 export class LoginComponent {
-  private messagingService = inject(MessagingService);
-  private webSocket = inject(WebSocketService);
   private auth = inject(AuthService);
   private router = inject(Router);
 
@@ -23,52 +19,22 @@ export class LoginComponent {
   errorMessage = '';
   isLoading = false;
 
+  // The password goes exactly as typed: spaces are characters like any other.
   async onLogin() {
-    if (!this.username.trim() || !this.password.trim()) {
+    if (!this.username.trim() || !this.password) {
       this.errorMessage = 'Please enter your username and password.';
       return;
     }
 
     this.isLoading = true;
     this.errorMessage = '';
-    
-    try {
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          username: this.username.trim(),
-          password: this.password.trim()
-        })
-      });
+    const result = await this.auth.login(this.username.trim(), this.password);
+    this.isLoading = false;
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          // The socket was refused while there was no session; now there is one, so open a
-          // fresh connection and wait for it before handing over to the dashboard. Without
-          // the wait, every page behind the login asks for its data down a socket that is
-          // not up yet and comes up empty until the next reload.
-          this.webSocket.reconnectNow();
-          await this.webSocket.whenConnected(4000);
-          // Who we are was asked for once when the app loaded, down a socket that was
-          // refused; ask again now that there is a session behind it.
-          this.auth.refresh();
-          this.isLoading = false;
-          this.router.navigate(['/dashboard']);
-        } else {
-          this.errorMessage = this.messageFor(response.status, data?.error);
-          this.isLoading = false;
-        }
-      } else {
-        const data = await response.json().catch(() => null);
-        this.errorMessage = this.messageFor(response.status, data?.error);
-        this.isLoading = false;
-      }
-    } catch (error) {
-      this.errorMessage = 'Unable to reach the server. Please check that it is running and try again.';
-      this.isLoading = false;
+    if (result.success) {
+      this.router.navigate(['/dashboard']);
+    } else {
+      this.errorMessage = this.messageFor(result.status, result.error);
     }
   }
 
@@ -77,10 +43,13 @@ export class LoginComponent {
    *
    * "Invalid credentials" is the wire's wording, not something to put in front of a person:
    * it reads like a fault report and does not say what to do next. The reply never says
-   * which of the two was wrong, and it should not — that would tell an outsider which
+   * which of the two was wrong, and it should not: that would tell an outsider which
    * usernames exist.
    */
   private messageFor(status: number, serverError?: string): string {
+    if (status === 0) {
+      return 'Unable to reach the server. Please check that it is running and try again.';
+    }
     if (status === 401) {
       return 'Incorrect username or password. Please try again.';
     }

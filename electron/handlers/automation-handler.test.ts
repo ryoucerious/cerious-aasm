@@ -1,5 +1,11 @@
-// Mock the services
-jest.mock('../services/messaging.service');
+import { messagingService } from '../services/messaging.service';
+import { automationService } from '../services/automation/automation.service';
+import { schedulerService } from '../services/scheduler.service';
+import * as instanceUtils from '../utils/ark/instance.utils';
+
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
 jest.mock('../services/automation/automation.service', () => ({
   automationService: {
     configureAutostart: jest.fn(),
@@ -9,485 +15,219 @@ jest.mock('../services/automation/automation.service', () => ({
     handleAutoStartOnAppLaunch: jest.fn()
   }
 }));
+jest.mock('../services/scheduler.service', () => ({ schedulerService: { initSchedule: jest.fn() } }));
+jest.mock('../utils/ark/instance.utils', () => ({ getInstance: jest.fn(), saveInstance: jest.fn() }));
 
-import { messagingService } from '../services/messaging.service';
-import { automationService } from '../services/automation/automation.service';
+const mockMessaging = jest.mocked(messagingService);
+const mockAutomation = jest.mocked(automationService);
+const mockInstanceUtils = jest.mocked(instanceUtils);
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockAutomationService = automationService as jest.Mocked<typeof automationService>;
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
-// Store handler functions for testing
-let configureAutostartHandler: Function;
-let configureCrashDetectionHandler: Function;
-let configureScheduledRestartHandler: Function;
-let getAutomationStatusHandler: Function;
-let autoStartOnAppLaunchHandler: Function;
-
-describe('Automation Handler', () => {
-  let mockSender: any;
+describe('automation-handler', () => {
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
-    // Import handler to register events
     require('./automation-handler');
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
+  });
 
-    // Capture the registered event handlers
-    const mockOn = mockMessagingService.on as jest.Mock;
-    mockOn.mock.calls.forEach(([event, handler]) => {
-      switch (event) {
-        case 'configure-autostart':
-          configureAutostartHandler = handler;
-          break;
-        case 'configure-crash-detection':
-          configureCrashDetectionHandler = handler;
-          break;
-        case 'configure-scheduled-restart':
-          configureScheduledRestartHandler = handler;
-          break;
-        case 'get-automation-status':
-          getAutomationStatusHandler = handler;
-          break;
-        case 'auto-start-on-app-launch':
-          autoStartOnAppLaunchHandler = handler;
-          break;
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
+
+  describe.each([
+    ['configure-autostart', mockAutomation.configureAutostart,
+      { autoStartOnAppLaunch: true, autoStartOnBoot: false }, [true, false]],
+    ['configure-crash-detection', mockAutomation.configureCrashDetection,
+      { enabled: true, checkInterval: 30000, maxRestartAttempts: 3 }, [true, 30000, 3]],
+    ['configure-scheduled-restart', mockAutomation.configureScheduledRestart,
+      { enabled: true, frequency: 'daily', time: '04:00', days: [1], warningMinutes: 5 }, [true, 'daily', '04:00', [1], 5]],
+    ['get-automation-status', mockAutomation.getAutomationStatus, {}, []]
+  ] as const)('%s', (channel, serviceMethod, settings, args) => {
+    const method = serviceMethod as jest.Mock;
+
+    it('passes the settings on and replies with the result', async () => {
+      method.mockResolvedValue({ success: true, status: { isMonitoring: true } });
+
+      await handlers[channel]({ serverId: 'a1', ...settings, requestId: 'r1' }, sender);
+
+      expect(method).toHaveBeenCalledWith('a1', ...args);
+      expect(replies(channel)).toEqual([{ success: true, status: { isMonitoring: true }, requestId: 'r1' }]);
+    });
+
+    it('passes on a refusal from the service', async () => {
+      method.mockResolvedValue({ success: false, error: 'Configuration failed' });
+
+      await handlers[channel]({ serverId: 'a1', ...settings, requestId: 'r1' }, sender);
+
+      expect(replies(channel)).toEqual([{ success: false, error: 'Configuration failed', requestId: 'r1' }]);
+    });
+
+    it.each([
+      ['an Error', new Error('Service error'), 'Service error'],
+      ['a string', 'String error', 'String error']
+    ])('replies a failure when the service throws %s', async (_label, thrown, error) => {
+      method.mockRejectedValue(thrown);
+
+      await handlers[channel]({ serverId: 'a1', ...settings, requestId: 'r1' }, sender);
+
+      expect(replies(channel)).toEqual([{ success: false, error, requestId: 'r1' }]);
+    });
+
+    it.each([[{ serverId: '../x', requestId: 'r1' }, 'r1'], [undefined, undefined]])(
+      'refuses an invalid instance id without calling the service (payload %p)',
+      async (payload, requestId) => {
+        await handlers[channel](payload, sender);
+
+        expect(method).not.toHaveBeenCalled();
+        expect(replies(channel)).toEqual([{ success: false, error: 'Invalid instance ID', requestId }]);
       }
-    });
+    );
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockSender = {};
+  describe('configure-discord-webhook', () => {
+    const config = { enabled: true, webhookUrl: 'https://discord.com/api/webhooks/1/abc' };
+
+    it('stores the webhook settings on the instance', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ id: 'a1' });
+
+      await handlers['configure-discord-webhook']({ serverId: 'a1', config, requestId: 'r1' }, sender);
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({ id: 'a1', name: 'Alpha', discordConfig: config });
+      expect(replies('configure-discord-webhook')).toEqual([{ success: true, requestId: 'r1' }]);
+    });
+
+    it('refuses a webhook URL that is not Discord\'s', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+
+      await handlers['configure-discord-webhook']({
+        serverId: 'a1', config: { enabled: true, webhookUrl: 'http://169.254.169.254/latest/meta-data' }, requestId: 'r1'
+      }, sender);
+
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+      expect(replies('configure-discord-webhook')).toEqual([
+        { success: false, error: 'The Discord webhook URL must be a Discord webhook link, such as https://discord.com/api/webhooks/...', requestId: 'r1' }
+      ]);
+    });
+
+    it('replies a failure for an instance that does not exist', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+
+      await handlers['configure-discord-webhook']({ serverId: 'a1', config, requestId: 'r1' }, sender);
+
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+      expect(replies('configure-discord-webhook')).toEqual([{ success: false, error: 'Instance not found', requestId: 'r1' }]);
+    });
+
+    it('passes on a save the instance store refused', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ error: 'A server with this name already exists.' });
+
+      await handlers['configure-discord-webhook']({ serverId: 'a1', config, requestId: 'r1' }, sender);
+
+      expect(replies('configure-discord-webhook')).toEqual([
+        { success: false, error: 'A server with this name already exists.', requestId: 'r1' }
+      ]);
+    });
+
+    it.each([[{ serverId: '../x', config, requestId: 'r1' }, 'r1'], [undefined, undefined]])(
+      'refuses an invalid instance id without touching any config (payload %p)',
+      async (payload, requestId) => {
+        await handlers['configure-discord-webhook'](payload, sender);
+
+        expect(mockInstanceUtils.getInstance).not.toHaveBeenCalled();
+        expect(replies('configure-discord-webhook')).toEqual([{ success: false, error: 'Invalid instance ID', requestId }]);
+      }
+    );
   });
 
-  describe('configure-autostart event', () => {
-    it('should configure autostart successfully', async () => {
-      const payload = {
-        serverId: 'test-server',
-        autoStartOnAppLaunch: true,
-        autoStartOnBoot: false,
-        requestId: 'test-123'
-      };
-      const expectedResult = { success: true };
-
-      mockAutomationService.configureAutostart.mockResolvedValue(expectedResult);
-
-      await configureAutostartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureAutostart).toHaveBeenCalledWith('test-server', true, false);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-autostart', {
-        success: true,
-        requestId: 'test-123'
-      }, mockSender);
+  describe('configure-broadcasts', () => {
+    beforeEach(() => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ id: 'a1' });
     });
 
-    it('should handle configure autostart failure', async () => {
-      const payload = {
-        serverId: 'test-server',
-        autoStartOnAppLaunch: false,
-        autoStartOnBoot: true
-      };
-      const expectedResult = { success: false, error: 'Configuration failed' };
+    it('stores the broadcast config and reschedules the broadcasts', async () => {
+      const broadcastConfig = { enabled: true, messages: [{ id: 'm1', message: 'Hi', interval: 30, enabled: true }] };
 
-      mockAutomationService.configureAutostart.mockResolvedValue(expectedResult);
+      await handlers['configure-broadcasts']({ serverId: 'a1', broadcastConfig, requestId: 'r1' }, sender);
 
-      await configureAutostartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureAutostart).toHaveBeenCalledWith('test-server', false, true);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-autostart', {
-        success: false,
-        error: 'Configuration failed',
-        requestId: undefined
-      }, mockSender);
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({ id: 'a1', name: 'Alpha', broadcastConfig });
+      expect(schedulerService.initSchedule).toHaveBeenCalledWith('a1');
+      expect(replies('configure-broadcasts')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
-    it('should handle configure autostart exception', async () => {
-      const payload = { serverId: 'test-server', autoStartOnAppLaunch: true, autoStartOnBoot: false };
-      const error = new Error('Service error');
+    it('turns a flat broadcast list into a broadcast config', async () => {
+      const broadcasts = [
+        { id: 'm1', message: 'Hi', intervalMinutes: 15 },
+        { id: 'm2', message: 'Bye', enabled: false }
+      ];
 
-      mockAutomationService.configureAutostart.mockRejectedValue(error);
+      await handlers['configure-broadcasts']({ serverId: 'a1', broadcasts, requestId: 'r1' }, sender);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await configureAutostartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureAutostart).toHaveBeenCalledWith('test-server', true, false);
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring autostart:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-autostart', {
-        success: false,
-        error: 'Service error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle undefined payload', async () => {
-      const expectedResult = { success: true };
-
-      mockAutomationService.configureAutostart.mockResolvedValue(expectedResult);
-
-      await configureAutostartHandler(undefined, mockSender);
-
-      expect(mockAutomationService.configureAutostart).toHaveBeenCalledWith(undefined as any, undefined as any, undefined as any);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-autostart', {
-        success: true,
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle non-Error exception (cover String(error) branch)', async () => {
-      const error = 'String error';
-      mockAutomationService.configureAutostart.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await configureAutostartHandler({}, mockSender);
-      expect(mockAutomationService.configureAutostart).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring autostart:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-autostart', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('configure-crash-detection event', () => {
-    it('should configure crash detection successfully', async () => {
-      const payload = {
-        serverId: 'test-server',
-        enabled: true,
-        checkInterval: 30000,
-        maxRestartAttempts: 3,
-        requestId: 'test-123'
-      };
-      const expectedResult = { success: true };
-
-      mockAutomationService.configureCrashDetection.mockResolvedValue(expectedResult);
-
-      await configureCrashDetectionHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureCrashDetection).toHaveBeenCalledWith('test-server', true, 30000, 3);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-crash-detection', {
-        success: true,
-        requestId: 'test-123'
-      }, mockSender);
-    });
-
-    it('should handle configure crash detection failure', async () => {
-      const payload = {
-        serverId: 'test-server',
-        enabled: false,
-        checkInterval: 60000,
-        maxRestartAttempts: 5
-      };
-      const expectedResult = { success: false, error: 'Invalid configuration' };
-
-      mockAutomationService.configureCrashDetection.mockResolvedValue(expectedResult);
-
-      await configureCrashDetectionHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureCrashDetection).toHaveBeenCalledWith('test-server', false, 60000, 5);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-crash-detection', {
-        success: false,
-        error: 'Invalid configuration',
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle configure crash detection exception', async () => {
-      const payload = { serverId: 'test-server', enabled: true, checkInterval: 30000, maxRestartAttempts: 3 };
-      const error = new Error('Configuration error');
-
-      mockAutomationService.configureCrashDetection.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await configureCrashDetectionHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureCrashDetection).toHaveBeenCalledWith('test-server', true, 30000, 3);
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring crash detection:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-crash-detection', {
-        success: false,
-        error: 'Configuration error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle undefined payload (cover || {} branch)', async () => {
-      const expectedResult = { success: true };
-      mockAutomationService.configureCrashDetection.mockResolvedValue(expectedResult);
-      await configureCrashDetectionHandler(undefined, mockSender);
-  expect(mockAutomationService.configureCrashDetection).toHaveBeenCalledWith(undefined as any, undefined as any, undefined as any, undefined as any);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-crash-detection', {
-        success: true,
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle non-Error exception (cover String(error) branch)', async () => {
-      const error = 'String error';
-      mockAutomationService.configureCrashDetection.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await configureCrashDetectionHandler({}, mockSender);
-      expect(mockAutomationService.configureCrashDetection).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring crash detection:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-crash-detection', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('configure-scheduled-restart event', () => {
-    it('should configure scheduled restart successfully', async () => {
-      const payload = {
-        serverId: 'test-server',
-        enabled: true,
-        frequency: 'daily' as const,
-        time: '02:00',
-        days: [1, 2, 3, 4, 5],
-        warningMinutes: 30,
-        requestId: 'test-123'
-      };
-      const expectedResult = { success: true };
-
-      mockAutomationService.configureScheduledRestart.mockResolvedValue(expectedResult);
-
-      await configureScheduledRestartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureScheduledRestart).toHaveBeenCalledWith('test-server', true, 'daily', '02:00', [1, 2, 3, 4, 5], 30);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-scheduled-restart', {
-        success: true,
-        requestId: 'test-123'
-      }, mockSender);
-    });
-
-    it('should handle configure scheduled restart failure', async () => {
-      const payload = {
-        serverId: 'test-server',
-        enabled: false,
-        frequency: 'weekly' as const,
-        time: '03:00',
-        days: [0, 6],
-        warningMinutes: 15
-      };
-      const expectedResult = { success: false, error: 'Invalid schedule' };
-
-      mockAutomationService.configureScheduledRestart.mockResolvedValue(expectedResult);
-
-      await configureScheduledRestartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureScheduledRestart).toHaveBeenCalledWith('test-server', false, 'weekly', '03:00', [0, 6], 15);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-scheduled-restart', {
-        success: false,
-        error: 'Invalid schedule',
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle configure scheduled restart exception', async () => {
-      const payload = { serverId: 'test-server', enabled: true, frequency: 'daily' as const, time: '02:00', days: [1, 2, 3], warningMinutes: 30 };
-      const error = new Error('Schedule error');
-
-      mockAutomationService.configureScheduledRestart.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await configureScheduledRestartHandler(payload, mockSender);
-
-      expect(mockAutomationService.configureScheduledRestart).toHaveBeenCalledWith('test-server', true, 'daily', '02:00', [1, 2, 3], 30);
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring scheduled restart:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-scheduled-restart', {
-        success: false,
-        error: 'Schedule error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle undefined payload (cover || {} branch)', async () => {
-      const expectedResult = { success: true };
-      mockAutomationService.configureScheduledRestart.mockResolvedValue(expectedResult);
-      await configureScheduledRestartHandler(undefined, mockSender);
-  expect(mockAutomationService.configureScheduledRestart).toHaveBeenCalledWith(undefined as any, undefined as any, undefined as any, undefined as any, undefined as any, undefined as any);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-scheduled-restart', {
-        success: true,
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle non-Error exception (cover String(error) branch)', async () => {
-      const error = 'String error';
-      mockAutomationService.configureScheduledRestart.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await configureScheduledRestartHandler({}, mockSender);
-      expect(mockAutomationService.configureScheduledRestart).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error configuring scheduled restart:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('configure-scheduled-restart', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('get-automation-status event', () => {
-    it('should get automation status successfully', async () => {
-      const payload = { serverId: 'test-server', requestId: 'test-123' };
-      const expectedResult = {
-        success: true,
-        status: {
-          settings: { autoStartOnAppLaunch: true },
-          status: { isMonitoring: true },
-          restartAttempts: 0
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({
+        id: 'a1',
+        name: 'Alpha',
+        broadcasts,
+        broadcastConfig: {
+          enabled: true,
+          messages: [
+            { id: 'm1', message: 'Hi', interval: 15, enabled: true },
+            { id: 'm2', message: 'Bye', interval: 60, enabled: false }
+          ]
         }
-      };
-
-      mockAutomationService.getAutomationStatus.mockResolvedValue(expectedResult);
-
-      await getAutomationStatusHandler(payload, mockSender);
-
-      expect(mockAutomationService.getAutomationStatus).toHaveBeenCalledWith('test-server');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-automation-status', {
-        success: true,
-        status: {
-          settings: { autoStartOnAppLaunch: true },
-          status: { isMonitoring: true },
-          restartAttempts: 0
-        },
-        requestId: 'test-123'
-      }, mockSender);
+      });
     });
 
-    it('should handle get automation status failure', async () => {
-      const payload = { serverId: 'test-server' };
-      const expectedResult = { success: false, error: 'Server not found' };
+    it('does not reschedule when the save is refused', async () => {
+      mockInstanceUtils.saveInstance.mockResolvedValue({ error: 'A server with this name already exists.' });
 
-      mockAutomationService.getAutomationStatus.mockResolvedValue(expectedResult);
+      await handlers['configure-broadcasts']({ serverId: 'a1', broadcastConfig: {}, requestId: 'r1' }, sender);
 
-      await getAutomationStatusHandler(payload, mockSender);
-
-      expect(mockAutomationService.getAutomationStatus).toHaveBeenCalledWith('test-server');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-automation-status', {
-        success: false,
-        error: 'Server not found',
-        requestId: undefined
-      }, mockSender);
+      expect(schedulerService.initSchedule).not.toHaveBeenCalled();
+      expect(replies('configure-broadcasts')).toEqual([
+        { success: false, error: 'A server with this name already exists.', requestId: 'r1' }
+      ]);
     });
 
-    it('should handle get automation status exception', async () => {
-      const payload = { serverId: 'test-server' };
-      const error = new Error('Status error');
+    it.each([[{ serverId: '../x', requestId: 'r1' }, 'r1'], [undefined, undefined]])(
+      'refuses an invalid instance id without touching any config (payload %p)',
+      async (payload, requestId) => {
+        await handlers['configure-broadcasts'](payload, sender);
 
-      mockAutomationService.getAutomationStatus.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getAutomationStatusHandler(payload, mockSender);
-
-      expect(mockAutomationService.getAutomationStatus).toHaveBeenCalledWith('test-server');
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error getting automation status:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-automation-status', {
-        success: false,
-        error: 'Status error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle undefined payload (cover || {} branch)', async () => {
-      const expectedResult = { success: true, status: { foo: 'bar' } };
-      mockAutomationService.getAutomationStatus.mockResolvedValue(expectedResult);
-      await getAutomationStatusHandler(undefined, mockSender);
-  expect(mockAutomationService.getAutomationStatus).toHaveBeenCalledWith(undefined as any);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-automation-status', {
-        success: true,
-        status: { foo: 'bar' },
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle non-Error exception (cover String(error) branch)', async () => {
-      const error = 'String error';
-      mockAutomationService.getAutomationStatus.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getAutomationStatusHandler({}, mockSender);
-      expect(mockAutomationService.getAutomationStatus).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error getting automation status:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-automation-status', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
+        expect(mockInstanceUtils.getInstance).not.toHaveBeenCalled();
+        expect(replies('configure-broadcasts')).toEqual([{ success: false, error: 'Invalid instance ID', requestId }]);
+      }
+    );
   });
 
-  describe('auto-start-on-app-launch event', () => {
-    it('should handle auto-start on app launch successfully', async () => {
-      const payload = { requestId: 'test-123' };
+  describe('auto-start-on-app-launch', () => {
+    it('starts the servers marked for it and replies', async () => {
+      mockAutomation.handleAutoStartOnAppLaunch.mockResolvedValue(undefined);
 
-      mockAutomationService.handleAutoStartOnAppLaunch.mockResolvedValue(undefined);
+      await handlers['auto-start-on-app-launch']({ requestId: 'r1' }, sender);
 
-      await autoStartOnAppLaunchHandler(payload, mockSender);
-
-      expect(mockAutomationService.handleAutoStartOnAppLaunch).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('auto-start-on-app-launch', {
-        success: true,
-        requestId: 'test-123'
-      }, mockSender);
+      expect(mockAutomation.handleAutoStartOnAppLaunch).toHaveBeenCalled();
+      expect(replies('auto-start-on-app-launch')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
-    it('should handle auto-start on app launch exception', async () => {
-      const payload = {};
-      const error = new Error('Auto-start failed');
+    it('replies a failure when starting throws', async () => {
+      mockAutomation.handleAutoStartOnAppLaunch.mockRejectedValue(new Error('Auto-start failed'));
 
-      mockAutomationService.handleAutoStartOnAppLaunch.mockRejectedValue(error);
+      await handlers['auto-start-on-app-launch']({ requestId: 'r1' }, sender);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await autoStartOnAppLaunchHandler(payload, mockSender);
-
-      expect(mockAutomationService.handleAutoStartOnAppLaunch).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error during auto-start on app launch:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('auto-start-on-app-launch', {
-        success: false,
-        error: 'Auto-start failed',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
+      expect(replies('auto-start-on-app-launch')).toEqual([{ success: false, error: 'Auto-start failed', requestId: 'r1' }]);
     });
 
-    it('should handle undefined payload (cover || {} branch)', async () => {
-      mockAutomationService.handleAutoStartOnAppLaunch.mockResolvedValue(undefined);
-      await autoStartOnAppLaunchHandler(undefined, mockSender);
-      expect(mockAutomationService.handleAutoStartOnAppLaunch).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('auto-start-on-app-launch', {
-        success: true,
-        requestId: undefined
-      }, mockSender);
-    });
+    it('answers a request without a payload', async () => {
+      mockAutomation.handleAutoStartOnAppLaunch.mockResolvedValue(undefined);
 
-    it('should handle non-Error exception (cover String(error) branch)', async () => {
-      const error = 'String error';
-      mockAutomationService.handleAutoStartOnAppLaunch.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await autoStartOnAppLaunchHandler({}, mockSender);
-      expect(mockAutomationService.handleAutoStartOnAppLaunch).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[automation-handler] Error during auto-start on app launch:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('auto-start-on-app-launch', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-      consoleSpy.mockRestore();
+      await handlers['auto-start-on-app-launch'](undefined, sender);
+
+      expect(replies('auto-start-on-app-launch')).toEqual([{ success: true, requestId: undefined }]);
     });
   });
 });

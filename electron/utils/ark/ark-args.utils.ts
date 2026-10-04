@@ -1,150 +1,159 @@
-// --- Imports ---
 import * as path from 'path';
 import { getDefaultInstallDir, getPlatform } from '../platform.utils';
-import { validateIPAddress } from '../validation.utils';
+import { parsePort, validateIPAddress } from '../validation.utils';
+import type { InstanceConfig } from '../../types/server-instance.types';
 
-// --- ARK Server Argument Building ---
+type LaunchConfig = Partial<InstanceConfig>;
 
-/**
- * Build Ark Ascended server command line arguments from instance config.
- * Returns an array of args for spawn().
- */
-export function buildArkServerArgs(config: any): string[] {
+const DEFAULT_MAP = 'TheIsland_WP';
+
+// A URL option value ends at the next '?', and UE splits the command line on whitespace.
+const UNSAFE_URL_VALUE = /[?\s\x00-\x1f\x7f]/;
+// Passwords may contain spaces (see below), but never a separator or a control character.
+const UNSAFE_PASSWORD = /[?\x00-\x1f\x7f]/;
+
+const isTrue = (value: unknown) => value === true || value === 'true';
+const isFalse = (value: unknown) => value === false || value === 'false';
+
+function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || String(value).trim() === '';
+}
+
+/** The configured MultiHome address, or null when none (or a malformed one) is set. */
+export function getMultiHomeAddress(config: LaunchConfig): string | null {
+  const multiHome = typeof config.multiHome === 'string' ? config.multiHome.trim() : '';
+  return multiHome && validateIPAddress(multiHome) ? multiHome : null;
+}
+
+function optionalPort(config: LaunchConfig, field: 'gamePort' | 'queryPort'): number | null {
+  const value = config[field];
+  if (isBlank(value) || value === 0) return null;
+  const port = parsePort(value);
+  if (port === undefined) {
+    console.warn(`[ark-args] Ignoring ${field} "${String(value)}": not a port number`);
+    return null;
+  }
+  return port;
+}
+
+function safeValue(value: unknown, field: string): string | null {
+  if (isBlank(value)) return null;
+  const text = String(value).trim();
+  if (UNSAFE_URL_VALUE.test(text)) {
+    console.warn(`[ark-args] Ignoring ${field}: it contains '?', whitespace or a control character`);
+    return null;
+  }
+  return text;
+}
+
+// A dropped password would leave the server open or without RCON, so refuse to start instead.
+function safePassword(value: unknown, label: string): string | null {
+  if (isBlank(value)) return null;
+  const text = String(value);
+  if (UNSAFE_PASSWORD.test(text)) {
+    throw new Error(`${label} contains '?' or a control character and cannot be passed to the server. Change it and start again.`);
+  }
+  return text;
+}
+
+/** Command-line arguments for spawn(). The order is part of ARK's contract; do not reshuffle it. */
+export function buildArkServerArgs(config: LaunchConfig): string[] {
   const args: string[] = [];
 
-  // Map (required, always ends with _WP)
   let mapArg = getArkMapName(config);
+  if (UNSAFE_URL_VALUE.test(mapArg)) {
+    throw new Error(`Map name "${mapArg}" contains '?', whitespace or a control character. Pick a map and start again.`);
+  }
   if (!mapArg.endsWith('_WP')) mapArg += '_WP';
 
-  // Build query parameters that go after the map name
-  let paramParts: string[] = [];
-  paramParts.push('listen');
+  const paramParts: string[] = ['listen'];
 
-  if (config.gamePort) paramParts.push(`Port=${config.gamePort}`);
+  const gamePort = optionalPort(config, 'gamePort');
+  if (gamePort) paramParts.push(`Port=${gamePort}`);
 
-  if (config.altSaveDirName) paramParts.push(`AltSaveDirectoryName=${config.altSaveDirName}`);
-  // QueryPort is the Steam server discovery/query port (UDP).
-  // Each instance MUST have a unique QueryPort or only the first server initialises Steam.
-  if (config.queryPort) paramParts.push(`QueryPort=${config.queryPort}`);
-  // PeerPort is the Steam Online Subsystem authentication port.
-  // Auto-calculated as gamePort + 1 (UE default) — not user-configurable.
-  const peerPort = config.gamePort ? parseInt(config.gamePort, 10) + 1 : null;
-  if (peerPort) paramParts.push(`PeerPort=${peerPort}`);
-  // MultiHome selects the local address each instance binds its sockets to.
-  // Default 0.0.0.0 binds every interface, which is what a normal LAN/WAN server wants
-  // and keeps multiple instances from fighting over the same socket. Users routing
-  // traffic through a VPN/tunnel (ZeroTier, WireGuard) need to bind that interface's
-  // address instead, so an explicit multiHome overrides the default.
-  // Anything that isn't a well-formed IPv4 address is ignored rather than passed
-  // through, since this value is interpolated into the `?`-delimited launch URL.
-  const multiHome = typeof config.multiHome === 'string' ? config.multiHome.trim() : '';
-  if (multiHome && validateIPAddress(multiHome)) {
-    paramParts.push(`MultiHome=${multiHome}`);
-  } else {
-    if (multiHome) {
-      console.warn(`[ark-args] Ignoring invalid MultiHome address "${multiHome}" - falling back to 0.0.0.0`);
-    }
-    paramParts.push('MultiHome=0.0.0.0');
+  const altSaveDirName = safeValue(config.altSaveDirName, 'altSaveDirName');
+  if (altSaveDirName) paramParts.push(`AltSaveDirectoryName=${altSaveDirName}`);
+  // QueryPort is Steam's discovery port (UDP). Each instance needs its own, or only the first
+  // server initialises Steam.
+  const queryPort = optionalPort(config, 'queryPort');
+  if (queryPort) paramParts.push(`QueryPort=${queryPort}`);
+  // PeerPort is Steam's authentication port: gamePort + 1, the UE default, not user-configurable.
+  if (gamePort && gamePort < 65535) paramParts.push(`PeerPort=${gamePort + 1}`);
+  // MultiHome picks the local address the sockets bind to. 0.0.0.0 binds every interface, which a
+  // normal LAN/WAN server wants and keeps instances from fighting over one socket. VPN/tunnel users
+  // (ZeroTier, WireGuard) bind that interface's address instead. A malformed value never reaches
+  // the `?`-delimited URL.
+  const multiHome = getMultiHomeAddress(config);
+  if (!multiHome && !isBlank(config.multiHome)) {
+    console.warn(`[ark-args] Ignoring invalid MultiHome address "${String(config.multiHome).trim()}" - falling back to 0.0.0.0`);
   }
+  paramParts.push(`MultiHome=${multiHome ?? '0.0.0.0'}`);
 
-  // Cluster parameters
   if (config.clusterDirOverride) {
-    // Resolve cluster directory relative to the installation directory
-    // This prevents users from accessing directories outside the app scope
-    const installDir = getDefaultInstallDir();
-    const clusterDir = path.resolve(installDir, config.clusterDirOverride);
+    // A relative override resolves against the install directory; an absolute one is used as given.
+    const clusterDir = path.resolve(getDefaultInstallDir(), config.clusterDirOverride);
     args.push(`-ClusterDirOverride=${clusterDir}`);
   }
-  if (config.clusterId) args.push(`-ClusterId=${config.clusterId}`);
+  const clusterId = safeValue(config.clusterId, 'clusterId');
+  if (clusterId) args.push(`-ClusterId=${clusterId}`);
 
-  // Passwords are passed RAW, never URL-encoded. ARK's command-line parser does not
-  // URL-decode parameter values, so an encoded password arrives at the server still
-  // encoded — a join password of `my pass!` would become `my%20pass%21` and no player
-  // typing the real password could connect. This matches ServerAdminPassword below and
-  // the RCON client, which both authenticate with the raw value from config.json.
-  // Characters that would break the query string (`?`, `<`, `>`, `"`, `'`) are rejected
-  // by password validation instead.
-  if (config.serverPassword) paramParts.push(`ServerPassword=${config.serverPassword}`);
+  // Passwords go in raw, never URL-encoded: ARK does not decode command-line values, so a join
+  // password of `my pass!` would arrive as `my%20pass%21` and nobody typing the real one could
+  // connect. ServerAdminPassword and the RCON client use the same raw value from config.json.
+  const serverPassword = safePassword(config.serverPassword, 'Server password');
+  if (serverPassword) paramParts.push(`ServerPassword=${serverPassword}`);
 
-  // PvE mode - pass on command line so it overrides INI (avoids shared config dir race)
-  const toBool = (val: any) => val === true || val === 'true';
-  // Must be 'ServerPVE=True' — a bare '?ServerPVE' parses as an empty value (false)
-  // and, because this overrides the INI, would force the server back to PVP.
-  if (toBool(config.serverPVE) || toBool(config.bPvE)) paramParts.push('ServerPVE=True');
+  // PvE goes on the command line so it overrides the INI. It must be 'ServerPVE=True': a bare
+  // '?ServerPVE' parses as an empty value (false) and would force the server back to PvP.
+  if (isTrue(config.serverPVE) || isTrue(config.bPvE)) paramParts.push('ServerPVE=True');
 
-  // ServerAdminPassword MUST be the LAST URL param.
-  // ARK:SA (UE5) has a known bug where it writes command-line URL params back to
-  // GameUserSettings.ini and treats everything AFTER ServerAdminPassword= up to the
-  // end of the param string as the password value.  Placing it last means nothing
-  // follows it, preventing concatenation such as:
-  //   ServerAdminPassword=mypassword?RCONEnabled=True?RCONPort=27020
-  // RCONEnabled and RCONPort are written to GameUserSettings.ini by writeArkConfigFiles
-  // and do NOT need to appear in the URL params.
-  const adminPassword = config.serverAdminPassword || config.rconPassword;
+  // ServerAdminPassword MUST be the last URL option. ARK:SA writes URL options back to
+  // GameUserSettings.ini and takes everything after ServerAdminPassword= as the password, e.g.
+  // `mypassword?RCONEnabled=True?RCONPort=27020`. RCONEnabled/RCONPort go through the INI instead.
+  const adminPassword = safePassword(config.serverAdminPassword || config.rconPassword, 'Admin password');
   if (adminPassword) {
-    console.log(`[ark-args] Setting ServerAdminPassword for RCON (length: ${String(adminPassword).length})`);
     paramParts.push(`ServerAdminPassword=${adminPassword}`);
   } else {
-    console.warn(`[ark-args] No admin password configured - RCON will not work!`);
+    console.warn('[ark-args] No admin password configured - RCON will not work');
   }
 
-  // Compose the main command string
-  let mainArg = mapArg;
-  if (paramParts.length > 0) {
-    mainArg += '?' + paramParts.join('?');
-  }
+  args.push(`${mapArg}?${paramParts.join('?')}`);
 
-  args.push(mainArg);
-
-  const isTrue = (val: any) => val === true || val === 'true';
-  const isFalse = (val: any) => val === false || val === 'false';
-
-  // Add standard flags
   if (isFalse(config.battleEye)) args.push('-NoBattlEye');
   if (isTrue(config.useExclusiveList)) args.push('-exclusivejoin');
   // ARK only honours this as a launch flag; it is not a GameUserSettings/Game.ini key.
   if (isTrue(config.forceAllowCaveFlyers)) args.push('-ForceAllowCaveFlyers');
-  
-  // Wine/Proton compatibility flags (required for ARK Server v83.21+ on Linux)
-  // These Unreal Engine flags prevent crashes and hangs when running under Wine:
-  // - NoHangDetection: Disables UE hang detection that freezes during Sentry SDK init
-  // - NOSTEAM: Disables Steam API subsystem (prevents Sentry initialization hang)
-  // - norhithread: Disables RHI rendering thread (prevents Wine threading issues)
-  // Note: Server will still be discoverable via QueryPort and show in Steam server browser
-  // Can be disabled via disableWineCompatFlags config option if issues arise
+
+  // Wine/Proton flags ARK Server v83.21+ needs on Linux (disableWineCompatFlags turns them off):
+  // NoHangDetection stops UE's hang detector freezing during Sentry SDK init, NOSTEAM keeps the
+  // Steam subsystem from hanging the same init (QueryPort discovery still works), and norhithread
+  // avoids Wine threading issues in the RHI thread.
   if (getPlatform() === 'linux' && !isTrue(config.disableWineCompatFlags)) {
     args.push('-NoHangDetection');
     args.push('-NOSTEAM');
     args.push('-norhithread');
   }
 
-  // Server platform - convert crossplay array if serverPlatform not set
   if (config.serverPlatform) {
     args.push(`-ServerPlatform=${config.serverPlatform}`);
-  } else if (config.crossplay && Array.isArray(config.crossplay) && config.crossplay.length > 0) {
-    // Convert crossplay platforms to serverPlatform format
-    const platformMap: { [key: string]: string } = {
+  } else if (Array.isArray(config.crossplay) && config.crossplay.length > 0) {
+    const platformMap: Record<string, string> = {
       'Steam (PC)': 'PC',
       'Xbox (XSX)': 'XSX',
       'PlayStation (PS5)': 'PS5',
       'Windows Store (WINGDK)': 'WINGDK'
     };
-    const platforms = config.crossplay.map((p: string) => platformMap[p] || p).join('+');
-    args.push(`-ServerPlatform=${platforms}`);
+    args.push(`-ServerPlatform=${config.crossplay.map(platform => platformMap[platform] || platform).join('+')}`);
   } else {
     args.push('-ServerPlatform=PC');
   }
 
-  // MaxPlayers — ARK:SA uses -WinLiveMaxPlayers=N as the authoritative player cap flag.
-  // winLiveMaxPlayers takes explicit precedence; otherwise maxPlayers drives the value.
+  // ARK:SA takes its player cap from -WinLiveMaxPlayers; an explicit winLiveMaxPlayers wins.
   const winLiveMaxPlayers = config.winLiveMaxPlayers || config.maxPlayers;
   if (winLiveMaxPlayers) args.push(`-WinLiveMaxPlayers=${winLiveMaxPlayers}`);
 
-  // Add launch parameters from INI utils (handles mods, crossplay, maxPlayers, etc.)
-  const launchParams = getArkLaunchParameters(config);
-  args.push(...launchParams);
+  args.push(...getArkLaunchParameters(config));
 
-  // Cluster flags (legacy support - these might be better handled in INI)
   if (isTrue(config.noTransferFromFiltering)) args.push('-NoTransferFromFiltering');
   if (isTrue(config.preventDownloadSurvivors)) args.push('-PreventDownloadSurvivors');
   if (isTrue(config.preventDownloadItems)) args.push('-PreventDownloadItems');
@@ -154,64 +163,43 @@ export function buildArkServerArgs(config: any): string[] {
   if (isTrue(config.preventUploadDinos)) args.push('-PreventUploadDinos');
 
   return args;
-
 }
 
-
-
-/**
- * Get ARK map name from config
- * @param config - Configuration object
- * @returns ARK map name
- */
-export function getArkMapName(config: any): string {
-  return config.mapName || 'TheIsland_WP';
+export function getArkMapName(config: LaunchConfig): string {
+  const mapName = typeof config.mapName === 'string' ? config.mapName.trim() : '';
+  return mapName || DEFAULT_MAP;
 }
 
-/**
- * Get ARK launch parameters from config
- * @param config - Configuration object
- * @returns Array of launch parameters
- */
-export function getArkLaunchParameters(config: any): string[] {
+/** The enabled mods and any extra launch parameters from the config. */
+export function getArkLaunchParameters(config: LaunchConfig): string[] {
   const params: string[] = [];
 
-  // Convert mods array to launch parameters (only include enabled mods)
-  let enabledModIds: string[] = [];
-  if (config.enabledMods && Array.isArray(config.enabledMods)) {
+  let enabledModIds: unknown[] = [];
+  if (Array.isArray(config.enabledMods)) {
     enabledModIds = config.enabledMods;
-  } else if (config.mods && Array.isArray(config.mods) && config.mods.length > 0) {
-    // Legacy format: mods array contains objects with {id, enabled}
-    const firstMod = config.mods[0];
-    if (firstMod && typeof firstMod === 'object' && firstMod.id) {
-      // Legacy format: filter enabled mods
-      enabledModIds = config.mods
-        .filter((mod: any) => mod && mod.enabled !== false)
-        .map((mod: any) => mod.id);
-    } else {
-      // Assume all string IDs are enabled (fallback)
-      enabledModIds = config.mods.filter((modId: any) => typeof modId === 'string' && modId.trim());
-    }
+  } else if (Array.isArray(config.mods)) {
+    // Older configs hold `{ id, enabled }` objects.
+    enabledModIds = config.mods.map(mod =>
+      mod && typeof mod === 'object' ? (mod.enabled !== false ? mod.id : null) : mod
+    );
   }
 
+  // Hand-edited and imported configs can hold numeric ids.
   const modIds = enabledModIds
-    .map((modId: string) => modId.trim())
-    .filter((id: string) => id)
+    .filter(id => typeof id === 'string' || typeof id === 'number')
+    .map(id => String(id).trim())
+    .filter(Boolean)
     .join(',');
 
   if (modIds) {
+    // No -automanagedmods: it makes ARK download mods from CurseForge at startup, which fails
+    // (serverUnreachable) and stops the server starting. Mods are installed beforehand.
     params.push(`-mods=${modIds}`);
-    // Do NOT pass -automanagedmods: it tells ARK to download mods from CurseForge at
-    // startup, which fails (serverUnreachable) and prevents the server from starting.
-    // Mods are pre-installed via SteamCMD; -mods= alone is sufficient to load them.
   }
 
-  // Add any additional launch parameters from config
-  if (config.launchParameters) {
-    const additionalParams = config.launchParameters.split(' ').filter((param: string) => param.trim() !== '');
-    params.push(...additionalParams);
+  if (typeof config.launchParameters === 'string') {
+    params.push(...config.launchParameters.split(' ').filter(param => param.trim() !== ''));
   }
 
-	return params;
+  return params;
 }
-
