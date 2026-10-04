@@ -89,14 +89,15 @@ export async function ensureAuthInitialized(req: express.Request, res: express.R
  * WebSocket handshake can attach an identity without another database round trip.
  * It is omitted in the legacy single-login mode, which has no database user.
  */
-export function createSession(res: express.Response, username: string, account?: { id: string; roleId: string; permissions: string[] }): void {
+export function createSession(res: express.Response, username: string, account?: { id: string; roleId: string; permissions: string[]; ownerUserId?: string | null }): void {
   const sessionToken = generateSessionToken();
   setSession(sessionToken, {
     username,
     created: new Date(),
     userId: account?.id,
     roleId: account?.roleId,
-    permissions: account?.permissions
+    permissions: account?.permissions,
+    ownerUserId: account?.ownerUserId ?? null
   });
 
   // Set session cookie (secure for local environment)

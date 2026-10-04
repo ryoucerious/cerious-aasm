@@ -121,7 +121,11 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'web-server-status': PERMISSIONS.SETTINGS_VIEW,
 
   // ---- Accounts ----
+  'list-ownership-labels': PERMISSIONS.SERVERS_VIEW,
   'get-users': PERMISSIONS.USERS_MANAGE,
+  'list-server-managers': PERMISSIONS.USERS_MANAGE,
+  'create-server-manager': PERMISSIONS.USERS_MANAGE,
+  'assign-server-manager': PERMISSIONS.USERS_MANAGE,
   'create-user': PERMISSIONS.USERS_MANAGE,
   'update-user': PERMISSIONS.USERS_MANAGE,
   'delete-user': PERMISSIONS.USERS_MANAGE,

@@ -15,6 +15,8 @@ export class WebSocketService {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Messages asked for before the socket was open. They used to be thrown away. */
+  private pending: { channel: string; payload: any }[] = [];
 
   /**
    * Emits true when connected, false when disconnected. Subscribe to this in web mode to know when to send messages.
@@ -65,7 +67,34 @@ export class WebSocketService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // Signing in has to handshake again. The open socket still carries the previous
+    // account, and connect() refuses to replace a socket that is already up.
+    this.dropSocket();
     this.connect();
+  }
+
+  /** End the connection and do not open another until the next sign-in. */
+  public disconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = this.maxReconnectAttempts;
+    this.pending = [];
+    this.dropSocket();
+  }
+
+  private dropSocket(): void {
+    const old = this.ws;
+    this.ws = null;
+    this.isConnected = false;
+    this.connectionState$.next(false);
+    if (!old) return;
+    old.onopen = null;
+    old.onmessage = null;
+    old.onerror = null;
+    old.onclose = null;
+    try { old.close(); } catch { /* already closing */ }
   }
 
   constructor() {
@@ -101,6 +130,7 @@ export class WebSocketService {
       this.isConnected = true;
       this.reconnectAttempts = 0;
       this.connectionState$.next(true);
+      this.flushPending();
     };
     this.ws.onclose = (event) => {
       this.isConnected = false;
@@ -135,9 +165,20 @@ export class WebSocketService {
 
   sendMessage(channel: string, payload: any) {
     this.connect();
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.pending.push({ channel, payload });
+      return;
+    }
+    this.ws.send(JSON.stringify({ channel, payload }));
+  }
+
+  private flushPending(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const msg = { channel, payload };
-    this.ws.send(JSON.stringify(msg));
+    const queued = this.pending;
+    this.pending = [];
+    for (const item of queued) {
+      this.ws.send(JSON.stringify(item));
+    }
   }
 
   receiveMessage<T = any>(channel: string): Observable<T> {

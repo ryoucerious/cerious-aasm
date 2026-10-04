@@ -13,6 +13,8 @@ import { ConfigImportExportService } from '../../core/services/config-import-exp
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { ServerNavService, ServerTabId } from '../../core/services/server-nav.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { ModalComponent } from '../modal/modal.component';
 import { GeneralTabComponent } from './tabs/general-tab/general-tab.component';
 import { RatesTabComponent } from './tabs/rates-tab/rates-tab.component';
@@ -172,6 +174,13 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   // Validation state
   fieldErrors: { [key: string]: string } = {};
   fieldWarnings: { [key: string]: string } = {};
+  canAssignManagers = false;
+  canSetOperator = false;
+  serverManagers: Array<{ id: string; username: string; displayName: string; roleId?: string; roleName?: string; ownerUserId?: string | null }> = [];
+  operators: Array<{ id: string; username: string; displayName: string }> = [];
+  assigneeRoles: Array<{ id: string; label: string }> = [];
+  managerBusy = false;
+  managerError = '';
 
   constructor(
     private firewallService: FirewallService,
@@ -184,13 +193,97 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
     private configImportExportService: ConfigImportExportService,
     private serverInstanceService: ServerInstanceService,
     private cdr: ChangeDetectorRef,
-    private serverNav: ServerNavService
+    private serverNav: ServerNavService,
+    private auth: AuthService
   ) {
     this.isElectron = this.utilityService.getPlatform() !== 'Web';
   }
 
   ngOnInit() {
     this.checkFirewallStatus();
+    this.subscriptions.push(this.auth.identity$.subscribe(identity => {
+      this.canAssignManagers = !!(identity.isAdmin || identity.user?.roleId === 'operator');
+      this.canSetOperator = identity.isAdmin;
+      const roles: Array<{ id: string; label: string }> = [];
+      if (identity.isAdmin || this.auth.can(PERMISSIONS.ACCOUNTS_MANAGERS_CREATE)) {
+        roles.push({ id: 'server-manager', label: 'Server Manager' });
+      }
+      if (identity.isAdmin || this.auth.can(PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE)) {
+        roles.push({ id: 'attendant', label: 'Attendant' });
+      }
+      this.assigneeRoles = roles;
+      if (this.canAssignManagers) {
+        void this.refreshServerManagers();
+      }
+      this.cdr.markForCheck();
+    }));
+  }
+
+  async refreshServerManagers(): Promise<void> {
+    const directory = await this.auth.listServerManagers();
+    this.serverManagers = directory.managers;
+    this.operators = directory.operators;
+    this.cdr.markForCheck();
+  }
+
+  async onManagerSelected(managerUserId: string | null): Promise<void> {
+    if (!this.serverInstance?.id) return;
+    this.managerBusy = true;
+    this.managerError = '';
+    const result = await this.auth.assignServerManager(this.serverInstance.id, managerUserId);
+    this.managerBusy = false;
+    if (!result.success) {
+      this.managerError = result.error || 'Could not assign that server manager.';
+    } else {
+      this.serverInstance.managerUserId = managerUserId;
+      this.notificationService.success(managerUserId ? 'Server assigned.' : 'Assignment cleared.');
+    }
+    this.cdr.markForCheck();
+  }
+
+  async onOperatorSelected(operatorUserId: string | null): Promise<void> {
+    if (!this.serverInstance?.id) return;
+    this.managerBusy = true;
+    this.managerError = '';
+    const result = await this.auth.setServerOperator(this.serverInstance.id, operatorUserId);
+    this.managerBusy = false;
+    if (!result.success) {
+      this.managerError = result.error || 'Could not move this server.';
+    } else {
+      const saved = result.data as { operatorUserId?: string | null; managerUserId?: string | null } | undefined;
+      this.serverInstance.operatorUserId = saved?.operatorUserId ?? operatorUserId;
+      if (saved && 'managerUserId' in saved) this.serverInstance.managerUserId = saved.managerUserId || null;
+      this.notificationService.success(operatorUserId ? 'Server moved to that operator.' : 'Server moved to the admin pool.');
+    }
+    this.cdr.markForCheck();
+  }
+
+  async onCreateManager(input: { username: string; password: string; displayName: string; roleId: string }): Promise<void> {
+    if (!this.serverInstance?.id) return;
+    this.managerBusy = true;
+    this.managerError = '';
+    const created = await this.auth.createServerManager({
+      ...input,
+      ownerUserId: this.serverInstance?.operatorUserId || null
+    });
+    if (!created.success || !created.data) {
+      this.managerBusy = false;
+      this.managerError = created.error || 'Could not add that account.';
+      this.cdr.markForCheck();
+      return;
+    }
+    const assigned = await this.auth.assignServerManager(this.serverInstance.id, created.data.id);
+    this.managerBusy = false;
+    if (!assigned.success) {
+      this.managerError = assigned.error || 'The account was created, but this server was not assigned.';
+      await this.refreshServerManagers();
+      this.cdr.markForCheck();
+      return;
+    }
+    this.serverInstance.managerUserId = created.data.id;
+    await this.refreshServerManagers();
+    this.notificationService.success(`${created.data.displayName || created.data.username} now has this server.`);
+    this.cdr.markForCheck();
   }
 
   ngOnChanges(changes: SimpleChanges) {

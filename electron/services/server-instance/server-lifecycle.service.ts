@@ -291,7 +291,7 @@ export class ServerLifecycleService {
   /**
    * Start all server instances with staggered delay to prevent CPU overload
    */
-  async startAllInstances(delayMs?: number): Promise<{ started: string[], failed: string[] }> {
+  async startAllInstances(delayMs?: number, onlyIds?: string[] | null): Promise<{ started: string[], failed: string[] }> {
     const managementService = require('./server-management.service').serverManagementService;
     const processService = require('./server-process.service').serverProcessService;
 
@@ -306,7 +306,11 @@ export class ServerLifecycleService {
       }
     }
     
-    const instances = (await managementService.getAllInstances()).instances;
+    let instances = (await managementService.getAllInstances()).instances;
+    if (Array.isArray(onlyIds)) {
+      const allowed = new Set(onlyIds);
+      instances = instances.filter((instance: any) => allowed.has(instance.id));
+    }
     const started: string[] = [];
     const failed: string[] = [];
 
@@ -335,11 +339,15 @@ export class ServerLifecycleService {
   /**
    * Stop all running server instances in parallel
    */
-  async stopAllInstances(): Promise<{ stopped: string[], failed: string[] }> {
+  async stopAllInstances(onlyIds?: string[] | null): Promise<{ stopped: string[], failed: string[] }> {
     const managementService = require('./server-management.service').serverManagementService;
     const processService = require('./server-process.service').serverProcessService;
     
-    const instances = (await managementService.getAllInstances()).instances;
+    let instances = (await managementService.getAllInstances()).instances;
+    if (Array.isArray(onlyIds)) {
+      const allowed = new Set(onlyIds);
+      instances = instances.filter((instance: any) => allowed.has(instance.id));
+    }
     const stopped: string[] = [];
     const failed: string[] = [];
 

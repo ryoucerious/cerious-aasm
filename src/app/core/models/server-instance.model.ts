@@ -167,6 +167,11 @@ export interface ServerInstance {
   // Server ordering for sidebar display
   sortOrder?: number; // Order of this server in the sidebar list
 
+  /** User id of the Server Manager or Attendant this server is assigned to. Empty means unassigned. */
+  managerUserId?: string | null;
+  /** User id of the operator who owns this server. Empty means the admin pool. */
+  operatorUserId?: string | null;
+
   // Additional missing ARK Ascended config settings
   perPlatformMaxStructuresMultiplier?: number;
   platformSaddleBuildAreaBoundsMultiplier?: number;

@@ -1,4 +1,4 @@
-﻿import * as instanceUtils from '../utils/ark/instance.utils';
+import * as instanceUtils from '../utils/ark/instance.utils';
 import { messagingService } from '../services/messaging.service';
 import { serverInstanceService } from '../services/server-instance/server-instance.service';
 import { serverLifecycleService } from '../services/server-instance/server-lifecycle.service';
@@ -6,8 +6,70 @@ import { serverMonitoringService } from '../services/server-instance/server-moni
 import { serverOperationsService } from '../services/server-instance/server-operations.service';
 import { serverManagementService } from '../services/server-instance/server-management.service';
 import { automationService } from '../services/automation/automation.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { canAssignServerManager, filterInstancesForUser, isServerManager, isServerScoped } from '../services/auth/server-assignment';
+import { userDatabaseService } from '../services/auth/user-database.service';
+import { hasPermission, isAssignableRole, PERMISSIONS, ROLE_IDS } from '../types/auth.types';
 
 const { arkConfigService } = require('../services/ark-config.service');
+
+/** null means every server. An array is the servers this sender is allowed to touch. */
+async function serverIdsForSender(sender: any): Promise<string[] | null> {
+  const identity = identifySender(sender);
+  if (!isServerScoped(identity) || !identity.user) return null;
+  const instances = await instanceUtils.getAllInstances();
+  return filterInstancesForUser(identity.user, instances).map((instance: any) => instance.id);
+}
+
+/**
+ * Stamp which operator owns a server, and refuse an assignee from a different group.
+ * A missing operatorUserId on an edit keeps the one already stored.
+ */
+function applyServerOwnership(instance: any, existing: any, identity: { isAdmin: boolean; user: { id: string; roleId: string } | null }): string | null {
+  if (!existing) {
+    if (identity.user?.roleId === ROLE_IDS.OPERATOR) {
+      instance.operatorUserId = identity.user.id;
+    } else if (identity.isAdmin) {
+      const requested = instance.operatorUserId || null;
+      if (requested) {
+        const operator = userDatabaseService.getUser(requested);
+        if (!operator || !operator.active || operator.roleId !== ROLE_IDS.OPERATOR) return 'Choose an active operator for this server.';
+        instance.operatorUserId = operator.id;
+      } else {
+        instance.operatorUserId = null;
+      }
+    } else {
+      instance.operatorUserId = null;
+    }
+  } else if (!identity.isAdmin) {
+    if (identity.user?.roleId === ROLE_IDS.OPERATOR && (existing.operatorUserId || null) !== identity.user.id) {
+      return 'That server is not in your group.';
+    }
+    instance.operatorUserId = existing.operatorUserId ?? null;
+  } else if (instance.operatorUserId === undefined) {
+    instance.operatorUserId = existing.operatorUserId ?? null;
+  } else {
+    const requested = instance.operatorUserId || null;
+    if (requested) {
+      const operator = userDatabaseService.getUser(requested);
+      if (!operator || !operator.active || operator.roleId !== ROLE_IDS.OPERATOR) return 'Choose an active operator for this server.';
+      instance.operatorUserId = operator.id;
+    } else {
+      instance.operatorUserId = null;
+    }
+  }
+
+  if (instance.managerUserId) {
+    const manager = userDatabaseService.getUser(instance.managerUserId);
+    if (!manager || !manager.active || !isAssignableRole(manager.roleId)) {
+      return 'Choose an active server manager or attendant.';
+    }
+    if ((manager.ownerUserId || null) !== (instance.operatorUserId || null)) {
+      return 'That person is not in this server\'s group.';
+    }
+  }
+  return null;
+}
 
 // feature: ini editor //
 /**
@@ -61,9 +123,13 @@ messagingService.on('start-all-instances', async (payload: any, sender: any) => 
     try {
         const { serverProcessService } = require('../services/server-instance/server-process.service');
         const allInstances = (await serverManagementService.getAllInstances()).instances;
+        const onlyIds = await serverIdsForSender(sender);
+        const scopedInstances = onlyIds
+          ? allInstances.filter((inst: any) => onlyIds.includes(inst.id))
+          : allInstances;
 
         // Determine which instances are eligible to start (skip already-running, starting, or queued)
-        const eligible = allInstances.filter((inst: any) => {
+        const eligible = scopedInstances.filter((inst: any) => {
             const state = serverProcessService.getNormalizedInstanceState(inst.id);
             return state !== 'running' && state !== 'starting' && state !== 'queued';
         });
@@ -79,7 +145,7 @@ messagingService.on('start-all-instances', async (payload: any, sender: any) => 
         messagingService.sendToOriginator('start-all-instances', { success: true, requestId, starting: eligible.map((i: any) => i.id) }, sender);
 
         // Start instances in the background; getStandardEventCallbacks handles all further state transitions
-        serverLifecycleService.startAllInstances().catch((err: Error) => {
+        serverLifecycleService.startAllInstances(undefined, onlyIds).catch((err: Error) => {
             console.error('[start-all-instances] Background start error:', err);
         });
     } catch (error) {
@@ -92,9 +158,13 @@ messagingService.on('stop-all-instances', async (payload: any, sender: any) => {
     try {
         const { serverProcessService } = require('../services/server-instance/server-process.service');
         const allInstances = (await serverManagementService.getAllInstances()).instances;
+        const onlyIds = await serverIdsForSender(sender);
+        const scopedInstances = onlyIds
+          ? allInstances.filter((inst: any) => onlyIds.includes(inst.id))
+          : allInstances;
 
         // Determine which instances are eligible to stop
-        const eligible = allInstances.filter((inst: any) => {
+        const eligible = scopedInstances.filter((inst: any) => {
             const state = serverProcessService.getNormalizedInstanceState(inst.id);
             return state === 'running' || state === 'starting';
         });
@@ -108,7 +178,7 @@ messagingService.on('stop-all-instances', async (payload: any, sender: any) => {
         messagingService.sendToOriginator('stop-all-instances', { success: true, requestId, stopping: eligible.map((i: any) => i.id) }, sender);
 
         // Stop instances in the background; lifecycle callbacks handle further state transitions
-        serverLifecycleService.stopAllInstances().catch((err: Error) => {
+        serverLifecycleService.stopAllInstances(onlyIds).catch((err: Error) => {
             console.error('[stop-all-instances] Background stop error:', err);
         });
     } catch (error) {
@@ -149,7 +219,8 @@ messagingService.on('force-stop-server-instance', async (payload, sender) => {
       // Broadcast notification using service-provided name
       messagingService.sendToAll('notification', {
         type: 'warning',
-        message: `${result.instanceName} force stopped.`
+        message: `${result.instanceName} force stopped.`,
+        instanceId: id
       });
     }
     
@@ -440,7 +511,8 @@ messagingService.on('start-server-instance', async (payload, sender) => {
     if (result.started) {
       messagingService.sendToAll('notification', {
         type: 'info',
-        message: `${result.instanceName} started.`
+        message: `${result.instanceName} started.`,
+        instanceId: id
       });
     } else {
       if (result.portError && sender && typeof sender.send === 'function') {
@@ -516,9 +588,11 @@ messagingService.on('get-server-instances', async (payload, sender) => {
   
   try {
     const result = await serverManagementService.getAllInstances();
+    const identity = identifySender(sender);
+    const instances = filterInstancesForUser(identity.user, result.instances);
     
     messagingService.sendToOriginator('get-server-instances', {
-      instances: result.instances,
+      instances,
       requestId
     }, sender);
     
@@ -547,9 +621,11 @@ messagingService.on('get-server-instance', async (payload, sender) => {
   
   try {
     const result = await serverManagementService.getInstance(id);
+    const identity = identifySender(sender);
+    const visible = filterInstancesForUser(identity.user, result.instance ? [result.instance] : []);
     
     messagingService.sendToOriginator('get-server-instance', {
-      instance: result.instance,
+      instance: visible[0] || null,
       requestId
     }, sender);
   } catch (error) {
@@ -577,6 +653,41 @@ messagingService.on('save-server-instance', async (payload, sender) => {
   
   try {
     const existingInstance = instance?.id ? await instanceUtils.getInstance(instance.id) : null;
+    const identity = identifySender(sender);
+    if (!existingInstance && !identity.isAdmin && !hasPermission(identity.permissions, PERMISSIONS.SERVERS_CREATE)) {
+      messagingService.sendToOriginator('save-server-instance', {
+        success: false,
+        error: 'Only an admin or operator can add a server.',
+        requestId
+      }, sender);
+      return;
+    }
+    if (existingInstance && !identity.isAdmin && !hasPermission(identity.permissions, PERMISSIONS.SERVERS_CONFIGURE)) {
+      messagingService.sendToOriginator('save-server-instance', {
+        success: false,
+        error: 'Your role cannot change server settings.',
+        requestId
+      }, sender);
+      return;
+    }
+    if (instance && typeof instance === 'object') {
+      if (!existingInstance && isServerManager(identity) && identity.user) {
+        instance.managerUserId = identity.user.id;
+      } else if (!canAssignServerManager(identity)) {
+        instance.managerUserId = existingInstance?.managerUserId ?? null;
+      } else if (instance.managerUserId === undefined) {
+        instance.managerUserId = existingInstance?.managerUserId ?? null;
+      }
+      const ownershipError = applyServerOwnership(instance, existingInstance, identity);
+      if (ownershipError) {
+        messagingService.sendToOriginator('save-server-instance', {
+          success: false,
+          error: ownershipError,
+          requestId
+        }, sender);
+        return;
+      }
+    }
     
     const result = await serverManagementService.saveInstance(instance);
     
@@ -604,7 +715,8 @@ messagingService.on('save-server-instance', async (payload, sender) => {
       
       messagingService.sendToAllOthers('notification', {
         type: 'info',
-        message: notificationMessage
+        message: notificationMessage,
+        instanceId: result.instance?.id
       }, sender);
     }
   } catch (error) {
@@ -612,6 +724,150 @@ messagingService.on('save-server-instance', async (payload, sender) => {
     messagingService.sendToOriginator('save-server-instance', {
       success: false,
       error: (error as Error)?.message || 'Failed to save server instance',
+      requestId
+    }, sender);
+  }
+});
+
+messagingService.on('assign-server-manager', async (payload: any, sender: any) => {
+  const { instanceId, managerUserId, requestId } = payload || {};
+  try {
+    const identity = identifySender(sender);
+    if (!canAssignServerManager(identity)) {
+      messagingService.sendToOriginator('assign-server-manager', {
+        success: false,
+        error: 'Only an admin or operator can assign a server manager.',
+        requestId
+      }, sender);
+      return;
+    }
+    const existing = instanceId ? await instanceUtils.getInstance(instanceId) : null;
+    if (!existing) {
+      messagingService.sendToOriginator('assign-server-manager', {
+        success: false,
+        error: 'That server was not found.',
+        requestId
+      }, sender);
+      return;
+    }
+    const serverOperator = existing.operatorUserId || null;
+    if (!identity.isAdmin && (identity.user?.roleId !== ROLE_IDS.OPERATOR || serverOperator !== identity.user.id)) {
+      messagingService.sendToOriginator('assign-server-manager', {
+        success: false,
+        error: 'That server is not in your group.',
+        requestId
+      }, sender);
+      return;
+    }
+    if (managerUserId) {
+      const manager = userDatabaseService.getUser(managerUserId);
+      if (!manager || !manager.active || !isAssignableRole(manager.roleId)) {
+        messagingService.sendToOriginator('assign-server-manager', {
+          success: false,
+          error: 'Choose an active server manager or attendant.',
+          requestId
+        }, sender);
+        return;
+      }
+      if ((manager.ownerUserId || null) !== serverOperator) {
+        messagingService.sendToOriginator('assign-server-manager', {
+          success: false,
+          error: 'That person is not in this server\'s group.',
+          requestId
+        }, sender);
+        return;
+      }
+    }
+    const saved = await instanceUtils.saveInstance({
+      ...existing,
+      id: instanceId,
+      operatorUserId: serverOperator,
+      managerUserId: managerUserId || null
+    });
+    if (saved && (saved as any).error) {
+      messagingService.sendToOriginator('assign-server-manager', {
+        success: false,
+        error: (saved as any).error,
+        requestId
+      }, sender);
+      return;
+    }
+    messagingService.sendToOriginator('assign-server-manager', {
+      success: true,
+      instance: saved,
+      requestId
+    }, sender);
+    messagingService.sendToAll('server-instance-updated', saved);
+    const allInstances = await serverManagementService.getAllInstances();
+    messagingService.sendToAll('server-instances', allInstances.instances);
+  } catch (error) {
+    messagingService.sendToOriginator('assign-server-manager', {
+      success: false,
+      error: (error as Error)?.message || 'Could not assign that server manager.',
+      requestId
+    }, sender);
+  }
+});
+
+messagingService.on('set-server-operator', async (payload: any, sender: any) => {
+  const { instanceId, requestId } = payload || {};
+  const operatorUserId = payload?.operatorUserId || null;
+  try {
+    if (!identifySender(sender).isAdmin) {
+      messagingService.sendToOriginator('set-server-operator', {
+        success: false,
+        error: 'Only an admin can move a server between groups.',
+        requestId
+      }, sender);
+      return;
+    }
+    const existing = instanceId ? await instanceUtils.getInstance(instanceId) : null;
+    if (!existing) {
+      messagingService.sendToOriginator('set-server-operator', {
+        success: false,
+        error: 'That server was not found.',
+        requestId
+      }, sender);
+      return;
+    }
+    if (operatorUserId) {
+      const operator = userDatabaseService.getUser(operatorUserId);
+      if (!operator || !operator.active || operator.roleId !== ROLE_IDS.OPERATOR) {
+        messagingService.sendToOriginator('set-server-operator', {
+          success: false,
+          error: 'Choose an active operator.',
+          requestId
+        }, sender);
+        return;
+      }
+    }
+    let managerUserId = existing.managerUserId || null;
+    if (managerUserId) {
+      const manager = userDatabaseService.getUser(managerUserId);
+      if (!manager || (manager.ownerUserId || null) !== operatorUserId) managerUserId = null;
+    }
+    const saved = await instanceUtils.saveInstance({
+      ...existing,
+      id: instanceId,
+      operatorUserId,
+      managerUserId
+    });
+    if (saved && (saved as any).error) {
+      messagingService.sendToOriginator('set-server-operator', {
+        success: false,
+        error: (saved as any).error,
+        requestId
+      }, sender);
+      return;
+    }
+    messagingService.sendToOriginator('set-server-operator', { success: true, instance: saved, requestId }, sender);
+    messagingService.sendToAll('server-instance-updated', saved);
+    const allInstances = await serverManagementService.getAllInstances();
+    messagingService.sendToAll('server-instances', allInstances.instances);
+  } catch (error) {
+    messagingService.sendToOriginator('set-server-operator', {
+      success: false,
+      error: (error as Error)?.message || 'Could not move that server.',
       requestId
     }, sender);
   }
@@ -654,7 +910,8 @@ messagingService.on('delete-server-instance', async (payload, sender) => {
 
       messagingService.sendToAllOthers('notification', {
         type: 'info',
-        message: 'Server deleted.'
+        message: 'Server deleted.',
+        instanceId: id
       }, sender);
     }
   } catch (error) {

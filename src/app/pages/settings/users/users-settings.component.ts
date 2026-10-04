@@ -5,7 +5,7 @@ import { AuthService } from '../../../core/services/auth.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ModalComponent } from '../../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../../components/dropdown/dropdown.component';
-import { Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID } from '../../../core/models/auth.model';
+import { Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID, accountPermissionFor } from '../../../core/models/auth.model';
 
 interface PermissionGroup {
   name: string;
@@ -44,7 +44,7 @@ export class UsersSettingsComponent implements OnInit {
   // User editor
   showUserModal = false;
   editingUser: User | null = null;
-  form = { username: '', displayName: '', password: '', roleId: '', active: true };
+  form = { username: '', displayName: '', password: '', roleId: '', active: true, ownerUserId: '' };
   saving = false;
 
   // Role editor
@@ -82,7 +82,7 @@ export class UsersSettingsComponent implements OnInit {
       this.users = usersAndRoles.users;
       this.roles = roleInfo.roles.length ? roleInfo.roles : usersAndRoles.roles;
       this.permissionCatalog = roleInfo.permissions;
-      this.roleOptions = this.roles.map(role => ({ value: role.id, label: role.name }));
+      this.roleOptions = this.roleChoices(null);
       this.permissionGroups = this.buildPermissionGroups();
     } finally {
       this.loading = false;
@@ -96,6 +96,70 @@ export class UsersSettingsComponent implements OnInit {
 
   get currentUserId(): string | null {
     return this.auth.currentUser?.id ?? null;
+  }
+
+  get canManageRoles(): boolean {
+    return this.auth.identity.isAdmin;
+  }
+
+  get isAdmin(): boolean {
+    return this.auth.identity.isAdmin;
+  }
+
+  get canAddUser(): boolean {
+    return this.roleChoices(null).length > 0;
+  }
+
+  get operators(): User[] {
+    return this.users.filter(user => user.roleId === 'operator' && user.active);
+  }
+
+  get showOwnerField(): boolean {
+    return this.isAdmin && this.isPoolRole(this.form.roleId);
+  }
+
+  canEditAccount(user: User): boolean {
+    if (this.isAdmin) return true;
+    return this.holds(user.roleId, 'create');
+  }
+
+  canDeleteAccount(user: User): boolean {
+    if (user.id === this.currentUserId || user.cliLocked) return false;
+    if (this.isAdmin) return true;
+    return this.holds(user.roleId, 'delete');
+  }
+
+  groupLabel(user: User): string {
+    if (user.roleId === 'admin') return 'Admin';
+    if (user.roleId === 'operator') return 'Operators';
+    if (!user.ownerUserId) return 'Admin pool';
+    const owner = this.users.find(account => account.id === user.ownerUserId);
+    return owner ? (owner.displayName || owner.username) : 'Operator';
+  }
+
+  private isPoolRole(roleId: string): boolean {
+    return roleId === 'server-manager' || roleId === 'attendant' || roleId === 'viewer';
+  }
+
+  private holds(roleId: string, action: 'create' | 'delete'): boolean {
+    const permission = accountPermissionFor(roleId, action);
+    return !!permission && this.auth.can(permission);
+  }
+
+  private roleChoices(editing: User | null): DropdownOption<string>[] {
+    return this.roles
+      .filter(role => this.canOfferRole(role.id, editing))
+      .map(role => ({ value: role.id, label: role.name }));
+  }
+
+  private canOfferRole(roleId: string, editing: User | null): boolean {
+    if (this.isAdmin) {
+      if (roleId === ADMIN_ROLE_ID) {
+        return editing?.roleId === ADMIN_ROLE_ID || !this.users.some(user => user.roleId === ADMIN_ROLE_ID);
+      }
+      return true;
+    }
+    return this.holds(roleId, 'create');
   }
 
   private buildPermissionGroups(): PermissionGroup[] {
@@ -132,12 +196,17 @@ export class UsersSettingsComponent implements OnInit {
 
   openCreateUser(): void {
     this.editingUser = null;
+    this.roleOptions = this.roleChoices(null);
+    const preferred = ['server-manager', 'attendant', 'viewer', 'operator'].find(roleId =>
+      this.roleOptions.some(option => option.value === roleId)
+    );
     this.form = {
       username: '',
       displayName: '',
       password: '',
-      roleId: this.roles.find(role => role.id !== ADMIN_ROLE_ID)?.id || this.roles[0]?.id || '',
-      active: true
+      roleId: preferred || this.roleOptions[0]?.value || '',
+      active: true,
+      ownerUserId: ''
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -145,12 +214,14 @@ export class UsersSettingsComponent implements OnInit {
 
   openEditUser(user: User): void {
     this.editingUser = user;
+    this.roleOptions = this.roleChoices(user);
     this.form = {
       username: user.username,
       displayName: user.displayName,
       password: '',
       roleId: user.roleId,
-      active: user.active
+      active: user.active,
+      ownerUserId: user.ownerUserId || ''
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -173,6 +244,8 @@ export class UsersSettingsComponent implements OnInit {
     this.saving = true;
     this.cdr.markForCheck();
 
+    const ownerUserId = this.isPoolRole(this.form.roleId) ? (this.form.ownerUserId || null) : null;
+    const owner = this.isAdmin ? { ownerUserId } : {};
     const result = this.editingUser
       ? await this.auth.updateUser({
           id: this.editingUser.id,
@@ -180,6 +253,7 @@ export class UsersSettingsComponent implements OnInit {
           displayName: this.form.displayName.trim(),
           roleId: this.form.roleId,
           active: this.form.active,
+          ...owner,
           ...(this.form.password ? { password: this.form.password } : {})
         })
       : await this.auth.createUser({
@@ -187,7 +261,8 @@ export class UsersSettingsComponent implements OnInit {
           displayName: this.form.displayName.trim(),
           password: this.form.password,
           roleId: this.form.roleId,
-          active: this.form.active
+          active: this.form.active,
+          ...owner
         });
 
     this.saving = false;

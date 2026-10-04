@@ -36,6 +36,7 @@ export function installSocketAuth(): void {
           displayName: session.username,
           roleId: 'admin',
           roleName: 'Admin',
+          ownerUserId: null,
           permissions: [],
           active: true
         },
@@ -51,6 +52,7 @@ export function installSocketAuth(): void {
         displayName: session.username,
         roleId: session.roleId || '',
         roleName: '',
+        ownerUserId: session.ownerUserId ?? null,
         permissions: session.permissions || [],
         active: true
       },

@@ -12,6 +12,7 @@ import { MockMessagingService } from '../../../../test/mocks/mock-messaging.serv
 import { ChangeDetectorRef } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { of } from 'rxjs';
+import { AuthService } from '../../core/services/auth.service';
 
 describe('ServerSettingsComponent', () => {
   let component: ServerSettingsComponent;
@@ -37,7 +38,14 @@ describe('ServerSettingsComponent', () => {
         { provide: ArkServerValidationService, useValue: mockValidationService },
         { provide: IpcService, useValue: mockIpcService },
         { provide: MessagingService, useClass: MockMessagingService },
-        { provide: ChangeDetectorRef, useValue: mockChangeDetectorRef }
+        { provide: ChangeDetectorRef, useValue: mockChangeDetectorRef },
+        { provide: AuthService, useValue: {
+          identity: { user: null, isAdmin: false, isLocalDesktop: false, permissions: [], accountsInUse: true },
+          identity$: of({ user: null, isAdmin: false, isLocalDesktop: false, permissions: [], accountsInUse: true }),
+          listServerManagers: async () => ({ managers: [], operators: [] }),
+          createServerManager: async () => ({ success: false }),
+          assignServerManager: async () => ({ success: false })
+        } }
       ]
     }).compileComponents();
 

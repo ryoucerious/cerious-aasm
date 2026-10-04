@@ -1,15 +1,24 @@
 import { messagingService } from '../services/messaging.service';
 import { activityLogService } from '../services/activity-log.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { filterInstancesForUser } from '../services/auth/server-assignment';
+import { getAllInstances } from '../utils/ark/instance.utils';
 
 /**
- * The Recent Activity feed. Reading is open to any signed-in user; clearing needs the
- * settings permission, since the history is shared by everyone.
+ * The Recent Activity feed. An admin sees every entry. Everyone else only sees entries
+ * for servers in their group, so one operator's feed cannot name another group's servers.
+ * Clearing needs the settings permission, since the history is shared.
  */
 
-messagingService.on('get-activity', (payload: any, sender: any) => {
+messagingService.on('get-activity', async (payload: any, sender: any) => {
   const { requestId, limit } = payload || {};
   try {
-    const entries = activityLogService.list(typeof limit === 'number' ? limit : 100);
+    let entries = activityLogService.list(typeof limit === 'number' ? limit : 100);
+    const identity = identifySender(sender);
+    if (!identity.isAdmin) {
+      const allowed = new Set(filterInstancesForUser(identity.user, await getAllInstances()).map((instance: any) => instance.id));
+      entries = entries.filter(entry => !!entry.instanceId && allowed.has(entry.instanceId));
+    }
     messagingService.sendToOriginator('get-activity', { success: true, entries, requestId }, sender);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

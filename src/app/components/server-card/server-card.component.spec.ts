@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ServerCardComponent } from './server-card.component';
+import { NotificationService } from '../../core/services/notification.service';
 
 describe('ServerCardComponent', () => {
   let component: ServerCardComponent;
@@ -7,7 +8,10 @@ describe('ServerCardComponent', () => {
   const now = 1_700_000_000_000;
 
   beforeEach(async () => {
-    await TestBed.configureTestingModule({ imports: [ServerCardComponent] }).compileComponents();
+    await TestBed.configureTestingModule({
+      imports: [ServerCardComponent],
+      providers: [{ provide: NotificationService, useValue: { success() {}, error() {} } }]
+    }).compileComponents();
     fixture = TestBed.createComponent(ServerCardComponent);
     component = fixture.componentInstance;
     component.server = { id: 'a', name: 'Aberration', mapName: 'Aberration_WP', state: 'running', players: 12, maxPlayers: 70, cpu: 8.4, memory: 6348.8, startedAt: now - (3 * 86400 + 14 * 3600) * 1000 } as any;

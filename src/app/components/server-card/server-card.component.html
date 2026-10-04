@@ -1,6 +1,11 @@
 <article class="server-card" [class.list-view]="view === 'list'" [class.online]="isOnline" (dblclick)="onConsole($event)">
   <div class="server-card-hero" [style.background-image]="visual.layered">
     <div class="server-card-hero-shade"></div>
+    <div class="server-card-hero-meta">
+      <span class="server-card-hero-operator" [title]="operatorLabel || 'Admin'">{{ operatorLabel || 'Admin' }}</span>
+      <span class="server-card-hero-manager" [title]="managerLabel || 'Not assigned'">{{ managerLabel || 'Not assigned' }}</span>
+      <span class="server-card-hero-address" *ngIf="connectAddress" [title]="connectAddress">{{ connectAddress }}</span>
+    </div>
     <span class="server-card-drag material-icons" title="Drag to reorder">drag_indicator</span>
     <div class="server-card-title">
       <div class="server-card-name-row">
@@ -66,6 +71,10 @@
       <button type="button" class="btn btn-ghost" (click)="onConsole($event)">
         <span class="material-icons">terminal</span> Console
       </button>
+      <button type="button" class="btn btn-ghost" (click)="onCopyAddress($event)" [disabled]="!connectAddress" [title]="copyTitle">
+        <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span>
+        {{ copied ? 'Copied' : 'Copy' }}
+      </button>
       <div class="server-card-menu-anchor" #menuAnchor>
         <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" aria-label="More actions" [attr.aria-expanded]="menuOpen">
           <span class="material-icons">more_horiz</span>
@@ -74,10 +83,10 @@
              this to the card's edge. -->
         <div class="card-menu" *ngIf="menuOpen" #menu role="menu"
              [style.left.px]="menuPosition.left" [style.top.px]="menuPosition.top">
-          <button type="button" class="card-menu-item" role="menuitem" (click)="onConfigure()">
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="canConfigure" (click)="onConfigure()">
             <span class="material-icons">tune</span> Configure
           </button>
-          <button type="button" class="card-menu-item" role="menuitem" (click)="onBackups()">
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="canBackups" (click)="onBackups()">
             <span class="material-icons">backup</span> Backups
           </button>
           <button type="button" class="card-menu-item" role="menuitem" *ngIf="isBusy" (click)="onForceStop()">

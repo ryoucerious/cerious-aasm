@@ -4,12 +4,12 @@
       <button type="button" class="users-toggle-btn" [class.active]="view === 'users'" (click)="view = 'users'">
         <i class="material-icons">group</i> Users <span class="nav-count">{{ users.length }}</span>
       </button>
-      <button type="button" class="users-toggle-btn" [class.active]="view === 'roles'" (click)="view = 'roles'">
+      <button type="button" class="users-toggle-btn" *ngIf="canManageRoles" [class.active]="view === 'roles'" (click)="view = 'roles'">
         <i class="material-icons">badge</i> Roles <span class="nav-count">{{ roles.length }}</span>
       </button>
     </div>
     <div class="users-header-actions">
-      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'users'" (click)="openCreateUser()">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'users' && canAddUser" (click)="openCreateUser()">
         <i class="material-icons">person_add</i> Add User
       </button>
       <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'roles'" (click)="openCreateRole()">
@@ -19,9 +19,8 @@
   </div>
 
   <p class="settings-card-hint users-intro">
-    Accounts control who can sign in and what they may do. Add users and set their passwords
-    here, including when the app is running headless. An admin password passed on the command
-    line stays in force and cannot be changed on this page.
+    One admin owns every operator. Each operator has a separate group of server managers, attendants, and viewers.
+    An operator only sees that group. An admin password passed on the command line stays in force and cannot be changed here.
   </p>
 
   <div class="dash-muted" *ngIf="loading">Loading accounts...</div>
@@ -32,7 +31,7 @@
     <div class="users-empty" *ngIf="!users.length">
       <i class="material-icons">group</i>
       <p>No accounts yet. Add one to let someone sign in to the web interface.</p>
-      <button type="button" class="btn btn-primary btn-sm" (click)="openCreateUser()">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="canAddUser" (click)="openCreateUser()">
         <i class="material-icons">person_add</i> Add User
       </button>
     </div>
@@ -42,6 +41,7 @@
         <tr>
           <th>User</th>
           <th>Role</th>
+          <th *ngIf="isAdmin">Group</th>
           <th>Status</th>
           <th>Last sign-in</th>
           <th class="users-actions">Actions</th>
@@ -60,6 +60,7 @@
             </div>
           </td>
           <td>{{ roleName(user.roleId) }}</td>
+          <td *ngIf="isAdmin">{{ groupLabel(user) }}</td>
           <td>
             <span class="status-badge" [ngClass]="user.active ? 'status-running' : 'status-stopped'">
               {{ user.active ? 'Active' : 'Disabled' }}
@@ -67,12 +68,10 @@
           </td>
           <td class="users-muted">{{ user.lastLoginAt ? (user.lastLoginAt | date:'short') : 'Never' }}</td>
           <td class="users-actions">
-            <button type="button" class="btn btn-ghost btn-sm" (click)="openEditUser(user)" title="Edit">
+            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canEditAccount(user)" (click)="openEditUser(user)" title="Edit">
               <i class="material-icons">edit</i>
             </button>
-            <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteUser(user)"
-                    [disabled]="user.id === currentUserId || user.cliLocked"
-                    [title]="user.cliLocked ? 'This account is provided by the command line' : (user.id === currentUserId ? 'You cannot delete your own account' : 'Delete')">
+            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canDeleteAccount(user)" (click)="requestDeleteUser(user)" title="Delete">
               <i class="material-icons">delete</i>
             </button>
           </td>
@@ -154,6 +153,14 @@
         copy of the app has the database open.
       </div>
     </div>
+    <div class="form-group" *ngIf="showOwnerField">
+      <label class="form-control-label">Group</label>
+      <select class="form-control" [(ngModel)]="form.ownerUserId" [disabled]="saving">
+        <option value="">Admin pool</option>
+        <option *ngFor="let operator of operators" [value]="operator.id">{{ operator.displayName || operator.username }}</option>
+      </select>
+      <div class="form-control-label desc">This person can only see servers in the group you choose. An operator cannot see another operator's group.</div>
+    </div>
     <div class="form-group">
       <label class="form-control-label toggle-label">
         <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving || !!editingUser?.cliLocked" />
@@ -225,7 +232,7 @@
 <app-modal [title]="'Delete User'" [show]="!!userToDelete" (close)="userToDelete = null">
   <div class="modal-confirmation">
     Delete <span class="modal-target">{{ userToDelete?.username }}</span>?
-    <p class="warning-text">They will be signed out and will no longer be able to sign in.</p>
+    <p class="warning-text">They will be signed out. This is refused if they still have servers, or if an operator still has people in their group.</p>
   </div>
   <div class="action-group-modal">
     <button type="button" class="btn" (click)="userToDelete = null">Cancel</button>

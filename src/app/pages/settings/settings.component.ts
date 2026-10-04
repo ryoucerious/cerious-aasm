@@ -13,6 +13,7 @@ import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { Subscription } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ThemeService, ThemePreference } from '../../core/services/theme.service';
@@ -26,6 +27,7 @@ import { ThemeService, ThemePreference } from '../../core/services/theme.service
 export class SettingsPageComponent {
   public isElectron: boolean;
   tabs: any[] = [];
+  private allTabs: any[] = [];
 
   arkUpdateAvailable = false;
   webServerRunning = false;
@@ -157,15 +159,30 @@ export class SettingsPageComponent {
     return this.arkInstallation.updateAvailable ? 'tone-warning' : 'tone-success';
   }
 
+  /** Hide settings an account is not allowed to use. My Account stays available. */
+  private applyVisibleTabs(): void {
+    this.tabs = this.allTabs.filter(tab => {
+      if (tab.id === 'profile' || tab.id === 'appearance' || tab.id === 'about') return true;
+      if (tab.id === 'users') {
+        return this.auth.can(PERMISSIONS.USERS_MANAGE)
+          || this.auth.identity.permissions.some(permission => permission.startsWith('accounts.'));
+      }
+      return this.auth.can(PERMISSIONS.SETTINGS_VIEW);
+    });
+    if (!this.tabs.some(tab => tab.id === this.activeTab)) this.activeTab = 'profile';
+    this.buildTabGroups();
+  }
+
   async ngOnInit() {
     this.subscriptions.push(this.auth.identity$.subscribe(identity => {
       this.accountsInUse = identity.accountsInUse;
+      this.applyVisibleTabs();
       this.cdr.markForCheck();
     }));
 
     this.subscriptions.push(this.settingsDrawer.isOpen$.subscribe(open => {
       this.drawerOpen = open;
-      if (open) this.loadArkInstallation();
+      if (open && this.auth.can(PERMISSIONS.SETTINGS_VIEW)) this.loadArkInstallation();
       this.cdr.markForCheck();
     }));
     this.subscriptions.push(this.settingsDrawer.section$.subscribe(section => {
@@ -183,8 +200,8 @@ export class SettingsPageComponent {
       })
     );
 
-    // Load config first
-    const cfg: any = await this.configService.loadConfig();
+    // Load config first. Operators do not have application settings, and this call would be refused.
+    const cfg: any = this.auth.can(PERMISSIONS.SETTINGS_VIEW) ? await this.configService.loadConfig() : null;
     if (cfg) {
       this.webServerPort = cfg.webServerPort;
       this.startWebServerOnLoad = cfg.startWebServerOnLoad;
@@ -299,6 +316,7 @@ export class SettingsPageComponent {
       { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
       { id: 'about', label: 'About', icon: 'info', group: 'Application' }
     ];
+    this.allTabs = this.tabs.slice();
     this.buildTabGroups();
   }
 

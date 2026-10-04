@@ -76,6 +76,25 @@ export class MessagingService extends EventEmitter {
         }, sender);
         return false;
       }
+
+      const { identifySender } = require('./auth/permission-gate');
+      const { instanceIdsInPayload, serverMayAccess, isServerScoped } = require('./auth/server-assignment');
+      const identity = identifySender(sender);
+      if (isServerScoped(identity)) {
+        const instanceIds = instanceIdsInPayload(payload);
+        const refused = instanceIds.find((id: string) => !serverMayAccess(identity.user, id));
+        if (refused) {
+          const error = 'That server is not assigned to you.';
+          console.warn(`[messaging] Refused "${event}" for ${identity.user.username}: ${error}`);
+          this.sendToOriginator(event, {
+            success: false,
+            error,
+            forbidden: true,
+            requestId: payload?.requestId
+          }, sender);
+          return false;
+        }
+      }
     }
 
     // Record who asked for what. This runs after authorization, so a refused call is never
@@ -129,10 +148,16 @@ export class MessagingService extends EventEmitter {
     this.wsServer.on('connection', (ws: any, request: any) => {
       ws._cid = randomUUID(); // assign a unique client id
 
-      // Resolve the account from the session cookie. The socket never passes through
-      // Express, so this is the only place a web client's identity can be established;
-      // without it every message would arrive anonymous and be refused.
-      const resolved = this.resolveSocketUser ? this.resolveSocketUser(request) : null;
+      // The socket never passes through Express, so the session cookie is read here.
+      // A failure must close this socket only. Letting it escape stops the whole panel.
+      let resolved: { user: any; authEnabled: boolean; allowed: boolean } | null = null;
+      try {
+        resolved = this.resolveSocketUser ? this.resolveSocketUser(request) : null;
+      } catch (error) {
+        console.error('[messaging] Could not resolve the signed-in account:', error);
+        try { ws.close(1011, 'Sign-in check failed'); } catch { /* already closing */ }
+        return;
+      }
       ws._authEnabled = resolved ? resolved.authEnabled : false;
       ws._user = resolved ? resolved.user : null;
 
@@ -168,6 +193,15 @@ export class MessagingService extends EventEmitter {
       });
       ws.on('close', () => {});
       ws.on('error', (err: any) => {});
+    });
+  }
+
+  /** Drop live browser sockets for this account so sign-out takes effect immediately. */
+  closeWebSocketsForUsername(username: string): void {
+    if (!this.wsServer || !username) return;
+    this.wsServer.clients.forEach((client: any) => {
+      if (client._user?.username !== username) return;
+      try { client.close(4401, 'Signed out'); } catch { /* already closing */ }
     });
   }
 
@@ -267,9 +301,21 @@ export class MessagingService extends EventEmitter {
     }
     let sent = 0;
     const clients = Array.from(this.wsServer.clients).filter((client: any) => client.readyState === WebSocket.OPEN);
+    const { filterBroadcastForUser } = require('./auth/server-assignment');
+    const { identifySender } = require('./auth/permission-gate');
     clients.forEach((client: any) => {
       if (excludeCid && client._cid === excludeCid) return;
-      client.send(JSON.stringify({ channel, data }));
+      // Refresh the group from the database. The handshake copy can be from before a move.
+      let user = client._user || null;
+      try {
+        const identity = identifySender(client);
+        user = identity.user || null;
+      } catch {
+        user = client._user || null;
+      }
+      const visible = filterBroadcastForUser(channel, data, user);
+      if (visible === undefined) return;
+      client.send(JSON.stringify({ channel, data: visible }));
       sent++;
     });
   }

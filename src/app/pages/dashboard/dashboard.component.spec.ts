@@ -13,6 +13,8 @@ import { NotificationService } from '../../core/services/notification.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
+import { AuthService } from '../../core/services/auth.service';
+import { ServerManagerDirectory } from '../../core/services/server-manager-directory.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('DashboardComponent', () => {
@@ -81,6 +83,7 @@ describe('DashboardComponent', () => {
 
     fixture = TestBed.createComponent(DashboardComponent);
     component = fixture.componentInstance;
+    spyOn(TestBed.inject(AuthService), 'can').and.returnValue(true);
     fixture.detectChanges();
   });
 
@@ -125,6 +128,20 @@ describe('DashboardComponent', () => {
     component.sort = 'custom';
     component.onSortChange();
     expect(component.canReorder).toBeTrue();
+  });
+
+  it('sorts by server manager and leaves unassigned servers last', async () => {
+    await fixture.whenStable();
+    servers$.next([
+      { ...alpha, managerUserId: 'm2' },
+      { ...beta, managerUserId: 'm1' },
+      { id: 'c', name: 'Gamma', state: 'stopped', players: 0, maxPlayers: 10, sortOrder: 2 }
+    ]);
+    (TestBed.inject(ServerManagerDirectory) as unknown as { namesSubject: { next: (names: Record<string, string>) => void } }).namesSubject.next({ m1: 'Calmaria', m2: 'Zed' });
+    component.sort = 'manager';
+    component.onSortChange();
+    expect(component.visibleServers.map(s => s.id)).toEqual(['b', 'a', 'c']);
+    expect(component.managerLabel(component.visibleServers[2])).toBe('Not assigned');
   });
 
   it('persists view preferences', () => {

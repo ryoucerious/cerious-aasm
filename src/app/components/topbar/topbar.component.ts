@@ -16,6 +16,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { WebSocketService } from '../../core/services/web-socket.service';
 import { AuthenticatedUser } from '../../core/models/auth.model';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { formatRelativeTime, initialOf } from '../../core/utils/format.utils';
@@ -104,6 +105,7 @@ export class TopbarComponent implements OnInit, OnDestroy {
     private serverNav: ServerNavService,
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
+    private webSocket: WebSocketService,
     private cdr: ChangeDetectorRef
   ) {
     this.isWebMode = this.utility.getPlatform() === 'Web';
@@ -381,6 +383,8 @@ export class TopbarComponent implements OnInit, OnDestroy {
     try {
       const response = await fetch('/api/logout', { method: 'POST', credentials: 'include' });
       if (response.ok) {
+        this.webSocket.disconnect();
+        this.auth.forget();
         this.router.navigate(['/login']);
       } else {
         console.error('Logout failed with status:', response.status);

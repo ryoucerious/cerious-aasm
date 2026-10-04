@@ -55,19 +55,39 @@ export class AuthService {
   }
 
   /** Ask the backend who we are. Safe to call repeatedly. */
-  refresh(): void {
-    this.messaging.sendMessage<any>('get-current-user', {}).pipe(take(1)).subscribe({
-      next: (res) => {
-        if (!res || res.success === false) return;
-        this.identitySubject.next({
-          user: res.user || null,
-          isLocalDesktop: !!res.isLocalDesktop,
-          isAdmin: !!res.isAdmin,
-          permissions: res.permissions || [],
-          accountsInUse: !!res.accountsInUse
-        });
-      },
-      error: () => { /* keep the optimistic default; the backend still enforces */ }
+  refresh(): Promise<void> {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(), 4000);
+      this.messaging.sendMessage<any>('get-current-user', {}).pipe(take(1)).subscribe({
+        next: (res) => {
+          clearTimeout(timer);
+          if (res && res.success !== false) {
+            this.identitySubject.next({
+              user: res.user || null,
+              isLocalDesktop: !!res.isLocalDesktop,
+              isAdmin: !!res.isAdmin,
+              permissions: res.permissions || [],
+              accountsInUse: !!res.accountsInUse
+            });
+          }
+          resolve();
+        },
+        error: () => {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+  }
+
+  /** Drop the signed-in account so a later sign-in is not shown as the previous person. */
+  forget(): void {
+    this.identitySubject.next({
+      user: null,
+      isLocalDesktop: false,
+      isAdmin: false,
+      permissions: [],
+      accountsInUse: this.identity.accountsInUse
     });
   }
 
@@ -97,11 +117,42 @@ export class AuthService {
     return { roles: res?.roles || [], permissions: res?.permissions || [] };
   }
 
-  createUser(input: { username: string; password: string; displayName?: string; roleId: string; active?: boolean }): Promise<SaveResult<User>> {
+  createUser(input: { username: string; password: string; displayName?: string; roleId: string; active?: boolean; ownerUserId?: string | null }): Promise<SaveResult<User>> {
     return this.mutate<User>('create-user', input, 'user');
   }
 
-  updateUser(input: { id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string }): Promise<SaveResult<User>> {
+  async listServerManagers(): Promise<{
+    managers: Array<{ id: string; username: string; displayName: string; roleId?: string; roleName?: string; ownerUserId?: string | null }>;
+    operators: Array<{ id: string; username: string; displayName: string; roleId?: string; roleName?: string }>;
+  }> {
+    const res = await this.send<any>('list-server-managers', {});
+    return { managers: res?.managers || [], operators: res?.operators || [] };
+  }
+
+  async listOwnershipLabels(): Promise<{
+    operators: Array<{ id: string; username: string; displayName: string }>;
+    assignees: Array<{ id: string; username: string; displayName: string; roleName?: string }>;
+  }> {
+    const res = await this.send<any>('list-ownership-labels', {});
+    return { operators: res?.operators || [], assignees: res?.assignees || [] };
+  }
+
+  createServerManager(input: { username: string; password: string; displayName?: string; roleId?: string; ownerUserId?: string | null }): Promise<SaveResult<User>> {
+    return this.mutate<User>('create-server-manager', input, 'user');
+  }
+
+  assignServerManager(instanceId: string, managerUserId: string | null): Promise<SaveResult> {
+    return this.mutate('assign-server-manager', { instanceId, managerUserId });
+  }
+
+  async setServerOperator(instanceId: string, operatorUserId: string | null): Promise<SaveResult<any>> {
+    const res: any = await this.send<any>('set-server-operator', { instanceId, operatorUserId });
+    if (!res) return { success: false, error: 'No response from the server.' };
+    if (res.success === false) return { success: false, error: res.error || 'Could not move that server.' };
+    return { success: true, data: res.instance };
+  }
+
+  updateUser(input: { id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string; ownerUserId?: string | null }): Promise<SaveResult<User>> {
     return this.mutate<User>('update-user', input, 'user');
   }
 

@@ -25,6 +25,8 @@ import { ModalComponent } from '../../components/modal/modal.component';
 import { ServerStateComponent } from '../../components/server-state/server-state.component';
 import { RconControlComponent } from '../../components/rcon-control/rcon-control.component';
 import { ServerSettingsComponent } from '../../components/server-settings/server-settings.component';
+import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 
 @Component({
   selector: 'app-server',
@@ -33,6 +35,7 @@ import { ServerSettingsComponent } from '../../components/server-settings/server
   templateUrl: './server.component.html'
 })
 export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
+  private readonly auth = inject(AuthService);
   get generalFields() {
     return this.advancedSettingsMeta.filter(f => f.tab === 'general');
   }
@@ -153,6 +156,10 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
       this.subscriptions.push(this.route.paramMap.subscribe(params => {
         const tab = params.get('tab');
         if (this.serverNav.isValidTab(tab)) {
+          if (this.isAttendant && tab !== 'console') {
+            this.router.navigate(['/server', DEFAULT_SERVER_TAB], { replaceUrl: true });
+            return;
+          }
           this.activeTab = tab;
           this.serverNav.rememberTab(tab);
           this.cdr.markForCheck();
@@ -163,13 +170,25 @@ export class ServerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
 
     this.subscriptions.push(this.liveServers.servers$.subscribe(() => this.cdr.markForCheck()));
+    this.subscriptions.push(this.auth.identity$.subscribe(() => {
+      if (this.isAttendant && this.activeTab !== 'console') {
+        this.router.navigate(['/server', DEFAULT_SERVER_TAB], { replaceUrl: true });
+      }
+      this.cdr.markForCheck();
+    }));
     this.subscriptions.push(interval(30000).subscribe(() => {
       this.now = Date.now();
       this.cdr.markForCheck();
     }));
   }
 
-  /** True for every page rendered by the settings component (everything except console and players). */
+  get canUseRcon(): boolean {
+    return this.auth.can(PERMISSIONS.RCON_USE);
+  }
+
+  private get isAttendant(): boolean {
+    return this.auth.identity?.user?.roleId === 'attendant';
+  }
   get isSettingsTab(): boolean {
     return this.activeTab !== 'console' && this.activeTab !== 'players';
   }

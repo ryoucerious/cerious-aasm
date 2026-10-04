@@ -27,7 +27,8 @@ describe('ServerInstanceService', () => {
       // Return observable for all sendMessage calls
       return of({} as T);
     });
-    service = new ServerInstanceService(messaging, http, ws, util);
+    const auth = { identity: { user: null, isAdmin: true, isLocalDesktop: true, permissions: [], accountsInUse: false } } as any;
+    service = new ServerInstanceService(messaging, http, ws, util, auth);
   });
 
   it('should be created', () => {

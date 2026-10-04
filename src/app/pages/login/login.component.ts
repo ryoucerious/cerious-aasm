@@ -54,7 +54,7 @@ export class LoginComponent {
           await this.webSocket.whenConnected(4000);
           // Who we are was asked for once when the app loaded, down a socket that was
           // refused; ask again now that there is a session behind it.
-          this.auth.refresh();
+          await this.auth.refresh();
           this.isLoading = false;
           this.router.navigate(['/dashboard']);
         } else {

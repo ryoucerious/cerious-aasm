@@ -17,6 +17,8 @@ import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
+import { ServerManagerDirectory } from '../../core/services/server-manager-directory.service';
 import { ServerCardComponent } from '../../components/server-card/server-card.component';
 import { AddServerModalComponent } from '../../components/add-server-modal/add-server-modal.component';
 import { ModalComponent } from '../../components/modal/modal.component';
@@ -33,7 +35,7 @@ export interface HostResources {
 }
 
 export type ServerFilter = 'all' | 'online' | 'offline';
-export type ServerSort = 'custom' | 'name-asc' | 'name-desc' | 'status' | 'players';
+export type ServerSort = 'custom' | 'name-asc' | 'name-desc' | 'status' | 'players' | 'manager';
 
 const HERO_IMAGE = 'assets/background/the-island.png';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -73,8 +75,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
     { value: 'name-asc', label: 'Name (A–Z)' },
     { value: 'name-desc', label: 'Name (Z–A)' },
     { value: 'status', label: 'Status' },
-    { value: 'players', label: 'Players' }
+    { value: 'players', label: 'Players' },
+    { value: 'manager', label: 'Owner' }
   ];
+  /** Display names for assigned server managers, keyed by user id. */
+  managerNames: Record<string, string> = {};
   /** Servers as dropdown options, for the Create Backup dialog. */
   serverOptions: DropdownOption<string>[] = [];
 
@@ -127,6 +132,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private serverNav: ServerNavService,
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
+    private managerDirectory: ServerManagerDirectory,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
@@ -158,8 +164,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
       const account = identity.user;
       if (account) {
         this.userName = account.displayName || account.username;
-        this.cdr.markForCheck();
       }
+      if (identity.isAdmin && this.preferOwnerSort && this.sort === 'custom') {
+        this.sort = 'manager';
+        this.refreshVisible();
+      }
+      this.cdr.markForCheck();
+    }));
+
+    this.subs.push(this.managerDirectory.names$.subscribe(names => {
+      this.managerNames = names;
+      this.refreshVisible();
+      this.cdr.markForCheck();
     }));
 
     this.globalConfigService.loadConfig().then(config => {
@@ -205,12 +221,29 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   onSortChange(): void {
+    this.preferOwnerSort = false;
     this.refreshVisible();
     this.saveViewPreferences();
   }
 
   get canReorder(): boolean {
-    return this.sort === 'custom' && this.filter === 'all';
+    return this.sort === 'custom' && this.filter === 'all' && this.auth.can(PERMISSIONS.SERVERS_CONFIGURE);
+  }
+
+  get canAddServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CREATE);
+  }
+
+  get canConfigure(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CONFIGURE);
+  }
+
+  get canBackups(): boolean {
+    return this.auth.can(PERMISSIONS.BACKUPS_VIEW);
+  }
+
+  get canDeleteServers(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_DELETE);
   }
 
   refreshVisible(): void {
@@ -224,6 +257,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       case 'name-desc': list.sort((a, b) => byName(b, a)); break;
       case 'status': list.sort((a, b) => Number(LiveServersService.isOnline(b)) - Number(LiveServersService.isOnline(a)) || byName(a, b)); break;
       case 'players': list.sort((a, b) => ((b.players || 0) - (a.players || 0)) || byName(a, b)); break;
+      case 'manager': list.sort((a, b) => this.compareManagers(a, b) || byName(a, b)); break;
       default: break; // custom = the sidebar order the service already applies
     }
     this.visibleServers = list;
@@ -244,6 +278,26 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   historyFor(server: ServerInstance): number[] {
     return this.serverHistories[server.id] || [];
+  }
+
+  operatorLabel(server: ServerInstance): string {
+    return this.managerDirectory.operatorLabel(server);
+  }
+
+  /** Assignee, including their role. An assigned server with no loaded name stays marked assigned. */
+  managerLabel(server: ServerInstance): string {
+    return this.managerDirectory.assigneeLabel(server);
+  }
+
+  private compareManagers(a: ServerInstance, b: ServerInstance): number {
+    if (this.auth.identity.isAdmin) {
+      const operator = this.operatorLabel(a).localeCompare(this.operatorLabel(b), undefined, { sensitivity: 'base' });
+      if (operator) return operator;
+    }
+    const aAssigned = !!a.managerUserId;
+    const bAssigned = !!b.managerUserId;
+    if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
+    return this.managerLabel(a).localeCompare(this.managerLabel(b), undefined, { sensitivity: 'base' });
   }
 
   get hostMemoryTotal(): number | null {
@@ -561,14 +615,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return `Backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
   }
 
+  private preferOwnerSort = false;
+
   private readViewPreferences(): void {
     try {
       const raw = localStorage.getItem('cerious-aasm.dashboard');
-      if (!raw) return;
+      if (!raw) {
+        this.preferOwnerSort = true;
+        return;
+      }
       const prefs = JSON.parse(raw);
       if (prefs.view === 'grid' || prefs.view === 'list') this.view = prefs.view;
       if (['all', 'online', 'offline'].includes(prefs.filter)) this.filter = prefs.filter;
-      if (['custom', 'name-asc', 'name-desc', 'status', 'players'].includes(prefs.sort)) this.sort = prefs.sort;
+      if (['custom', 'name-asc', 'name-desc', 'status', 'players', 'manager'].includes(prefs.sort)) this.sort = prefs.sort;
     } catch {
       // ignore corrupt or unavailable storage
     }

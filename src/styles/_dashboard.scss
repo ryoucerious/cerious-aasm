@@ -313,7 +313,7 @@
 
 .server-card-hero {
   position: relative;
-  height: 128px;
+  height: 152px;
   color: #fff;
   background-size: cover;
   background-position: center;
@@ -330,9 +330,48 @@
   position: absolute;
   top: 10px;
   right: 10px;
+  z-index: 2;
   color: rgba(255, 255, 255, 0.75);
   font-size: 20px;
   cursor: grab;
+}
+
+.server-card-hero-meta {
+  position: absolute;
+  top: 0.65rem;
+  left: 0.7rem;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  max-width: calc(100% - 2.6rem);
+}
+
+.server-card-hero-operator,
+.server-card-hero-manager,
+.server-card-hero-address {
+  max-width: 100%;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-weight: $font-bold;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  @include text-ellipsis;
+}
+
+.server-card-hero-operator {
+  font-size: 0.78rem;
+}
+
+.server-card-hero-manager {
+  font-size: 0.84rem;
+}
+
+.server-card-hero-address {
+  font-size: 0.78rem;
 }
 
 .server-card-title {
@@ -474,6 +513,10 @@
     margin-left: auto;
   }
 
+  .btn {
+    flex: 0 0 auto;
+  }
+
   // .btn-icon-only reserves a 2.5rem box, which is taller than a standard button; here the
   // menu button should be exactly as tall as Start and Console, just narrower.
   .btn-icon-only {
@@ -532,7 +575,7 @@
   .server-card-hero {
     width: 220px;
     height: auto;
-    min-height: 96px;
+    min-height: 148px;
     flex-shrink: 0;
   }
 

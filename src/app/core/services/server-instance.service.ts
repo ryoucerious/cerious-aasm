@@ -6,6 +6,7 @@ import { map, shareReplay, filter as rxFilter, take as rxTake } from 'rxjs/opera
 import { ServerInstance } from '../models/server-instance.model';
 import { WebSocketService } from './web-socket.service';
 import { UtilityService } from './utility.service';
+import { AuthService } from './auth.service';
 
 @Injectable({ providedIn: 'root' })
 export class ServerInstanceService {
@@ -21,7 +22,8 @@ export class ServerInstanceService {
     public messaging: MessagingService,
     private http: HttpClient,
     private ws: WebSocketService,
-    private util: UtilityService
+    private util: UtilityService,
+    private auth: AuthService
   ) {
     // The list is asked for once as the app starts. In the web UI that request can be made
     // before the socket carrying it is open — the moment just after signing in, or while a
@@ -36,11 +38,17 @@ export class ServerInstanceService {
       const list = Array.isArray(instances) ? instances : [];
       this.latestInstances = list;
       this.instances$.next(list);
+      const active = this.activeServer$.getValue();
+      if (active && !list.some(item => item.id === active.id)) {
+        this.activeServer$.next(null);
+      }
       // If no servers exist, create a default (only on first load)
       if (list.length > 0) {
         this._shouldCreateDefault = false;
       }
-      if (this._shouldCreateDefault && list.length === 0) {
+      const roleId = this.auth.identity?.user?.roleId;
+      const scoped = roleId === 'server-manager' || roleId === 'attendant';
+      if (this._shouldCreateDefault && list.length === 0 && !scoped) {
         this._shouldCreateDefault = false;
         this.getDefaultInstanceFromMeta().subscribe(instance => {
           // Keep name and sessionName in sync

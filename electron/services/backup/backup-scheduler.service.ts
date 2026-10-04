@@ -128,7 +128,8 @@ export class BackupSchedulerService {
       const detail = error || 'Unknown error';
       messagingService.sendToAll('notification', {
         type: 'error',
-        message: `Scheduled backup failed for "${instanceName}": ${detail}`
+        message: `Scheduled backup failed for "${instanceName}": ${detail}`,
+        instanceId
       });
       messagingService.sendToAll('server-instance-log', {
         log: `[BACKUP] Scheduled backup failed: ${detail}`,

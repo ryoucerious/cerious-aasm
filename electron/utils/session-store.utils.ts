@@ -16,6 +16,8 @@ export interface SessionData {
   userId?: string;
   roleId?: string;
   permissions?: string[];
+  /** The operator this account belongs to. Null is the admin pool. */
+  ownerUserId?: string | null;
 }
 
 // Module-level state

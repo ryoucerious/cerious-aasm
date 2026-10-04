@@ -24,7 +24,13 @@ export const PERMISSIONS = {
   APP_INSTALL: 'app.install',
   SETTINGS_VIEW: 'settings.view',
   SETTINGS_MANAGE: 'settings.manage',
-  USERS_MANAGE: 'users.manage'
+  USERS_MANAGE: 'users.manage',
+  ACCOUNTS_MANAGERS_CREATE: 'accounts.managers.create',
+  ACCOUNTS_MANAGERS_DELETE: 'accounts.managers.delete',
+  ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
+  ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
+  ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
@@ -47,6 +53,8 @@ export interface User {
   displayName: string;
   roleId: string;
   active: boolean;
+  /** The operator this account belongs to. Null or missing means the admin pool. */
+  ownerUserId?: string | null;
   /** Password is supplied on the command line and cannot be changed in the app. */
   cliLocked?: boolean;
   createdAt: number;
@@ -65,6 +73,19 @@ export interface PermissionInfo {
   label: string;
   group: string;
   description: string;
+}
+
+/**
+ * The permission for creating or deleting one kind of pool account.
+ * Mirrors accountPermission in electron/services/auth/pool-access.ts.
+ */
+export function accountPermissionFor(roleId: string, action: 'create' | 'delete'): Permission | null {
+  const map: Record<string, { create: Permission; delete: Permission }> = {
+    'server-manager': { create: PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, delete: PERMISSIONS.ACCOUNTS_MANAGERS_DELETE },
+    attendant: { create: PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, delete: PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE },
+    viewer: { create: PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, delete: PERMISSIONS.ACCOUNTS_VIEWERS_DELETE }
+  };
+  return map[roleId]?.[action] ?? null;
 }
 
 /** Who the UI is acting as right now. */

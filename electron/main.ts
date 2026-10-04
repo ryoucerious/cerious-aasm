@@ -369,6 +369,15 @@ function createWindow() {
 app.on('ready', async () => {
   console.info(`[main] ====== Cerious AASM starting — log: ${getLogFilePath()} ======`);
 
+  // Groups have to be on disk before anything loads the server list into memory.
+  try {
+    userDatabaseService.initialize();
+    const { migrateServerOperators } = require('./services/auth/pool-migration');
+    await migrateServerOperators();
+  } catch (error) {
+    console.error('[main] Could not prepare account groups:', error);
+  }
+
   // Clear ARK log files before starting servers
   LogService.clearArkLogFiles();
 

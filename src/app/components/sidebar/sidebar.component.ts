@@ -16,6 +16,9 @@ import { NotificationService } from '../../core/services/notification.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AppUpdateService } from '../../core/services/app-update.service';
 import { UtilityService } from '../../core/services/utility.service';
+import { ServerManagerDirectory } from '../../core/services/server-manager-directory.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { environment } from '../../../environments/environment';
 
 /**
@@ -84,6 +87,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private settingsDrawer: SettingsDrawerService,
     private appUpdate: AppUpdateService,
     private utility: UtilityService,
+    private managerDirectory: ServerManagerDirectory,
+    private auth: AuthService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -115,8 +120,18 @@ export class SidebarComponent implements OnInit, OnDestroy {
       }
     }));
 
+    this.subs.push(this.auth.identity$.subscribe(() => {
+      this.servers = this.displayOrder(this.servers);
+      this.rebuildTabs();
+      this.cdr.markForCheck();
+    }));
+    this.subs.push(this.managerDirectory.names$.subscribe(() => {
+      this.servers = this.displayOrder(this.servers);
+      this.cdr.markForCheck();
+    }));
+
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
-      this.servers = servers;
+      this.servers = this.displayOrder(servers);
       // Auto-select the first server if none is selected so server pages have something to show.
       if (this.servers.length > 0 && !this.selectedServerId) {
         const first = this.servers[0];
@@ -244,7 +259,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
   }
 
   private rebuildTabs(): void {
-    const tabs = this.serverNav.visibleTabs(this.expertMode, this.isLinux);
+    const attendant = this.auth.identity?.user?.roleId === 'attendant';
+    const tabs = this.serverNav.visibleTabs(this.expertMode, this.isLinux)
+      .filter(tab => !attendant || tab.id === 'console');
     this.overviewTabs = tabs.filter(tab => tab.group === 'overview');
     this.configTabs = tabs.filter(tab => tab.group === 'config' || tab.group === 'ini');
     this.featureTabs = tabs.filter(tab => tab.group === 'features');
@@ -259,6 +276,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
   // -------------------- Server list --------------------
 
   onDrop(event: CdkDragDrop<ServerInstance[]>): void {
+    if (this.groupsByOperator) return;
+    if (!this.auth.can(PERMISSIONS.SERVERS_CONFIGURE)) return;
     if (event.previousIndex === event.currentIndex) return;
     const reordered = this.servers.slice();
     moveItemInArray(reordered, event.previousIndex, event.currentIndex);
@@ -268,8 +287,17 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
+  get canAddServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CREATE);
+  }
+
+  get canDeleteServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_DELETE);
+  }
+
   onServerNameDoubleClick(server: ServerInstance, event: Event): void {
     event.stopPropagation();
+    if (!this.auth.can(PERMISSIONS.SERVERS_CONFIGURE)) return;
     if (this.isServerBusy(server)) return;
     this.editingServerId = server.id;
     this.editingServerName = server.name;
@@ -336,6 +364,36 @@ export class SidebarComponent implements OnInit, OnDestroy {
   /** Deleting is only offered for a server that is fully stopped. */
   isServerStopped(server: ServerInstance): boolean {
     return serverStatusKey(server.state) === 'stopped';
+  }
+
+  /** Admin sees the operator, then the assigned person. An operator already is that operator. */
+  get groupsByOperator(): boolean {
+    return this.auth.identity.isAdmin;
+  }
+
+  listLabel(server: ServerInstance): string {
+    return this.groupsByOperator
+      ? this.managerDirectory.chainLabel(server)
+      : this.managerDirectory.assigneeLabel(server);
+  }
+
+  /** Admin's list opens grouped by operator, then by the assigned person. */
+  private displayOrder(servers: ServerInstance[]): ServerInstance[] {
+    if (!this.groupsByOperator) return servers;
+    return servers.slice().sort((a, b) => this.compareByOwner(a, b));
+  }
+
+  private compareByOwner(a: ServerInstance, b: ServerInstance): number {
+    const operator = this.managerDirectory.operatorLabel(a)
+      .localeCompare(this.managerDirectory.operatorLabel(b), undefined, { sensitivity: 'base' });
+    if (operator) return operator;
+    const aAssigned = !!a.managerUserId;
+    const bAssigned = !!b.managerUserId;
+    if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
+    const person = this.managerDirectory.assigneeLabel(a)
+      .localeCompare(this.managerDirectory.assigneeLabel(b), undefined, { sensitivity: 'base' });
+    if (person) return person;
+    return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
   }
 
   trackByServerId(_index: number, server: ServerInstance): string {

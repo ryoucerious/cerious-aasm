@@ -58,8 +58,12 @@
                          [history]="historyFor(server)"
                          [now]="now"
                          [view]="view"
-                         [canDelete]="servers.length > 1"
+                         [canDelete]="canDeleteServers && servers.length > 1"
+                         [canConfigure]="canConfigure"
+                         [canBackups]="canBackups"
                          [hostMemoryTotalBytes]="hostMemoryTotal"
+                         [operatorLabel]="operatorLabel(server)"
+                         [managerLabel]="managerLabel(server)"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
                          (forceStop)="forceStopServer($event)"
@@ -70,9 +74,10 @@
         </app-server-card>
         <div class="dash-empty" *ngIf="!visibleServers.length">
           <span class="material-icons">dns</span>
-          <p *ngIf="!servers.length">No servers yet. Create your first ARK: Survival Ascended server.</p>
+          <p *ngIf="!servers.length && canAddServer">No servers yet. Create your first ARK: Survival Ascended server.</p>
+          <p *ngIf="!servers.length && !canAddServer">No servers are assigned to you.</p>
           <p *ngIf="servers.length">No servers match this filter.</p>
-          <button type="button" class="btn btn-primary" *ngIf="!servers.length" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
+          <button type="button" class="btn btn-primary" *ngIf="!servers.length && canAddServer" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
         </div>
       </div>
 

@@ -4,6 +4,53 @@
     <p class="form-control-label desc">Configure the essential server settings including name, map, passwords, and basic gameplay options.</p>
   </div>
 
+  <div class="settings-section" *ngIf="canAssignManagers">
+    <h5>Ownership</h5>
+    <p class="section-desc">The operator owns the group. The assigned person is the server manager or attendant who works on this server.</p>
+    <div class="form-group" *ngIf="canSetOperator">
+      <label class="form-control-label">Operator</label>
+      <select class="form-control input"
+              [ngModel]="serverInstance.operatorUserId || ''"
+              (ngModelChange)="onOperatorSelected($event)"
+              [disabled]="isLocked || managerBusy">
+        <option value="">Admin pool</option>
+        <option *ngFor="let operator of operators" [value]="operator.id">{{ managerLabel(operator) }}</option>
+      </select>
+      <div class="form-control-label desc">Moving a server to another operator clears the assigned person if they are not in that group.</div>
+    </div>
+    <p class="section-desc" *ngIf="!canSetOperator">This server stays in your group.</p>
+    <div class="form-group">
+      <label class="form-control-label">Assigned to</label>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <select class="form-control input" style="flex: 1;"
+                [ngModel]="serverInstance.managerUserId || ''"
+                (ngModelChange)="onManagerSelected($event)"
+                [disabled]="isLocked || managerBusy">
+          <option value="">Not assigned</option>
+          <option *ngFor="let manager of visibleManagers" [value]="manager.id">{{ managerLabel(manager) }}</option>
+        </select>
+        <button type="button" class="btn btn-sm" *ngIf="assigneeRoles.length" (click)="showCreateManager = !showCreateManager" [disabled]="isLocked || managerBusy" title="Add a server manager or attendant and assign this server">
+          <i class="material-icons" style="font-size:18px;">add</i>
+        </button>
+      </div>
+      <div class="form-control-label desc">A Server Manager runs and configures it. An Attendant can only start, stop, and read the console. The list is only people in this group.</div>
+      <div *ngIf="managerError" class="validation-error">{{ managerError }}</div>
+    </div>
+    <div class="form-group" *ngIf="showCreateManager">
+      <label class="form-control-label">New account</label>
+      <select class="form-control input" [(ngModel)]="newManager.roleId" [disabled]="managerBusy">
+        <option *ngFor="let role of assigneeRoles" [value]="role.id">{{ role.label }}</option>
+      </select>
+      <input class="form-control input" type="text" placeholder="Username" [(ngModel)]="newManager.username" [disabled]="managerBusy" style="margin-top: 0.5rem;" />
+      <input class="form-control input" type="text" placeholder="Display name (optional)" [(ngModel)]="newManager.displayName" [disabled]="managerBusy" style="margin-top: 0.5rem;" />
+      <input class="form-control input" type="password" placeholder="Password (at least 8 characters)" [(ngModel)]="newManager.password" [disabled]="managerBusy" style="margin-top: 0.5rem;" />
+      <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+        <button type="button" class="btn btn-sm" (click)="onCreateManager()" [disabled]="managerBusy || !newManager.username.trim() || newManager.password.length < 8">Add and assign</button>
+        <button type="button" class="btn btn-sm" (click)="clearCreateManager()" [disabled]="managerBusy">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="settings-section">
     <h5>Server Settings</h5>
     <p class="section-desc">Configure your server's basic properties and settings.</p>

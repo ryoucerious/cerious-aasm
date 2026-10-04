@@ -15,6 +15,7 @@ export interface VerifiedAccount {
   roleName: string;
   permissions: string[];
   active: boolean;
+  ownerUserId?: string | null;
 }
 
 const VERIFY_TIMEOUT_MS = 5000;

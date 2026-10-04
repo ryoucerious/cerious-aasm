@@ -1,7 +1,8 @@
 import express from 'express';
 import { validateAuthInput, sanitizeString } from '../utils/validation.utils';
 import { getAuthConfig, verifyPassword, hashPassword, updateAuthConfig } from './auth-config';
-import { ensureAuthInitialized, createSession, destroySession, isAuthenticated } from './auth-middleware';
+import { ensureAuthInitialized, createSession, destroySession, isAuthenticated, resolveSessionFromCookieHeader } from './auth-middleware';
+import { messagingService } from '../services/messaging.service';
 import { verifyWithUserDatabase } from './user-bridge';
 
 /**
@@ -31,7 +32,8 @@ export async function loginHandler(req: express.Request, res: express.Response) 
     createSession(res, account.username, {
       id: account.id,
       roleId: account.roleId,
-      permissions: account.permissions || []
+      permissions: account.permissions || [],
+      ownerUserId: account.ownerUserId ?? null
     });
     res.json({ success: true, message: 'Login successful', user: account });
     return;
@@ -60,7 +62,11 @@ export async function loginHandler(req: express.Request, res: express.Response) 
 
 // Pure handler for logout
 export function logoutHandler(req: express.Request, res: express.Response) {
+  const session = resolveSessionFromCookieHeader(req.headers.cookie);
   destroySession(req, res);
+  // The open socket was introduced as this account and would keep answering as them
+  // after the cookie is gone.
+  if (session?.username) messagingService.closeWebSocketsForUsername(session.username);
   res.json({ success: true, message: 'Logged out successfully' });
 }
 

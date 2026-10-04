@@ -1,6 +1,6 @@
 import {
   Component, EventEmitter, Input, Output, ChangeDetectionStrategy, HostListener, ElementRef,
-  ViewChild, ChangeDetectorRef
+  ViewChild, ChangeDetectorRef, OnDestroy
 } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance } from '../../core/models/server-instance.model';
@@ -12,6 +12,7 @@ import {
   isOnlineStatus, isBusyStatus, canStartStatus
 } from '../../core/utils/server-status';
 import { fixedOrigin } from '../../core/utils/floating';
+import { NotificationService } from '../../core/services/notification.service';
 
 /** Display state for the pill on a card; derived from the backend's lowercase state. */
 export interface CardStatus {
@@ -31,13 +32,19 @@ export interface CardStatus {
   templateUrl: './server-card.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class ServerCardComponent {
+export class ServerCardComponent implements OnDestroy {
   @Input({ required: true }) server!: ServerInstance;
   @Input() history: number[] = [];
   @Input() now = Date.now();
   @Input() view: 'grid' | 'list' = 'grid';
   @Input() canDelete = true;
+  @Input() canConfigure = true;
+  @Input() canBackups = true;
   @Input() hostMemoryTotalBytes: number | null = null;
+  /** The operator who owns this server. "Admin" means the admin pool. */
+  @Input() operatorLabel = '';
+  /** Who this server is assigned to, including their role. */
+  @Input() managerLabel = '';
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();
@@ -50,11 +57,22 @@ export class ServerCardComponent {
   menuOpen = false;
   /** Where the actions menu sits, in viewport coordinates. */
   menuPosition = { left: 0, top: 0 };
+  /** True for a moment after the address lands on the clipboard. */
+  copied = false;
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
   @ViewChild('menuAnchor') private menuAnchor?: ElementRef<HTMLElement>;
   @ViewChild('menu') private menu?: ElementRef<HTMLElement>;
 
-  constructor(private host: ElementRef<HTMLElement>, private cdr: ChangeDetectorRef) {}
+  constructor(
+    private host: ElementRef<HTMLElement>,
+    private cdr: ChangeDetectorRef,
+    private notificationService: NotificationService
+  ) {}
+
+  ngOnDestroy(): void {
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+  }
 
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: Event): void {
@@ -185,6 +203,69 @@ export class ServerCardComponent {
   onConsole(event: Event): void {
     event.stopPropagation();
     this.openConsole.emit(this.server);
+  }
+
+  /**
+   * Address a player pastes into the game. The host is the one this page was opened on, and
+   * the port is the game port. The password is never copied.
+   */
+  get connectAddress(): string {
+    const port = Number(this.server?.gamePort);
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return '';
+    return `${host}:${port}`;
+  }
+
+  get copyTitle(): string {
+    const address = this.connectAddress;
+    if (!address) return 'This server has no game port';
+    return `Copy ${address}`;
+  }
+
+  onCopyAddress(event: Event): void {
+    event.stopPropagation();
+    const address = this.connectAddress;
+    if (!address || !this.writeClipboard(address)) {
+      this.notificationService.error('Could not copy the address');
+      return;
+    }
+    this.copied = true;
+    this.notificationService.success(`Copied ${address}`);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    this.copiedTimer = setTimeout(() => {
+      this.copied = false;
+      this.copiedTimer = null;
+      this.cdr.markForCheck();
+    }, 2000);
+    this.cdr.markForCheck();
+  }
+
+  /**
+   * The panel is served over plain HTTP, where the clipboard API is refused. The older copy
+   * command still works from a button click.
+   */
+  private writeClipboard(text: string): boolean {
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.top = '0';
+      area.style.left = '0';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(area);
+      if (copied) return true;
+    } catch {
+      // Fall through to the clipboard API when this page is a secure context.
+    }
+    const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+    if (!clipboard?.writeText) return false;
+    void clipboard.writeText(text);
+    return true;
   }
 
   onConfigure(): void {

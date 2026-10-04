@@ -1,4 +1,4 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
@@ -19,15 +19,28 @@ export interface Field {
   imports: [CommonModule, FormsModule],
   templateUrl: './general-tab.component.html'
 })
-export class GeneralTabComponent {
+export class GeneralTabComponent implements OnChanges {
+  showCreateManager = false;
+  newManager = { username: '', password: '', displayName: '', roleId: 'server-manager' };
+
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
   @Input() generalFields: Field[] = [];
   @Input() dropdownOpen = false;
   @Input() fieldErrors: { [key: string]: string } = {};
   @Input() fieldWarnings: { [key: string]: string } = {};
+  @Input() canAssignManagers = false;
+  @Input() canSetOperator = false;
+  @Input() operators: Array<{ id: string; username: string; displayName: string }> = [];
+  @Input() assigneeRoles: Array<{ id: string; label: string }> = [];
+  @Input() serverManagers: Array<{ id: string; username: string; displayName: string; roleId?: string; roleName?: string; ownerUserId?: string | null }> = [];
+  @Input() managerBusy = false;
+  @Input() managerError = '';
 
   @Output() saveSettings = new EventEmitter<void>();
+  @Output() operatorSelected = new EventEmitter<string | null>();
+  @Output() managerSelected = new EventEmitter<string | null>();
+  @Output() createManager = new EventEmitter<{ username: string; password: string; displayName: string; roleId: string }>();
   @Output() validateField = new EventEmitter<{key: string, value: any}>();
   @Output() toggleMultiOption = new EventEmitter<{key: string, option: string, checked: boolean}>();
   @Output() mapSelect = new EventEmitter<{value: string, key?: string}>();
@@ -84,5 +97,49 @@ export class GeneralTabComponent {
 
   onDropdownToggle(): void {
     this.dropdownToggle.emit(!this.dropdownOpen);
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['assigneeRoles'] && this.assigneeRoles.length && !this.assigneeRoles.some(role => role.id === this.newManager.roleId)) {
+      this.newManager.roleId = this.assigneeRoles[0].id;
+    }
+    const busy = changes['managerBusy'];
+    if (busy && busy.previousValue === true && this.managerBusy === false && !this.managerError) {
+      this.clearCreateManager();
+    }
+  }
+
+  get visibleManagers(): Array<{ id: string; username: string; displayName: string; roleId?: string; roleName?: string; ownerUserId?: string | null }> {
+    const pool = this.serverInstance?.operatorUserId || '';
+    return (this.serverManagers || []).filter(manager => (manager.ownerUserId || '') === pool);
+  }
+
+  onOperatorSelected(value: string): void {
+    this.operatorSelected.emit(value || null);
+  }
+
+  managerLabel(manager: { username: string; displayName: string; roleName?: string }): string {
+    const name = manager.displayName && manager.displayName !== manager.username
+      ? `${manager.displayName} (${manager.username})`
+      : (manager.displayName || manager.username);
+    return manager.roleName ? `${name} - ${manager.roleName}` : name;
+  }
+
+  onManagerSelected(value: string): void {
+    this.managerSelected.emit(value || null);
+  }
+
+  onCreateManager(): void {
+    this.createManager.emit({
+      username: this.newManager.username.trim(),
+      password: this.newManager.password,
+      displayName: this.newManager.displayName.trim(),
+      roleId: this.newManager.roleId
+    });
+  }
+
+  clearCreateManager(): void {
+    this.showCreateManager = false;
+    this.newManager = { username: '', password: '', displayName: '', roleId: 'server-manager' };
   }
 }
