@@ -21,6 +21,8 @@ jest.mock('fs', () => {
   return mocked;
 });
 jest.mock('path');
+// test/setup.ts stubs crypto globally; package checksums need real SHA-256.
+jest.mock('crypto', () => jest.requireActual('crypto'));
 jest.mock('./platform.utils');
 jest.mock('./installer.utils', () => ({
   ...jest.requireActual('./installer.utils'),
@@ -95,6 +97,15 @@ describe('steamcmd.utils', () => {
 
       expect(isSteamCmdInstalled()).toBe(exists);
       expect(mockFs.existsSync).toHaveBeenCalledWith(`${STEAMCMD_DIR}/steamcmd.sh`);
+    });
+
+    // A bootstrap that never updated leaves steamcmd.sh behind, but nothing it can run.
+    it('reports a Linux install whose first-time update never completed as missing', () => {
+      setPlatform('linux');
+      mockFs.existsSync.mockImplementation(((file: string) =>
+        !String(file).endsWith('linux32/steamclient.so')) as any);
+
+      expect(isSteamCmdInstalled()).toBe(false);
     });
   });
 
@@ -323,6 +334,164 @@ describe('steamcmd.utils', () => {
       expect(onData).toHaveBeenCalledWith(
         expect.objectContaining({ step: 'init', message: expect.stringContaining('Initializing') })
       );
+    });
+
+    describe('Linux package fallback', () => {
+      const realCrypto: typeof import('crypto') = jest.requireActual('crypto');
+      const bins = Buffer.from('bins');
+      const boot = Buffer.from('boot');
+      const sha = (buffer: Buffer) => realCrypto.createHash('sha256').update(buffer).digest('hex');
+      const manifest = (binsSha = sha(bins)) => `"linux"
+{
+	"version"		"1788292693"
+	"steamcmd_bins_linux"
+	{
+		"file"		"steamcmd_bins_linux.zip.1b6d"
+		"size"		"4"
+		"sha2"		"${binsSha}"
+		"zipvz"		"steamcmd_bins_linux.zip.vz.3091_2456"
+		"sha2vz"		"081b20a356f6dd74fca3e4023ca6da33924ecbffbcdf271b21051b1a3ad55e65"
+	}
+	"steamcmd_linux"
+	{
+		"file"		"steamcmd_linux.zip.917c"
+		"size"		"4"
+		"sha2"		"${sha(boot)}"
+		"IsBootstrapperPackage"		"1"
+	}
+}
+"kvsign2"
+{
+	"linux"		"eb45"
+}`;
+
+      /** Serves the tarball, the manifest and each package from one axios.get mock. */
+      function stubSteamHosts(manifestText: string | null) {
+        mockGet.mockImplementation(((url: string) => {
+          if (url.endsWith('/steam_cmd_linux')) {
+            return manifestText === null
+              ? Promise.reject(new Error('getaddrinfo ENOTFOUND'))
+              : Promise.resolve({ headers: {}, data: manifestText });
+          }
+          const stream = Object.assign(new EventEmitter(), {
+            destroy: jest.fn(),
+            pipe: jest.fn(() => process.nextTick(() => writeStream.emit('finish')))
+          });
+          return Promise.resolve({ headers: {}, data: stream });
+        }) as any);
+        mockFs.readFileSync.mockImplementation(((file: string) =>
+          String(file).includes('steamcmd_bins_linux') ? bins : boot) as any);
+      }
+
+      // The 2018 bootstrapper leaves linux32/steamclient.so missing when its update host is down.
+      function bootstrapFails() {
+        mockFs.existsSync.mockImplementation(((file: string) =>
+          !String(file).endsWith('linux32/steamclient.so')) as any);
+      }
+
+      beforeEach(() => {
+        setPlatform('linux');
+        mockFs.readdirSync.mockReturnValue(['steamcmd', 'steamclient.so'] as any);
+        mockSpawn.mockReset();
+        steamCmdExits(0, 0);
+      });
+
+      it('installs the current packages from the manifest when the bootstrap update fails', async () => {
+        bootstrapFails();
+        stubSteamHosts(manifest());
+
+        const err = await runInstall();
+
+        expect(err).toBeNull();
+        expect(mockGet).toHaveBeenCalledWith(
+          'https://client-update.steamstatic.com/steam_cmd_linux',
+          expect.objectContaining({ responseType: 'text' })
+        );
+        expect(mockGet).toHaveBeenCalledWith(
+          'https://client-update.steamstatic.com/steamcmd_bins_linux.zip.1b6d',
+          expect.objectContaining({ responseType: 'stream' })
+        );
+        expect(AdmZip).toHaveBeenCalledWith(STEAMCMD_DIR + '/package/steamcmd_bins_linux.zip.1b6d');
+        expect(AdmZip).toHaveBeenCalledWith(STEAMCMD_DIR + '/package/steamcmd_linux.zip.917c');
+        expect(AdmZip.__extractAllTo).toHaveBeenCalledWith(STEAMCMD_DIR, true);
+        // The zips carry no Unix permissions.
+        expect(mockFs.chmodSync).toHaveBeenCalledWith(STEAMCMD_DIR + '/steamcmd.sh', 0o755);
+        expect(mockFs.chmodSync).toHaveBeenCalledWith(STEAMCMD_DIR + '/linux64/steamcmd', 0o755);
+        // The new steamcmd.sh is run once more so it can finish its own first start.
+        expect(mockSpawn).toHaveBeenCalledTimes(2);
+        expect(unregisterCancel).toHaveBeenCalledTimes(1);
+      });
+
+      it('tries the next host when the first one fails', async () => {
+        bootstrapFails();
+        stubSteamHosts(manifest());
+        const serve = mockGet.getMockImplementation()!;
+        mockGet.mockImplementation(((url: string, opts: unknown) =>
+          url.startsWith('https://client-update.steamstatic.com')
+            ? Promise.reject(new Error('getaddrinfo ENOTFOUND'))
+            : (serve as any)(url, opts)) as any);
+
+        const err = await runInstall();
+
+        expect(err).toBeNull();
+        expect(mockGet).toHaveBeenCalledWith(
+          'https://media.steampowered.com/client/steamcmd_linux.zip.917c',
+          expect.anything()
+        );
+      });
+
+      it('rejects a package whose checksum does not match the manifest', async () => {
+        bootstrapFails();
+        stubSteamHosts(manifest('0'.repeat(64)));
+
+        const err = await runInstall();
+
+        expect(err).toBeInstanceOf(Error);
+        expect(err!.message).toMatch(/SteamCMD could not finish its first-time update/);
+        expect(err!.message).toMatch(/checksum/i);
+        expect(AdmZip).not.toHaveBeenCalledWith(STEAMCMD_DIR + '/package/steamcmd_bins_linux.zip.1b6d');
+      });
+
+      it('reports an error instead of succeeding when no host is reachable', async () => {
+        bootstrapFails();
+        stubSteamHosts(null);
+
+        const err = await runInstall();
+
+        expect(err).toBeInstanceOf(Error);
+        expect(err!.message).toMatch(/SteamCMD could not finish its first-time update/);
+        expect(onData).toHaveBeenCalledWith(expect.objectContaining({ step: 'error' }));
+        expect(unregisterCancel).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves a bootstrapped install alone', async () => {
+        mockFs.existsSync.mockReturnValue(true);
+        stubSteamHosts(manifest());
+
+        const err = await runInstall();
+
+        expect(err).toBeNull();
+        expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('steam_cmd_linux'), expect.anything());
+        expect(mockSpawn).toHaveBeenCalledTimes(1);
+      });
+
+      // The package download runs on the install's own abort signal, like the tarball before it.
+      it('ends the install cancelled when Cancel arrives during the package download', async () => {
+        bootstrapFails();
+        stubSteamHosts(manifest());
+        const serve = mockGet.getMockImplementation()!;
+        mockGet.mockImplementation(((url: string, opts: unknown) => {
+          if (!url.endsWith('/steam_cmd_linux')) return (serve as any)(url, opts);
+          mockOnInstallCancel.mock.calls[0][0]();
+          return Promise.reject(new Error('canceled'));
+        }) as any);
+
+        const err = await runInstall();
+
+        expect(err).toEqual(new Error('Install cancelled.'));
+        expect(mockGet).toHaveBeenCalledTimes(2);
+        expect(mockSpawn).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('should handle pty.spawn failure during initialization gracefully', async () => {

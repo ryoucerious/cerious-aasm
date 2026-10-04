@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as pty from 'node-pty';
 import axios from 'axios';
+import * as crypto from 'crypto';
 import { InstallCancelledError, InstallProgress, onInstallCancel, reportSafely } from './installer.utils';
 import { getDefaultInstallDir, getPlatform } from './platform.utils';
 
@@ -25,7 +26,10 @@ export function getSteamCmdExecutable(): string {
 }
 
 export function isSteamCmdInstalled(): boolean {
-  return fs.existsSync(getSteamCmdExecutable());
+  if (!fs.existsSync(getSteamCmdExecutable())) return false;
+  // An install whose first-time update failed has steamcmd.sh but can't download anything;
+  // report it missing so the installer runs again and repairs it.
+  return getPlatform() !== 'linux' || isLinuxSteamCmdBootstrapped(getSteamCmdDir());
 }
 
 /**
@@ -147,7 +151,31 @@ export function installSteamCmd(callback: (err: Error | null) => void, onProgres
         }
       }
 
-      initializeSteamCmd(dir, safeReport, abort.signal, finish);
+      initializeSteamCmd(dir, safeReport, abort.signal, err => {
+        if (err || platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir)) {
+          finish(err);
+          return;
+        }
+
+        // The bootstrapper's own update host is gone (see LINUX_PACKAGE_HOSTS), so it left no
+        // usable client behind. Fetch the current packages and let the new steamcmd.sh finish
+        // its first start.
+        console.warn('[steamcmd] First-time update did not complete; installing the SteamCMD packages directly.');
+        report(95, 'init', 'Downloading SteamCMD update...');
+        installLinuxPackages(dir, abort.signal).then(
+          () => initializeSteamCmd(dir, safeReport, abort.signal, finish),
+          (error: unknown) => {
+            if (error instanceof InstallCancelledError) {
+              finish(error);
+              return;
+            }
+            const message = `SteamCMD could not finish its first-time update: ${error instanceof Error ? error.message : String(error)}`;
+            console.error('[steamcmd]', message);
+            report(95, 'error', message);
+            finish(new Error(message));
+          }
+        );
+      });
     },
     (error: unknown) => {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -156,6 +184,95 @@ export function installSteamCmd(callback: (err: Error | null) => void, onProgres
       finish(err);
     }
   );
+}
+
+/**
+ * steamcmd_linux.tar.gz holds a bootstrapper from 2018 that takes its first update only from
+ * client-download.steampowered.com. When that host doesn't resolve, the bootstrap exits 1 in
+ * under a second and SteamCMD never becomes usable. The current packages are still published on
+ * the host the updated client uses, so install them from there.
+ */
+const LINUX_PACKAGE_HOSTS = [
+  'https://client-update.steamstatic.com',
+  'https://media.steampowered.com/client',
+];
+
+/** The bootstrapper ships without steamclient.so; the first update adds it. */
+function isLinuxSteamCmdBootstrapped(dir: string): boolean {
+  return fs.existsSync(path.join(dir, 'linux32', 'steamclient.so'));
+}
+
+/** The "file" and "sha2" of each package block in a steam_cmd_linux manifest. */
+function parsePackageManifest(text: string): { file: string; sha2: string }[] {
+  const packages: { file: string; sha2: string }[] = [];
+  // Package blocks are the innermost braces; the outer "linux" block wraps them.
+  for (const block of text.match(/\{[^{}]*\}/g) ?? []) {
+    const file = /"file"\s+"([^"]+)"/.exec(block)?.[1];
+    const sha2 = /"sha2"\s+"([0-9a-f]{64})"/i.exec(block)?.[1];
+    if (file && sha2) {
+      packages.push({ file, sha2: sha2.toLowerCase() });
+    }
+  }
+  return packages;
+}
+
+/** Rejects with InstallCancelledError when `signal` aborts, like downloadFile. */
+async function installLinuxPackagesFrom(host: string, dir: string, signal: AbortSignal): Promise<void> {
+  const manifest = await axios.get(`${host}/steam_cmd_linux`, { responseType: 'text', signal }).catch((error: unknown) => {
+    throw signal.aborted ? new InstallCancelledError() : error;
+  });
+  const packages = parsePackageManifest(String(manifest.data));
+  if (packages.length === 0) {
+    throw new Error(`no packages listed in ${host}/steam_cmd_linux`);
+  }
+
+  const packageDir = path.join(dir, 'package');
+  fs.mkdirSync(packageDir, { recursive: true });
+  for (const { file, sha2 } of packages) {
+    const zipPath = path.join(packageDir, file);
+    await downloadFile(`${host}/${file}`, zipPath, signal, () => {});
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
+    if (actual !== sha2) {
+      throw new Error(`checksum mismatch for ${file}`);
+    }
+    const AdmZip = require('adm-zip');
+    new AdmZip(zipPath).extractAllTo(dir, true);
+  }
+
+  // The zips store DOS attributes, so nothing comes out executable.
+  const executables = [path.join(dir, 'steamcmd.sh')];
+  for (const platformDir of ['linux32', 'linux64']) {
+    try {
+      for (const name of fs.readdirSync(path.join(dir, platformDir)) ?? []) {
+        executables.push(path.join(dir, platformDir, name));
+      }
+    } catch {
+      // A package set without this platform is fine.
+    }
+  }
+  for (const file of executables) {
+    try {
+      fs.chmodSync(file, 0o755);
+    } catch (error) {
+      console.warn(`[steamcmd] Could not chmod ${file}:`, error);
+    }
+  }
+}
+
+/** Tries each host in turn; a cancel stops at once. */
+async function installLinuxPackages(dir: string, signal: AbortSignal): Promise<void> {
+  let lastError: unknown;
+  for (const host of LINUX_PACKAGE_HOSTS) {
+    try {
+      await installLinuxPackagesFrom(host, dir, signal);
+      return;
+    } catch (error) {
+      if (error instanceof InstallCancelledError || signal.aborted) throw new InstallCancelledError();
+      lastError = error;
+      console.warn(`[steamcmd] Could not install packages from ${host}:`, error instanceof Error ? error.message : error);
+    }
+  }
+  throw lastError;
 }
 
 /**

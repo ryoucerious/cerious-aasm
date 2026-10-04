@@ -12,6 +12,19 @@ ARK: Survival Ascended is heavy. Plan for about 20 GB of disk before you create 
 
 On Windows, Docker Desktop runs containers inside a WSL 2 virtual machine, and by default that VM only gets half of your computer's memory. If your servers crash or stall during startup, raise the limit by adding a `memory=` line under `[wsl2]` in `%UserProfile%\.wslconfig`, then restart Docker Desktop.
 
+On a Mac, Docker Desktop's virtual machine has its own memory limit too, under Settings → Resources. Give it at least 12 GB for one server.
+
+### Apple Silicon Macs
+
+The ARK server, SteamCMD, and Proton only exist for Intel and AMD processors, so on an Apple Silicon Mac the container runs under emulation. Before you start, open Docker Desktop's settings and, under General, turn on **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**. Then use the ARM override file alongside the main one:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ryoucerious/cerious-aasm/main/docker-compose.arm64.yml
+docker compose -f docker-compose.yml -f docker-compose.arm64.yml up -d
+```
+
+Pass both files to every Compose command, including `pull` and `down`. The override asks for the Intel image explicitly and tells SteamCMD to use its 64-bit build, because the 32-bit one crashes under emulation. Expect everything to be slower than on an Intel or AMD machine.
+
 ## Installing
 
 Make a folder for Cerious AASM and download the Compose file into it. If you plan to run on a Linux server with host networking (explained below), grab the second file as well.
@@ -42,6 +55,19 @@ Everything that matters is kept in two Docker volumes, so you can stop, recreate
 - `aasm-config` holds the app's own logs and a little Proton configuration.
 
 Docker prefixes volume names with the project name, which is the folder the Compose file sits in, so in practice they're called something like `cerious-aasm_aasm-data`. Run `docker volume ls` to see the exact names.
+
+### Using folders on the host instead
+
+You can swap either volume for a folder on the host, for example on a NAS or on Unraid, where the appdata share is the usual place. The app runs as its own user inside the container, so it needs to own those folders. Tell it which user and group should own them with `PUID` and `PGID` in your `.env` file:
+
+```bash
+PUID=99
+PGID=100
+```
+
+Those are Unraid's `nobody` and `users`. Anywhere else, `id -u` and `id -g` print your own. When the container starts it makes everything in both folders owned by that user and group, including folders nested inside them and files left behind by an earlier run as a different user. It only changes the files whose owner is wrong, so later starts don't have to touch everything again. Set `UMASK` too if you want new files to be group-writable, for example `UMASK=002`.
+
+Leave `PUID` and `PGID` unset with the regular Docker volumes; the app already owns those.
 
 The app has its own per-server backups, and that's the easiest way to protect your saves. If you want a copy of everything, stop your servers first and archive the whole data volume:
 
@@ -192,6 +218,10 @@ Each ARK server writes its own log too. It's inside the data volume at `AASMServ
 
 **A server fails to start with a namespace error from Proton.** Proton needs to create user namespaces, which some hosts don't allow a container to do. The Compose file already gives the container the permissions that usually covers. If it still fails, uncomment `privileged: true` on the `aasm` service and run `docker compose up -d`.
 
+**Installing the ARK server fails with "Failed to download."** The log shows `[steamcmd] Init attempt 1 exited with code 1` several times first. SteamCMD could not finish its first-time update. The app then fetches SteamCMD's update itself, and if that fails too, the install stops with a message saying why. Check that the container can reach `client-update.steamstatic.com` and try again. On an Apple Silicon Mac, also check that you started it with `docker-compose.arm64.yml`.
+
+**"Permission denied" or `EACCES` errors in the log, and the container stops.** The data or config folder is a host folder the app doesn't own. Set `PUID` and `PGID` to the user and group that should own it, as described under [Using folders on the host instead](#using-folders-on-the-host-instead).
+
 **Players can't connect.** Check the Firewall page for that server. In the default setup, a port outside the published ranges is the usual cause. After that, check the port forwarding on your router.
 
 **Your server doesn't show up in the in-game server list.** Give it a minute or two after the log says the server is advertising for join. If it has a join password, turn on the in-game filter for password-protected servers and search for it by name; ARK hides those servers by default. You can always join directly by opening the in-game console and typing `open <ip>:<game port>`.
@@ -209,6 +239,9 @@ All of these go in the `.env` file next to `docker-compose.yml`. Run `docker com
 | `AASM_GAME_PORTS` | `7777-7900` | Game and peer ports available to servers (UDP) |
 | `AASM_QUERY_PORTS` | `27015-27030` | Query ports available to servers (UDP) |
 | `AASM_RCON_PORTS` | `27020-27050` | RCON ports available to servers (TCP) |
+| `PUID` | none | User ID that owns the data folders when they're host folders (Unraid: `99`) |
+| `PGID` | none | Group ID that owns the data folders when they're host folders (Unraid: `100`) |
+| `UMASK` | none | Permissions mask for new files, such as `002` for group-writable |
 | `AASM_IMAGE` | `ghcr.io/ryoucerious/cerious-aasm:latest` | The image to run. Set a local name when building from source. |
 | `CURSEFORGE_API_KEY` | none | Only used when building the image yourself, passed to the build as a secret |
 

@@ -59,6 +59,19 @@ A hardening release. The web interface's sign-in and permission checks, the desk
 - **Unused Dependencies Removed**: Tailwind, PostCSS, Bootstrap, Font Awesome, node-fetch, ps-list, sharp, png-to-ico and the CORS middleware are gone, along with unused styles and the never-supported macOS packaging target.
 - **Reverse Proxy Notes**: The [Docker guide](docs/DOCKER.md#behind-a-reverse-proxy) and the [troubleshooting guide](docs/TROUBLESHOOTING.md#behind-a-reverse-proxy) say what a proxy has to forward.
 
+## [1.2.1] - 2026-09-28
+
+### New Features & Improvements
+
+- **Docker on Apple Silicon Macs**: A new `docker-compose.arm64.yml`, used alongside `docker-compose.yml`, runs the image on an Apple Silicon Mac through Docker Desktop's Rosetta emulation. The ARK server, SteamCMD and Proton are Intel and AMD only, so the override asks for the Intel image explicitly and has SteamCMD use its 64-bit build; the 32-bit one crashes under emulation. The container also switches to the 64-bit build by itself when it detects Rosetta. The [Docker guide](docs/DOCKER.md) has the steps.
+
+- **Unraid and Host Folders**: The container can now keep its data in folders on the host, such as Unraid's appdata share, instead of Docker volumes. Set `PUID` and `PGID` to the user and group that should own them (`99` and `100` on Unraid) and, optionally, `UMASK`. On startup the container takes on those IDs, gives them ownership of everything in the data and config folders, including nested folders and anything mounted inside them, and runs the app as that user. It only changes files whose owner is wrong, so restarts stay quick. Without `PUID` and `PGID` nothing changes for existing Docker volumes.
+
+### Bug Fixes
+
+- **"Permission Denied" With Host Folders**: Mapping the data or config folder to a folder on the host, as Unraid does, stopped the app at startup with `EACCES: permission denied`. The app ran as a fixed user the host knew nothing about, so it could not write to folders the host had created as root or as its own user. See Unraid and Host Folders above.
+- **Installing the ARK Server Failed on Linux and in Docker**: The SteamCMD download Valve publishes for Linux contains a 2018 bootstrapper, and on first run that bootstrapper updates itself from `client-download.steampowered.com` and nowhere else. That host no longer resolves, so SteamCMD never finished setting itself up, and every attempt to download the ARK server failed with "Failed to download." When the first-time update does not complete, the app now downloads SteamCMD's current packages from the host the updated SteamCMD uses, checks each one against Steam's published checksum, and unpacks them itself. If that fails too, the install stops with a message saying why, instead of reporting SteamCMD as installed.
+
 ## [1.2.0] - 2026-09-27
 
 Cerious AASM now runs in Docker. The image serves the same web interface as a headless Linux

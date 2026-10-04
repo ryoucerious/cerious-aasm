@@ -93,6 +93,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 
 VOLUME ["/home/aasm/.local/share/cerious-aasm", "/home/aasm/.config"]
 
-USER aasm
-
+# Starts as root so the entrypoint can apply PUID/PGID and fix folder ownership;
+# it then runs the app as aasm.
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -170,7 +170,7 @@ curl -fsSLO https://raw.githubusercontent.com/ryoucerious/cerious-aasm/main/dock
 docker compose up -d
 ```
 
-Then open `http://localhost:3000`. The [Docker guide](DOCKER.md) covers the rest: installing the ARK server, turning on sign-in, which ports your servers can use, host networking on Linux, updating, and troubleshooting.
+Then open `http://localhost:3000`. On an Apple Silicon Mac, add `docker-compose.arm64.yml` as described in the Docker guide. The [Docker guide](DOCKER.md) covers the rest: installing the ARK server, turning on sign-in, which ports your servers can use, host networking on Linux, updating, and troubleshooting.
 
 ## Post-Installation Setup
 
