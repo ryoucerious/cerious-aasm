@@ -78,14 +78,9 @@ export class ServerCardComponent implements OnDestroy {
     }
   }
 
-  /**
-   * The name players see in the server browser, shown only when it differs from the name
-   * this app uses; otherwise it is the same word twice.
-   */
+  /** The name players see in the server browser. A new server uses the same words as its name. */
   get sessionName(): string {
-    const session = (this.server?.sessionName || '').trim();
-    if (!session) return '';
-    return session.toLowerCase() === (this.server?.name || '').trim().toLowerCase() ? '' : session;
+    return (this.server?.sessionName || '').trim();
   }
 
   get visual(): MapVisual {

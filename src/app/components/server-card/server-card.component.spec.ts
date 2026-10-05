@@ -150,6 +150,14 @@ describe('ServerCardComponent', () => {
     });
   });
   describe('hero labels and menu', () => {
+    it('shows the session name when it matches the server name', () => {
+      component.server = { ...component.server, sessionName: 'Aberration' } as any;
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.server-card-details-main')?.textContent).toContain('Aberration');
+    });
+
     it('puts the operator, assignee and join address with the session name', () => {
       spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
       component.server = { ...component.server, gamePort: 7777, operatorUserId: 'op1', managerUserId: 'm1', sessionName: 'Official Island' } as any;
