@@ -10,8 +10,38 @@ import { PERMISSIONS, Permission } from '../../types/auth.types';
  *
  * `null` marks a channel that any signed-in user may call regardless of role (currently
  * only the handshake-ish reads the UI needs to render at all).
+ *
+ * An object rule names the permission (or several, any one of which is enough) and, for a
+ * call about one server, the payload key that carries the server's id. The gate reads that
+ * key and refuses the call when the server is outside the caller's pool, so no handler has
+ * to check and nothing is guessed from payload shapes.
  */
-export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
+
+/** Where a channel's payload names the server(s) the call is about. */
+export type InstanceKey = 'id' | 'instanceId' | 'serverId' | 'targetId' | 'orderedIds' | 'instance.id';
+
+export type ChannelRule =
+  | Permission
+  | null
+  | {
+      permission?: Permission;
+      anyOf?: Permission[];
+      instance?: InstanceKey;
+    };
+
+/** Any one of these opens the account channels; the handler then limits what the caller may do. */
+export const ACCOUNT_CHANNEL_PERMISSIONS: Permission[] = [
+  PERMISSIONS.USERS_MANAGE,
+  PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, PERMISSIONS.ACCOUNTS_MANAGERS_DELETE,
+  PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE,
+  PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE
+];
+
+const byId = (permission: Permission): ChannelRule => ({ permission, instance: 'id' });
+const byInstanceId = (permission: Permission): ChannelRule => ({ permission, instance: 'instanceId' });
+const byServerId = (permission: Permission): ChannelRule => ({ permission, instance: 'serverId' });
+
+export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   // Reads every signed-in user needs
   'get-system-info': null,
   'get-log-file-path': null,
@@ -25,76 +55,82 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
 
   // Servers: reading
   'get-server-instances': PERMISSIONS.SERVERS_VIEW,
-  'get-server-instance': PERMISSIONS.SERVERS_VIEW,
-  'get-server-instance-state': PERMISSIONS.SERVERS_VIEW,
-  'get-server-instance-logs': PERMISSIONS.SERVERS_VIEW,
-  'get-server-instance-players': PERMISSIONS.SERVERS_VIEW,
-  'get-rcon-status': PERMISSIONS.SERVERS_VIEW,
-  'get-ini-file': PERMISSIONS.SERVERS_VIEW,
+  'get-server-instance': byId(PERMISSIONS.SERVERS_VIEW),
+  'get-server-instance-state': byId(PERMISSIONS.SERVERS_VIEW),
+  'get-server-instance-logs': byId(PERMISSIONS.SERVERS_VIEW),
+  'get-server-instance-players': byId(PERMISSIONS.SERVERS_VIEW),
+  'get-rcon-status': byId(PERMISSIONS.SERVERS_VIEW),
+  'get-ini-file': byInstanceId(PERMISSIONS.SERVERS_VIEW),
+  'list-pool-labels': PERMISSIONS.SERVERS_VIEW,
 
   // Servers: control
-  'start-server-instance': PERMISSIONS.SERVERS_CONTROL,
-  'stop-server-instance': PERMISSIONS.SERVERS_CONTROL,
-  'force-stop-server-instance': PERMISSIONS.SERVERS_CONTROL,
+  'start-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
+  'stop-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
+  'force-stop-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
   'start-all-instances': PERMISSIONS.SERVERS_CONTROL,
   'stop-all-instances': PERMISSIONS.SERVERS_CONTROL,
-  'connect-rcon': PERMISSIONS.SERVERS_CONTROL,
-  'disconnect-rcon': PERMISSIONS.SERVERS_CONTROL,
+  'connect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
+  'disconnect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
 
   // Servers: lifecycle and configuration
-  'save-server-instance': PERMISSIONS.SERVERS_CONFIGURE,
-  'save-ini-file': PERMISSIONS.SERVERS_CONFIGURE,
-  'reorder-server-instances': PERMISSIONS.SERVERS_CONFIGURE,
-  'export-server-config': PERMISSIONS.SERVERS_CONFIGURE,
-  'import-server-config': PERMISSIONS.SERVERS_CONFIGURE,
+  // Adding a server and editing one share this channel: creating needs servers.create and
+  // editing needs servers.configure. The handler refuses the half the caller lacks.
+  'save-server-instance': { anyOf: [PERMISSIONS.SERVERS_CREATE, PERMISSIONS.SERVERS_CONFIGURE], instance: 'instance.id' },
+  'save-ini-file': byInstanceId(PERMISSIONS.SERVERS_CONFIGURE),
+  'reorder-server-instances': { permission: PERMISSIONS.SERVERS_CONFIGURE, instance: 'orderedIds' },
+  'export-server-config': byId(PERMISSIONS.SERVERS_CONFIGURE),
+  'import-server-config': { permission: PERMISSIONS.SERVERS_CONFIGURE, instance: 'targetId' },
   'setup-ark-server-firewall': PERMISSIONS.SERVERS_CONFIGURE,
   'setup-web-server-firewall': PERMISSIONS.SERVERS_CONFIGURE,
   'get-linux-firewall-instructions': PERMISSIONS.SERVERS_CONFIGURE,
-  'open-directory': PERMISSIONS.SERVERS_CONFIGURE,
+  'open-directory': byId(PERMISSIONS.SERVERS_CONFIGURE),
   'select-directory': PERMISSIONS.SERVERS_CONFIGURE,
   'test-directory-access': PERMISSIONS.SERVERS_CONFIGURE,
-  'delete-server-instance': PERMISSIONS.SERVERS_DELETE,
+  'delete-server-instance': byId(PERMISSIONS.SERVERS_DELETE),
   'import-server-from-backup': PERMISSIONS.SERVERS_CREATE,
+  // Attaching a server manager to a server is the pool owner's job; set-server-operator moves
+  // a server between pools and has no entry, so only an admin may call it.
+  'assign-server-manager': byInstanceId(PERMISSIONS.SERVERS_CREATE),
 
   // RCON and players
-  'rcon-command': PERMISSIONS.RCON_USE,
-  'get-online-players': PERMISSIONS.PLAYERS_VIEW,
-  'load-whitelist': PERMISSIONS.PLAYERS_VIEW,
-  'add-to-whitelist': PERMISSIONS.PLAYERS_MANAGE,
-  'remove-from-whitelist': PERMISSIONS.PLAYERS_MANAGE,
-  'clear-whitelist': PERMISSIONS.PLAYERS_MANAGE,
+  'rcon-command': byId(PERMISSIONS.RCON_USE),
+  'get-online-players': byId(PERMISSIONS.PLAYERS_VIEW),
+  'load-whitelist': byInstanceId(PERMISSIONS.PLAYERS_VIEW),
+  'add-to-whitelist': byInstanceId(PERMISSIONS.PLAYERS_MANAGE),
+  'remove-from-whitelist': byInstanceId(PERMISSIONS.PLAYERS_MANAGE),
+  'clear-whitelist': byInstanceId(PERMISSIONS.PLAYERS_MANAGE),
 
   // Backups
-  'get-backup-list': PERMISSIONS.BACKUPS_VIEW,
-  'get-backup-settings': PERMISSIONS.BACKUPS_VIEW,
-  'get-scheduler-status': PERMISSIONS.BACKUPS_VIEW,
-  'download-backup': PERMISSIONS.BACKUPS_VIEW,
-  'create-backup': PERMISSIONS.BACKUPS_CREATE,
-  'save-backup-settings': PERMISSIONS.BACKUPS_CREATE,
-  'start-backup-scheduler': PERMISSIONS.BACKUPS_CREATE,
-  'stop-backup-scheduler': PERMISSIONS.BACKUPS_CREATE,
-  'restore-backup': PERMISSIONS.BACKUPS_RESTORE,
-  'delete-backup': PERMISSIONS.BACKUPS_DELETE,
+  'get-backup-list': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'get-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'get-scheduler-status': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'download-backup': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'create-backup': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
+  'save-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
+  'start-backup-scheduler': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
+  'stop-backup-scheduler': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
+  'restore-backup': byInstanceId(PERMISSIONS.BACKUPS_RESTORE),
+  'delete-backup': byInstanceId(PERMISSIONS.BACKUPS_DELETE),
 
   // Mods and plugins
   'curseforge-search-mods': PERMISSIONS.MODS_MANAGE,
   'curseforge-get-mod': PERMISSIONS.MODS_MANAGE,
   'curseforge-open-website': PERMISSIONS.MODS_MANAGE,
-  'get-asaapi-status': PERMISSIONS.MODS_MANAGE,
+  'get-asaapi-status': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'get-asaapi-latest': PERMISSIONS.MODS_MANAGE,
-  'list-ark-api-plugins': PERMISSIONS.MODS_MANAGE,
-  'download-asaapi': PERMISSIONS.MODS_MANAGE,
-  'remove-ark-api-plugin': PERMISSIONS.MODS_MANAGE,
-  'install-plugin-from-zip': PERMISSIONS.MODS_MANAGE,
-  'install-plugin-from-url': PERMISSIONS.MODS_MANAGE,
+  'list-ark-api-plugins': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'download-asaapi': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'remove-ark-api-plugin': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'install-plugin-from-zip': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'install-plugin-from-url': byInstanceId(PERMISSIONS.MODS_MANAGE),
 
   // Automation
-  'get-automation-status': PERMISSIONS.AUTOMATION_MANAGE,
-  'configure-autostart': PERMISSIONS.AUTOMATION_MANAGE,
-  'configure-crash-detection': PERMISSIONS.AUTOMATION_MANAGE,
-  'configure-scheduled-restart': PERMISSIONS.AUTOMATION_MANAGE,
-  'configure-discord-webhook': PERMISSIONS.AUTOMATION_MANAGE,
-  'configure-broadcasts': PERMISSIONS.AUTOMATION_MANAGE,
+  'get-automation-status': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
+  'configure-autostart': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
+  'configure-crash-detection': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
+  'configure-scheduled-restart': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
+  'configure-discord-webhook': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
+  'configure-broadcasts': byServerId(PERMISSIONS.AUTOMATION_MANAGE),
   'auto-start-on-app-launch': PERMISSIONS.AUTOMATION_MANAGE,
 
   // Installation
@@ -102,32 +138,34 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'cancel-install': PERMISSIONS.APP_INSTALL,
   'check-install-requirements': PERMISSIONS.APP_INSTALL,
   'check-ark-update': PERMISSIONS.APP_INSTALL,
-  // Reading what is installed is not a privileged action; installing it is.
-  'get-ark-installation': PERMISSIONS.SETTINGS_VIEW,
+  // Reading what is installed is not a privileged action; installing it is. Every page asks on load.
+  'get-ark-installation': null,
   'check-linux-deps': PERMISSIONS.APP_INSTALL,
   'get-linux-deps-list': PERMISSIONS.APP_INSTALL,
   'install-linux-deps': PERMISSIONS.APP_INSTALL,
   'validate-sudo-password': PERMISSIONS.APP_INSTALL,
   'check-for-app-update': PERMISSIONS.APP_INSTALL,
-  // Every page asks for this on load; every built-in role holds settings.view.
-  'get-app-update-status': PERMISSIONS.SETTINGS_VIEW,
+  // Every page asks for this on load, and attendants and viewers hold no settings permission.
+  'get-app-update-status': null,
   'download-app-update': PERMISSIONS.APP_INSTALL,
   'install-app-update': PERMISSIONS.APP_INSTALL,
 
   // Application settings
-  'get-global-config': PERMISSIONS.SETTINGS_VIEW,
+  // The public config (password stripped) is already broadcast to every client on each change.
+  'get-global-config': null,
   'open-config-directory': PERMISSIONS.SETTINGS_VIEW,
   'set-global-config': PERMISSIONS.SETTINGS_MANAGE,
   'start-web-server': PERMISSIONS.SETTINGS_MANAGE,
   'stop-web-server': PERMISSIONS.SETTINGS_MANAGE,
   'web-server-status': PERMISSIONS.SETTINGS_VIEW,
 
-  // Accounts
-  'get-users': PERMISSIONS.USERS_MANAGE,
-  'create-user': PERMISSIONS.USERS_MANAGE,
-  'update-user': PERMISSIONS.USERS_MANAGE,
-  'delete-user': PERMISSIONS.USERS_MANAGE,
-  'get-roles': PERMISSIONS.USERS_MANAGE,
+  // Accounts. Roles are edited by users.manage holders only; the account channels also open to
+  // pool owners, and the handler limits them to their own pool.
+  'get-users': { anyOf: ACCOUNT_CHANNEL_PERMISSIONS },
+  'create-user': { anyOf: ACCOUNT_CHANNEL_PERMISSIONS },
+  'update-user': { anyOf: ACCOUNT_CHANNEL_PERMISSIONS },
+  'delete-user': { anyOf: ACCOUNT_CHANNEL_PERMISSIONS },
+  'get-roles': { anyOf: ACCOUNT_CHANNEL_PERMISSIONS },
   'create-role': PERMISSIONS.USERS_MANAGE,
   'update-role': PERMISSIONS.USERS_MANAGE,
   'delete-role': PERMISSIONS.USERS_MANAGE,
@@ -136,22 +174,37 @@ export const CHANNEL_PERMISSIONS: Record<string, Permission | null> = {
   'change-own-password': null
 };
 
+function ruleFor(channel: string): ChannelRule | undefined {
+  // Own entries only: a plain lookup would find 'constructor' and friends on Object.prototype.
+  return Object.prototype.hasOwnProperty.call(CHANNEL_PERMISSIONS, channel) ? CHANNEL_PERMISSIONS[channel] : undefined;
+}
+
 /**
- * The permission a channel needs.
+ * The permission a channel needs, for the refusal text: the first of several when any is enough.
  *
  * Returns `undefined` for a channel with no entry, which callers must treat as
  * "admin only"; see the deny-by-default note above.
  */
 export function permissionForChannel(channel: string): Permission | null | undefined {
-  // Own entries only: a plain lookup would find 'constructor' and friends on Object.prototype.
-  return Object.prototype.hasOwnProperty.call(CHANNEL_PERMISSIONS, channel) ? CHANNEL_PERMISSIONS[channel] : undefined;
+  const rule = ruleFor(channel);
+  if (rule === undefined || rule === null || typeof rule === 'string') return rule;
+  return rule.permission ?? rule.anyOf?.[0] ?? null;
+}
+
+/** The payload key naming the server(s) a channel acts on, when the channel declares one. */
+export function instanceKeyForChannel(channel: string): InstanceKey | undefined {
+  const rule = ruleFor(channel);
+  return rule && typeof rule === 'object' ? rule.instance : undefined;
 }
 
 /** True when a channel is known and callable with the given permissions. */
 export function isChannelAllowed(channel: string, permissions: Permission[], isAdmin: boolean): boolean {
   if (isAdmin) return true;
-  const required = permissionForChannel(channel);
-  if (required === undefined) return false;   // unknown channel: deny
-  if (required === null) return true;         // available to any signed-in user
-  return permissions.includes(required);
+  const rule = ruleFor(channel);
+  if (rule === undefined) return false;   // unknown channel: deny
+  if (rule === null) return true;         // available to any signed-in user
+  if (typeof rule === 'string') return permissions.includes(rule);
+  const accepted = rule.anyOf ?? (rule.permission ? [rule.permission] : []);
+  // An object rule that names no permission is a mistake; fail closed.
+  return accepted.some(permission => permissions.includes(permission));
 }

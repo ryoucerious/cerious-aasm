@@ -4,12 +4,12 @@
       <button type="button" class="users-toggle-btn" [class.active]="view === 'users'" (click)="view = 'users'">
         <i class="material-icons">group</i> Users <span class="nav-count">{{ users.length }}</span>
       </button>
-      <button type="button" class="users-toggle-btn" [class.active]="view === 'roles'" (click)="view = 'roles'">
+      <button type="button" class="users-toggle-btn" *ngIf="canManageRoles" [class.active]="view === 'roles'" (click)="view = 'roles'">
         <i class="material-icons">badge</i> Roles <span class="nav-count">{{ roles.length }}</span>
       </button>
     </div>
     <div class="users-header-actions">
-      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'users'" (click)="openCreateUser()">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'users' && canAddUser" (click)="openCreateUser()">
         <i class="material-icons">person_add</i> Add User
       </button>
       <button type="button" class="btn btn-primary btn-sm" *ngIf="view === 'roles'" (click)="openCreateRole()">
@@ -31,7 +31,7 @@
     <div class="users-empty" *ngIf="!users.length">
       <i class="material-icons">group</i>
       <p>No accounts yet. Add one to let someone sign in to the web interface.</p>
-      <button type="button" class="btn btn-primary btn-sm" (click)="openCreateUser()">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="canAddUser" (click)="openCreateUser()">
         <i class="material-icons">person_add</i> Add User
       </button>
     </div>
@@ -41,6 +41,7 @@
         <tr>
           <th>User</th>
           <th>Role</th>
+          <th>Pool</th>
           <th>Status</th>
           <th>Last sign-in</th>
           <th class="users-actions">Actions</th>
@@ -59,6 +60,7 @@
             </div>
           </td>
           <td>{{ roleName(user.roleId) }}</td>
+          <td class="pool-cell users-muted">{{ poolLabel(user) }}</td>
           <td>
             <span class="status-badge" [ngClass]="user.active ? 'status-running' : 'status-stopped'">
               {{ user.active ? 'Active' : 'Disabled' }}
@@ -66,10 +68,10 @@
           </td>
           <td class="users-muted">{{ user.lastLoginAt ? (user.lastLoginAt | date:'short') : 'Never' }}</td>
           <td class="users-actions">
-            <button type="button" class="btn btn-ghost btn-sm" (click)="openEditUser(user)" title="Edit">
+            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canEditAccount(user)" (click)="openEditUser(user)" title="Edit">
               <i class="material-icons">edit</i>
             </button>
-            <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteUser(user)"
+            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canDeleteAccount(user)" (click)="requestDeleteUser(user)"
                     [disabled]="user.id === currentUserId || user.cliLocked"
                     [title]="user.cliLocked ? 'This account is provided by the command line' : (user.id === currentUserId ? 'You cannot delete your own account' : 'Delete')">
               <i class="material-icons">delete</i>
@@ -105,8 +107,8 @@
           <td class="users-muted">{{ usersWithRole(role.id) }}</td>
           <td class="users-actions">
             <button type="button" class="btn btn-ghost btn-sm" (click)="openEditRole(role)"
-                    [title]="isAdminRole(role) ? 'View permissions' : 'Edit'">
-              <i class="material-icons">{{ isAdminRole(role) ? 'visibility' : 'edit' }}</i>
+                    [title]="role.builtIn ? 'View permissions' : 'Edit'">
+              <i class="material-icons">{{ role.builtIn ? 'visibility' : 'edit' }}</i>
             </button>
             <button type="button" class="btn btn-ghost btn-sm" (click)="requestDeleteRole(role)"
                     [disabled]="role.builtIn" [title]="role.builtIn ? 'Built-in roles cannot be deleted' : 'Delete'">
@@ -150,6 +152,11 @@
         copy of the app has the database open.
       </div>
     </div>
+    <div class="form-group" *ngIf="showOwnerField">
+      <label class="form-control-label">Pool</label>
+      <app-dropdown [options]="ownerOptions" [(ngModel)]="form.ownerUserId" [disabled]="saving" placeholder="Admin pool"></app-dropdown>
+      <div class="form-control-label desc">The operator this account works for. An account in an operator's pool sees only that pool's servers.</div>
+    </div>
     <div class="form-group">
       <label class="form-control-label toggle-label">
         <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving || !!editingUser?.cliLocked" />
@@ -166,13 +173,16 @@
   </div>
 </app-modal>
 
-<app-modal [title]="editingRole ? (roleEditorLocked ? 'Admin Role' : 'Edit Role') : 'Add Role'"
+<app-modal [title]="editingRole ? (roleEditorLocked ? editingRole.name : 'Edit Role') : 'Add Role'"
            [show]="showRoleModal" [maxWidth]="'680px'" (close)="closeRoleModal()">
   <div class="modal-form">
     <div class="form-group" *ngIf="roleEditorLocked">
-      <div class="form-control-label desc">
+      <div class="form-control-label desc" *ngIf="isAdminRole(editingRole)">
         The Admin role always holds every permission, including any added by a future version,
         so it cannot be edited.
+      </div>
+      <div class="form-control-label desc" *ngIf="editingRole && !isAdminRole(editingRole)">
+        Built-in roles have a fixed set of permissions, so this list cannot be edited.
       </div>
     </div>
     <div class="form-group">
@@ -193,7 +203,7 @@
           <label class="permission-item" *ngFor="let permission of group.permissions; trackBy: trackByPermission"
                  [title]="permission.description">
             <input type="checkbox" class="toggle-switch"
-                   [checked]="roleEditorLocked || hasPermission(permission.id)"
+                   [checked]="(editingRole && isAdminRole(editingRole)) || hasPermission(permission.id)"
                    [disabled]="saving || roleEditorLocked"
                    (change)="togglePermission(permission.id, $any($event.target).checked)" />
             <span class="permission-item-text">

@@ -6,6 +6,7 @@ import { loadGlobalConfig } from '../global-config.utils';
 import { validateInstanceId } from '../validation.utils';
 import { writeJsonAtomic } from '../fs.utils';
 import { findPortConflict, nextFreePortSet } from './port-sets';
+import { notifyInstancesChanged } from './instance-changes';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
 // Live values that server-management.getAllInstances merges into each instance. The UI sends
@@ -54,6 +55,11 @@ function readInstanceConfig(id: string): any {
 }
 
 export async function getAllInstances() {
+  return getAllInstancesSync();
+}
+
+/** The same list, for callers that cannot wait: the broadcast path reads it from a cache. */
+export function getAllInstancesSync() {
   const baseDir = getInstancesBaseDir();
   if (!fs.existsSync(baseDir)) {
     fs.mkdirSync(baseDir, { recursive: true });
@@ -117,8 +123,25 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
     config.rconPort = free.rconPort;
   }
 
+  // A new server has no place in the sidebar yet. Give it the next place, and give any
+  // server that was never ordered a place of its own first, so the new one stays last.
+  const isNew = !all.some(inst => inst.id === id);
+  if (isNew && !Number.isFinite(config.sortOrder)) {
+    let max = -1;
+    for (const inst of all) {
+      if (Number.isFinite(inst.sortOrder)) {
+        max = Math.max(max, inst.sortOrder as number);
+        continue;
+      }
+      max += 1;
+      writeJsonAtomic(getInstanceConfigPath(inst.id), { ...inst, sortOrder: max });
+    }
+    config.sortOrder = max + 1;
+  }
+
   fs.mkdirSync(dir, { recursive: true });
   writeJsonAtomic(path.join(dir, 'config.json'), config);
+  notifyInstancesChanged();
   return config;
 }
 
@@ -130,6 +153,7 @@ export function deleteInstance(id: string) {
   const dir = getInstanceDir(id);
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
+    notifyInstancesChanged();
     return true;
   }
   return false;

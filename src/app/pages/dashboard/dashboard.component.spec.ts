@@ -13,6 +13,9 @@ import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { ServerCardComponent } from '../../components/server-card/server-card.component';
+import { By } from '@angular/platform-browser';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('DashboardComponent', () => {
@@ -30,6 +33,8 @@ describe('DashboardComponent', () => {
   let notification: MockNotificationService;
   let settingsDrawer: jasmine.SpyObj<SettingsDrawerService>;
   let displayName$: BehaviorSubject<string>;
+  /** Permissions the stubbed identity lacks; empty means an admin. */
+  let denied: Set<string>;
 
   const now = Date.now();
   const alpha = { id: 'a', name: 'Alpha', state: 'running', players: 4, maxPlayers: 10, startedAt: now - 3600_000, sortOrder: 0 };
@@ -64,6 +69,7 @@ describe('DashboardComponent', () => {
     notification = new MockNotificationService();
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
     displayName$ = new BehaviorSubject('Admin');
+    denied = new Set();
     localStorage.removeItem('cerious-aasm.dashboard');
 
     await TestBed.configureTestingModule({
@@ -77,7 +83,8 @@ describe('DashboardComponent', () => {
         { provide: ActivityService, useValue: activity },
         { provide: BackupService, useValue: backup },
         { provide: NotificationService, useValue: notification },
-        { provide: AuthService, useValue: { displayName$: displayName$.asObservable() } },
+        { provide: AuthService, useValue: { displayName$: displayName$.asObservable(), can: (permission: string) => !denied.has(permission) } },
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
         { provide: ServerNavService, useValue: { rememberTab: jasmine.createSpy('rememberTab') } },
         { provide: SettingsDrawerService, useValue: settingsDrawer }
       ],
@@ -299,5 +306,28 @@ describe('DashboardComponent', () => {
       polled.destroy();
       discardPeriodicTasks();
     }));
+  });
+  describe('pools and permissions', () => {
+    const card = () => fixture.debugElement.query(By.directive(ServerCardComponent)).componentInstance as ServerCardComponent;
+    const recheck = () => {
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+    };
+
+    it('labels each card with its assignee and pool', () => {
+      expect(card().assigneeLabel).toBe('Not assigned');
+      expect(card().operatorLabel).toBe('Admin');
+      expect(card().canConfigure).toBeTrue();
+      expect(card().canDelete).toBeTrue();
+    });
+
+    it('hides what the role may not do', () => {
+      denied = new Set(['servers.create', 'servers.configure', 'servers.delete']);
+      recheck();
+
+      expect(card().canConfigure).toBeFalse();
+      expect(card().canDelete).toBeFalse();
+      expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Add Server');
+    });
   });
 });

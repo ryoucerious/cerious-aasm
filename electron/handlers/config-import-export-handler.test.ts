@@ -154,7 +154,7 @@ describe('config-import-export-handler', () => {
       expect(mockMessaging.sendToOriginator.mock.invocationCallOrder[0])
         .toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[notification]);
       expect(mockMessaging.sendToAll.mock.calls[notification][1]).toEqual({
-        type: 'success', message: 'Server configuration imported successfully.'
+        type: 'success', message: 'Server configuration imported successfully.', instanceId: 'a1'
       });
     });
 

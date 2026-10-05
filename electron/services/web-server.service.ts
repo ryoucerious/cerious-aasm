@@ -288,6 +288,7 @@ function legacyAdmin(username: string): AuthenticatedUser {
     roleName: 'Admin',
     permissions: [],
     active: true,
+    ownerUserId: null,
     cliLocked: false,
     createdAt: 0,
     updatedAt: 0,

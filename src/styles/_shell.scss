@@ -641,11 +641,29 @@ $sidenav-width: 248px;
     }
   }
 
-  .server-name {
+  .server-name-block {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.05rem;
+  }
+
+  .server-name {
+    min-width: 0;
     font-size: 0.92rem;
+    line-height: 1.2;
     // The row is a button, and a double-click on it starts a rename rather than selecting text.
+    user-select: none;
+    @include text-ellipsis;
+  }
+
+  .server-item-manager {
+    min-width: 0;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    color: var(--text-secondary);
     user-select: none;
     @include text-ellipsis;
   }

@@ -1,7 +1,9 @@
 import { AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
 import type { WebContents } from 'electron';
 import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
-import { isChannelAllowed, permissionForChannel } from './channel-permissions';
+import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
+import { instanceVisibleTo } from './pool-access';
+import { getInstance } from '../../utils/ark/instance.utils';
 
 /** What a message sender is allowed to do. */
 export interface SenderIdentity {
@@ -69,12 +71,15 @@ export interface AuthorizationResult {
 }
 
 /**
- * Decide whether a sender may use a channel.
+ * Decide whether a sender may use a channel, and, for a call about one server, whether that
+ * server is in the sender's pool.
  *
  * Deny-by-default: a channel with no entry in the permission map is refused for everyone but
- * an administrator, so shipping a handler without classifying it fails closed.
+ * an administrator, so shipping a handler without classifying it fails closed. The pool check
+ * reads only the payload key the channel declares; an id that names no server is left to the
+ * handler, which already answers "not found".
  */
-export function authorizeChannel(channel: string, sender: MessageSender): AuthorizationResult {
+export function authorizeChannel(channel: string, sender: MessageSender, payload?: unknown): AuthorizationResult {
   const identity = identifySender(sender);
 
   if (identity.isAdmin) return { allowed: true };
@@ -83,15 +88,36 @@ export function authorizeChannel(channel: string, sender: MessageSender): Author
     return { allowed: false, error: 'You must sign in to do that.' };
   }
 
-  if (isChannelAllowed(channel, identity.permissions, identity.isAdmin)) {
-    return { allowed: true };
+  if (!isChannelAllowed(channel, identity.permissions, identity.isAdmin)) {
+    const required = permissionForChannel(channel);
+    return {
+      allowed: false,
+      error: required
+        ? `Your role does not allow this (${required} required).`
+        : 'Your role does not allow this.'
+    };
   }
 
-  const required = permissionForChannel(channel);
-  return {
-    allowed: false,
-    error: required
-      ? `Your role does not allow this (${required} required).`
-      : 'Your role does not allow this.'
-  };
+  const key = instanceKeyForChannel(channel);
+  if (key) {
+    for (const id of instanceIdsFromPayload(payload, key)) {
+      const instance = getInstance(id);
+      if (instance && !instanceVisibleTo(identity.user, instance)) {
+        return { allowed: false, error: 'That server is not in your pool.' };
+      }
+    }
+  }
+
+  return { allowed: true };
+}
+
+/** The server ids a payload carries under the channel's declared key; [] when it names none. */
+function instanceIdsFromPayload(payload: unknown, key: InstanceKey): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const value = key === 'instance.id'
+    ? (record.instance as Record<string, unknown> | undefined)?.id
+    : record[key];
+  if (Array.isArray(value)) return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  return typeof value === 'string' && value ? [value] : [];
 }

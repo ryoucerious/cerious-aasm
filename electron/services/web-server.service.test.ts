@@ -36,7 +36,7 @@ function account(roleId: string, overrides: Partial<AuthenticatedUser> = {}): Au
   return {
     id: 'u1', username: 'sam', displayName: 'Sam', roleId, roleName: roleId,
     permissions: roleId === 'admin' ? [...ALL_PERMISSIONS] : ['servers.view'],
-    active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, ...overrides
+    active: true, ownerUserId: null, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, ...overrides
   };
 }
 

@@ -4,6 +4,35 @@
     <p class="form-control-label desc">Configure the essential server settings including name, map, passwords, and basic gameplay options.</p>
   </div>
 
+  <div class="settings-section ownership-section" *ngIf="showOwnership">
+    <h5>Ownership</h5>
+    <p class="section-desc">Which operator's pool this server is in, and who runs it.</p>
+
+    <div class="form-group">
+      <label class="form-control-label">Pool</label>
+      <app-dropdown *ngIf="canChooseOperator; else operatorText"
+                    [options]="operatorOptions"
+                    [ngModel]="serverInstance?.operatorUserId || ''"
+                    (ngModelChange)="onOperatorChange($event)"
+                    [disabled]="ownershipBusy"
+                    ariaLabel="Pool"></app-dropdown>
+      <ng-template #operatorText><div class="form-control-static">{{ operatorLabel }}</div></ng-template>
+      <div class="form-control-label desc">Only accounts in this pool can see the server. Admins see every pool.</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-control-label">Assigned to</label>
+      <app-dropdown *ngIf="canChooseAssignee; else assigneeText"
+                    [options]="assigneeOptions"
+                    [ngModel]="serverInstance?.managerUserId || ''"
+                    (ngModelChange)="onAssigneeChange($event)"
+                    [disabled]="ownershipBusy"
+                    ariaLabel="Assigned to"></app-dropdown>
+      <ng-template #assigneeText><div class="form-control-static">{{ assigneeLabel }}</div></ng-template>
+      <div class="form-control-label desc">The server manager or attendant who runs this server. They have to be in the same pool.</div>
+    </div>
+  </div>
+
   <div class="settings-section">
     <h5>Server Settings</h5>
     <p class="section-desc">Configure your server's basic properties and settings.</p>

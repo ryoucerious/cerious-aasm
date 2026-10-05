@@ -1,5 +1,5 @@
 import {
-  formatUptime, formatRelativeTime, formatBytes, formatMegabytes, formatPercent, toPercent, formatHourLabel, initialOf, formatLocalDateTime
+  formatUptime, formatRelativeTime, formatBytes, formatMegabytes, formatPercent, toPercent, formatHourLabel, initialOf, formatLocalDateTime, joinAddress
 } from './format.utils';
 
 describe('format.utils', () => {
@@ -48,6 +48,13 @@ describe('format.utils', () => {
     expect(formatHourLabel(nine)).toBe('9pm');
     expect(initialOf('jared')).toBe('J');
     expect(initialOf('')).toBe('?');
+  });
+
+  it('builds a join address from the page host and game port', () => {
+    expect(joinAddress({ gamePort: 7777 }, 'ark.example.org')).toBe('ark.example.org:7777');
+    expect(joinAddress({ gamePort: 7777, multiHome: '203.0.113.5' }, 'localhost')).toBe('203.0.113.5:7777');
+    expect(joinAddress({ gamePort: 7777 }, '127.0.0.1')).toBe('127.0.0.1:7777');
+    expect(joinAddress({ gamePort: 0 }, 'ark.example.org')).toBe('');
   });
 
   it('formats a date and time in the local time zone', () => {

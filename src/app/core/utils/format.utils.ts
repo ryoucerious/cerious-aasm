@@ -78,6 +78,25 @@ export function formatHourLabel(timestamp: number): string {
   return `${twelve}${suffix}`;
 }
 
+/** Hosts the desktop app and a local dev server load from; useless in a join address. */
+const LOCAL_JOIN_HOSTS = new Set(['', 'localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * What a player pastes into the game: the host this panel was opened on and the game port.
+ * On localhost, a MultiHome address is the one players can use. Without one, the page host
+ * is still shown so the port is visible in the desktop app.
+ */
+export function joinAddress(
+  server: { gamePort?: number | null; multiHome?: string | null } | null | undefined,
+  pageHost: string
+): string {
+  const port = Number(server?.gamePort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+  const multiHome = String(server?.multiHome || '').trim();
+  const host = LOCAL_JOIN_HOSTS.has(pageHost) && multiHome ? multiHome : pageHost.trim();
+  return host ? `${host}:${port}` : '';
+}
+
 /** First letter of a name for an avatar, uppercase. */
 export function initialOf(name: string | null | undefined): string {
   const trimmed = (name || '').trim();

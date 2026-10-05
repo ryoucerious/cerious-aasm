@@ -25,7 +25,7 @@ function socket(cid?: string, readyState = 1) {
 
 const viewer: AuthenticatedUser = {
   id: 'u1', username: 'viewer1', displayName: 'Viewer', roleId: 'viewer', roleName: 'Viewer',
-  permissions: ['servers.view'], active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null
+  permissions: ['servers.view'], active: true, ownerUserId: null, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null
 };
 
 function webSender(user: AuthenticatedUser | null, authEnabled = true): ApiProcessSender {
@@ -186,6 +186,42 @@ describe('MessagingService', () => {
       expect(own.send).not.toHaveBeenCalledWith('chan', { foo: 1 });
       expect(other.send).toHaveBeenCalledWith('chan', { foo: 1 });
       expect(child.send).toHaveBeenCalledWith({ type: 'broadcast-web', channel: 'chan', data: { foo: 2 }, excludeCid: 'c1' });
+    });
+
+    it('honours an audience: listed accounts, plus owners when asked', () => {
+      const listed = Object.assign(socket('a'), { _user: { id: 'u1' } });
+      const other = Object.assign(socket('b'), { _user: { id: 'u2' } });
+      const authOff = Object.assign(socket('c'), { _user: null });
+      const legacy = Object.assign(socket('d'), { _user: { id: 'legacy-admin' } });
+      (service as unknown as { wsServer: unknown }).wsServer = { clients: new Set([listed, other, authOff, legacy]) };
+
+      service.sendToAllWebSockets('chan', { foo: 1 }, undefined, { userIds: ['u1'], owners: true });
+      expect(listed.send).toHaveBeenCalledTimes(1);
+      expect(other.send).not.toHaveBeenCalled();
+      expect(authOff.send).toHaveBeenCalledTimes(1);
+      expect(legacy.send).toHaveBeenCalledTimes(1);
+
+      service.sendToAllWebSockets('chan', { foo: 2 }, undefined, { userIds: ['u1'], owners: false });
+      expect(listed.send).toHaveBeenCalledTimes(2);
+      expect(authOff.send).toHaveBeenCalledTimes(1);
+      expect(legacy.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('splits a broadcast through the installed scoper, one child message per view', () => {
+      const child = { connected: true, send: jest.fn() };
+      service.setApiProcess(child as never);
+      service.scopeBroadcast = jest.fn(() => [
+        { data: ['all'], audience: { userIds: ['a1'], owners: true } },
+        { data: [], audience: { userIds: ['op2'], owners: false } }
+      ]);
+
+      service.broadcastToWebClients('server-instances', ['all'], 'c9');
+
+      expect(service.scopeBroadcast).toHaveBeenCalledWith('server-instances', ['all']);
+      expect(child.send.mock.calls).toEqual([
+        [{ type: 'broadcast-web', channel: 'server-instances', data: ['all'], excludeCid: 'c9', audience: { userIds: ['a1'], owners: true } }],
+        [{ type: 'broadcast-web', channel: 'server-instances', data: [], excludeCid: 'c9', audience: { userIds: ['op2'], owners: false } }]
+      ]);
     });
 
     it('sends nothing to a web server child that has gone away', () => {

@@ -301,7 +301,8 @@ export class ServerProcessService {
     const name = instanceUtils.getInstance(instanceId)?.name || instanceId;
     messagingService.sendToAll('notification', {
       type: 'error',
-      message: `${name} crashed during startup (${exit}). Check the logs for details.`
+      message: `${name} crashed during startup (${exit}). Check the logs for details.`,
+      instanceId
     });
     messagingService.sendToAll('server-instance-log', {
       log: stderrTail

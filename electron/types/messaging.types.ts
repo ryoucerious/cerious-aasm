@@ -60,9 +60,17 @@ export type ChildToMainMessage =
     }
   | { type: 'auth-verify'; requestId: string; username: string; password: string };
 
+/** Who receives a pool-scoped broadcast. Absent on a message means every socket. */
+export interface BroadcastAudience {
+  /** Account ids that receive it. */
+  userIds: string[];
+  /** Also the sockets with no account: authentication off, or the legacy single login. */
+  owners: boolean;
+}
+
 export type MainToChildMessage =
   | { type: 'auth-verify-result'; requestId: string; user: AuthenticatedUser | null }
   | { type: 'invalidate-sessions'; userId?: string; roleId?: string }
   | { type: 'messaging-response'; channel: string; data: unknown; cid?: string }
-  | { type: 'broadcast-web'; channel: string; data: unknown; excludeCid?: string }
+  | { type: 'broadcast-web'; channel: string; data: unknown; excludeCid?: string; audience?: BroadcastAudience }
   | { type: 'update-auth-config'; authConfig: WebAuthConfigUpdate };

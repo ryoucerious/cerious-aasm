@@ -54,6 +54,10 @@ export interface InstanceConfig extends Partial<AutomationSettings> {
   sessionName?: string;
   /** Position in the sidebar, which Start All follows. */
   sortOrder?: number;
+  /** The operator whose pool this server is in. Absent or null is the admin pool. */
+  operatorUserId?: string | null;
+  /** The server manager or attendant this server is assigned to. Absent or null is unassigned. */
+  managerUserId?: string | null;
   mapName?: string;
   gamePort?: number | string;
   queryPort?: number | string;

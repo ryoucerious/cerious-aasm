@@ -10,7 +10,12 @@ import { automationService } from '../services/automation/automation.service';
 import { arkConfigService } from '../services/ark-config.service';
 import { rconService } from '../services/rcon.service';
 import { activityLogService } from '../services/activity-log.service';
-import { identifySender, isDesktopWindow } from '../services/auth/permission-gate';
+import { identifySender, isDesktopWindow, SenderIdentity } from '../services/auth/permission-gate';
+import { filterInstancesForUser } from '../services/auth/pool-access';
+import { applyServerOwnership, assigneeRefusal, canAssignFor, operatorRefusal } from '../services/auth/server-ownership';
+import { userDatabaseService } from '../services/auth/user-database.service';
+import { PERMISSIONS } from '../types/auth.types';
+import type { MessageSender } from '../types/messaging.types';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 import { validateInstanceId } from '../utils/validation.utils';
@@ -19,6 +24,18 @@ import { onRequest } from './handler.utils';
 
 const UP_OR_QUEUED = new Set(['running', 'starting', 'queued']);
 const UP = new Set(['running', 'starting']);
+
+const lookupUser = (id: string) => userDatabaseService.getUser(id);
+
+/** The instances this sender may see: everything for an admin, their pool for anyone else. */
+function visibleTo(identity: SenderIdentity, instances: InstanceConfig[]): InstanceConfig[] {
+  return identity.isAdmin ? instances : filterInstancesForUser(identity.user, instances);
+}
+
+/** The ids a Start All or Stop All from this sender covers; undefined means every server. */
+function scopeIds(identity: SenderIdentity, instances: InstanceConfig[]): string[] | undefined {
+  return identity.isAdmin ? undefined : visibleTo(identity, instances).map(instance => instance.id);
+}
 
 onRequest('get-ini-file', payload => {
   const { instanceId, filename } = payload;
@@ -49,9 +66,11 @@ onRequest('save-ini-file', async payload => {
   return { success: true, instanceId, filename };
 });
 
-onRequest('start-all-instances', async (_payload, { afterReply }) => {
+onRequest('start-all-instances', async (_payload, { sender, afterReply }) => {
   const { instances } = await serverManagementService.getAllInstances();
-  const eligible: InstanceConfig[] = instances.filter(
+  const identity = identifySender(sender);
+  const onlyIds = scopeIds(identity, instances);
+  const eligible: InstanceConfig[] = visibleTo(identity, instances).filter(
     (instance: InstanceConfig) => !UP_OR_QUEUED.has(serverProcessService.getNormalizedInstanceState(instance.id))
   );
 
@@ -62,13 +81,15 @@ onRequest('start-all-instances', async (_payload, { afterReply }) => {
   }
 
   // Answered before the starts, which are staggered and report through the state callbacks.
-  afterReply(async () => { await serverLifecycleService.startAllInstances(); });
+  afterReply(async () => { await serverLifecycleService.startAllInstances(undefined, onlyIds); });
   return { success: true, starting: eligible.map(instance => instance.id) };
 });
 
-onRequest('stop-all-instances', async (_payload, { afterReply }) => {
+onRequest('stop-all-instances', async (_payload, { sender, afterReply }) => {
   const { instances } = await serverManagementService.getAllInstances();
-  const eligible: InstanceConfig[] = instances.filter(
+  const identity = identifySender(sender);
+  const onlyIds = scopeIds(identity, instances);
+  const eligible: InstanceConfig[] = visibleTo(identity, instances).filter(
     (instance: InstanceConfig) => UP.has(serverProcessService.getNormalizedInstanceState(instance.id))
   );
 
@@ -76,7 +97,7 @@ onRequest('stop-all-instances', async (_payload, { afterReply }) => {
     messagingService.sendToAll('server-instance-state', { instanceId: id, state: 'stopping' });
   }
 
-  afterReply(async () => { await serverLifecycleService.stopAllInstances(); });
+  afterReply(async () => { await serverLifecycleService.stopAllInstances(onlyIds); });
   return { success: true, stopping: eligible.map(instance => instance.id) };
 });
 
@@ -90,7 +111,7 @@ onRequest('force-stop-server-instance', async payload => {
     if (result.shouldNotifyAutomation) {
       automationService.setManuallyStopped(id, true);
     }
-    messagingService.sendToAll('notification', { type: 'warning', message: `${result.instanceName} force stopped.` });
+    messagingService.sendToAll('notification', { type: 'warning', message: `${result.instanceName} force stopped.`, instanceId: id });
   }
   return result;
 }, { fallbackError: 'Failed to force stop server' });
@@ -174,7 +195,7 @@ onRequest('start-server-instance', async (payload, { sender }) => {
   const result = await serverInstanceService.startServerInstance(id, onLog, onState);
 
   if (result.started) {
-    messagingService.sendToAll('notification', { type: 'info', message: `${result.instanceName} started.` });
+    messagingService.sendToAll('notification', { type: 'info', message: `${result.instanceName} started.`, instanceId: id });
   } else if (result.portError) {
     messagingService.sendToOriginator('notification', { type: 'error', message: result.portError }, sender);
   }
@@ -189,10 +210,11 @@ onRequest('get-server-instance-players', payload => {
   return { instanceId, players };
 }, { onError: (_error, payload) => ({ instanceId: payload.id, players: 0 }) });
 
-onRequest('get-server-instances', async (_payload, { afterReply }) => {
+onRequest('get-server-instances', async (_payload, { sender, afterReply }) => {
   const { instances } = await serverManagementService.getAllInstances();
+  // The broadcast carries the full list; each web client receives its own pool's view of it.
   afterReply(() => messagingService.sendToAll('server-instances', instances));
-  return { instances };
+  return { instances: visibleTo(identifySender(sender), instances) };
 }, { onError: () => ({ instances: [] }) });
 
 onRequest('get-server-instance', async payload => {
@@ -203,16 +225,73 @@ onRequest('get-server-instance', async payload => {
 onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
   const { instance } = payload;
   const previous: InstanceConfig | null = instance?.id ? instanceUtils.getInstance(instance.id) : null;
+  const identity = identifySender(sender);
+
+  // The channel opens on either permission; which half applies depends on whether the server exists.
+  if (!identity.isAdmin) {
+    if (!previous && !identity.permissions.includes(PERMISSIONS.SERVERS_CREATE)) {
+      return { success: false, error: 'Only an admin or operator can add a server.' };
+    }
+    if (previous && !identity.permissions.includes(PERMISSIONS.SERVERS_CONFIGURE)) {
+      return { success: false, error: 'Your role cannot change server settings.' };
+    }
+  }
+  if (instance && typeof instance === 'object') {
+    const refusal = applyServerOwnership(instance, previous, identity, lookupUser);
+    if (refusal) return { success: false, error: refusal };
+  }
+
   const result = await serverManagementService.saveInstance(instance);
 
   if (result.success && result.instance) {
     const saved: InstanceConfig = result.instance;
     afterReply(() => messagingService.sendToAll('server-instance-updated', saved));
     afterReply(() => serverInstanceService.broadcastInstances());
-    afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: describeSave(previous, saved) }, sender));
+    afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: describeSave(previous, saved), instanceId: saved.id }, sender));
   }
   return { success: result.success, instance: result.instance, error: result.error };
 }, { fallbackError: 'Failed to save server instance' });
+
+/** Reply and broadcast for a change to a server's ownership. */
+function ownershipSaved(channel: string, saved: InstanceConfig, afterReply: (fn: () => void | Promise<void>) => void) {
+  afterReply(() => messagingService.sendToAll('server-instance-updated', saved));
+  afterReply(() => serverInstanceService.broadcastInstances());
+  return { success: true, instance: saved };
+}
+
+onRequest('assign-server-manager', async (payload, { sender, afterReply }) => {
+  const { instanceId, managerUserId } = payload;
+  const existing: InstanceConfig | null = typeof instanceId === 'string' ? instanceUtils.getInstance(instanceId) : null;
+  if (!existing) return { success: false, error: 'That server was not found.' };
+  const identity = identifySender(sender);
+  if (!canAssignFor(identity, existing)) return { success: false, error: 'That server is not in your pool.' };
+
+  const assignee = managerUserId || null;
+  const refusal = assigneeRefusal(assignee, existing.operatorUserId, lookupUser);
+  if (refusal) return { success: false, error: refusal };
+
+  const saved = await instanceUtils.saveInstance({ ...existing, managerUserId: assignee });
+  if (saved.error !== undefined) return { success: false, error: saved.error };
+  return ownershipSaved('assign-server-manager', saved, afterReply);
+}, { fallbackError: 'Could not assign that server manager.' });
+
+onRequest('set-server-operator', async (payload, { sender, afterReply }) => {
+  const { instanceId } = payload;
+  if (!identifySender(sender).isAdmin) return { success: false, error: 'Only an admin can move a server between pools.' };
+  const existing: InstanceConfig | null = typeof instanceId === 'string' ? instanceUtils.getInstance(instanceId) : null;
+  if (!existing) return { success: false, error: 'That server was not found.' };
+
+  const operatorUserId: string | null = payload.operatorUserId || null;
+  if (operatorUserId) {
+    const refusal = operatorRefusal(operatorUserId, lookupUser);
+    if (refusal) return { success: false, error: refusal };
+  }
+  // An assignee from the old pool cannot follow the server into the new one.
+  const keepAssignee = !!existing.managerUserId && assigneeRefusal(existing.managerUserId, operatorUserId, lookupUser) === null;
+  const saved = await instanceUtils.saveInstance({ ...existing, operatorUserId, managerUserId: keepAssignee ? existing.managerUserId : null });
+  if (saved.error !== undefined) return { success: false, error: saved.error };
+  return ownershipSaved('set-server-operator', saved, afterReply);
+}, { fallbackError: 'Could not move that server.' });
 
 onRequest('delete-server-instance', async (payload, { sender, afterReply }) => {
   const { id } = payload;
@@ -221,7 +300,7 @@ onRequest('delete-server-instance', async (payload, { sender, afterReply }) => {
   if (result.success) {
     afterReply(() => serverInstanceService.broadcastInstances());
     afterReply(() => activityLogService.record('info', 'Server deleted', id, identifySender(sender).user?.username || null));
-    afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: 'Server deleted.' }, sender));
+    afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: 'Server deleted.', instanceId: id }, sender));
   }
   return { success: result.success, id: result.id };
 }, { onError: (_error, payload) => ({ success: false, id: payload.id }) });
@@ -234,11 +313,23 @@ onRequest('import-server-from-backup', async (payload, { sender, afterReply }) =
     { filePath: backupFilePath, fileData },
     isDesktopWindow(sender)
   );
-  if (result.success) {
+  let instance = result.instance;
+  if (result.success && instance) {
+    // Lands in the importer's pool, as a server they created would.
+    instance = await stampImportedPool(instance, sender);
     afterReply(() => serverInstanceService.broadcastInstances());
   }
-  return { success: result.success, instance: result.instance, message: result.message, error: result.error };
+  return { success: result.success, instance, message: result.message, error: result.error };
 }, { fallbackError: 'Failed to import server from backup' });
+
+async function stampImportedPool(imported: InstanceConfig, sender: MessageSender): Promise<InstanceConfig> {
+  const identity = identifySender(sender);
+  if (identity.isAdmin) return imported;
+  const stamped: Partial<InstanceConfig> = { ...imported };
+  if (applyServerOwnership(stamped, null, identity, lookupUser)) return imported;
+  const saved = await instanceUtils.saveInstance(stamped);
+  return saved.error === undefined ? saved : imported;
+}
 
 onRequest('reorder-server-instances', async payload => {
   const { orderedIds } = payload;

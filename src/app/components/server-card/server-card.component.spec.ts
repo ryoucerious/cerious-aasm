@@ -126,12 +126,18 @@ describe('ServerCardComponent', () => {
       expect(component.connectAddress).toBe('203.0.113.5:7777');
     });
 
-    it('is empty, with the copy button disabled, when only localhost is known', () => {
+    it('shows localhost and the game port when that is the only host known', () => {
       spyOn(component as any, 'pageHostname').and.returnValue('127.0.0.1');
       component.server = { ...component.server, gamePort: 7777 } as any;
-      expect(component.connectAddress).toBe('');
-      const button = fixture.nativeElement.querySelector('.server-card-copy') as HTMLButtonElement;
-      expect(button.disabled).toBeTrue();
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+      expect(component.connectAddress).toBe('127.0.0.1:7777');
+      const button = fixture.nativeElement.querySelector('.server-card-address .server-card-copy') as HTMLButtonElement;
+      expect(button).not.toBeNull();
+      expect(button.textContent?.trim()).toBe('content_copy');
+      expect(button.getAttribute('data-tooltip')).toBe('Copy');
+      expect(fixture.nativeElement.querySelector('.server-card-actions .server-card-copy')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.server-card-details')?.textContent).toContain('127.0.0.1:7777');
     });
 
     it('copies the address and shows it as copied', async () => {
@@ -141,6 +147,71 @@ describe('ServerCardComponent', () => {
       await component.onCopyAddress({ stopPropagation() {} } as any);
       expect(writeText).toHaveBeenCalledWith('ark.example.org:7777');
       expect(component.copied).toBeTrue();
+    });
+  });
+  describe('hero labels and menu', () => {
+    it('puts the operator, assignee and join address with the session name', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
+      component.server = { ...component.server, gamePort: 7777, operatorUserId: 'op1', managerUserId: 'm1', sessionName: 'Official Island' } as any;
+      component.operatorLabel = 'Ops';
+      component.assigneeLabel = 'Server Manager · mia';
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+
+      const el = fixture.nativeElement as HTMLElement;
+      const details = el.querySelector('.server-card-details') as HTMLElement;
+      expect(el.querySelector('.server-card-hero .server-card-details')).toBeNull();
+      expect(details.querySelector('.server-card-details-main')?.textContent).toContain('Official Island');
+      expect(details.querySelector('.server-card-details-main')?.textContent).toContain('Ops');
+      expect(details.querySelector('.server-card-details-main')?.textContent).toContain('Server Manager · mia');
+      expect(details.querySelector('.server-card-address')?.textContent).toContain('ark.example.org:7777');
+    });
+
+    it('keeps the same space above the stats when a server has no operator or assignee', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
+      component.server = { ...component.server, gamePort: 7777, operatorUserId: 'op1', managerUserId: 'm1', sessionName: 'Official Island' } as any;
+      component.operatorLabel = 'Ops';
+      component.assigneeLabel = 'Server Manager · mia';
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+      const assigned = (fixture.nativeElement.querySelector('.server-card-details') as HTMLElement).offsetHeight;
+
+      component.server = { ...component.server, operatorUserId: null, managerUserId: null, sessionName: component.server.name } as any;
+      component.operatorLabel = '';
+      component.assigneeLabel = '';
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+      const unassigned = (fixture.nativeElement.querySelector('.server-card-details') as HTMLElement).offsetHeight;
+
+      expect(unassigned).toBe(assigned);
+    });
+
+    it('hides Admin and Not assigned, and still shows the join address with the session lines', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
+      component.server = { ...component.server, gamePort: 7777 } as any;
+      component.operatorLabel = 'Admin';
+      component.assigneeLabel = 'Not assigned';
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+
+      const el = fixture.nativeElement as HTMLElement;
+      const details = el.querySelector('.server-card-details') as HTMLElement;
+      expect(details.textContent).not.toContain('Admin');
+      expect(details.textContent).not.toContain('Not assigned');
+      expect(details.textContent).toContain('ark.example.org:7777');
+    });
+
+    it('hides Configure and Backups when the role lacks them', () => {
+      component.canConfigure = false;
+      component.canBackups = false;
+      component.menuOpen = true;
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+
+      const items = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.card-menu-item')).map(el => el.textContent?.trim() || '');
+      expect(items.some(text => text.includes('Configure'))).toBeFalse();
+      expect(items.some(text => text.includes('Backups'))).toBeFalse();
+      expect(items.length).toBeGreaterThan(0);
     });
   });
 });

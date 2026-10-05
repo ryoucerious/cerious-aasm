@@ -60,7 +60,9 @@ onRequest('import-server-config', async (payload, { afterReply }) => {
   const suffix = warnings.length > 0 ? ` (${warnings.length} warnings)` : '';
   afterReply(() => messagingService.sendToAll('notification', {
     type: 'success',
-    message: `Server configuration imported successfully.${suffix}`
+    message: `Server configuration imported successfully.${suffix}`,
+    // Only an import into a server is about a server; a parse-only import is for everyone.
+    ...(typeof targetId === 'string' && targetId ? { instanceId: targetId } : {})
   }));
   return reply;
 }, { fallbackError: 'Failed to import config' });

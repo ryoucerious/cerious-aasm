@@ -5,8 +5,10 @@ import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { WebContents } from 'electron';
 import { RawData, WebSocket, WebSocketServer } from 'ws';
 import { authorizeChannel, identifySender } from './auth/permission-gate';
+import { LEGACY_ADMIN_ID } from '../types/auth.types';
 import {
   ApiProcessSender,
+  BroadcastAudience,
   ChildToMainMessage,
   MainToChildMessage,
   MessageSender,
@@ -22,6 +24,9 @@ export interface BusObserver {
 }
 
 type Socket = WebSocket & WebSocketClient;
+
+/** Narrows one broadcast to the views each pool may see; see auth/pool-broadcast. */
+export type BroadcastScoper = (channel: string, data: unknown) => Array<{ data: unknown; audience?: BroadcastAudience }>;
 
 const SESSION_SWEEP_MS = 60_000;
 // Bounds the memory a stream of made-up origins can take; past it refusals are no longer logged.
@@ -47,6 +52,12 @@ export class MessagingService extends EventEmitter {
    */
   isSessionLive: ((token: string) => boolean) | null = null;
 
+  /**
+   * Decides which web clients a broadcast is for. Installed by main, which owns the user
+   * database; unset in the web server child, which only matches sockets against the audience.
+   */
+  scopeBroadcast: BroadcastScoper | null = null;
+
   /** The web server child that relays web clients, or null while it is not running. */
   setApiProcess(child: ChildProcess | null): void {
     this.apiProcess = child;
@@ -71,7 +82,7 @@ export class MessagingService extends EventEmitter {
     const [payload, sender] = args as [unknown, MessageSender];
 
     if (sender) {
-      const decision = authorizeChannel(event, sender);
+      const decision = authorizeChannel(event, sender, payload);
       if (!decision.allowed) {
         console.warn(`[messaging] Refused "${event}": ${decision.error}`);
         this.sendToOriginator(event, {
@@ -233,7 +244,10 @@ export class MessagingService extends EventEmitter {
   }
 
   broadcastToWebClients(channel: string, data: unknown, excludeCid?: string): void {
-    this.sendToChild({ type: 'broadcast-web', channel, data, excludeCid });
+    const views = this.scopeBroadcast ? this.scopeBroadcast(channel, data) : [{ data }];
+    for (const view of views) {
+      this.sendToChild({ type: 'broadcast-web', channel, data: view.data, excludeCid, audience: view.audience });
+    }
   }
 
   sendToAllRenderers(channel: string, data: unknown): void {
@@ -242,12 +256,12 @@ export class MessagingService extends EventEmitter {
     }
   }
 
-  sendToAllWebSockets(channel: string, data: unknown, excludeCid?: string): void {
+  sendToAllWebSockets(channel: string, data: unknown, excludeCid?: string, audience?: BroadcastAudience): void {
     const message = JSON.stringify({ channel, data });
     for (const client of this.openSockets()) {
-      if (!excludeCid || client._cid !== excludeCid) {
-        client.send(message);
-      }
+      if (excludeCid && client._cid === excludeCid) continue;
+      if (audience && !inAudience(client, audience)) continue;
+      client.send(message);
     }
   }
 
@@ -321,6 +335,13 @@ function hostMatches(origin: URL, host: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A socket with no account was opened with authentication off; the legacy login acts as admin. */
+function inAudience(client: WebSocketClient, audience: BroadcastAudience): boolean {
+  const user = client._user;
+  if (!user || user.id === LEGACY_ADMIN_ID) return audience.owners;
+  return audience.userIds.includes(user.id);
 }
 
 function isWebSocketClient(sender: NonNullable<MessageSender>): sender is WebSocketClient {

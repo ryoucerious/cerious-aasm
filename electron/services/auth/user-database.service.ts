@@ -22,6 +22,7 @@ interface UserRow {
   display_name: string;
   role_id: string;
   active: number;
+  owner_user_id?: string | null;
   cli_locked: number;
   created_at: number;
   updated_at: number;
@@ -53,6 +54,8 @@ export interface CreateUserInput {
   displayName?: string;
   roleId: string;
   active?: boolean;
+  /** The operator whose pool this account joins. Null is the admin pool. Ignored for admins and operators. */
+  ownerUserId?: string | null;
 }
 
 export interface UpdateUserInput {
@@ -63,6 +66,8 @@ export interface UpdateUserInput {
   active?: boolean;
   /** When present the password is replaced; an empty string is rejected. */
   password?: string;
+  /** When present, moves the account to that operator's pool; null is the admin pool. */
+  ownerUserId?: string | null;
 }
 
 export interface RoleInput {
@@ -267,22 +272,29 @@ export class UserDatabaseService {
     if (!columns.some(column => column.name === 'cli_locked')) {
       this.conn.run('ALTER TABLE users ADD COLUMN cli_locked INTEGER NOT NULL DEFAULT 0');
     }
+    // Installs created before operator pools. Everyone starts in the admin pool.
+    if (!columns.some(column => column.name === 'owner_user_id')) {
+      this.conn.run('ALTER TABLE users ADD COLUMN owner_user_id TEXT');
+    }
   }
 
   private seedBuiltInRoles(): void {
     const now = Date.now();
     for (const role of BUILT_IN_ROLES) {
       const existing = this.queryOne('SELECT id FROM roles WHERE id = ?', [role.id]);
+      const permissions = JSON.stringify(role.id === ROLE_IDS.ADMIN ? ALL_PERMISSIONS : role.permissions);
       if (existing) {
-        // Keep the built-in description and name current with the app, but leave any
-        // permission edits the operator made to a non-admin built-in role alone.
-        this.conn.run('UPDATE roles SET name = ?, description = ?, built_in = 1, updated_at = ? WHERE id = ?',
-          [role.name, role.description, now, role.id]);
+        // Built-in permissions are the product rules (who may add a server, and so on).
+        // An older install stored a wider Server Manager, so each start puts the defined set back.
+        this.conn.run(
+          'UPDATE roles SET name = ?, description = ?, permissions = ?, built_in = 1, updated_at = ? WHERE id = ?',
+          [role.name, role.description, permissions, now, role.id]
+        );
         continue;
       }
       this.conn.run(
         'INSERT INTO roles (id, name, description, permissions, built_in, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
-        [role.id, role.name, role.description, JSON.stringify(role.permissions), now, now]
+        [role.id, role.name, role.description, permissions, now, now]
       );
     }
   }
@@ -414,8 +426,8 @@ export class UserDatabaseService {
     this.ensureOpen();
     const existing = this.getRole(input.id);
     if (!existing) return { success: false, error: 'Role not found.' };
-    if (existing.id === ROLE_IDS.ADMIN) {
-      return { success: false, error: 'The Admin role always has every permission and cannot be edited.' };
+    if (existing.builtIn) {
+      return { success: false, error: 'Built-in roles have a fixed set of permissions and cannot be edited.' };
     }
 
     const name = (input.name || '').trim() || existing.name;
@@ -483,14 +495,16 @@ export class UserDatabaseService {
     if (!this.getRole(input.roleId)) {
       return { success: false, error: 'That role does not exist.' };
     }
+    const owner = this.normalizeOwner(input.roleId, input.ownerUserId);
+    if (owner.error) return { success: false, error: owner.error };
 
     const now = Date.now();
     const id = randomUUID();
     const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
     this.conn.run(
-      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, created_at, updated_at, last_login_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, now, now]
+      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, owner_user_id, created_at, updated_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, owner.id, now, now]
     );
     return { success: true, data: this.getUser(id)! };
   }
@@ -509,6 +523,12 @@ export class UserDatabaseService {
 
     const roleId = input.roleId ?? existing.roleId;
     if (!this.getRole(roleId)) return { success: false, error: 'That role does not exist.' };
+    // Checked only when the owner or the role changes: an owner who was disabled since must not
+    // make every other edit of their pool's accounts fail.
+    const owner = input.ownerUserId !== undefined || roleId !== existing.roleId
+      ? this.normalizeOwner(roleId, input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId)
+      : { id: existing.ownerUserId };
+    if (owner.error) return { success: false, error: owner.error };
 
     const active = input.active ?? existing.active;
     // Never allow the last active admin to be demoted or disabled: that would lock everyone out.
@@ -536,11 +556,11 @@ export class UserDatabaseService {
       : null;
 
     this.conn.run(
-      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, updated_at = ?
+      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, updated_at = ?
        ${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
       passwordHash
-        ? [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, Date.now(), passwordHash, input.id]
-        : [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, Date.now(), input.id]
+        ? [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), passwordHash, input.id]
+        : [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), input.id]
     );
     return { success: true, data: this.getUser(input.id)! };
   }
@@ -653,6 +673,19 @@ export class UserDatabaseService {
     return { success: true, data: this.getUser(existing.id)! };
   }
 
+  /**
+   * The owner a row may carry. Admins and operators are never in a pool, so they store null
+   * whatever was asked. A pool role may name an active operator, or null for the admin pool.
+   */
+  private normalizeOwner(roleId: string, ownerUserId: string | null | undefined): { id: string | null; error?: string } {
+    if (roleId === ROLE_IDS.ADMIN || roleId === ROLE_IDS.OPERATOR || !ownerUserId) return { id: null };
+    const owner = this.getUser(ownerUserId);
+    if (!owner || !owner.active || owner.roleId !== ROLE_IDS.OPERATOR) {
+      return { id: null, error: 'Choose an active operator for this pool.' };
+    }
+    return { id: owner.id };
+  }
+
   private countOtherActiveAdmins(excludeUserId: string): number {
     const row = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ? AND active = 1 AND id != ?', [ROLE_IDS.ADMIN, excludeUserId]);
     return row?.count ?? 0;
@@ -706,6 +739,7 @@ export class UserDatabaseService {
       displayName: row.display_name,
       roleId: row.role_id,
       active: !!row.active,
+      ownerUserId: row.owner_user_id || null,
       cliLocked: !!row.cli_locked,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

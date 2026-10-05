@@ -1,6 +1,35 @@
-import { ErrorHandler } from '@angular/core';
+import { ErrorHandler, SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { of } from 'rxjs';
 import { GeneralTabComponent } from './general-tab.component';
+import { AuthService } from '../../../../core/services/auth.service';
+import { PoolDirectoryService } from '../../../../core/services/pool-directory.service';
+import { NotificationService } from '../../../../core/services/notification.service';
+import { CurrentIdentity } from '../../../../core/models/auth.model';
+import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
+
+const admin: CurrentIdentity = { user: null, isLocalDesktop: true, isAdmin: true, permissions: [], accountsInUse: true };
+const operator = (id: string): CurrentIdentity => ({
+  user: { id, username: id, displayName: id, roleId: 'operator', roleName: 'Operator', active: true, ownerUserId: null, permissions: [], createdAt: 0, updatedAt: 0, lastLoginAt: null },
+  isLocalDesktop: false, isAdmin: false, permissions: ['servers.view'], accountsInUse: true
+});
+const viewer: CurrentIdentity = {
+  user: { id: 'v1', username: 'v1', displayName: 'v1', roleId: 'viewer', roleName: 'Viewer', active: true, ownerUserId: 'op1', permissions: [], createdAt: 0, updatedAt: 0, lastLoginAt: null },
+  isLocalDesktop: false, isAdmin: false, permissions: ['servers.view'], accountsInUse: true
+};
+let identity: CurrentIdentity = admin;
+const assignServerManager = jasmine.createSpy('assignServerManager').and.resolveTo({ success: true });
+const setServerOperator = jasmine.createSpy('setServerOperator').and.resolveTo({ success: true });
+const directory = {
+  changed$: of(undefined),
+  operators: [{ id: 'op1', username: 'op1', displayName: 'Ops', roleName: 'Operator', ownerUserId: null }],
+  assignees: [
+    { id: 'm1', username: 'mia', displayName: '', roleName: 'Server Manager', ownerUserId: 'op1' },
+    { id: 'm0', username: 'max', displayName: '', roleName: 'Server Manager', ownerUserId: null }
+  ],
+  operatorLabel: () => 'Ops',
+  assigneeLabel: () => 'Not assigned'
+};
 
 describe('GeneralTabComponent', () => {
   let component: GeneralTabComponent;
@@ -10,9 +39,15 @@ describe('GeneralTabComponent', () => {
 
   beforeEach(async () => {
     errors = [];
+    identity = admin;
     await TestBed.configureTestingModule({
       imports: [GeneralTabComponent],
-      providers: [{ provide: ErrorHandler, useValue: { handleError: (error: unknown) => errors.push(error) } }]
+      providers: [
+        { provide: ErrorHandler, useValue: { handleError: (error: unknown) => errors.push(error) } },
+        { provide: AuthService, useValue: { get identity() { return identity; }, assignServerManager, setServerOperator } },
+        { provide: PoolDirectoryService, useValue: directory },
+        { provide: NotificationService, useClass: MockNotificationService }
+      ]
     }).compileComponents();
     fixture = TestBed.createComponent(GeneralTabComponent);
     component = fixture.componentInstance;
@@ -103,5 +138,49 @@ describe('GeneralTabComponent', () => {
     const messages = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.validation-error'))
       .map(element => element.textContent?.trim());
     expect(messages).toEqual(['Server Map cannot be empty', 'Game Port must be a valid integer']);
+  });
+  describe('ownership', () => {
+    // Inputs arrive through bindings in the app, which is what fires ngOnChanges.
+    const setServer = (server: Record<string, unknown>) => {
+      component.serverInstance = server;
+      component.ngOnChanges({ serverInstance: new SimpleChange(null, server, false) });
+      fixture.detectChanges();
+    };
+    const dropdowns = () => (fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section app-dropdown').length;
+    const statics = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section .form-control-static')).map(el => el.textContent?.trim());
+
+    it('lets an admin choose both the pool and the assignee', () => {
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
+
+      expect(dropdowns()).toBe(2);
+      expect(component.operatorOptions.map(option => option.label)).toEqual(['Admin pool', 'Ops (op1)']);
+      expect(component.assigneeOptions.map(option => option.value)).toEqual(['', 'm1']);
+    });
+
+    it('lets the pool\'s operator choose only the assignee', () => {
+      identity = operator('op1');
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
+
+      expect(dropdowns()).toBe(1);
+      expect(statics()).toEqual(['Ops']);
+    });
+
+    it('shows a viewer the labels only', () => {
+      identity = viewer;
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: 'm1' });
+
+      expect(dropdowns()).toBe(0);
+      expect(statics()).toEqual(['Ops', 'Not assigned']);
+    });
+
+    it('assigns and moves through the auth service', async () => {
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
+
+      await component.onAssigneeChange('m1');
+      await component.onOperatorChange('');
+
+      expect(assignServerManager).toHaveBeenCalledWith('s1', 'm1');
+      expect(setServerOperator).toHaveBeenCalledWith('s1', null);
+    });
   });
 });

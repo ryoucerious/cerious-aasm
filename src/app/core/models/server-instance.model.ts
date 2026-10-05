@@ -170,6 +170,11 @@ export interface ServerInstance {
   // Server ordering for sidebar display
   sortOrder?: number; // Order of this server in the sidebar list
 
+  /** The operator whose pool this server is in. Null or missing is the admin pool. */
+  operatorUserId?: string | null;
+  /** The server manager or attendant this server is assigned to. Null or missing is unassigned. */
+  managerUserId?: string | null;
+
   perPlatformMaxStructuresMultiplier?: number;
   platformSaddleBuildAreaBoundsMultiplier?: number;
   maxPlatformSaddleStructureLimit?: number;

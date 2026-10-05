@@ -113,4 +113,97 @@ describe('UserDatabaseService', () => {
       { id: 1, kind: 'info', message: 'first', instanceId: null, username: null, createdAt: expect.any(Number) }
     ]);
   });
+  describe('pools', () => {
+    it('opens again with the owner column already present', () => {
+      const again = new UserDatabaseService();
+      again.initialize();
+      expect(again.listUsers()).toEqual([]);
+      again.close();
+    });
+
+    it('stores a pool account under an active operator', async () => {
+      const operator = await createUser('op', 'operator');
+
+      const result = await service.createUser({ username: 'm', password: 'password1', roleId: 'server-manager', ownerUserId: operator.id });
+
+      expect(result).toMatchObject({ success: true, data: { ownerUserId: operator.id } });
+    });
+
+    it('refuses an owner that is not an active operator', async () => {
+      const viewer = await createUser('v', 'viewer');
+
+      const result = await service.createUser({ username: 'm', password: 'password1', roleId: 'server-manager', ownerUserId: viewer.id });
+
+      expect(result).toEqual({ success: false, error: 'Choose an active operator for this pool.' });
+    });
+
+    it('never stores an owner on an admin or operator account', async () => {
+      const operator = await createUser('op', 'operator');
+
+      const other = await service.createUser({ username: 'op2', password: 'password1', roleId: 'operator', ownerUserId: operator.id });
+
+      expect(other).toMatchObject({ success: true, data: { ownerUserId: null } });
+    });
+
+    it('moves an account between pools on update and keeps it when the field is absent', async () => {
+      const a = await createUser('a', 'operator');
+      const b = await createUser('b', 'operator');
+      const created = await service.createUser({ username: 'm', password: 'password1', roleId: 'viewer', ownerUserId: a.id });
+      const m = created.success ? created.data : null;
+
+      expect(await service.updateUser({ id: m!.id, displayName: 'M' })).toMatchObject({ success: true, data: { ownerUserId: a.id } });
+      expect(await service.updateUser({ id: m!.id, ownerUserId: b.id })).toMatchObject({ success: true, data: { ownerUserId: b.id } });
+      expect(await service.updateUser({ id: m!.id, ownerUserId: null })).toMatchObject({ success: true, data: { ownerUserId: null } });
+    });
+
+    it('drops the owner when an account is promoted to operator', async () => {
+      const a = await createUser('a', 'operator');
+      const created = await service.createUser({ username: 'm', password: 'password1', roleId: 'viewer', ownerUserId: a.id });
+      const m = created.success ? created.data : null;
+
+      expect(await service.updateUser({ id: m!.id, roleId: 'operator' })).toMatchObject({ success: true, data: { ownerUserId: null } });
+    });
+
+    it('leaves a pool member editable after their operator is disabled', async () => {
+      const op = await createUser('op', 'operator');
+      const created = await service.createUser({ username: 'm', password: 'password1', roleId: 'viewer', ownerUserId: op.id });
+      const m = created.success ? created.data : null;
+      expect(await service.updateUser({ id: op.id, active: false })).toMatchObject({ success: true });
+
+      expect(await service.updateUser({ id: m!.id, displayName: 'M' })).toMatchObject({ success: true, data: { ownerUserId: op.id } });
+      expect(await service.updateUser({ id: m!.id, ownerUserId: op.id })).toEqual({ success: false, error: 'Choose an active operator for this pool.' });
+    });
+
+    it('restores the built-in roles and leaves a custom role alone', () => {
+      const manager = service.getRole('server-manager')!;
+      const operator = service.getRole('operator')!;
+      expect(manager.permissions).not.toContain('servers.create');
+      expect(manager.permissions).not.toContain('servers.delete');
+      expect(manager.permissions).toEqual(expect.arrayContaining(['servers.view', 'servers.control', 'servers.configure']));
+      expect(operator.permissions).toEqual(expect.arrayContaining([
+        'servers.create', 'servers.delete', 'accounts.managers.create', 'accounts.viewers.delete'
+      ]));
+      expect(service.getRole('attendant')!.permissions).toEqual(['servers.view', 'servers.control', 'players.view']);
+      expect(service.getRole('viewer')!.permissions).toEqual(['servers.view', 'players.view']);
+
+      service.updateRole({ id: 'server-manager', name: 'Server Manager', permissions: ['servers.view', 'servers.create'] });
+      const db = (service as unknown as { conn: { run(sql: string, params: unknown[]): void } }).conn;
+      db.run('UPDATE roles SET permissions = ? WHERE id = ?', [
+        JSON.stringify(['servers.view', 'servers.control', 'servers.create', 'servers.delete']),
+        'server-manager'
+      ]);
+      const custom = service.createRole({ name: 'Auditors', permissions: ['servers.view'] });
+      if (!custom.success) throw new Error(custom.error);
+
+      const again = new UserDatabaseService();
+      again.initialize();
+      expect(again.getRole('server-manager')!.permissions).not.toContain('servers.create');
+      expect(again.getRole('viewer')!.permissions).toEqual(['servers.view', 'players.view']);
+      expect(again.getRole(custom.data.id)!.permissions).toEqual(['servers.view']);
+      expect(again.updateRole({ id: 'operator', name: 'Operator', permissions: ['servers.view'] })).toEqual({
+        success: false, error: 'Built-in roles have a fixed set of permissions and cannot be edited.'
+      });
+      again.close();
+    });
+  });
 });

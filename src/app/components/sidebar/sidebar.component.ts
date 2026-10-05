@@ -10,6 +10,7 @@ import { ServerInstanceService, withoutRuntimeFields } from '../../core/services
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus, isBusyStatus } from '../../core/utils/server-status';
+import { PoolDirectoryService } from '../../core/services/pool-directory.service';
 import { ServerNavService, ServerTabDef, ServerTabId } from '../../core/services/server-nav.service';
 import { ModalComponent } from '../modal/modal.component';
 import { AddServerModalComponent } from '../add-server-modal/add-server-modal.component';
@@ -17,6 +18,8 @@ import { NotificationService } from '../../core/services/notification.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AppUpdateService } from '../../core/services/app-update.service';
 import { IpcService } from '../../core/services/ipc.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { environment } from '../../../environments/environment';
 
 /**
@@ -84,8 +87,23 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private settingsDrawer: SettingsDrawerService,
     private appUpdate: AppUpdateService,
     private ipc: IpcService,
+    private auth: AuthService,
+    private poolDirectory: PoolDirectoryService,
     private cdr: ChangeDetectorRef
   ) {}
+
+  // The backend enforces these; the list only hides controls that would be refused.
+  get canCreateServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CREATE);
+  }
+
+  get canRenameServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CONFIGURE);
+  }
+
+  get canDeleteServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_DELETE);
+  }
 
   ngOnInit(): void {
     this.subs.push(this.appUpdate.status$.subscribe(status => {
@@ -114,6 +132,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
         this.cdr.markForCheck();
       }
     }));
+
+    this.subs.push(this.poolDirectory.changed$.subscribe(() => this.cdr.markForCheck()));
+    this.subs.push(this.auth.identity$.subscribe(() => this.cdr.markForCheck()));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
@@ -263,7 +284,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   onServerNameDoubleClick(server: ServerInstance, event: Event): void {
     event.stopPropagation();
-    if (this.isServerBusy(server)) return;
+    if (!this.canRenameServer || this.isServerBusy(server)) return;
     this.editingServerId = server.id;
     this.editingServerName = server.name;
     this.cdr.markForCheck();
@@ -331,6 +352,26 @@ export class SidebarComponent implements OnInit, OnDestroy {
   /** Deleting is only offered for a server that is fully stopped. */
   isServerStopped(server: ServerInstance): boolean {
     return serverStatusKey(server.state) === 'stopped';
+  }
+
+  /** An admin's row names both the operator and the assignee. */
+  get groupsByOperator(): boolean {
+    return this.auth.identity.isAdmin;
+  }
+
+  /**
+   * Admin sees the operator and the assignee. Anyone else sees the assignee.
+   * "Admin" and "Not assigned" are not names, and the join address stays on the card.
+   */
+  listLabel(server: ServerInstance): string {
+    const assignee = this.poolDirectory.assigneeLabel(server);
+    const hasAssignee = !!server.managerUserId && assignee !== 'Not assigned';
+    const operator = this.poolDirectory.operatorLabel(server);
+    const hasOperator = !!server.operatorUserId && operator !== 'Operator';
+    if (this.groupsByOperator && hasOperator && hasAssignee) return `${operator} · ${assignee}`;
+    if (this.groupsByOperator && hasOperator) return operator;
+    if (hasAssignee) return assignee;
+    return '';
   }
 
   trackByServerId(_index: number, server: ServerInstance): string {

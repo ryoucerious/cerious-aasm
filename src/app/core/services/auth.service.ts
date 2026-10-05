@@ -6,8 +6,9 @@ import { WebSocketService } from './web-socket.service';
 import { IpcService } from './ipc.service';
 import { GlobalConfig } from '../interfaces/global-config.interface';
 import {
-  AuthenticatedUser, CurrentIdentity, Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID
+  AuthenticatedUser, CurrentIdentity, Permission, PermissionInfo, PoolLabel, Role, User, ADMIN_ROLE_ID
 } from '../models/auth.model';
+import { ServerInstance } from '../models/server-instance.model';
 
 export interface UsersAndRoles {
   users: User[];
@@ -179,12 +180,32 @@ export class AuthService {
     return { roles: res?.roles || [], permissions: res?.permissions || [] };
   }
 
-  createUser(input: { username: string; password: string; displayName?: string; roleId: string; active?: boolean }): Promise<SaveResult<User>> {
+  createUser(input: {
+    username: string; password: string; displayName?: string; roleId: string; active?: boolean; ownerUserId?: string | null;
+  }): Promise<SaveResult<User>> {
     return this.mutate<User>('create-user', input, 'user');
   }
 
-  updateUser(input: { id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string }): Promise<SaveResult<User>> {
+  updateUser(input: {
+    id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string; ownerUserId?: string | null;
+  }): Promise<SaveResult<User>> {
     return this.mutate<User>('update-user', input, 'user');
+  }
+
+  /** Names for the ownership line on a server; what comes back depends on who is asking. */
+  async listPoolLabels(): Promise<{ operators: PoolLabel[]; assignees: PoolLabel[] }> {
+    const res = await this.send<{ operators?: PoolLabel[]; assignees?: PoolLabel[] }>('list-pool-labels', {});
+    return { operators: res?.operators || [], assignees: res?.assignees || [] };
+  }
+
+  /** Attaches a server manager or attendant to a server, or detaches with null. Admin or the pool's operator. */
+  assignServerManager(instanceId: string, managerUserId: string | null): Promise<SaveResult<ServerInstance>> {
+    return this.mutate<ServerInstance>('assign-server-manager', { instanceId, managerUserId }, 'instance');
+  }
+
+  /** Moves a server into an operator's pool, or back to the admin pool with null. Admin only. */
+  setServerOperator(instanceId: string, operatorUserId: string | null): Promise<SaveResult<ServerInstance>> {
+    return this.mutate<ServerInstance>('set-server-operator', { instanceId, operatorUserId }, 'instance');
   }
 
   deleteUser(id: string): Promise<SaveResult> {

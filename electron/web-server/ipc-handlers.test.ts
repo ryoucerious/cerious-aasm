@@ -40,7 +40,15 @@ describe('ipc-handlers', () => {
   it('broadcasts to every socket but the excluded one', () => {
     receive({ type: 'broadcast-web', channel: 'server-instances', data: [], excludeCid: 'c1' });
 
-    expect(messagingService.sendToAllWebSockets).toHaveBeenCalledWith('server-instances', [], 'c1');
+    expect(messagingService.sendToAllWebSockets).toHaveBeenCalledWith('server-instances', [], 'c1', undefined);
+  });
+
+  it('passes a broadcast\'s audience on to the sockets', () => {
+    const audience = { userIds: ['u1'], owners: true };
+
+    receive({ type: 'broadcast-web', channel: 'server-instance-log', data: { instanceId: 's1' }, audience });
+
+    expect(messagingService.sendToAllWebSockets).toHaveBeenCalledWith('server-instance-log', { instanceId: 's1' }, undefined, audience);
   });
 
   it('hands a credential check result to the waiting login', () => {

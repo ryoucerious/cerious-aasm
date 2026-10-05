@@ -264,6 +264,13 @@ describe('ServerLifecycleService', () => {
     });
 
     // The handler marks them 'queued' up front; one that fails its checks used to stay queued.
+    it('limits Start All to the given servers', async () => {
+      const result = await serverLifecycleService.startAllInstances(0, ['c3']);
+
+      expect(result).toEqual({ started: ['c3'], failed: [] });
+      expect(mockProcess.startServerProcess).toHaveBeenCalledTimes(1);
+    });
+
     it('reports a server that fails to start as stopped again', async () => {
       mockUdp.mockResolvedValueOnce(true);
 
@@ -283,6 +290,15 @@ describe('ServerLifecycleService', () => {
 
       await expect(serverLifecycleService.stopAllInstances()).resolves.toEqual({ stopped: ['a1', 'c3'], failed: [] });
       expect(mockProcess.stopServerProcess).not.toHaveBeenCalledWith('b2');
+    });
+
+    it('limits Stop All to the given servers', async () => {
+      mockManagement.getAllInstances.mockResolvedValue({ instances: [{ id: 'a1' }, { id: 'b2' }, { id: 'c3' }] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+      mockProcess.stopServerProcess.mockResolvedValue({ success: true });
+
+      await expect(serverLifecycleService.stopAllInstances(['c3'])).resolves.toEqual({ stopped: ['c3'], failed: [] });
+      expect(mockProcess.stopServerProcess).toHaveBeenCalledTimes(1);
     });
   });
 });

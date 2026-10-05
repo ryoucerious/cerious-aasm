@@ -71,6 +71,7 @@ import { ArkUpdateService, stopSteamCmdQuery } from './services/ark-update.servi
 import { autoUpdateService } from './services/auto-update.service';
 import { playerHistoryService } from './services/player-history.service';
 import { userDatabaseService } from './services/auth/user-database.service';
+import { scopeBroadcast } from './services/auth/pool-broadcast';
 import { cleanupAllRconConnections } from './utils/rcon.utils';
 import { loadGlobalConfig } from './utils/global-config.utils';
 import { releaseInstallLockIfHeld } from './utils/installer.utils';
@@ -448,6 +449,8 @@ function createWindow(): void {
 async function prepareAccounts(): Promise<void> {
   try {
     userDatabaseService.initialize();
+    // Web clients only receive the broadcasts for their pool; main decides, the child matches.
+    messagingService.scopeBroadcast = scopeBroadcast;
     const globalConfig = loadGlobalConfig();
     const startup = readAuthArgs();
     const authOn = !!globalConfig.authenticationEnabled || startup.enabled;

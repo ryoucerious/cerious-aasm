@@ -6,15 +6,13 @@ import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { SparklineComponent } from '../sparkline/sparkline.component';
 import { getMapVisual, MapVisual } from '../../core/utils/map-visuals';
-import { formatUptime, formatMegabytes, formatBytes, formatPercent } from '../../core/utils/format.utils';
+import { formatUptime, formatMegabytes, formatBytes, formatPercent, joinAddress } from '../../core/utils/format.utils';
 import {
   serverStatusKey, serverStatusLabel, serverStatusClass,
   isOnlineStatus, isBusyStatus, canStartStatus
 } from '../../core/utils/server-status';
 import { fixedOrigin } from '../../core/utils/floating';
 
-/** Hosts the desktop app and a local dev server load from; useless in a join address. */
-const LOCAL_HOSTS = new Set(['', 'localhost', '127.0.0.1', '[::1]', '::1']);
 const COPIED_FOR_MS = 2000;
 
 /** Display state for the pill on a card; derived from the backend's lowercase state. */
@@ -41,7 +39,13 @@ export class ServerCardComponent implements OnDestroy {
   @Input() now = Date.now();
   @Input() view: 'grid' | 'list' = 'grid';
   @Input() canDelete = true;
+  @Input() canConfigure = true;
+  @Input() canBackups = true;
   @Input() hostMemoryTotalBytes: number | null = null;
+  /** The operator who owns this server. The admin pool and an unknown id stay off the artwork. */
+  @Input() operatorLabel = '';
+  /** Who this server is assigned to, including their role. "Not assigned" stays off the artwork. */
+  @Input() assigneeLabel = '';
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();
@@ -195,22 +199,23 @@ export class ServerCardComponent implements OnDestroy {
   }
 
   /**
-   * What a player pastes into the game: the host this panel was opened on and the game port. The
-   * desktop app loads from localhost, which no player can use, so it falls back to the server's
-   * MultiHome address. The password is never part of it.
+   * The host this panel was opened on and the game port. The desktop app loads from localhost,
+   * so a MultiHome address replaces that when one is set. The password is never part of it.
    */
   get connectAddress(): string {
-    const port = Number(this.server?.gamePort);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
-    const pageHost = this.pageHostname();
-    const host = LOCAL_HOSTS.has(pageHost) ? String(this.server?.multiHome || '').trim() : pageHost;
-    return host ? `${host}:${port}` : '';
+    return joinAddress(this.server, this.pageHostname());
   }
 
-  get copyTitle(): string {
-    const address = this.connectAddress;
-    if (address) return `Copy ${address}`;
-    return 'No join address: open the panel by its network address, or set MultiHome in the server settings';
+  /** A named operator. The admin pool is not a person, so it is not printed as "Admin". */
+  get showOperator(): boolean {
+    const label = (this.operatorLabel || '').trim();
+    return !!this.server?.operatorUserId && label !== '' && label !== 'Operator';
+  }
+
+  /** A named assignee. An empty assignment is not printed as "Not assigned". */
+  get showAssignee(): boolean {
+    const label = (this.assigneeLabel || '').trim();
+    return !!this.server?.managerUserId && label !== '' && label !== 'Not assigned';
   }
 
   async onCopyAddress(event: Event): Promise<void> {

@@ -304,7 +304,7 @@ describe('ServerProcessService', () => {
       expect(getInstanceState('inst1')).toBe('crashed');
       expect(readLogTail).toHaveBeenCalledWith('/instances/inst1/stderr.log', 50);
       expect(broadcasts('notification')).toEqual([
-        { type: 'error', message: 'Alpha crashed during startup (signal SIGSEGV). Check the logs for details.' }
+        { type: 'error', message: 'Alpha crashed during startup (signal SIGSEGV). Check the logs for details.', instanceId: 'inst1' }
       ]);
       expect(broadcasts('server-instance-log')).toEqual([{
         instanceId: 'inst1',

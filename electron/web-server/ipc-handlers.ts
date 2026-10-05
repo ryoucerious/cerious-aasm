@@ -26,7 +26,7 @@ export function setupIPCHandlers(): void {
         messagingService.sendToWebSocket(message.cid, message.channel, message.data);
         break;
       case 'broadcast-web':
-        messagingService.sendToAllWebSockets(message.channel, message.data, message.excludeCid);
+        messagingService.sendToAllWebSockets(message.channel, message.data, message.excludeCid, message.audience);
         break;
       case 'update-auth-config': {
         const before = getAuthConfig();

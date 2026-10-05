@@ -14,6 +14,7 @@ import { ServerConfigurationService } from '../../core/services/server-configura
 import { BackupUIService } from '../../core/services/backup-ui.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { EventSubscriptionService } from '../../core/services/event-subscription.service';
+import { AuthService } from '../../core/services/auth.service';
 import { SaveInstanceResult } from '../../core/models/server-instance.model';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
@@ -29,8 +30,11 @@ describe('ServerComponent', () => {
   let mockBackupUI: jasmine.SpyObj<BackupUIService>;
   let mockRconManagement: jasmine.SpyObj<RconManagementService>;
   let mockNotification: jasmine.SpyObj<NotificationService>;
+  /** Permissions the stubbed identity lacks; empty means an admin. */
+  let denied: Set<string>;
 
   beforeEach(async () => {
+    denied = new Set();
     mockMessaging = new MockMessagingService();
     mockMessaging.receiveMessage = jasmine.createSpy('receiveMessage').and.returnValue(of(null));
     mockMessaging.sendMessage = jasmine.createSpy('sendMessage').and.returnValue(of(null));
@@ -88,7 +92,8 @@ describe('ServerComponent', () => {
         { provide: ServerLifecycleService, useValue: mockServerLifecycle },
         { provide: EventSubscriptionService, useValue: mockEventSubscription },
         { provide: AutomationService, useValue: jasmine.createSpyObj('AutomationService', ['configureAutoStart']) },
-        { provide: NotificationService, useValue: mockNotification }
+        { provide: NotificationService, useValue: mockNotification },
+        { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission) } }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
@@ -428,5 +433,12 @@ describe('ServerComponent', () => {
     expect(component.pageTitle).toBe('General');
     component.activeTab = 'players';
     expect(component.isSettingsTab).toBeFalse();
+  });
+  describe('RCON permission', () => {
+    it('offers the RCON panel only to a role that may use RCON', () => {
+      expect(component.canUseRcon).toBeTrue();
+      denied = new Set(['rcon.use']);
+      expect(component.canUseRcon).toBeFalse();
+    });
   });
 });

@@ -1,45 +1,66 @@
 <article class="server-card" [class.list-view]="view === 'list'" [class.online]="isOnline" (dblclick)="onConsole($event)">
   <div class="server-card-hero" [style.background-image]="visual.layered">
     <div class="server-card-hero-shade"></div>
-    <span class="server-card-drag material-icons" title="Drag to reorder">drag_indicator</span>
+    <span class="server-card-drag material-icons" data-tooltip="Drag to reorder" aria-label="Drag to reorder">drag_indicator</span>
     <div class="server-card-title">
       <div class="server-card-name-row">
-        <h3 class="server-card-name" [title]="server.name">{{ server.name }}</h3>
-        <span class="status-badge card-status" [ngClass]="status.cssClass">{{ status.label }}</span>
+        <h3 class="server-card-name" [attr.data-tooltip]="server.name">{{ server.name }}</h3>
+        <span class="status-badge card-status" [ngClass]="status.cssClass" [attr.data-tooltip]="status.label">{{ status.label }}</span>
       </div>
-      <div class="server-card-map">{{ visual.label }}</div>
+      <div class="server-card-map" [attr.data-tooltip]="visual.label">{{ visual.label }}</div>
     </div>
   </div>
 
   <div class="server-card-body">
-    <div class="server-card-session" *ngIf="sessionName">
-      <span class="material-icons">public</span>
-      <span class="server-card-session-name">{{ sessionName }}</span>
+    <div class="server-card-details" *ngIf="sessionName || showOperator || showAssignee || connectAddress">
+      <div class="server-card-details-main">
+        <div class="server-card-session" *ngIf="sessionName" [attr.data-tooltip]="sessionName">
+          <span class="material-icons">public</span>
+          <span class="server-card-session-name">{{ sessionName }}</span>
+        </div>
+        <div class="server-card-session" *ngIf="showOperator" [attr.data-tooltip]="operatorLabel">
+          <span class="material-icons">badge</span>
+          <span class="server-card-session-name">{{ operatorLabel }}</span>
+        </div>
+        <div class="server-card-session" *ngIf="showAssignee" [attr.data-tooltip]="assigneeLabel">
+          <span class="material-icons">person</span>
+          <span class="server-card-session-name">{{ assigneeLabel }}</span>
+        </div>
+      </div>
+      <div class="server-card-session server-card-address" *ngIf="connectAddress">
+        <span class="material-icons" [attr.data-tooltip]="connectAddress">lan</span>
+        <span class="server-card-session-name" [attr.data-tooltip]="connectAddress">{{ connectAddress }}</span>
+        <button type="button" class="server-card-copy" (click)="onCopyAddress($event)"
+                [attr.data-tooltip]="copied ? 'Copied' : 'Copy'"
+                [attr.aria-label]="copied ? 'Copied' : 'Copy'">
+          <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span>
+        </button>
+      </div>
     </div>
 
     <div class="server-card-stats">
-      <div class="server-stat">
+      <div class="server-stat" [attr.data-tooltip]="players + ' players'">
         <span class="material-icons">group</span>
         <span class="server-stat-text">
           <span class="server-stat-value">{{ players }}</span>
           <span class="server-stat-label">Players</span>
         </span>
       </div>
-      <div class="server-stat">
+      <div class="server-stat" [attr.data-tooltip]="uptime + ' uptime'">
         <span class="material-icons">schedule</span>
         <span class="server-stat-text">
           <span class="server-stat-value">{{ uptime }}</span>
           <span class="server-stat-label">Uptime</span>
         </span>
       </div>
-      <div class="server-stat">
+      <div class="server-stat" [attr.data-tooltip]="cpu + ' CPU'">
         <span class="material-icons">memory</span>
         <span class="server-stat-text">
           <span class="server-stat-value">{{ cpu }}</span>
           <span class="server-stat-label">CPU</span>
         </span>
       </div>
-      <div class="server-stat">
+      <div class="server-stat" [attr.data-tooltip]="memory + (memoryTotal ? ' ' + memoryTotal : '') + ' memory'">
         <span class="material-icons">storage</span>
         <span class="server-stat-text">
           <span class="server-stat-value">{{ memory }}</span>
@@ -49,7 +70,7 @@
     </div>
 
     <div class="server-card-spark" [class.dim]="!isOnline">
-      <app-sparkline [values]="history" [color]="isOnline ? 'var(--success)' : 'var(--text-secondary)'" [height]="36"></app-sparkline>
+      <app-sparkline [values]="history" [color]="isOnline ? 'var(--success)' : 'var(--text-secondary)'" [height]="24"></app-sparkline>
     </div>
 
     <div class="server-card-actions">
@@ -58,28 +79,26 @@
               [class.btn-primary]="!isOnline"
               [class.btn-danger]="isOnline"
               [disabled]="!isOnline && !canStart"
+              [attr.data-tooltip]="isOnline ? 'Stop' : (isBusy ? status.label : 'Start')"
               (click)="onPrimaryAction($event)">
         <span class="material-icons">{{ isOnline ? 'stop' : 'play_arrow' }}</span>
         {{ isOnline ? 'Stop' : (isBusy ? status.label : 'Start') }}
       </button>
-      <button type="button" class="btn btn-ghost" (click)="onConsole($event)">
+      <button type="button" class="btn btn-ghost" data-tooltip="Console" (click)="onConsole($event)">
         <span class="material-icons">terminal</span> Console
       </button>
-      <button type="button" class="btn btn-ghost server-card-copy" (click)="onCopyAddress($event)" [disabled]="!connectAddress" [title]="copyTitle">
-        <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span> {{ copied ? 'Copied' : 'Copy' }}
-      </button>
       <div class="server-card-menu-anchor" #menuAnchor>
-        <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" aria-label="More actions" [attr.aria-expanded]="menuOpen">
+        <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" data-tooltip="More actions" aria-label="More actions" [attr.aria-expanded]="menuOpen">
           <span class="material-icons">more_horiz</span>
         </button>
         <!-- Positioned against the viewport: the card hides its overflow, which would clip this
              at the card's edge. -->
         <div class="card-menu" *ngIf="menuOpen" #menu role="menu"
              [style.left.px]="menuPosition.left" [style.top.px]="menuPosition.top">
-          <button type="button" class="card-menu-item" role="menuitem" (click)="onConfigure()">
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="canConfigure" (click)="onConfigure()">
             <span class="material-icons">tune</span> Configure
           </button>
-          <button type="button" class="card-menu-item" role="menuitem" (click)="onBackups()">
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="canBackups" (click)="onBackups()">
             <span class="material-icons">backup</span> Backups
           </button>
           <button type="button" class="card-menu-item" role="menuitem" *ngIf="isBusy" (click)="onForceStop()">

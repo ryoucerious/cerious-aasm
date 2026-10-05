@@ -14,6 +14,8 @@ import { SettingsDrawerService } from '../../core/services/settings-drawer.servi
 import { AppUpdateService } from '../../core/services/app-update.service';
 import { WebSocketService } from '../../core/services/web-socket.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PoolDirectoryService } from '../../core/services/pool-directory.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
@@ -30,6 +32,9 @@ describe('SidebarComponent', () => {
   let serverNav: any;
   let notification: MockNotificationService;
   let settingsDrawer: jasmine.SpyObj<SettingsDrawerService>;
+  /** Permissions the stubbed identity lacks; empty means an admin. */
+  let denied: Set<string>;
+  let identity: { isAdmin: boolean };
 
   const stopped = { id: '1', name: 'Alpha', state: 'stopped' };
   const running = { id: '2', name: 'Beta', state: 'running', players: 3 };
@@ -71,6 +76,8 @@ describe('SidebarComponent', () => {
     };
     notification = new MockNotificationService();
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
+    denied = new Set();
+    identity = { isAdmin: false };
 
     await TestBed.configureTestingModule({
       imports: [SidebarComponent, HttpClientTestingModule],
@@ -85,7 +92,9 @@ describe('SidebarComponent', () => {
         { provide: NotificationService, useValue: notification },
         { provide: GlobalConfigService, useClass: MockGlobalConfigService },
         { provide: WebSocketService, useValue: { connected$: of(false) } },
-        { provide: SettingsDrawerService, useValue: settingsDrawer }
+        { provide: SettingsDrawerService, useValue: settingsDrawer },
+        { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission), identity, identity$: of(identity) } },
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } }
       ]
     }).compileComponents();
 
@@ -96,6 +105,24 @@ describe('SidebarComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  it('labels a row with the assignee, and with the operator for an admin', () => {
+    const directory = TestBed.inject(PoolDirectoryService) as unknown as {
+      operatorLabel: () => string;
+      assigneeLabel: () => string;
+    };
+    directory.operatorLabel = () => 'Ops';
+    directory.assigneeLabel = () => 'Server Manager · mia';
+    const server = { id: '1', name: 'Alpha', operatorUserId: 'op1', managerUserId: 'm1' } as any;
+
+    expect(component.listLabel(server)).toBe('Server Manager · mia');
+    identity.isAdmin = true;
+    expect(component.listLabel(server)).toBe('Ops · Server Manager · mia');
+  });
+
+  it('leaves the subtitle blank when a server has no operator or assignee', () => {
+    expect(component.listLabel({ id: '1', name: 'Alpha', gamePort: 7777, multiHome: '203.0.113.5' } as any)).toBe('');
   });
 
   it('groups the visible tabs into overview, configuration and features', () => {
@@ -263,10 +290,20 @@ describe('SidebarComponent', () => {
     expect(serverInstanceService.save).not.toHaveBeenCalled();
   });
 
-  it('reorders servers', () => {
+  it('reorders servers, including for an admin', () => {
+    identity.isAdmin = true;
     servers$.next([stopped, running]);
     component.onDrop({ previousIndex: 0, currentIndex: 1 } as any);
     expect(liveServers.reorder).toHaveBeenCalledWith(['2', '1']);
+  });
+
+  it('keeps the saved order instead of grouping an admin by pool', () => {
+    identity.isAdmin = true;
+    servers$.next([
+      { id: '1', name: 'Zulu', sortOrder: 0 },
+      { id: '2', name: 'Alpha', sortOrder: 1, operatorUserId: 'bob' }
+    ]);
+    expect(component.servers.map(server => server.id)).toEqual(['1', '2']);
   });
 
   it('maps server states to status classes', () => {
@@ -367,5 +404,34 @@ describe('SidebarComponent', () => {
     component['subs'] = [sub as any];
     component.ngOnDestroy();
     expect(sub.unsubscribe).toHaveBeenCalled();
+  });
+  describe('permissions', () => {
+    const recheck = () => {
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+    };
+
+    it('offers adding, renaming and deleting to an admin', () => {
+      servers$.next([stopped, running]);
+      recheck();
+      const el: HTMLElement = fixture.nativeElement;
+
+      expect(el.querySelector('button[title="Add server"]')).not.toBeNull();
+      expect(el.querySelector('.delete-server-btn')).not.toBeNull();
+      component.onServerNameDoubleClick(stopped as never, new Event('dblclick'));
+      expect(component.editingServerId).toBe('1');
+    });
+
+    it('hides adding, renaming and deleting when the role lacks them', () => {
+      denied = new Set(['servers.create', 'servers.delete', 'servers.configure']);
+      servers$.next([stopped, running]);
+      recheck();
+      const el: HTMLElement = fixture.nativeElement;
+
+      expect(el.querySelector('button[title="Add server"]')).toBeNull();
+      expect(el.querySelector('.delete-server-btn')).toBeNull();
+      component.onServerNameDoubleClick(stopped as never, new Event('dblclick'));
+      expect(component.editingServerId).toBeNull();
+    });
   });
 });

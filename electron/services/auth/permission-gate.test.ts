@@ -2,11 +2,15 @@ import { authorizeChannel, identifySender, isDesktopWindow } from './permission-
 import type { ApiProcessSender, WebSocketClient } from '../../types/messaging.types';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES } from '../../types/auth.types';
 import { permissionForChannel } from './channel-permissions';
+import { getInstance } from '../../utils/ark/instance.utils';
+
+jest.mock('../../utils/ark/instance.utils', () => ({ getInstance: jest.fn() }));
+const mockGetInstance = jest.mocked(getInstance);
 
 function account(roleId: string, permissions: AuthenticatedUser['permissions']): AuthenticatedUser {
   return {
     id: `id-${roleId}`, username: roleId, displayName: roleId, roleId, roleName: roleId, permissions,
-    active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null
+    active: true, ownerUserId: null, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null
   };
 }
 
@@ -111,4 +115,58 @@ describe('authorizeChannel', () => {
       allowed: false, error: 'Your role does not allow this (servers.control required).'
     });
   });
+describe('authorizeChannel pool scope', () => {
+  const operator = (permissions: AuthenticatedUser['permissions']) => ({ ...account('operator', permissions), id: 'op-1' });
+
+  beforeEach(() => mockGetInstance.mockReset());
+
+  it('refuses a call about a server outside the caller\'s pool', () => {
+    mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-2' } as never);
+
+    expect(authorizeChannel('start-server-instance', web(operator(['servers.control'])), { id: 's1' }))
+      .toEqual({ allowed: false, error: 'That server is not in your pool.' });
+    expect(mockGetInstance).toHaveBeenCalledWith('s1');
+  });
+
+  it('allows a call about a server inside the pool', () => {
+    mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-1' } as never);
+
+    expect(authorizeChannel('create-backup', web(operator(['backups.create'])), { instanceId: 's1' })).toEqual({ allowed: true });
+  });
+
+  it('refuses a reorder that includes any server outside the pool', () => {
+    mockGetInstance.mockImplementation(id => ({ id, operatorUserId: id === 's2' ? 'op-2' : 'op-1' }) as never);
+
+    expect(authorizeChannel('reorder-server-instances', web(operator(['servers.configure'])), { orderedIds: ['s1', 's2'] }).allowed).toBe(false);
+    expect(authorizeChannel('reorder-server-instances', web(operator(['servers.configure'])), { orderedIds: ['s1'] }).allowed).toBe(true);
+  });
+
+  it('reads the id of the instance being saved and skips a new server', () => {
+    mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-2' } as never);
+    const sender = web(operator(['servers.create', 'servers.configure']));
+
+    expect(authorizeChannel('save-server-instance', sender, { instance: { id: 's1', name: 'x' } }).allowed).toBe(false);
+    expect(authorizeChannel('save-server-instance', sender, { instance: { name: 'new' } }).allowed).toBe(true);
+    expect(mockGetInstance).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an unknown server to the handler', () => {
+    mockGetInstance.mockReturnValue(null);
+
+    expect(authorizeChannel('start-server-instance', web(operator(['servers.control'])), { id: 'nope' }).allowed).toBe(true);
+  });
+
+  it('never scopes an admin or the desktop', () => {
+    mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-2' } as never);
+
+    expect(authorizeChannel('start-server-instance', desktop, { id: 's1' }).allowed).toBe(true);
+    expect(authorizeChannel('start-server-instance', web(account('admin', ALL_PERMISSIONS)), { id: 's1' }).allowed).toBe(true);
+    expect(mockGetInstance).not.toHaveBeenCalled();
+  });
+
+  it('still refuses on permission before looking at the pool', () => {
+    expect(authorizeChannel('start-server-instance', web(operator(['servers.view'])), { id: 's1' }).allowed).toBe(false);
+    expect(mockGetInstance).not.toHaveBeenCalled();
+  });
+});
 });

@@ -18,6 +18,8 @@ import { ServerConfigurationService } from '../../core/services/server-configura
 import { BackupUIService } from '../../core/services/backup-ui.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { EventSubscriptionService, ServerPageState } from '../../core/services/event-subscription.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { ServerHeaderComponent } from '../../components/server-header/server-header.component';
 import { PlayerListComponent } from '../../components/player-list/player-list.component';
 import { ModalComponent } from '../../components/modal/modal.component';
@@ -125,8 +127,14 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     private eventSubscriptionService: EventSubscriptionService,
     private automationService: AutomationService,
     private cdr: ChangeDetectorRef,
-    private notificationService: NotificationService
+    private notificationService: NotificationService,
+    private auth: AuthService
   ) {}
+
+  /** The backend refuses RCON for roles without the permission; the panel is simply not shown. */
+  get canUseRcon(): boolean {
+    return this.auth.can(PERMISSIONS.RCON_USE);
+  }
 
   ngOnInit() {
     this.activeServerSub = this.eventSubscriptionService.initializeSubscriptions(this, this.cdr);

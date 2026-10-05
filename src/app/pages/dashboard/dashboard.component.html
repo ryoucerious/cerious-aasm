@@ -40,7 +40,7 @@
           </div>
           <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
           <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
-          <button type="button" class="btn btn-primary" (click)="openAddServer()">
+          <button type="button" class="btn btn-primary" *ngIf="canCreateServer" (click)="openAddServer()">
             <span class="material-icons">add</span> Add Server
           </button>
         </div>
@@ -56,7 +56,11 @@
                          [history]="historyFor(server)"
                          [now]="now"
                          [view]="view"
-                         [canDelete]="servers.length > 1"
+                         [canDelete]="servers.length > 1 && canDeleteServer"
+                         [canConfigure]="canConfigure"
+                         [canBackups]="canBackups"
+                         [assigneeLabel]="poolDirectory.assigneeLabel(server)"
+                         [operatorLabel]="poolDirectory.operatorLabel(server)"
                          [hostMemoryTotalBytes]="hostMemoryTotal"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
@@ -70,7 +74,7 @@
           <span class="material-icons">dns</span>
           <p *ngIf="!servers.length">No servers yet. Create your first ARK: Survival Ascended server.</p>
           <p *ngIf="servers.length">No servers match this filter.</p>
-          <button type="button" class="btn btn-primary" *ngIf="!servers.length" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
+          <button type="button" class="btn btn-primary" *ngIf="!servers.length && canCreateServer" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
         </div>
       </div>
 
@@ -141,7 +145,7 @@
           <button type="button" class="dash-action" (click)="goToServerInstall()">
             <span class="dash-action-icon tone-warning"><span class="material-icons">system_update_alt</span></span> Update ARK Server
           </button>
-          <button type="button" class="dash-action" (click)="openAddServer()">
+          <button type="button" class="dash-action" *ngIf="canCreateServer" (click)="openAddServer()">
             <span class="dash-action-icon tone-info"><span class="material-icons">add</span></span> Add Server
           </button>
           <button type="button" class="dash-action" (click)="goToSettings()">

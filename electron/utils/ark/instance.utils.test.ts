@@ -221,9 +221,9 @@ describe('instance.utils', () => {
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/${expectedId}`, { recursive: true });
       expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
         `${mockInstancesBaseDir}/${expectedId}/config.json`,
-        { ...instanceData, id: expectedId }
+        { ...instanceData, id: expectedId, sortOrder: 0 }
       );
-      expect(result).toEqual({ ...instanceData, id: expectedId });
+      expect(result).toEqual({ ...instanceData, id: expectedId, sortOrder: 0 });
     });
 
     it('should save instance with provided ID', async () => {
@@ -232,8 +232,8 @@ describe('instance.utils', () => {
       const result = await saveInstance(instanceData);
 
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id`, { recursive: true });
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, instanceData);
-      expect(result).toEqual(instanceData);
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...instanceData, sortOrder: 0 });
+      expect(result).toEqual({ ...instanceData, sortOrder: 0 });
     });
 
     it('rejects a traversal id before creating any directory', async () => {
@@ -256,8 +256,8 @@ describe('instance.utils', () => {
         startedAt: 1700000000000
       });
 
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, settings);
-      expect(result).toEqual(settings);
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...settings, sortOrder: 0 });
+      expect(result).toEqual({ ...settings, sortOrder: 0 });
     });
 
     it('should return error for duplicate server name', async () => {
@@ -314,6 +314,25 @@ describe('instance.utils', () => {
       mockedFs.readdirSync.mockReturnValue(instances.map(inst => inst.id) as any);
       mockedFs.readFileSync.mockImplementation(p => JSON.stringify(byPath.get(String(p))));
     }
+
+    it('puts a new server after the ones already in the list', async () => {
+      onDisk(
+        { id: 'existing-1', name: 'One', gamePort: 7777, queryPort: 27015, rconPort: 27020 },
+        { id: 'existing-2', name: 'Two', gamePort: 7787, queryPort: 27025, rconPort: 27030 }
+      );
+
+      const result = await saveInstance({ name: 'New', gamePort: 7800, queryPort: 27100, rconPort: 27200 });
+
+      expect(result).toEqual(expect.objectContaining({ sortOrder: 2 }));
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
+        `${mockInstancesBaseDir}/existing-1/config.json`,
+        expect.objectContaining({ id: 'existing-1', sortOrder: 0 })
+      );
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
+        `${mockInstancesBaseDir}/existing-2/config.json`,
+        expect.objectContaining({ id: 'existing-2', sortOrder: 1 })
+      );
+    });
 
     it('moves a new server onto the next free port set when its ports collide', async () => {
       onDisk(one);

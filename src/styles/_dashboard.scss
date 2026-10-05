@@ -310,6 +310,7 @@
   position: absolute;
   top: 10px;
   right: 10px;
+  z-index: 2;
   color: rgba(255, 255, 255, 0.75);
   font-size: 20px;
   cursor: grab;
@@ -320,6 +321,7 @@
   left: 1rem;
   right: 1rem;
   bottom: 0.85rem;
+  z-index: 2;
 }
 
 .server-card-name-row {
@@ -348,13 +350,63 @@
   flex-shrink: 0;
 }
 
+// Session name, operator and assignee on the left; the join address on the right.
+// Each of those three lines is reserved even when it is empty, so the stats start
+// in the same place on a card with nobody assigned as on one that has all three.
+$server-card-detail-line: 15px;
+$server-card-detail-gap: 0.25rem;
+
+.server-card-details {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.server-card-details-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: $server-card-detail-gap;
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: calc(3 * #{$server-card-detail-line} + 2 * #{$server-card-detail-gap});
+}
+
+.server-card-address {
+  flex: 0 1 auto;
+  margin-left: auto;
+  max-width: 55%;
+  justify-content: flex-end;
+}
+
+.server-card-copy {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 0.1rem;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+
+  .material-icons { font-size: 13px; }
+
+  &:hover { color: var(--text-primary); background: var(--surface-raised); }
+}
+
 // What players see this server called, which is not always what it is called here.
 .server-card-session {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
+  height: $server-card-detail-line;
   font-size: 0.8rem;
+  line-height: $server-card-detail-line;
   color: var(--text-secondary);
   // The card is a button; its text is read, not selected.
   cursor: inherit;
@@ -364,6 +416,10 @@
     font-size: 15px;
     flex-shrink: 0;
   }
+}
+
+.server-card-address .server-card-copy .material-icons {
+  font-size: 13px;
 }
 
 .server-card-session-name {
@@ -425,11 +481,14 @@
 }
 
 .server-card-spark {
-  height: 36px;
+  height: 24px;
+  // The body gap is shared with the rows above. Pull the chart up so the
+  // space under the stats is a bit tighter than the space above them.
+  margin-top: -0.4rem;
 
   .sparkline {
     width: 100%;
-    height: 36px;
+    height: 24px;
     display: block;
   }
 
@@ -539,13 +598,13 @@
 
   // In a row the session name is one item among several, so it gives up width before the
   // stats do and steps out entirely once the row is tight rather than being run over.
-  .server-card-session {
-    flex: 0 1 11rem;
+  .server-card-details {
+    flex: 0 1 14rem;
     min-width: 0;
   }
 
   @media (max-width: 1100px) {
-    .server-card-session { display: none; }
+    .server-card-details { display: none; }
   }
 
   // The sparkline is the least important thing in the row, so it gives up its width first
@@ -553,6 +612,7 @@
   .server-card-spark {
     flex: 0 1 160px;
     min-width: 0;
+    margin-top: 0;
   }
 
   @media (max-width: 1100px) {

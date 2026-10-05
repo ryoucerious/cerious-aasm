@@ -1,5 +1,7 @@
 import { messagingService } from '../services/messaging.service';
 import { activityLogService } from '../services/activity-log.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { getAllInstances } from '../utils/ark/instance.utils';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn() }
@@ -8,8 +10,19 @@ jest.mock('../services/activity-log.service', () => ({
   activityLogService: { list: jest.fn(), clear: jest.fn() }
 }));
 
+jest.mock('../services/auth/permission-gate', () => ({ identifySender: jest.fn() }));
+jest.mock('../utils/ark/instance.utils', () => ({ getAllInstances: jest.fn() }));
+
 const mockMessaging = jest.mocked(messagingService);
 const mockActivity = jest.mocked(activityLogService);
+const mockIdentify = jest.mocked(identifySender);
+const mockGetAllInstances = jest.mocked(getAllInstances);
+
+const DESKTOP: ReturnType<typeof identifySender> = { user: null, permissions: [], isAdmin: true, isLocalDesktop: true };
+const OPERATOR: ReturnType<typeof identifySender> = {
+  user: { id: 'op1', username: 'op1', displayName: 'op1', roleId: 'operator', roleName: 'Operator', ownerUserId: null, active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, permissions: [] },
+  permissions: [], isAdmin: false, isLocalDesktop: false
+};
 
 type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
@@ -21,6 +34,33 @@ describe('activity-handler', () => {
   beforeAll(() => {
     require('./activity-handler');
     handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
+  });
+
+  beforeEach(() => {
+    mockIdentify.mockReturnValue(DESKTOP);
+    mockGetAllInstances.mockResolvedValue([]);
+  });
+
+  describe('for a pool member', () => {
+    it('shows only entries about servers in the pool, never global ones', async () => {
+      mockIdentify.mockReturnValue(OPERATOR);
+      mockGetAllInstances.mockResolvedValue([{ id: 'a1', operatorUserId: 'op1' }, { id: 'b2', operatorUserId: null }] as never);
+      const other = { ...entry, id: 2, instanceId: 'b2' };
+      const global = { ...entry, id: 3, instanceId: null, message: 'Web server started' };
+      mockActivity.list.mockReturnValue([entry, other, global]);
+
+      await handlers['get-activity']({ requestId: 'r1' }, sender);
+
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('get-activity', { success: true, entries: [entry], requestId: 'r1' }, sender);
+    });
+
+    it('does not read the server list for an admin', async () => {
+      mockActivity.list.mockReturnValue([entry]);
+
+      await handlers['get-activity']({ requestId: 'r1' }, sender);
+
+      expect(mockGetAllInstances).not.toHaveBeenCalled();
+    });
   });
 
   describe('get-activity', () => {

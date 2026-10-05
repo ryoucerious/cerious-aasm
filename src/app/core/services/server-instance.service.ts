@@ -63,6 +63,7 @@ function defaultsFromMeta(definitions: FieldDefinition[]): ServerInstanceDraft {
     rconPassword: '',
     battleEye: false,
     noTransferFromFiltering: false,
+    useExclusiveList: false,
     installed: false,
     currentVersion: null,
     autoUpdateEnabled: true

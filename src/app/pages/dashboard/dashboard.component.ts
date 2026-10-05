@@ -16,6 +16,8 @@ import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { PERMISSIONS } from '../../core/models/auth.model';
 import { ServerCardComponent } from '../../components/server-card/server-card.component';
 import { AddServerModalComponent } from '../../components/add-server-modal/add-server-modal.component';
 import { ModalComponent } from '../../components/modal/modal.component';
@@ -132,9 +134,27 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private serverNav: ServerNavService,
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
+    public poolDirectory: PoolDirectoryService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
+
+  // The backend enforces these; the page only hides controls that would be refused.
+  get canCreateServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CREATE);
+  }
+
+  get canDeleteServer(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_DELETE);
+  }
+
+  get canConfigure(): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_CONFIGURE);
+  }
+
+  get canBackups(): boolean {
+    return this.auth.can(PERMISSIONS.BACKUPS_VIEW);
+  }
 
   ngOnInit(): void {
     this.readViewPreferences();
@@ -161,6 +181,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.userName = name;
       this.cdr.markForCheck();
     }));
+
+    // The cards' ownership labels come from the directory, which reloads as accounts change.
+    this.subs.push(this.poolDirectory.changed$.subscribe(() => this.cdr.markForCheck()));
 
     // exhaustMap: a slow backend is not sent a new request while it still owes the last one.
     this.subs.push(interval(HOST_RESOURCES_POLL_MS).pipe(startWith(0), exhaustMap(() => this.fetchHostResources())).subscribe());

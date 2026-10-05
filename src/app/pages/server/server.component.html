@@ -32,6 +32,7 @@
     </app-server-state>
 
     <app-rcon-control
+      *ngIf="canUseRcon"
       [rconConnected]="rconConnected"
       [serverState]="mapServerState(activeServerInstance.state)"
       [knownCommands]="knownRconCommands"

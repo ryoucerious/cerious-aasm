@@ -168,13 +168,14 @@ export class ServerLifecycleService {
   }
 
   /** Starts every server that is not up, one at a time, `delayMs` apart (the configured delay by default). */
-  async startAllInstances(delayMs?: number): Promise<{ started: string[]; failed: string[] }> {
+  /** Starts every server not already up; `onlyIds` limits that to a caller's pool. */
+  async startAllInstances(delayMs?: number, onlyIds?: string[]): Promise<{ started: string[]; failed: string[] }> {
     const staggerMs = delayMs ?? (loadGlobalConfig().serverStartDelaySeconds ?? DEFAULT_START_DELAY_SECONDS) * 1000;
     const { instances } = await serverManagementService.getAllInstances();
     const started: string[] = [];
     const failed: string[] = [];
 
-    for (const instance of instances as InstanceConfig[]) {
+    for (const instance of limitTo(instances as InstanceConfig[], onlyIds)) {
       const state = serverProcessService.getNormalizedInstanceState(instance.id);
       if (state === 'running' || state === 'starting') continue;
 
@@ -197,12 +198,13 @@ export class ServerLifecycleService {
     return { started, failed };
   }
 
-  async stopAllInstances(): Promise<{ stopped: string[]; failed: string[] }> {
+  /** Stops every running server; `onlyIds` limits that to a caller's pool. */
+  async stopAllInstances(onlyIds?: string[]): Promise<{ stopped: string[]; failed: string[] }> {
     const { instances } = await serverManagementService.getAllInstances();
     const stopped: string[] = [];
     const failed: string[] = [];
 
-    await Promise.all((instances as InstanceConfig[]).map(async instance => {
+    await Promise.all(limitTo(instances as InstanceConfig[], onlyIds).map(async instance => {
       const state = serverProcessService.getNormalizedInstanceState(instance.id);
       if (state !== 'running' && state !== 'starting') return;
       try {
@@ -216,6 +218,12 @@ export class ServerLifecycleService {
     }));
     return { stopped, failed };
   }
+}
+
+function limitTo(instances: InstanceConfig[], onlyIds?: string[]): InstanceConfig[] {
+  if (!onlyIds) return instances;
+  const allowed = new Set(onlyIds);
+  return instances.filter(instance => allowed.has(instance.id));
 }
 
 export const serverLifecycleService = new ServerLifecycleService();

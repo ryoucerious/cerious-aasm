@@ -24,12 +24,55 @@ export const PERMISSIONS = {
   APP_INSTALL: 'app.install',
   SETTINGS_VIEW: 'settings.view',
   SETTINGS_MANAGE: 'settings.manage',
-  USERS_MANAGE: 'users.manage'
+  USERS_MANAGE: 'users.manage',
+  ACCOUNTS_MANAGERS_CREATE: 'accounts.managers.create',
+  ACCOUNTS_MANAGERS_DELETE: 'accounts.managers.delete',
+  ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
+  ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
+  ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
 
 export const ADMIN_ROLE_ID = 'admin';
+export const OPERATOR_ROLE_ID = 'operator';
+export const SERVER_MANAGER_ROLE_ID = 'server-manager';
+export const ATTENDANT_ROLE_ID = 'attendant';
+export const VIEWER_ROLE_ID = 'viewer';
+
+/** Server managers, attendants and viewers live in a pool. Admins and operators do not. */
+export function isPoolRole(roleId: string | null | undefined): boolean {
+  return roleId === SERVER_MANAGER_ROLE_ID || roleId === ATTENDANT_ROLE_ID || roleId === VIEWER_ROLE_ID;
+}
+
+/** A server is assigned to one person, who is either a server manager or an attendant. */
+export function isAssignableRole(roleId: string | null | undefined): boolean {
+  return roleId === SERVER_MANAGER_ROLE_ID || roleId === ATTENDANT_ROLE_ID;
+}
+
+/**
+ * The permission for creating (also editing) or deleting one kind of pool account.
+ * Mirrors accountPermission in electron/services/auth/pool-access.ts.
+ */
+export function accountPermissionFor(roleId: string, action: 'create' | 'delete'): Permission | null {
+  const map: Record<string, { create: Permission; delete: Permission }> = {
+    [SERVER_MANAGER_ROLE_ID]: { create: PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, delete: PERMISSIONS.ACCOUNTS_MANAGERS_DELETE },
+    [ATTENDANT_ROLE_ID]: { create: PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, delete: PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE },
+    [VIEWER_ROLE_ID]: { create: PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, delete: PERMISSIONS.ACCOUNTS_VIEWERS_DELETE }
+  };
+  return map[roleId]?.[action] ?? null;
+}
+
+/** A name shown for an operator or an assignee. */
+export interface PoolLabel {
+  id: string;
+  username: string;
+  displayName: string;
+  roleName: string;
+  /** For an assignee, the operator whose pool they are in; null is the admin pool. */
+  ownerUserId?: string | null;
+}
 
 /** The backend refuses shorter account passwords. */
 export const MIN_PASSWORD_LENGTH = 8;
@@ -50,6 +93,8 @@ export interface User {
   displayName: string;
   roleId: string;
   active: boolean;
+  /** The operator whose pool this account is in. Null or missing is the admin pool. */
+  ownerUserId?: string | null;
   /** Password is supplied on the command line and cannot be changed in the app. */
   cliLocked?: boolean;
   createdAt: number;

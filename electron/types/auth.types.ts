@@ -34,7 +34,15 @@ export const PERMISSIONS = {
   APP_INSTALL: 'app.install',
   SETTINGS_VIEW: 'settings.view',
   SETTINGS_MANAGE: 'settings.manage',
-  USERS_MANAGE: 'users.manage'
+  USERS_MANAGE: 'users.manage',
+  // Pool accounts. Creating a server manager is not the same act as deleting one, and neither is
+  // the same as an attendant or a viewer, so each is its own permission.
+  ACCOUNTS_MANAGERS_CREATE: 'accounts.managers.create',
+  ACCOUNTS_MANAGERS_DELETE: 'accounts.managers.delete',
+  ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
+  ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
+  ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
@@ -60,7 +68,13 @@ export const PERMISSION_DESCRIPTIONS: Record<Permission, { label: string; group:
   [PERMISSIONS.APP_INSTALL]:       { label: 'Install and update',  group: 'Application', description: 'Install or update the ARK server and system dependencies.' },
   [PERMISSIONS.SETTINGS_VIEW]:     { label: 'View settings',       group: 'Application', description: 'Read application settings.' },
   [PERMISSIONS.SETTINGS_MANAGE]:   { label: 'Change settings',     group: 'Application', description: 'Change application settings, including the web server.' },
-  [PERMISSIONS.USERS_MANAGE]:      { label: 'Manage users',        group: 'Application', description: 'Create users, reset passwords and assign roles.' }
+  [PERMISSIONS.USERS_MANAGE]:      { label: 'Manage roles and all accounts', group: 'Application', description: 'Edit roles, and manage any account whose permissions you hold.' },
+  [PERMISSIONS.ACCOUNTS_MANAGERS_CREATE]:   { label: 'Add server managers',    group: 'Accounts', description: 'Add or edit a server manager in your pool.' },
+  [PERMISSIONS.ACCOUNTS_MANAGERS_DELETE]:   { label: 'Delete server managers', group: 'Accounts', description: 'Delete a server manager in your pool.' },
+  [PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE]: { label: 'Add attendants',         group: 'Accounts', description: 'Add or edit an attendant in your pool.' },
+  [PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE]: { label: 'Delete attendants',      group: 'Accounts', description: 'Delete an attendant in your pool.' },
+  [PERMISSIONS.ACCOUNTS_VIEWERS_CREATE]:    { label: 'Add viewers',            group: 'Accounts', description: 'Add or edit a viewer in your pool.' },
+  [PERMISSIONS.ACCOUNTS_VIEWERS_DELETE]:    { label: 'Delete viewers',         group: 'Accounts', description: 'Delete a viewer in your pool.' }
 };
 
 export interface Role {
@@ -80,6 +94,11 @@ export interface User {
   displayName: string;
   roleId: string;
   active: boolean;
+  /**
+   * The operator whose pool this account is in. Null is the admin pool. Admin and operator
+   * accounts are never owned, so it is always null for them.
+   */
+  ownerUserId: string | null;
   /** Set when this account's password comes from the process command line. */
   cliLocked: boolean;
   createdAt: number;
@@ -109,8 +128,24 @@ export const ROLE_IDS = {
   ADMIN: 'admin',
   SERVER_MANAGER: 'server-manager',
   OPERATOR: 'operator',
+  ATTENDANT: 'attendant',
   VIEWER: 'viewer'
 } as const;
+
+/** A server is assigned to one person, who is either a server manager or an attendant. */
+export function isAssignableRole(roleId: string | null | undefined): boolean {
+  return roleId === ROLE_IDS.SERVER_MANAGER || roleId === ROLE_IDS.ATTENDANT;
+}
+
+/** A name shown for an operator or an assignee, without anything private. */
+export interface PoolLabel {
+  id: string;
+  username: string;
+  displayName: string;
+  roleName: string;
+  /** For an assignee, the operator whose pool they are in; null is the admin pool. */
+  ownerUserId?: string | null;
+}
 
 /**
  * The roles created on first run. Admin always holds every permission, including any added
@@ -124,36 +159,45 @@ export const BUILT_IN_ROLES: { id: string; name: string; description: string; pe
     permissions: ALL_PERMISSIONS
   },
   {
-    id: ROLE_IDS.SERVER_MANAGER,
-    name: 'Server Manager',
-    description: 'Runs and configures servers, mods, automation and backups. Cannot manage users or application settings.',
+    id: ROLE_IDS.OPERATOR,
+    name: 'Operator',
+    description: 'Runs one pool: adds and deletes its servers, runs them, and manages the server managers, attendants and viewers in it. Cannot see another pool, create operators or change application settings.',
     permissions: [
       PERMISSIONS.SERVERS_VIEW, PERMISSIONS.SERVERS_CONTROL, PERMISSIONS.SERVERS_CREATE,
       PERMISSIONS.SERVERS_DELETE, PERMISSIONS.SERVERS_CONFIGURE,
       PERMISSIONS.RCON_USE, PERMISSIONS.PLAYERS_VIEW, PERMISSIONS.PLAYERS_MANAGE,
       PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.BACKUPS_CREATE, PERMISSIONS.BACKUPS_RESTORE, PERMISSIONS.BACKUPS_DELETE,
       PERMISSIONS.MODS_MANAGE, PERMISSIONS.AUTOMATION_MANAGE,
-      PERMISSIONS.APP_INSTALL, PERMISSIONS.SETTINGS_VIEW
+      PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, PERMISSIONS.ACCOUNTS_MANAGERS_DELETE,
+      PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE,
+      PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE
     ]
   },
   {
-    id: ROLE_IDS.OPERATOR,
-    name: 'Operator',
-    description: 'Day-to-day running: start and stop servers, use RCON, take backups.',
+    id: ROLE_IDS.SERVER_MANAGER,
+    name: 'Server Manager',
+    description: 'Runs the servers assigned to them: settings, mods, players and backups. Cannot add or delete servers, manage accounts or change application settings.',
     permissions: [
-      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.SERVERS_CONTROL,
+      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.SERVERS_CONTROL, PERMISSIONS.SERVERS_CONFIGURE,
       PERMISSIONS.RCON_USE, PERMISSIONS.PLAYERS_VIEW, PERMISSIONS.PLAYERS_MANAGE,
-      PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.BACKUPS_CREATE,
-      PERMISSIONS.SETTINGS_VIEW
+      PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.BACKUPS_CREATE, PERMISSIONS.BACKUPS_RESTORE, PERMISSIONS.BACKUPS_DELETE,
+      PERMISSIONS.MODS_MANAGE, PERMISSIONS.AUTOMATION_MANAGE
+    ]
+  },
+  {
+    id: ROLE_IDS.ATTENDANT,
+    name: 'Attendant',
+    description: 'Can start, stop, read the console and see who is connected on the servers assigned to them. Cannot change settings, send commands or add servers.',
+    permissions: [
+      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.SERVERS_CONTROL, PERMISSIONS.PLAYERS_VIEW
     ]
   },
   {
     id: ROLE_IDS.VIEWER,
     name: 'Viewer',
-    description: 'Read-only. Can watch status, logs and players but change nothing.',
+    description: 'Read-only inside one pool. Can watch status, the console and players. Cannot change anything, take backups or open application settings.',
     permissions: [
-      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.PLAYERS_VIEW,
-      PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.SETTINGS_VIEW
+      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.PLAYERS_VIEW
     ]
   }
 ];

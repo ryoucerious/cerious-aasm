@@ -11,6 +11,7 @@ import { arkConfigService } from '../services/ark-config.service';
 import { rconService } from '../services/rcon.service';
 import { activityLogService } from '../services/activity-log.service';
 import { identifySender } from '../services/auth/permission-gate';
+import { userDatabaseService } from '../services/auth/user-database.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 
@@ -53,6 +54,7 @@ jest.mock('../services/auth/permission-gate', () => ({
   isDesktopWindow: jest.requireActual('../services/auth/permission-gate').isDesktopWindow
 }));
 jest.mock('../utils/ark/instance.utils', () => ({ getInstance: jest.fn(), saveInstance: jest.fn() }));
+jest.mock('../services/auth/user-database.service', () => ({ userDatabaseService: { getUser: jest.fn() } }));
 jest.mock('../utils/ark/ark-server/ark-server-state.utils', () => ({ getNormalizedInstanceState: jest.fn() }));
 
 const mockMessaging = jest.mocked(messagingService);
@@ -64,6 +66,15 @@ const mockOperations = jest.mocked(serverOperationsService);
 const mockManagement = jest.mocked(serverManagementService);
 const mockArkConfig = jest.mocked(arkConfigService);
 const mockInstanceUtils = jest.mocked(instanceUtils);
+const mockUsers = jest.mocked(userDatabaseService);
+
+const DESKTOP: ReturnType<typeof identifySender> = { user: null, permissions: [], isAdmin: true, isLocalDesktop: true };
+function operatorIdentity(id: string, permissions: string[] = ['servers.view', 'servers.control', 'servers.create', 'servers.configure']): ReturnType<typeof identifySender> {
+  return {
+    user: { id, username: id, displayName: id, roleId: 'operator', roleName: 'Operator', ownerUserId: null, active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, permissions: permissions as never },
+    permissions: permissions as never, isAdmin: false, isLocalDesktop: false
+  };
+}
 
 type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
@@ -77,6 +88,10 @@ describe('server-instance-handler', () => {
   beforeAll(() => {
     require('./server-instance-handler');
     handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
+  });
+
+  beforeEach(() => {
+    jest.mocked(identifySender).mockReturnValue(DESKTOP);
   });
 
   function request(channel: string, payload?: unknown): Promise<void> {
@@ -281,7 +296,7 @@ describe('server-instance-handler', () => {
       expect(mockInstance.forceStopInstance).toHaveBeenCalledWith('a1');
       expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: false }]);
       expect(broadcasts('server-instance-log')).toEqual([{ log: '[FORCE STOP] Server force stopped', instanceId: 'a1' }]);
-      expect(broadcasts('notification')).toEqual([{ type: 'warning', message: 'Alpha force stopped.' }]);
+      expect(broadcasts('notification')).toEqual([{ type: 'warning', message: 'Alpha force stopped.', instanceId: 'a1' }]);
       expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
       expect(automationService.setManuallyStopped).toHaveBeenCalledWith('a1', true);
       expect(replies('force-stop-server-instance')).toEqual([{ ...result, requestId: 'r1' }]);
@@ -612,7 +627,7 @@ describe('server-instance-handler', () => {
 
       expect(broadcasts('clear-server-instance-logs')).toEqual([{ instanceId: 'a1' }]);
       expect(mockInstance.startServerInstance).toHaveBeenCalledWith('a1', callbacks.onLog, callbacks.onState);
-      expect(broadcasts('notification')).toEqual([{ type: 'info', message: 'Alpha started.' }]);
+      expect(broadcasts('notification')).toEqual([{ type: 'info', message: 'Alpha started.', instanceId: 'a1' }]);
       expect(replies('start-server-instance')).toEqual([{ success: true, instanceId: 'a1', error: undefined, requestId: 'r1' }]);
     });
 
@@ -755,7 +770,7 @@ describe('server-instance-handler', () => {
       expect(replies('save-server-instance')).toEqual([{ success: true, instance: saved, error: undefined, requestId: 'r1' }]);
       expect(broadcasts('server-instance-updated')).toEqual([saved]);
       expect(mockInstance.broadcastInstances).toHaveBeenCalled();
-      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.' }, sender]]);
+      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.', instanceId: 'a1' }, sender]]);
       expect(replyOrder('save-server-instance')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
     });
 
@@ -768,7 +783,7 @@ describe('server-instance-handler', () => {
       await request('save-server-instance', { instance: saved, requestId: 'r1' });
 
       expect(broadcasts('server-instance-updated')).toEqual([saved]);
-      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.' }, sender]]);
+      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.', instanceId: 'a1' }, sender]]);
     });
 
     it.each([
@@ -783,7 +798,7 @@ describe('server-instance-handler', () => {
 
       await request('save-server-instance', { instance: saved });
 
-      expect(notices()).toEqual([['notification', { type: 'info', message }, sender]]);
+      expect(notices()).toEqual([['notification', { type: 'info', message, instanceId: (saved as { id?: string }).id }, sender]]);
     });
 
     it('passes on a refused save and tells nobody else', async () => {
@@ -832,7 +847,7 @@ describe('server-instance-handler', () => {
       expect(mockInstance.broadcastInstances).toHaveBeenCalled();
       expect(identifySender).toHaveBeenCalledWith(sender);
       expect(activityLogService.record).toHaveBeenCalledWith('info', 'Server deleted', 'a1', 'jared');
-      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.' }, sender);
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.', instanceId: 'a1' }, sender);
     });
 
     it('still tells the others when the activity feed fails', async () => {
@@ -843,7 +858,7 @@ describe('server-instance-handler', () => {
       await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
 
       expect(replies('delete-server-instance')).toEqual([{ success: true, id: 'a1', requestId: 'r1' }]);
-      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.' }, sender);
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.', instanceId: 'a1' }, sender);
     });
 
     it('passes on a refused delete and tells nobody else', async () => {
@@ -975,6 +990,160 @@ describe('server-instance-handler', () => {
       expect(replies('reorder-server-instances')).toEqual([
         { success: false, error: 'orderedIds must be an array', requestId: undefined }
       ]);
+    });
+  });
+  describe('pools', () => {
+    const op1 = operatorIdentity('op1');
+    const s1 = { id: 's1', name: 'One', operatorUserId: 'op1', managerUserId: null };
+    const s2 = { id: 's2', name: 'Two', operatorUserId: null, managerUserId: null };
+    const people: Record<string, unknown> = {
+      m1: { id: 'm1', roleId: 'server-manager', ownerUserId: 'op1', active: true },
+      m2: { id: 'm2', roleId: 'server-manager', ownerUserId: 'op2', active: true },
+      op1: { id: 'op1', roleId: 'operator', ownerUserId: null, active: true },
+      op2: { id: 'op2', roleId: 'operator', ownerUserId: null, active: true }
+    };
+
+    beforeEach(() => {
+      mockUsers.getUser.mockImplementation(id => (people[id] ?? null) as never);
+      mockManagement.getAllInstances.mockResolvedValue({ instances: [s1, s2] });
+    });
+
+    it('filters get-server-instances for a non-admin', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+
+      await request('get-server-instances', { requestId: 'r1' });
+
+      expect(replies('get-server-instances')).toEqual([{ instances: [s1], requestId: 'r1' }]);
+      expect(broadcasts('server-instances')).toEqual([[s1, s2]]);
+    });
+
+    it('scopes start-all and stop-all to the visible servers', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: [], failed: [] });
+      mockLifecycle.stopAllInstances.mockResolvedValue({ stopped: [], failed: [] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      await request('start-all-instances', { requestId: 'r1' });
+      expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['s1'], requestId: 'r1' }]);
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, ['s1']);
+
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+      await request('stop-all-instances', { requestId: 'r2' });
+      expect(replies('stop-all-instances')).toEqual([{ success: true, stopping: ['s1'], requestId: 'r2' }]);
+      expect(mockLifecycle.stopAllInstances).toHaveBeenCalledWith(['s1']);
+    });
+
+    it('starts everything for an admin', async () => {
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: [], failed: [] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, undefined);
+    });
+
+    it('refuses a server manager creating without servers.create', async () => {
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('m1', ['servers.view', 'servers.configure']));
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+
+      await request('save-server-instance', { instance: { name: 'new' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'Only an admin or operator can add a server.', requestId: 'r1' }]);
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+    });
+
+    it('refuses editing without servers.configure', async () => {
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op1', ['servers.view', 'servers.create']));
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+
+      await request('save-server-instance', { instance: { ...s1, name: 'renamed' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'Your role cannot change server settings.', requestId: 'r1' }]);
+    });
+
+    it('puts an operator\'s new server in their pool and tells the others with the id', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: { id: 's3', name: 'new', operatorUserId: 'op1' } });
+
+      await request('save-server-instance', { instance: { name: 'new' }, requestId: 'r1' });
+
+      expect(mockManagement.saveInstance).toHaveBeenCalledWith({ name: 'new', operatorUserId: 'op1' });
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server "new" added.', instanceId: 's3' }, sender);
+    });
+
+    it('refuses a save whose assignee is in another pool', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+
+      await request('save-server-instance', { instance: { ...s1, managerUserId: 'm2' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'That person is not in this server\'s pool.', requestId: 'r1' }]);
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+    });
+
+    it('assigns a manager and broadcasts the update', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      const saved = { ...s1, managerUserId: 'm1' };
+      mockInstanceUtils.saveInstance.mockResolvedValue(saved as never);
+
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm1', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith(saved);
+      expect(replies('assign-server-manager')).toEqual([{ success: true, instance: saved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+    });
+
+    it('lets the pool\'s operator assign, and refuses another operator', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      mockInstanceUtils.saveInstance.mockResolvedValue({ ...s1, managerUserId: 'm1' } as never);
+
+      jest.mocked(identifySender).mockReturnValue(op1);
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm1', requestId: 'r1' });
+      expect(replies('assign-server-manager')).toEqual([expect.objectContaining({ success: true })]);
+
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op2'));
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm2', requestId: 'r2' });
+      expect(replies('assign-server-manager')[1]).toEqual({ success: false, error: 'That server is not in your pool.', requestId: 'r2' });
+    });
+
+    it('moves a server between pools and clears an assignee from the old pool', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ ...s1, managerUserId: 'm1' } as never);
+      const moved = { ...s1, operatorUserId: 'op2', managerUserId: null };
+      mockInstanceUtils.saveInstance.mockResolvedValue(moved as never);
+
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'op2', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith(moved);
+      expect(replies('set-server-operator')).toEqual([{ success: true, instance: moved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([moved]);
+    });
+
+    it('refuses set-server-operator from a non-admin and for an unknown server or operator', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'op2', requestId: 'r1' });
+      expect(replies('set-server-operator')[0]).toEqual({ success: false, error: 'Only an admin can move a server between pools.', requestId: 'r1' });
+
+      jest.mocked(identifySender).mockReturnValue(DESKTOP);
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      await request('set-server-operator', { instanceId: 'nope', operatorUserId: 'op2', requestId: 'r2' });
+      expect(replies('set-server-operator')[1]).toEqual({ success: false, error: 'That server was not found.', requestId: 'r2' });
+
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'm1', requestId: 'r3' });
+      expect(replies('set-server-operator')[2]).toEqual({ success: false, error: 'Choose an active operator for this server.', requestId: 'r3' });
+    });
+
+    it('stamps an imported server with the importer\'s pool', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      const imported = { id: 'i1', name: 'Imported' };
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: true, instance: imported, message: 'Imported' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ ...imported, operatorUserId: 'op1' } as never);
+
+      await request('import-server-from-backup', { serverName: 'Imported', fileData: 'ZGF0YQ==', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({ ...imported, operatorUserId: 'op1' });
+      expect(replies('import-server-from-backup')).toEqual([expect.objectContaining({ success: true, instance: { ...imported, operatorUserId: 'op1' } })]);
     });
   });
 });

@@ -23,7 +23,7 @@ const mockedVerifyWithUserDatabase = jest.mocked(verifyWithUserDatabase);
 
 const account: AuthenticatedUser = {
   id: 'u1', username: 'jared', displayName: 'Jared', roleId: 'operator', roleName: 'Operator',
-  permissions: ['servers.view'], active: true, cliLocked: false, createdAt: 1, updatedAt: 1, lastLoginAt: null
+  permissions: ['servers.view'], active: true, ownerUserId: null, cliLocked: false, createdAt: 1, updatedAt: 1, lastLoginAt: null
 };
 
 let nextIp = 1;
