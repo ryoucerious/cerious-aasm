@@ -23,6 +23,8 @@ const POLL_INTERVAL_MS = 3000;
 // ARK logs grow to several GB; reading one whole on every request ballooned Electron past 10 GB.
 const TAIL_BYTES = 64 * 1024;
 
+type LogEncoding = 'utf8' | 'utf16le';
+
 // Only these lines mean the server takes players AND has bound its RCON port. 'Full Startup:',
 // 'Listening on port', 'StartPlay RPC completed' and 'Initializing Game Engine Completed' come
 // 30-60 s earlier, and connecting RCON on them wastes the retry window on a closed port.
@@ -145,16 +147,40 @@ export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
   return file ? readLogTail(file, maxLines) : [];
 }
 
+/**
+ * How a log is encoded. ARK writes UTF-8 with a byte order mark; a log the engine is told to write
+ * elsewhere (-AbsLog) can be UTF-16 LE, which read as UTF-8 puts a NUL after every character so no
+ * startup line ever matches.
+ */
+function detectLogEncoding(filePath: string): LogEncoding {
+  try {
+    const head = readRange(filePath, 0, 4);
+    if (head.length >= 2 && head[0] === 0xff && head[1] === 0xfe) return 'utf16le';
+    if (head.length >= 4 && head[1] === 0 && head[3] === 0) return 'utf16le';
+  } catch {
+    // Missing or unreadable: the caller handles that.
+  }
+  return 'utf8';
+}
+
+/** A byte order mark decodes to U+FEFF, which would otherwise start the first line. */
+function stripBom(line: string): string {
+  return line.replace(/^\uFEFF/, '');
+}
+
 /** The last `maxLines` non-empty lines within the final 64 KB of a file; [] when it is unreadable. */
 export function readLogTail(filePath: string, maxLines: number): string[] {
   let fd: number | undefined;
   try {
     const { size } = fs.statSync(filePath);
-    const length = Math.min(TAIL_BYTES, size);
+    const encoding = detectLogEncoding(filePath);
+    let length = Math.min(TAIL_BYTES, size);
+    // A UTF-16 window has to start on a character boundary.
+    if (encoding === 'utf16le' && length % 2 !== 0) length--;
     const buffer = Buffer.alloc(length);
     fd = fs.openSync(filePath, 'r');
     const bytesRead = fs.readSync(fd, buffer, 0, length, size - length);
-    const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/);
+    const lines = buffer.subarray(0, bytesRead).toString(encoding).split(/\r?\n/).map(stripBom);
     // The read starts mid-line when the file is larger than the window.
     if (size > length) lines.shift();
     return lines.filter(line => line.trim().length > 0).slice(-maxLines);
@@ -234,13 +260,13 @@ function closeTailer(instanceId: string, drain: boolean): void {
 /** Streams lines appended to `file` from now on, through fs.watch and a polling fallback. */
 function tailFile(file: string, onLine: (line: string) => void): Tailer {
   let position = sizeOf(file) ?? 0;
-  let decoder = new StringDecoder('utf8');
+  let decoder = new StringDecoder(detectLogEncoding(file));
   // Text after the last newline: a line ARK has not finished writing.
   let partial = '';
   let stopped = false;
 
   const emit = (text: string) => {
-    const lines = (partial + text).split(/\r?\n/);
+    const lines = (partial + text).split(/\r?\n/).map(stripBom);
     partial = lines.pop() ?? '';
     for (const line of lines) {
       if (line.trim()) onLine(line);
@@ -254,7 +280,7 @@ function tailFile(file: string, onLine: (line: string) => void): Tailer {
       // Rewritten in place (Proton reuses ShooterGame.log): start again from the top.
       position = 0;
       partial = '';
-      decoder = new StringDecoder('utf8');
+      decoder = new StringDecoder(detectLogEncoding(file));
     }
     if (size === position) return;
     const chunk = readRange(file, position, size - position);

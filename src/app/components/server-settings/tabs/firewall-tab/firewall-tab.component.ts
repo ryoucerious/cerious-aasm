@@ -36,6 +36,15 @@ export class FirewallTabComponent {
     return this.docker?.mode === 'host';
   }
 
+  get gamePort(): number {
+    return parseInt(String(this.serverInstance.gamePort), 10) || 7777;
+  }
+
+  /** Steam's peer port: always the game port + 1, never a setting of its own. */
+  get peerPort(): number {
+    return this.gamePort + 1;
+  }
+
   /**
    * Every port this server listens on, against the published range it has to fall in.
    * The peer port is not a setting of its own (it is always the game port + 1), so a game

@@ -354,11 +354,43 @@ describe('ark-server-logging.utils', () => {
       write(A_LOG, `${'x'.repeat(70 * 1024)}\nlast line\n`);
 
       expect(readLogTail(A_LOG, 5)).toEqual(['last line']);
-      expect((fs.readSync as jest.Mock).mock.calls[0][3]).toBe(64 * 1024);
+      // The encoding sniff reads the first bytes; the tail read is the last call.
+      expect((fs.readSync as jest.Mock).mock.calls.at(-1)[3]).toBe(64 * 1024);
     });
 
     it('returns nothing for a missing file', () => {
       expect(readLogTail('/nope.log', 5)).toEqual([]);
+    });
+  });
+
+  describe('log encoding', () => {
+    const UTF16_BOM = Buffer.from([0xff, 0xfe]);
+
+    it('reads a UTF-16 LE log as text', () => {
+      write(A_LOG, Buffer.concat([UTF16_BOM, Buffer.from('first line\r\nsecond line\r\n', 'utf16le')]));
+
+      expect(readLogTail(A_LOG, 5)).toEqual(['first line', 'second line']);
+    });
+
+    it('drops the byte order mark of a UTF-8 log', () => {
+      write(A_LOG, '\uFEFF[2026.10.04-01.02.03:004][  0]Log file open\n');
+
+      expect(readLogTail(A_LOG, 5)).toEqual(['[2026.10.04-01.02.03:004][  0]Log file open']);
+    });
+
+    it('streams lines from a UTF-16 LE log', () => {
+      detectAndRegisterLogFile('a1', snapshotLogFiles('a1'));
+      write(A_LOG, Buffer.concat([UTF16_BOM, Buffer.from('Log file open\r\n', 'utf16le')]));
+      const onLog = jest.fn();
+      const onState = jest.fn();
+      setupLogTailing('a1', onLog, onState);
+      jest.advanceTimersByTime(2000);
+
+      write(A_LOG, Buffer.from('Server has completed startup and is now advertising for join.\r\n', 'utf16le'));
+      poll();
+
+      expect(logged(onLog)).toEqual(['Server has completed startup and is now advertising for join.']);
+      expect(onState).toHaveBeenCalledWith('running');
     });
   });
 });

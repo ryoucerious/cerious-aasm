@@ -314,9 +314,28 @@ async function readDiskUsage(targetPath: string): Promise<DiskUsage | null> {
   return { total, free };
 }
 
+/**
+ * `df` refuses a path that does not exist, and the data directory the dashboard asks about may not
+ * have been created yet. The nearest existing parent is on the same volume, and the home directory
+ * is the last resort.
+ */
+function existingPathForDisk(targetPath: string): string {
+  let current = path.resolve(targetPath || os.homedir());
+  for (;;) {
+    try {
+      if (fs.existsSync(current)) return current;
+    } catch {
+      // Unreadable; its parent may still name the volume.
+    }
+    const parent = path.dirname(current);
+    if (!parent || parent === current) return os.homedir();
+    current = parent;
+  }
+}
+
 /** Linux: POSIX df output in 1K blocks. */
 async function readDiskUsageLinux(targetPath: string): Promise<DiskUsage | null> {
-  const output = await execFileAsync('df', ['-kP', targetPath || os.homedir()], { encoding: 'utf8', timeout: 5000 });
+  const output = await execFileAsync('df', ['-kP', existingPathForDisk(targetPath)], { encoding: 'utf8', timeout: 5000 });
   const lines = output.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
   const cols = lines[lines.length - 1].trim().split(/\s+/);

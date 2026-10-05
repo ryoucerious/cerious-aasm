@@ -304,6 +304,52 @@ describe('instance.utils', () => {
     });
   });
 
+  describe('saveInstance ports', () => {
+    const one = { id: 'existing-1', name: 'One', gamePort: 7777, queryPort: 27015, rconPort: 27020 };
+    const two = { id: 'existing-2', name: 'Two', gamePort: 7787, queryPort: 27025, rconPort: 27030 };
+
+    function onDisk(...instances: Array<{ id: string }>): void {
+      const byPath = new Map(instances.map(inst => [`${mockInstancesBaseDir}/${inst.id}/config.json`, inst]));
+      mockedFs.existsSync.mockImplementation(p => p === mockInstancesBaseDir || byPath.has(String(p)));
+      mockedFs.readdirSync.mockReturnValue(instances.map(inst => inst.id) as any);
+      mockedFs.readFileSync.mockImplementation(p => JSON.stringify(byPath.get(String(p))));
+    }
+
+    it('moves a new server onto the next free port set when its ports collide', async () => {
+      onDisk(one);
+
+      const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7787, queryPort: 27025, rconPort: 27030 }));
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ gamePort: 7787 }));
+    });
+
+    it('keeps the ports of a new server when nothing else uses them', async () => {
+      onDisk(one);
+
+      const result = await saveInstance({ name: 'New', gamePort: 7800, queryPort: 27100, rconPort: 27200 });
+
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7800, queryPort: 27100, rconPort: 27200 }));
+    });
+
+    it('rejects moving an existing server onto a port another server uses', async () => {
+      onDisk(one, two);
+
+      const result = await saveInstance({ ...two, gamePort: 7777 });
+
+      expect(result).toEqual({ error: 'UDP port 7777 is already used by "One".' });
+      expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
+    });
+
+    it('lets an existing server keep its own ports', async () => {
+      onDisk(one, two);
+
+      const result = await saveInstance({ ...two, name: 'Two renamed' });
+
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7787, name: 'Two renamed' }));
+    });
+  });
+
   describe('deleteInstance', () => {
     it('should delete existing instance directory', () => {
       const mockDir = `${mockInstancesBaseDir}/test-instance-1`;

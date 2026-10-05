@@ -65,6 +65,9 @@
       <button type="button" class="btn btn-ghost" (click)="onConsole($event)">
         <span class="material-icons">terminal</span> Console
       </button>
+      <button type="button" class="btn btn-ghost server-card-copy" (click)="onCopyAddress($event)" [disabled]="!connectAddress" [title]="copyTitle">
+        <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span> {{ copied ? 'Copied' : 'Copy' }}
+      </button>
       <div class="server-card-menu-anchor" #menuAnchor>
         <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" aria-label="More actions" [attr.aria-expanded]="menuOpen">
           <span class="material-icons">more_horiz</span>

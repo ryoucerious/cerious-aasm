@@ -1,6 +1,6 @@
 import {
   Component, EventEmitter, Input, Output, ChangeDetectionStrategy, HostListener, ElementRef,
-  ViewChild, ChangeDetectorRef
+  ViewChild, ChangeDetectorRef, OnDestroy
 } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance } from '../../core/models/server-instance.model';
@@ -12,6 +12,10 @@ import {
   isOnlineStatus, isBusyStatus, canStartStatus
 } from '../../core/utils/server-status';
 import { fixedOrigin } from '../../core/utils/floating';
+
+/** Hosts the desktop app and a local dev server load from; useless in a join address. */
+const LOCAL_HOSTS = new Set(['', 'localhost', '127.0.0.1', '[::1]', '::1']);
+const COPIED_FOR_MS = 2000;
 
 /** Display state for the pill on a card; derived from the backend's lowercase state. */
 export interface CardStatus {
@@ -31,7 +35,7 @@ export interface CardStatus {
   templateUrl: './server-card.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class ServerCardComponent {
+export class ServerCardComponent implements OnDestroy {
   @Input({ required: true }) server!: ServerInstance;
   @Input() history: number[] = [];
   @Input() now = Date.now();
@@ -50,11 +54,18 @@ export class ServerCardComponent {
   menuOpen = false;
   /** Where the actions menu sits, in viewport coordinates. */
   menuPosition = { left: 0, top: 0 };
+  /** True for a moment after the join address lands on the clipboard. */
+  copied = false;
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
   @ViewChild('menuAnchor') private menuAnchor?: ElementRef<HTMLElement>;
   @ViewChild('menu') private menu?: ElementRef<HTMLElement>;
 
   constructor(private host: ElementRef<HTMLElement>, private cdr: ChangeDetectorRef) {}
+
+  ngOnDestroy(): void {
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+  }
 
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: Event): void {
@@ -181,6 +192,75 @@ export class ServerCardComponent {
   onConsole(event: Event): void {
     event.stopPropagation();
     this.openConsole.emit(this.server);
+  }
+
+  /**
+   * What a player pastes into the game: the host this panel was opened on and the game port. The
+   * desktop app loads from localhost, which no player can use, so it falls back to the server's
+   * MultiHome address. The password is never part of it.
+   */
+  get connectAddress(): string {
+    const port = Number(this.server?.gamePort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+    const pageHost = this.pageHostname();
+    const host = LOCAL_HOSTS.has(pageHost) ? String(this.server?.multiHome || '').trim() : pageHost;
+    return host ? `${host}:${port}` : '';
+  }
+
+  get copyTitle(): string {
+    const address = this.connectAddress;
+    if (address) return `Copy ${address}`;
+    return 'No join address: open the panel by its network address, or set MultiHome in the server settings';
+  }
+
+  async onCopyAddress(event: Event): Promise<void> {
+    event.stopPropagation();
+    const address = this.connectAddress;
+    if (!address) return;
+    this.copied = await this.writeClipboard(address);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    if (this.copied) {
+      this.copiedTimer = setTimeout(() => {
+        this.copied = false;
+        this.copiedTimer = null;
+        this.cdr.markForCheck();
+      }, COPIED_FOR_MS);
+    }
+    this.cdr.markForCheck();
+  }
+
+  /** The host in the address bar; localhost in the desktop app. Separate so tests can set it. */
+  protected pageHostname(): string {
+    return typeof window === 'undefined' ? '' : window.location.hostname;
+  }
+
+  /**
+   * The clipboard API exists only in a secure context, and the web UI is often served over plain
+   * HTTP. The old copy command still works there from a click.
+   */
+  private async writeClipboard(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Refused (permissions, insecure context): try the fallback.
+    }
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(area);
+      return copied;
+    } catch {
+      return false;
+    }
   }
 
   onConfigure(): void {

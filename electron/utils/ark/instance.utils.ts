@@ -5,6 +5,7 @@ import { getDefaultInstallDir } from '../platform.utils';
 import { loadGlobalConfig } from '../global-config.utils';
 import { validateInstanceId } from '../validation.utils';
 import { writeJsonAtomic } from '../fs.utils';
+import { findPortConflict, nextFreePortSet } from './port-sets';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
 // Live values that server-management.getAllInstances merges into each instance. The UI sends
@@ -98,6 +99,24 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
   for (const field of RUNTIME_FIELDS) {
     delete config[field];
   }
+
+  // Two servers on one port cannot both run. A new server arrives with the default ports and
+  // takes the next free set; an edit that lands on another server's port is refused.
+  const others = all.filter(inst => inst.id !== id);
+  const conflict = findPortConflict(config, others);
+  if (conflict) {
+    if (all.some(inst => inst.id === id)) {
+      return { error: `${conflict.protocol} port ${conflict.port} is already used by "${conflict.name}".` };
+    }
+    const free = nextFreePortSet(others);
+    if (!free) {
+      return { error: 'Every port set is in use. Free one before adding another server.' };
+    }
+    config.gamePort = free.gamePort;
+    config.queryPort = free.queryPort;
+    config.rconPort = free.rconPort;
+  }
+
   fs.mkdirSync(dir, { recursive: true });
   writeJsonAtomic(path.join(dir, 'config.json'), config);
   return config;

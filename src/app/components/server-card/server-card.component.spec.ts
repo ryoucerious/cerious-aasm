@@ -113,4 +113,34 @@ describe('ServerCardComponent', () => {
 
     expect(component.menuPosition).toEqual(placed);
   });
+  describe('join address', () => {
+    it('is the host the panel was opened on plus the game port', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
+      component.server = { ...component.server, gamePort: 7787 } as any;
+      expect(component.connectAddress).toBe('ark.example.org:7787');
+    });
+
+    it('falls back to the MultiHome address when the panel runs on localhost', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('localhost');
+      component.server = { ...component.server, gamePort: 7777, multiHome: '203.0.113.5' } as any;
+      expect(component.connectAddress).toBe('203.0.113.5:7777');
+    });
+
+    it('is empty, with the copy button disabled, when only localhost is known', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('127.0.0.1');
+      component.server = { ...component.server, gamePort: 7777 } as any;
+      expect(component.connectAddress).toBe('');
+      const button = fixture.nativeElement.querySelector('.server-card-copy') as HTMLButtonElement;
+      expect(button.disabled).toBeTrue();
+    });
+
+    it('copies the address and shows it as copied', async () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
+      component.server = { ...component.server, gamePort: 7777 } as any;
+      const writeText = spyOn(navigator.clipboard, 'writeText').and.resolveTo();
+      await component.onCopyAddress({ stopPropagation() {} } as any);
+      expect(writeText).toHaveBeenCalledWith('ark.example.org:7777');
+      expect(component.copied).toBeTrue();
+    });
+  });
 });

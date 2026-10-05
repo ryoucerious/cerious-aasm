@@ -10,7 +10,8 @@ import {
   getProcessCpuSeconds,
   parseTasklistVerbose,
   parseDirFreeBytes,
-  isRunningInDocker
+  isRunningInDocker,
+  getDiskUsage
 } from '../utils/platform.utils';
 
 jest.mock('os');
@@ -317,5 +318,36 @@ describe('Platform Utils - CPU sampling helpers', () => {
     expect(processCpuPercent(5, 1, 1000, 1)).toBe(0);
     expect(processCpuPercent(0, 1000, 1000, 1)).toBe(100);
     expect(processCpuPercent(0, 1, 0, 1)).toBe(0);
+  });
+
+  describe('getDiskUsage on Linux', () => {
+    const realPath = jest.requireActual('path') as typeof path;
+
+    beforeEach(() => {
+      (process as any).platform = 'linux';
+      mockPath.resolve.mockImplementation((...parts: string[]) => realPath.posix.resolve(...parts));
+      mockPath.dirname.mockImplementation((p: string) => realPath.posix.dirname(p));
+      mockOs.homedir.mockReturnValue('/home/test');
+    });
+
+    it('asks df about the nearest existing parent when the configured path does not exist yet', async () => {
+      const existing = '/home/test/.local/share';
+      jest.spyOn(fs, 'existsSync').mockImplementation(p => p === existing);
+      mockExecFileStdout('Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/sda1 1000 400 500 45% /\n');
+
+      const usage = await getDiskUsage(`${existing}/cerious-aasm-not-yet`);
+
+      expect(mockExecFile.mock.calls[0][1]).toEqual(['-kP', existing]);
+      expect(usage).toEqual({ total: 1000 * 1024, free: 500 * 1024 });
+    });
+
+    it('falls back to the home directory when nothing on the path exists', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      mockExecFileStdout('Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/sda1 1000 400 500 45% /\n');
+
+      await getDiskUsage('/mnt/gone/cerious-aasm');
+
+      expect(mockExecFile.mock.calls[0][1]).toEqual(['-kP', '/home/test']);
+    });
   });
 });
