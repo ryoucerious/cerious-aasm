@@ -44,16 +44,25 @@ function detectPackageFormat(): PackageFormat | null {
 function sha256(file: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    fs.createReadStream(file)
-      .on('error', reject)
-      .on('data', chunk => hash.update(chunk))
-      .on('end', () => resolve(hash.digest('hex')));
+    const stream = fs.createReadStream(file);
+    let failed = false;
+    stream.on('error', error => {
+      failed = true;
+      reject(error);
+    });
+    stream.on('data', chunk => hash.update(chunk));
+    // Resolve on close, not end: end fires while the handle is still open, and Windows will not
+    // delete the file until it is closed. A bad digest has to be able to remove the download.
+    stream.on('close', () => {
+      if (!failed) resolve(hash.digest('hex'));
+    });
   });
 }
 
 function removeDir(dir: string): void {
   try {
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Windows can return EPERM for a moment after a stream closes. Retry rather than leave the package behind.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   } catch (error) {
     console.warn(`[linux-package-updater] Could not remove ${dir}:`, error);
   }
@@ -220,6 +229,12 @@ export class LinuxPackageUpdaterService {
 
     await new Promise<void>((resolve, reject) => {
       const writer = fs.createWriteStream(file, { mode: 0o600 });
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
       response.data.on('data', (chunk: Buffer) => {
         received += chunk.length;
         const elapsedSeconds = (Date.now() - startedAt) / 1000 || 1;
@@ -231,9 +246,13 @@ export class LinuxPackageUpdaterService {
           total
         });
       });
-      response.data.on('error', reject);
-      writer.on('error', reject);
-      writer.on('finish', resolve);
+      response.data.on('error', fail);
+      writer.on('error', fail);
+      writer.on('close', () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      });
       response.data.pipe(writer);
     });
   }
