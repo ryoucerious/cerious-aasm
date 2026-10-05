@@ -5,7 +5,8 @@ import {
   instanceVisibleTo,
   isPoolOwnerIdentity,
   isPoolRole,
-  visibleInstanceIds
+  visibleInstanceIds,
+  type PoolInstance
 } from './pool-access';
 
 const admin = { id: 'a1', roleId: 'admin', ownerUserId: null };
@@ -19,7 +20,7 @@ const custom = { id: 'c1', roleId: 'auditors', ownerUserId: null };
 const inOp1 = { id: 's1', operatorUserId: 'op1', managerUserId: 'm1' };
 const inOp1Unassigned = { id: 's2', operatorUserId: 'op1', managerUserId: null };
 const inAdminPool = { id: 's3', operatorUserId: null, managerUserId: 't1' };
-const legacy = { id: 's4' };
+const legacy: { id: string } & PoolInstance = { id: 's4' };
 
 describe('pool-access', () => {
   describe('isPoolRole and accountPermission', () => {
@@ -77,8 +78,8 @@ describe('pool-access', () => {
     it('hides a server from an assignee whose pool it has left', () => {
       // A config can say "assigned to m1" while the server sits in another pool; the assignment
       // must not widen what m1 sees.
-      expect(instanceVisibleTo(manager, { id: 'x', operatorUserId: null, managerUserId: 'm1' })).toBe(false);
-      expect(instanceVisibleTo(manager, { id: 'y', operatorUserId: 'op2', managerUserId: 'm1' })).toBe(false);
+      expect(instanceVisibleTo(manager, { operatorUserId: null, managerUserId: 'm1' })).toBe(false);
+      expect(instanceVisibleTo(manager, { operatorUserId: 'op2', managerUserId: 'm1' })).toBe(false);
     });
 
     it('keeps a role the app does not know inside the admin pool', () => {

@@ -316,10 +316,7 @@ describe('instance.utils', () => {
     }
 
     it('puts a new server after the ones already in the list', async () => {
-      onDisk(
-        { id: 'existing-1', name: 'One', gamePort: 7777, queryPort: 27015, rconPort: 27020 },
-        { id: 'existing-2', name: 'Two', gamePort: 7787, queryPort: 27025, rconPort: 27030 }
-      );
+      onDisk(one, two);
 
       const result = await saveInstance({ name: 'New', gamePort: 7800, queryPort: 27100, rconPort: 27200 });
 

@@ -355,7 +355,8 @@ describe('ark-server-logging.utils', () => {
 
       expect(readLogTail(A_LOG, 5)).toEqual(['last line']);
       // The encoding sniff reads the first bytes; the tail read is the last call.
-      expect((fs.readSync as jest.Mock).mock.calls.at(-1)[3]).toBe(64 * 1024);
+      const readCalls = (fs.readSync as jest.Mock).mock.calls;
+      expect(readCalls[readCalls.length - 1][3]).toBe(64 * 1024);
     });
 
     it('returns nothing for a missing file', () => {
