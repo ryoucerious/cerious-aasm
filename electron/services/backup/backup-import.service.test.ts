@@ -56,7 +56,7 @@ describe('BackupImportService (real fs)', () => {
     expect(imported.id).not.toBe('old-server');
     expect(imported).toMatchObject({ name: 'Alpha', sessionName: 'Alpha', gamePort: 7778 });
     const onDisk = JSON.parse(fs.readFileSync(path.join(serversDir, imported.id, 'config.json'), 'utf8'));
-    expect(onDisk).toEqual({ id: imported.id, name: 'Alpha', sessionName: 'Alpha', gamePort: 7778 });
+    expect(onDisk).toEqual({ id: imported.id, name: 'Alpha', sessionName: 'Alpha', gamePort: 7778, sortOrder: 0 });
     expect(fs.readFileSync(path.join(serversDir, imported.id, 'SavedArks', 'TheIsland_WP', 'TheIsland_WP.ark'), 'utf8')).toBe('world');
     expect((await instanceUtils.getAllInstances()).map(instance => instance.id)).toEqual([imported.id]);
   });
