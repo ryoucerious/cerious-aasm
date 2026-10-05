@@ -1,1180 +1,1149 @@
-// Mock the services
-jest.mock('../services/messaging.service');
-jest.mock('../services/server-instance/server-instance.service', () => ({
-  serverInstanceService: {
-    forceStopInstance: jest.fn(),
-    startServerInstance: jest.fn(),
-    getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() })),
-    importServerFromBackup: jest.fn(),
-  }
-}));
-jest.mock('../services/server-instance/server-process.service', () => ({
-  serverProcessService: {
-    getNormalizedInstanceState: jest.fn(),
-  }
-}));
-jest.mock('../services/server-instance/server-monitoring.service', () => ({
-  serverMonitoringService: {
-    getInstanceLogs: jest.fn(),
-    getPlayerCount: jest.fn(),
-    stopPlayerPolling: jest.fn(),
-    startPlayerPolling: jest.fn(),
-    getInstanceState: jest.fn(),
-  }
-}));
-jest.mock('../services/server-instance/server-operations.service', () => ({
-  serverOperationsService: {
-    connectRcon: jest.fn(),
-    disconnectRcon: jest.fn(),
-    executeRconCommand: jest.fn(),
-    getRconStatus: jest.fn(),
-  }
-}));
-jest.mock('../services/server-instance/server-management.service', () => ({
-  serverManagementService: {
-    getAllInstances: jest.fn(),
-    getInstance: jest.fn(),
-    saveInstance: jest.fn(),
-    deleteInstance: jest.fn(),
-    importFromBackup: jest.fn(),
-  }
-}));
-jest.mock('../services/automation/automation.service', () => ({
-  automationService: {
-    setManuallyStopped: jest.fn()
-  }
-}));
-jest.mock('../utils/ark/ark-server/ark-server-state.utils');
-
 import { messagingService } from '../services/messaging.service';
 import { serverInstanceService } from '../services/server-instance/server-instance.service';
+import { getStandardEventCallbacks } from '../services/server-instance/instance-events';
+import { serverLifecycleService } from '../services/server-instance/server-lifecycle.service';
 import { serverProcessService } from '../services/server-instance/server-process.service';
 import { serverMonitoringService } from '../services/server-instance/server-monitoring.service';
 import { serverOperationsService } from '../services/server-instance/server-operations.service';
 import { serverManagementService } from '../services/server-instance/server-management.service';
 import { automationService } from '../services/automation/automation.service';
-import * as arkServerStateUtils from '../utils/ark/ark-server/ark-server-state.utils';
+import { arkConfigService } from '../services/ark-config.service';
+import { rconService } from '../services/rcon.service';
+import { activityLogService } from '../services/activity-log.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { userDatabaseService } from '../services/auth/user-database.service';
+import * as instanceUtils from '../utils/ark/instance.utils';
+import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockServerInstanceService = serverInstanceService as jest.Mocked<typeof serverInstanceService>;
-const mockServerProcessService = serverProcessService as jest.Mocked<typeof serverProcessService>;
-const mockServerMonitoringService = serverMonitoringService as jest.Mocked<typeof serverMonitoringService>;
-const mockServerOperationsService = serverOperationsService as jest.Mocked<typeof serverOperationsService>;
-const mockServerManagementService = serverManagementService as jest.Mocked<typeof serverManagementService>;
-const mockAutomationService = automationService as jest.Mocked<typeof automationService>;
-const mockGetNormalizedInstanceState = arkServerStateUtils.getNormalizedInstanceState as jest.Mock;
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn(), sendToAllOthers: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-instance.service', () => ({
+  serverInstanceService: {
+    forceStopInstance: jest.fn(),
+    startServerInstance: jest.fn(),
+    importServerFromBackup: jest.fn(),
+    broadcastInstances: jest.fn(),
+    deleteInstance: jest.fn()
+  }
+}));
+jest.mock('../services/server-instance/instance-events', () => ({ getStandardEventCallbacks: jest.fn() }));
+jest.mock('../services/server-instance/server-lifecycle.service', () => ({
+  serverLifecycleService: { stopServerInstance: jest.fn(), startAllInstances: jest.fn(), stopAllInstances: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-process.service', () => ({
+  serverProcessService: { getNormalizedInstanceState: jest.fn(), setInstanceState: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-monitoring.service', () => ({
+  serverMonitoringService: { getInstanceLogs: jest.fn(), getPlayerCount: jest.fn(), startPlayerPolling: jest.fn(), stopPlayerPolling: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-operations.service', () => ({
+  serverOperationsService: { connectRcon: jest.fn(), disconnectRcon: jest.fn(), getRconStatus: jest.fn(), executeRconCommand: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-management.service', () => ({
+  serverManagementService: { getAllInstances: jest.fn(), getInstance: jest.fn(), saveInstance: jest.fn(), deleteInstance: jest.fn() }
+}));
+jest.mock('../services/automation/automation.service', () => ({ automationService: { setManuallyStopped: jest.fn() } }));
+jest.mock('../services/ark-config.service', () => ({
+  arkConfigService: { readIniFile: jest.fn(), writeIniFile: jest.fn(), parseIniToConfig: jest.fn() }
+}));
+jest.mock('../services/rcon.service', () => ({ rconService: { getOnlinePlayers: jest.fn() } }));
+jest.mock('../services/activity-log.service', () => ({ activityLogService: { record: jest.fn() } }));
+jest.mock('../services/auth/permission-gate', () => ({
+  identifySender: jest.fn(),
+  isDesktopWindow: jest.requireActual('../services/auth/permission-gate').isDesktopWindow
+}));
+jest.mock('../utils/ark/instance.utils', () => ({ getInstance: jest.fn(), saveInstance: jest.fn() }));
+jest.mock('../services/auth/user-database.service', () => ({ userDatabaseService: { getUser: jest.fn() } }));
+jest.mock('../utils/ark/ark-server/ark-server-state.utils', () => ({ getNormalizedInstanceState: jest.fn() }));
 
+const mockMessaging = jest.mocked(messagingService);
+const mockInstance = jest.mocked(serverInstanceService);
+const mockLifecycle = jest.mocked(serverLifecycleService);
+const mockProcess = jest.mocked(serverProcessService);
+const mockMonitoring = jest.mocked(serverMonitoringService);
+const mockOperations = jest.mocked(serverOperationsService);
+const mockManagement = jest.mocked(serverManagementService);
+const mockArkConfig = jest.mocked(arkConfigService);
+const mockInstanceUtils = jest.mocked(instanceUtils);
+const mockUsers = jest.mocked(userDatabaseService);
 
-// Store handler functions for testing
-let forceStopHandler: Function;
-let getStateHandler: Function;
-let getLogsHandler: Function;
-let connectRconHandler: Function;
-let disconnectRconHandler: Function;
-let getRconStatusHandler: Function;
-let rconCommandHandler: Function;
-let startInstanceHandler: Function;
-let getPlayersHandler: Function;
-let getInstancesHandler: Function;
-let getInstanceHandler: Function;
-let saveInstanceHandler: Function;
-let deleteInstanceHandler: Function;
-let importBackupHandler: Function;
+const DESKTOP: ReturnType<typeof identifySender> = { user: null, permissions: [], isAdmin: true, isLocalDesktop: true };
+function operatorIdentity(id: string, permissions: string[] = ['servers.view', 'servers.control', 'servers.create', 'servers.configure']): ReturnType<typeof identifySender> {
+  return {
+    user: { id, username: id, displayName: id, roleId: 'operator', roleName: 'Operator', ownerUserId: null, active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, permissions: permissions as never },
+    permissions: permissions as never, isAdmin: false, isLocalDesktop: false
+  };
+}
 
-// Shared mock sender for all tests
-const mockSender = {};
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
-beforeAll(() => {
-  // Import handler to register events
-  require('./server-instance-handler');
+// What the real services throw when a payload field is missing.
+const missingField = new TypeError("Cannot read properties of undefined (reading 'includes')");
 
-  const mockOn = mockMessagingService.on as jest.Mock;
-  mockOn.mock.calls.forEach(([event, handler]) => {
-    switch (event) {
-      case 'force-stop-server-instance':
-        forceStopHandler = handler;
-        break;
-      case 'get-server-instance-state':
-        getStateHandler = handler;
-        break;
-      case 'get-server-instance-logs':
-        getLogsHandler = handler;
-        break;
-      case 'connect-rcon':
-        connectRconHandler = handler;
-        break;
-      case 'disconnect-rcon':
-        disconnectRconHandler = handler;
-        break;
-      case 'get-rcon-status':
-        getRconStatusHandler = handler;
-        break;
-      case 'rcon-command':
-        rconCommandHandler = handler;
-        break;
-      case 'start-server-instance':
-        startInstanceHandler = handler;
-        break;
-      case 'get-server-instance-players':
-        getPlayersHandler = handler;
-        break;
-      case 'get-server-instances':
-        getInstancesHandler = handler;
-        break;
-      case 'get-server-instance':
-        getInstanceHandler = handler;
-        break;
-      case 'save-server-instance':
-        saveInstanceHandler = handler;
-        break;
-      case 'delete-server-instance':
-        deleteInstanceHandler = handler;
-        break;
-      case 'import-server-from-backup':
-        importBackupHandler = handler;
-        break;
-    }
+describe('server-instance-handler', () => {
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
+
+  beforeAll(() => {
+    require('./server-instance-handler');
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
-});
-
-describe('Server Instance Handler', () => {
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.mocked(identifySender).mockReturnValue(DESKTOP);
   });
 
-  describe('start-server-instance handler', () => {
-    it('should not send notification if result.started is false and result.portError is set but sender has no send function', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-else' };
-      const expectedResult = {
-        started: false,
-        portError: 'PORT ERROR',
-        instanceId: 'instance-1',
-        instanceName: 'Test Server',
-        shouldNotifyAutomation: false,
-        success: false
-      };
-      // sender does NOT have a send function
-      const senderWithoutSend = {};
-      mockServerInstanceService.startServerInstance.mockResolvedValue(expectedResult);
-      mockServerInstanceService.getStandardEventCallbacks.mockReturnValue({ onLog: jest.fn(), onState: jest.fn() });
-      await startInstanceHandler(payload, senderWithoutSend);
-      // Should NOT send notification (neither info nor error)
-      const notifCall = (mockMessagingService.sendToAll as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(notifCall).toBeUndefined();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('start-server-instance', {
-        success: false,
-        instanceId: 'instance-1',
-        error: 'PORT ERROR',
-        requestId: 'req-else'
-      }, senderWithoutSend);
-    });
-    it('should force stop server instance successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const expectedResult = {
-        success: true,
-        instanceId: 'instance-1',
-        instanceName: 'Test Server',
-        shouldNotifyAutomation: true
-      };
-      mockServerInstanceService.forceStopInstance.mockResolvedValue(expectedResult);
-      await forceStopHandler(payload, mockSender);
-      expect(mockServerInstanceService.forceStopInstance).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId: 'instance-1', connected: false });
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('server-instance-log', { log: '[FORCE STOP] Server force stopped', instanceId: 'instance-1' });
-      expect(mockServerMonitoringService.stopPlayerPolling).toHaveBeenCalledWith('instance-1');
-      expect(mockAutomationService.setManuallyStopped).toHaveBeenCalledWith('instance-1', true);
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('notification', {
-        type: 'warning',
-        message: 'Test Server force stopped.'
-      });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('force-stop-server-instance', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, mockSender);
+  function request(channel: string, payload?: unknown): Promise<void> {
+    return handlers[channel](payload, sender);
+  }
+
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
+
+  function broadcasts(channel: string): unknown[] {
+    return mockMessaging.sendToAll.mock.calls.filter(([broadcastChannel]) => broadcastChannel === channel).map(call => call[1]);
+  }
+
+  function replyOrder(channel: string): number {
+    const index = mockMessaging.sendToOriginator.mock.calls.findIndex(([replyChannel]) => replyChannel === channel);
+    return mockMessaging.sendToOriginator.mock.invocationCallOrder[index];
+  }
+
+  describe('get-ini-file', () => {
+    it('replies with the file', async () => {
+      mockArkConfig.readIniFile.mockReturnValue('[ServerSettings]');
+
+      await request('get-ini-file', { instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' });
+
+      expect(mockArkConfig.readIniFile).toHaveBeenCalledWith('a1', 'Game.ini');
+      expect(replies('get-ini-file')).toEqual([
+        { success: true, content: '[ServerSettings]', instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' }
+      ]);
     });
 
-    it('should handle force stop exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const error = new Error('System error');
-      mockServerInstanceService.forceStopInstance.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await forceStopHandler(payload, mockSender);
-      expect(mockServerInstanceService.forceStopInstance).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle force-stop-server-instance:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('force-stop-server-instance', {
-        success: false,
-        error: 'System error',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
+    it('replies with the reason reading fails', async () => {
+      mockArkConfig.readIniFile.mockImplementation(() => { throw new Error('Invalid instance ID'); });
+
+      await request('get-ini-file', { instanceId: '../x', filename: 'Game.ini', requestId: 'r1' });
+
+      expect(replies('get-ini-file')).toEqual([{ success: false, error: 'Invalid instance ID', requestId: 'r1' }]);
     });
 
-    it('should handle force stop exception with string error', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      mockServerInstanceService.forceStopInstance.mockRejectedValue('fail');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await forceStopHandler(payload, mockSender);
-      expect(mockServerInstanceService.forceStopInstance).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle force-stop-server-instance:', 'fail');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('force-stop-server-instance', {
-        success: false,
-        error: 'Failed to force stop server',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
+    it('answers a request without a payload', async () => {
+      mockArkConfig.readIniFile.mockImplementation(() => { throw missingField; });
 
-    it('should handle force stop exception with undefined error', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      mockServerInstanceService.forceStopInstance.mockRejectedValue(undefined);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await forceStopHandler(payload, mockSender);
-      expect(mockServerInstanceService.forceStopInstance).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle force-stop-server-instance:', undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('force-stop-server-instance', {
-        success: false,
-        error: 'Failed to force stop server',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
+      await request('get-ini-file', undefined);
 
-  });
-
-  describe('get-server-instance-state handler', () => {
-    it('should get server instance state successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const expectedResult = {
-        state: 'running',
-        instanceId: 'instance-1'
-      };
-
-      mockGetNormalizedInstanceState.mockReturnValue('running');
-
-      await getStateHandler(payload, mockSender);
-
-      expect(mockGetNormalizedInstanceState).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-state', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, mockSender);
-    });
-
-    it('should handle get state exception with string error', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      mockGetNormalizedInstanceState.mockImplementation(() => { throw 'fail'; });
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getStateHandler(payload, mockSender);
-      expect(mockGetNormalizedInstanceState).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-state:', 'fail');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-state', {
-        state: 'unknown',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get state exception with undefined error', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      mockGetNormalizedInstanceState.mockImplementation(() => { throw undefined; });
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getStateHandler(payload, mockSender);
-      expect(mockGetNormalizedInstanceState).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-state:', undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-state', {
-        state: 'unknown',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get state exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const error = new Error('State check failed');
-      mockGetNormalizedInstanceState.mockImplementation(() => { throw error; });
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getStateHandler(payload, mockSender);
-      expect(mockGetNormalizedInstanceState).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-state:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-state', {
-        state: 'unknown',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
+      expect(replies('get-ini-file')).toEqual([{ success: false, error: missingField.message, requestId: undefined }]);
     });
   });
 
-  describe('get-server-instance-logs handler', () => {
-    it('should handle get logs exception with string error', async () => {
-      const payload = { id: 'instance-1', maxLines: 100, requestId: 'req-1' };
-      mockServerMonitoringService.getInstanceLogs.mockImplementation(() => { throw 'fail'; });
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLogsHandler(payload, mockSender);
-      expect(mockServerMonitoringService.getInstanceLogs).toHaveBeenCalledWith('instance-1', 100);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-logs:', 'fail');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-logs', {
-        log: '',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should handle get logs exception with undefined error', async () => {
-      const payload = { id: 'instance-1', maxLines: 100, requestId: 'req-1' };
-      mockServerMonitoringService.getInstanceLogs.mockImplementation(() => { throw undefined; });
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await getLogsHandler(payload, mockSender);
-      expect(mockServerMonitoringService.getInstanceLogs).toHaveBeenCalledWith('instance-1', 100);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-logs:', undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-logs', {
-        log: '',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      consoleSpy.mockRestore();
-    });
-    it('should get server instance logs successfully', async () => {
-      const payload = { id: 'instance-1', maxLines: 100, requestId: 'req-1' };
-      const expectedResult = {
-        log: 'Server log line',
-        instanceId: 'instance-1'
-      };
-
-      mockServerMonitoringService.getInstanceLogs.mockReturnValue({ log: 'Server log line', instanceId: 'instance-1' });
-
-      await getLogsHandler(payload, mockSender);
-
-      expect(mockServerMonitoringService.getInstanceLogs).toHaveBeenCalledWith('instance-1', 100);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-logs', {
-        log: 'Server log line',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('get-server-instance-logs', {
-        log: 'Server log line',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      });
-    });
-
-    it('should handle get logs exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const error = new Error('Log retrieval failed');
-
-      mockServerMonitoringService.getInstanceLogs.mockImplementation(() => {
-        throw error;
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getLogsHandler(payload, mockSender);
-
-      expect(mockServerMonitoringService.getInstanceLogs).toHaveBeenCalledWith('instance-1', undefined);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-logs:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-logs', {
-        log: '',
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('connect-rcon handler', () => {
-    it('should connect RCON successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const expectedResult = {
-        success: true,
-        connected: true,
-        instanceId: 'instance-1'
-      };
-
-      mockServerOperationsService.connectRcon.mockResolvedValue(expectedResult);
-
-      await connectRconHandler(payload, mockSender);
-
-      expect(mockServerOperationsService.connectRcon).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId: 'instance-1', connected: true });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('connect-rcon', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, mockSender);
-    });
-
-    it('should handle RCON connection failure', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const expectedResult = {
-        success: false,
-        connected: false,
-        instanceId: 'instance-1',
-        error: 'Connection failed'
-      };
-
-      mockServerOperationsService.connectRcon.mockResolvedValue(expectedResult);
-
-      await connectRconHandler(payload, mockSender);
-
-      expect(mockServerOperationsService.connectRcon).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId: 'instance-1', connected: false });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('connect-rcon', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, mockSender);
-    });
-
-    it('should handle RCON connection exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const error = new Error('RCON connection error');
-
-      mockServerOperationsService.connectRcon.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await connectRconHandler(payload, mockSender);
-
-      expect(mockServerOperationsService.connectRcon).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle connect-rcon:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('connect-rcon', {
-        success: false,
-        connected: false,
-        instanceId: 'instance-1',
-        error: 'RCON connection error',
-        requestId: 'req-1'
-      }, mockSender);
-      // sendToAll is not called in the catch block
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('disconnect-rcon handler', () => {
-    it('should disconnect RCON successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const expectedResult = {
-        success: true,
-        connected: false,
-        instanceId: 'instance-1'
-      };
-
-      mockServerOperationsService.disconnectRcon.mockResolvedValue(expectedResult);
-
-      await disconnectRconHandler(payload, mockSender);
-
-      expect(mockServerOperationsService.disconnectRcon).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId: 'instance-1', connected: false });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('disconnect-rcon', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, mockSender);
-    });
-
-    it('should handle RCON disconnect exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const error = new Error('RCON disconnect error');
-
-      mockServerOperationsService.disconnectRcon.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await disconnectRconHandler(payload, mockSender);
-
-      expect(mockServerOperationsService.disconnectRcon).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle disconnect-rcon:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('disconnect-rcon', {
-        success: false,
-        connected: false,
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, mockSender);
-      // sendToAll is not called in the catch block
-      expect(mockMessagingService.sendToAll).not.toHaveBeenCalled();
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('get-rcon-status handler', () => {
-    it('should get RCON status successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        success: true,
-        connected: true,
-        instanceId: 'instance-1'
-      };
-
-      mockServerOperationsService.getRconStatus.mockReturnValue(expectedResult);
-
-      await getRconStatusHandler(payload, sender);
-
-      expect(mockServerOperationsService.getRconStatus).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-rcon-status', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle get RCON status exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('RCON status check failed');
-
-      mockServerOperationsService.getRconStatus.mockImplementation(() => {
-        throw error;
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getRconStatusHandler(payload, sender);
-
-      expect(mockServerOperationsService.getRconStatus).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-rcon-status:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-rcon-status', {
-        success: false,
-        connected: false,
-        instanceId: 'instance-1',
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('rcon-command handler', () => {
-    it('should execute RCON command successfully', async () => {
-      const payload = { id: 'instance-1', command: 'listplayers', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        success: true,
-        response: 'Player list response',
-        instanceId: 'instance-1'
-      };
-
-      mockServerOperationsService.executeRconCommand.mockResolvedValue(expectedResult);
-
-      await rconCommandHandler(payload, sender);
-
-      expect(mockServerOperationsService.executeRconCommand).toHaveBeenCalledWith('instance-1', 'listplayers');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('rcon-command', {
-        instanceId: 'instance-1',
-        response: 'Player list response',
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle RCON command exception', async () => {
-      const payload = { id: 'instance-1', command: 'invalid', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('RCON command failed');
-
-      mockServerOperationsService.executeRconCommand.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await rconCommandHandler(payload, sender);
-
-      expect(mockServerOperationsService.executeRconCommand).toHaveBeenCalledWith('instance-1', 'invalid');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle rcon-command:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('rcon-command', {
-        instanceId: 'instance-1',
-        response: 'RCON command failed',
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('get-server-instance-players handler', () => {
-    it('should get server instance players successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        instanceId: 'instance-1',
-        players: 5
-      };
-
-      mockServerMonitoringService.getPlayerCount.mockReturnValue(expectedResult);
-
-      await getPlayersHandler(payload, sender);
-
-      expect(mockServerMonitoringService.getPlayerCount).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-players', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle get players exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('Player retrieval failed');
-
-      mockServerMonitoringService.getPlayerCount.mockImplementation(() => {
-        throw error;
-      });
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getPlayersHandler(payload, sender);
-
-      expect(mockServerMonitoringService.getPlayerCount).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance-players:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance-players', {
-        instanceId: 'instance-1',
-        players: 0,
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('get-server-instances handler', () => {
-    it('should get server instances successfully', async () => {
-      const payload = { requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        instances: [{ id: 'instance-1', name: 'Server 1' }]
-      };
-
-      mockServerManagementService.getAllInstances.mockReset();
-      mockServerManagementService.getAllInstances.mockResolvedValue(expectedResult);
-
-      await getInstancesHandler(payload, sender);
-
-      expect(mockServerManagementService.getAllInstances).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instances', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle get instances exception', async () => {
-      const payload = { requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('Instance retrieval failed');
-
-      mockServerManagementService.getAllInstances.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getInstancesHandler(payload, sender);
-
-      expect(mockServerManagementService.getAllInstances).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instances:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instances', {
-        instances: [],
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('get-server-instance handler', () => {
-    it('should get server instance successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        instance: { id: 'instance-1', name: 'Server 1' }
-      };
-
-      mockServerManagementService.getInstance.mockResolvedValue(expectedResult);
-
-      await getInstanceHandler(payload, sender);
-
-      expect(mockServerManagementService.getInstance).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle get instance exception', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('Instance retrieval failed');
-
-      mockServerManagementService.getInstance.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await getInstanceHandler(payload, sender);
-
-      expect(mockServerManagementService.getInstance).toHaveBeenCalledWith('instance-1');
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle get-server-instance:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-server-instance', {
-        instance: null,
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('save-server-instance handler', () => {
-    it('should save server instance successfully', async () => {
-      const payload = { instance: { id: 'instance-1', name: 'Server 1' }, requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        success: true,
-        instance: { id: 'instance-1', name: 'Server 1' }
-      };
-
-      mockServerManagementService.saveInstance.mockResolvedValue(expectedResult);
-
-      await saveInstanceHandler(payload, sender);
-
-      expect(mockServerManagementService.saveInstance).toHaveBeenCalledWith({ id: 'instance-1', name: 'Server 1' });
-      expect(mockMessagingService.sendToAll).toHaveBeenCalledWith('server-instance-updated', { id: 'instance-1', name: 'Server 1' });
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('save-server-instance', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle save instance exception', async () => {
-      const payload = { instance: { id: 'instance-1', name: 'Server 1' }, requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('Save failed');
-
-      mockServerManagementService.saveInstance.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await saveInstanceHandler(payload, sender);
-
-      expect(mockServerManagementService.saveInstance).toHaveBeenCalledWith({ id: 'instance-1', name: 'Server 1' });
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle save-server-instance:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('save-server-instance', {
-        success: false,
-        error: 'Save failed',
-        requestId: 'req-1'
-      }, sender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should send notification with Unknown fallback if name and id are missing', async () => {
-      const newInstance = {}; // no name, no id
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('Unknown');
-      expect(call[1].message).toContain('added');
-    });
-
-    it('should not send notification if saveInstance result.success is false', async () => {
-      const instance = { id: 'fail-id' };
-      mockServerManagementService.saveInstance.mockResolvedValueOnce({ success: false, instance });
-      await saveInstanceHandler({ instance }, mockSender);
-      // Should not send notification
-      const notifCall = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(notifCall).toBeUndefined();
-      // Should send result to originator
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'save-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].instance).toEqual(instance);
-    });
-
-    it('should send updated notification if existingInstance exists and name is unchanged', async () => {
-      const oldInstance = { id: 'id-1', name: 'Server 1' };
-      const newInstance = { id: 'id-1', name: 'Server 1' };
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(oldInstance);
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('updated');
-      expect(call[1].message).toContain('Server 1');
-    });
-  });
-
-  describe('delete-server-instance handler', () => {
-    it('should delete server instance successfully', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const expectedResult = {
-        success: true,
-        id: 'instance-1'
-      };
-
-      mockServerManagementService.deleteInstance.mockResolvedValue(expectedResult);
-
-      await deleteInstanceHandler(payload, sender);
-
-      expect(mockServerManagementService.deleteInstance).toHaveBeenCalledWith('instance-1');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('delete-server-instance', {
-        ...expectedResult,
-        requestId: 'req-1'
-      }, sender);
-    });
-
-    it('should handle delete instance exception (Error)', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      const error = new Error('Delete failed');
-      mockServerManagementService.deleteInstance.mockRejectedValue(error);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await deleteInstanceHandler(payload, sender);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle delete-server-instance:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('delete-server-instance', {
-        success: false,
-        id: 'instance-1',
-        requestId: 'req-1'
-      }, sender);
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle delete instance exception (string)', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      mockServerManagementService.deleteInstance.mockRejectedValue('fail');
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await deleteInstanceHandler(payload, sender);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle delete-server-instance:', 'fail');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('delete-server-instance', {
-        success: false,
-        id: 'instance-1',
-        requestId: 'req-1'
-      }, sender);
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle delete instance exception (undefined)', async () => {
-      const payload = { id: 'instance-1', requestId: 'req-1' };
-      const sender = { send: jest.fn() };
-      mockServerManagementService.deleteInstance.mockRejectedValue(undefined);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      await deleteInstanceHandler(payload, sender);
-      expect(consoleSpy).toHaveBeenCalledWith('[server-instance-handler] Failed to handle delete-server-instance:', undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('delete-server-instance', {
-        success: false,
-        id: 'instance-1',
-        requestId: 'req-1'
-      }, sender);
-      consoleSpy.mockRestore();
-    });
-
-    it('should not send notification if result.success is false', async () => {
-      mockServerManagementService.deleteInstance.mockResolvedValueOnce({ success: false, id: 'id-2' });
-      await deleteInstanceHandler({ id: 'id-2', requestId: 'req-del-2' }, mockSender);
-      const notifCall = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(notifCall).toBeUndefined();
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'delete-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].id).toBe('id-2');
-      expect(call[1].requestId).toBe('req-del-2');
-    });
-  });
-
-  // Fallback: payload undefined for all handlers
-  describe('payload fallback coverage', () => {
-    it('should send correct notification for server update with missing name but present id (save-server-instance)', async () => {
-      const oldInstance = { id: 'id-xyz' }; // name missing
-      const newInstance = { id: 'id-xyz' }; // name missing, id present
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(oldInstance);
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('id-xyz');
-      expect(call[1].message).toContain('updated');
-      expect(call[1].message).not.toContain('Unknown');
-    });
-
-    it('should send correct notification for server add with missing name and id (save-server-instance)', async () => {
-      const newInstance = {}; // name and id missing
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('Unknown');
-      expect(call[1].message).toContain('added');
-    });
-    it('should send correct notification for server add with missing name but present id (save-server-instance)', async () => {
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(null);
-      const newInstance = { id: 'id-xyz' }; // name missing, id present
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('id-xyz');
-      expect(call[1].message).not.toContain('Unknown');
-    });
-    it('should send correct notification for server add with missing name and id (save-server-instance)', async () => {
-      const newInstance = {};
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('Unknown');
-    });
-    it('start-server-instance: should use fallback error message if thrown value is string', async () => {
-      mockServerInstanceService.getStandardEventCallbacks.mockReturnValue({ onLog: jest.fn(), onState: jest.fn() });
-      mockServerInstanceService.startServerInstance.mockRejectedValue('fail');
-      await startInstanceHandler({ id: 'id1' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'start-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to start server');
-    });
-
-    it('connect-rcon: should use fallback error message if thrown value is string', async () => {
-      mockServerOperationsService.connectRcon.mockRejectedValue('fail');
-      await connectRconHandler({ id: 'id1' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'connect-rcon');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to connect RCON');
-    });
-
-    it('rcon-command: should use fallback error message if thrown value is string', async () => {
-      mockServerOperationsService.executeRconCommand.mockRejectedValue('fail');
-      await rconCommandHandler({ id: 'id1', command: 'cmd' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'rcon-command');
-      expect(call).toBeDefined();
-      expect(call[1].response).toBe('RCON command failed');
-    });
-
-    it('save-server-instance: should use fallback error message if thrown value is string', async () => {
-      mockServerManagementService.saveInstance.mockRejectedValue('fail');
-      await saveInstanceHandler({ instance: { id: 'id1' } }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'save-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to save server instance');
-    });
-
-    it('import-server-from-backup: should use fallback error message if thrown value is string', async () => {
-      mockServerInstanceService.importServerFromBackup.mockRejectedValue('fail');
-      await importBackupHandler({ serverName: 's', backupFilePath: 'b', fileData: 'd', fileName: 'f' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'import-server-from-backup');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to import server from backup');
-    });
-
-    it('should call sendToAll in startPlayerPolling callback (connect-rcon)', async () => {
-      const instanceId = 'abc123';
-      const count = 42;
-      mockServerOperationsService.connectRcon.mockResolvedValue({ connected: true, success: true, instanceId });
-      mockServerMonitoringService.startPlayerPolling.mockImplementation((id, cb) => {
-        cb(instanceId, count);
-      });
-      await connectRconHandler({ id: instanceId }, mockSender);
-      const call = (mockMessagingService.sendToAll as any).mock.calls.find(
-        (c: any[]) => c[0] === 'server-instance-players'
-      );
-      expect(call).toBeDefined();
-      expect(call[1]).toEqual({ instanceId, players: count });
-    });
-
-    it('should send portError notification if present and sender.send is function (start-server-instance)', async () => {
-      const portError = 'Port in use';
-      const senderWithSend = { send: jest.fn() };
-      mockServerInstanceService.getStandardEventCallbacks.mockReturnValue({ onLog: jest.fn(), onState: jest.fn() });
-      mockServerInstanceService.startServerInstance.mockResolvedValue({ started: false, portError, instanceId: 'id1' });
-      await startInstanceHandler({ id: 'id1' }, senderWithSend);
-      const call = (senderWithSend.send as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBe('notification');
-      expect(call[1].type).toBe('error');
-      expect(call[1].message).toBe(portError);
-    });
-
-    it('should send correct notification for server rename (save-server-instance)', async () => {
-      const oldInstance = { id: 'id1', name: 'OldName' };
-      const newInstance = { id: 'id1', name: 'NewName' };
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(oldInstance);
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('renamed');
-    });
-
-    it('should send correct notification for server add (save-server-instance)', async () => {
-      jest.spyOn(require('../utils/ark/instance.utils'), 'getInstance').mockResolvedValueOnce(null);
-      const newInstance = { id: 'id2', name: 'AddedName' };
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: newInstance });
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [newInstance] });
-      await saveInstanceHandler({ instance: newInstance }, mockSender);
-      const call = (mockMessagingService.sendToAllOthers as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(call).toBeDefined();
-      expect(call[1].message).toContain('added');
-    });
-
-    it('should handle error in import-server-from-backup', async () => {
-      mockServerInstanceService.importServerFromBackup.mockRejectedValue(new Error('fail import'));
-      await importBackupHandler({ serverName: 's', backupFilePath: 'b', fileData: 'd', fileName: 'f' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'import-server-from-backup');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(typeof call[1].error).toBe('string');
-    });
-
-    it('force-stop-server-instance: should handle undefined payload', async () => {
-      mockServerInstanceService.forceStopInstance.mockResolvedValue({ success: true, instanceId: '' });
-      await forceStopHandler(undefined, mockSender);
-      expect(mockServerInstanceService.forceStopInstance).toHaveBeenCalled();
-    });
-    it('get-server-instance-state: should handle undefined payload', async () => {
-      mockGetNormalizedInstanceState.mockReturnValue('stopped');
-      await getStateHandler(undefined, mockSender);
-      expect(mockGetNormalizedInstanceState).toHaveBeenCalled();
-    });
-    it('get-server-instance-logs: should handle undefined payload', async () => {
-      mockServerMonitoringService.getInstanceLogs.mockReturnValue({ log: '', instanceId: '' });
-      await getLogsHandler(undefined, mockSender);
-      expect(mockServerMonitoringService.getInstanceLogs).toHaveBeenCalled();
-    });
-    it('connect-rcon: should handle undefined payload', async () => {
-      mockServerOperationsService.connectRcon.mockResolvedValue({ success: true, connected: true, instanceId: '' });
-      await connectRconHandler(undefined, mockSender);
-      expect(mockServerOperationsService.connectRcon).toHaveBeenCalled();
-    });
-    it('disconnect-rcon: should handle undefined payload', async () => {
-      mockServerOperationsService.disconnectRcon.mockResolvedValue({ success: true, connected: false, instanceId: '' });
-      await disconnectRconHandler(undefined, mockSender);
-      expect(mockServerOperationsService.disconnectRcon).toHaveBeenCalled();
-    });
-    it('get-rcon-status: should handle undefined payload', async () => {
-      (mockServerOperationsService.getRconStatus as any).mockResolvedValue({ success: true, connected: true, instanceId: '' });
-      await getRconStatusHandler(undefined, mockSender);
-      expect(mockServerOperationsService.getRconStatus).toHaveBeenCalled();
-    });
-    it('rcon-command: should handle undefined payload', async () => {
-      mockServerOperationsService.executeRconCommand.mockResolvedValue({ success: true, response: '', instanceId: '' });
-      await rconCommandHandler(undefined, mockSender);
-      expect(mockServerOperationsService.executeRconCommand).toHaveBeenCalled();
-    });
-    it('start-server-instance: should handle undefined payload', async () => {
-      mockServerInstanceService.startServerInstance.mockResolvedValue({ started: true, instanceId: '' });
-      await startInstanceHandler(undefined, mockSender);
-      const call = (mockServerInstanceService.startServerInstance as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBeUndefined();
-      expect(typeof call[1]).toBe('function');
-      expect(typeof call[2]).toBe('function');
-    });
-    it('get-server-instance-players: should handle undefined payload', async () => {
-      mockServerMonitoringService.getPlayerCount.mockReturnValue({ instanceId: '', players: 0 });
-      await getPlayersHandler(undefined, mockSender);
-      const call = (mockServerMonitoringService.getPlayerCount as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBeUndefined();
-    });
-    it('get-server-instances: should handle undefined payload', async () => {
-      mockServerManagementService.getAllInstances.mockResolvedValue({ instances: [] });
-      await getInstancesHandler(undefined, mockSender);
-      expect(mockServerManagementService.getAllInstances).toHaveBeenCalled();
-    });
-    it('get-server-instance: should handle undefined payload', async () => {
-      mockServerManagementService.getInstance.mockResolvedValue({ instance: null });
-      await getInstanceHandler(undefined, mockSender);
-      const call = (mockServerManagementService.getInstance as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBeUndefined();
-    });
-    it('save-server-instance: should handle undefined payload', async () => {
-      mockServerManagementService.saveInstance.mockResolvedValue({ success: true, instance: {} });
-      await saveInstanceHandler(undefined, mockSender);
-      expect(mockServerManagementService.saveInstance).toHaveBeenCalledWith(undefined);
-    });
-    it('delete-server-instance: should handle undefined payload', async () => {
-      mockServerManagementService.deleteInstance.mockResolvedValue({ success: true, id: '' });
-      await deleteInstanceHandler(undefined, mockSender);
-      const call = (mockServerManagementService.deleteInstance as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBeUndefined();
-    });
-    it('import-server-from-backup: should handle undefined payload', async () => {
-      mockServerInstanceService.importServerFromBackup.mockResolvedValue({ success: true, instance: {} });
-      await importBackupHandler(undefined, mockSender);
-      const call = (mockServerInstanceService.importServerFromBackup as any).mock.calls.slice(-1)[0];
-      expect(call[0]).toBeUndefined();
-      expect(call[1]).toBeUndefined();
-      expect(call[2]).toBeUndefined();
-      expect(call[3]).toBeUndefined();
-    });
-  });
-
-  describe('force-stop-server-instance handler', () => {
-    it('should send fallback error message if an error is thrown', async () => {
-      // Simulate error thrown (not an Error instance)
-      mockServerInstanceService.forceStopInstance.mockImplementation(() => { throw 'fail'; });
-      await forceStopHandler({}, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'force-stop-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to force stop server');
-    });
-    it('should send error message if an Error is thrown', async () => {
-      mockServerInstanceService.forceStopInstance.mockImplementation(() => { throw new Error('custom error'); });
-      await forceStopHandler({}, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'force-stop-server-instance');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('custom error');
-    });
-  });
-  describe('import-server-from-backup handler', () => {
+  describe('save-ini-file', () => {
     beforeEach(() => {
-      jest.clearAllMocks();
-      mockServerProcessService.getNormalizedInstanceState.mockReset();
-    });
-    it('should not send error if result.success is false but no error is thrown', async () => {
-      mockServerInstanceService.importServerFromBackup.mockResolvedValueOnce({ success: false, error: 'restore failed' });
-      mockServerManagementService.getAllInstances.mockResolvedValueOnce({ instances: [] });
-      await importBackupHandler({ backupPath: 'foo', requestId: 'req-4' }, mockSender);
-      // Should not throw, should not call error fallback
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'import-server-from-backup');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('restore failed');
+      mockArkConfig.writeIniFile.mockReset();
+      mockInstanceUtils.getInstance.mockReset();
     });
 
-    it('should send error message if an Error is thrown', async () => {
-      mockServerInstanceService.importServerFromBackup.mockImplementation(() => { throw new Error('custom import error'); });
-      await importBackupHandler({ backupPath: 'foo', requestId: 'req-2' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'import-server-from-backup');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('custom import error');
+    it('writes the file and merges its settings into the instance through instance.utils', async () => {
+      const saved = { id: 'a1', name: 'Alpha', maxPlayers: 20 };
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha', maxPlayers: 10 });
+      mockArkConfig.parseIniToConfig.mockReturnValue({ maxPlayers: 20 });
+      mockInstanceUtils.saveInstance.mockResolvedValue(saved);
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'GameUserSettings.ini', content: 'MaxPlayers=20', requestId: 'r1' });
+
+      expect(mockArkConfig.writeIniFile).toHaveBeenCalledWith('a1', 'GameUserSettings.ini', 'MaxPlayers=20');
+      expect(mockArkConfig.parseIniToConfig).toHaveBeenCalledWith('GameUserSettings.ini', 'MaxPlayers=20');
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith(saved);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(replies('save-ini-file')).toEqual([{ success: true, instanceId: 'a1', filename: 'GameUserSettings.ini', requestId: 'r1' }]);
     });
 
-    it('should send fallback error message if a non-Error is thrown', async () => {
-      mockServerInstanceService.importServerFromBackup.mockImplementation(() => { throw 'fail'; });
-      await importBackupHandler({ backupPath: 'foo', requestId: 'req-3' }, mockSender);
-      const call = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'import-server-from-backup');
-      expect(call).toBeDefined();
-      expect(call[1].success).toBe(false);
-      expect(call[1].error).toBe('Failed to import server from backup');
+    it('leaves an instance without a config alone', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'Game.ini', content: '', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+      expect(replies('save-ini-file')).toEqual([{ success: true, instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' }]);
+    });
+
+    it('still reports the saved file when the merge fails, without logging the config', async () => {
+      mockInstanceUtils.getInstance.mockImplementation(() => { throw new SyntaxError('Unexpected token "rconPassword": "hunter2"'); });
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'Game.ini', content: '', requestId: 'r1' });
+
+      expect(replies('save-ini-file')).toEqual([{ success: true, instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([]);
+      expect(console.warn).toHaveBeenCalled();
+      expect(JSON.stringify(jest.mocked(console.warn).mock.calls)).not.toContain('hunter2');
+    });
+
+    it('does not broadcast a merge the instance store refused', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1', name: 'Alpha' });
+      mockArkConfig.parseIniToConfig.mockReturnValue({});
+      mockInstanceUtils.saveInstance.mockResolvedValue({ error: 'A server with this name already exists.' });
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'Game.ini', content: '', requestId: 'r1' });
+
+      expect(broadcasts('server-instance-updated')).toEqual([]);
+      expect(replies('save-ini-file')).toEqual([{ success: true, instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' }]);
+    });
+
+    it('replies with the reason writing fails and merges nothing', async () => {
+      mockArkConfig.writeIniFile.mockImplementation(() => { throw new Error('Invalid filename. Must be a .ini file.'); });
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'x.txt', content: '', requestId: 'r1' });
+
+      expect(mockInstanceUtils.getInstance).not.toHaveBeenCalled();
+      expect(replies('save-ini-file')).toEqual([{ success: false, error: 'Invalid filename. Must be a .ini file.', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockArkConfig.writeIniFile.mockImplementation(() => { throw missingField; });
+
+      await request('save-ini-file', undefined);
+
+      expect(replies('save-ini-file')).toEqual([{ success: false, error: missingField.message, requestId: undefined }]);
     });
   });
-  describe('force-stop-server-instance handler', () => {
-    it('should not send notification if result.success is false', async () => {
-      mockServerInstanceService.forceStopInstance.mockResolvedValueOnce({ success: false, error: 'fail' });
-      await forceStopHandler({ id: 'test-id', requestId: 'req-1' }, mockSender);
-      // Should not send notification
-      const notifCall = (mockMessagingService.sendToAll as any).mock.calls.find((c: any[]) => c[0] === 'notification');
-      expect(notifCall).toBeUndefined();
-      // Should send result to originator
-      const originCall = (mockMessagingService.sendToOriginator as any).mock.calls.find((c: any[]) => c[0] === 'force-stop-server-instance');
-      expect(originCall).toBeDefined();
-      expect(originCall[1].success).toBe(false);
-      expect(originCall[1].error).toBe('fail');
+
+  describe('start-all-instances', () => {
+    const states: Record<string, string> = { a: 'running', b: 'stopped', c: 'queued', d: 'crashed', e: 'starting' };
+
+    beforeEach(() => {
+      mockManagement.getAllInstances.mockResolvedValue({ instances: Object.keys(states).map(id => ({ id })) });
+      mockProcess.getNormalizedInstanceState.mockImplementation(id => states[id]);
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: [], failed: [] });
+    });
+
+    it('queues every server not already up, answers, then starts them', async () => {
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockProcess.setInstanceState.mock.calls).toEqual([['b', 'queued'], ['d', 'queued']]);
+      expect(broadcasts('server-instance-state')).toEqual([{ instanceId: 'b', state: 'queued' }, { instanceId: 'd', state: 'queued' }]);
+      expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['b', 'd'], requestId: 'r1' }]);
+      expect(replyOrder('start-all-instances')).toBeLessThan(mockLifecycle.startAllInstances.mock.invocationCallOrder[0]);
+    });
+
+    it('logs a background start that fails after the answer', async () => {
+      mockLifecycle.startAllInstances.mockRejectedValue(new Error('spawn failed'));
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['b', 'd'], requestId: 'r1' }]);
+      expect(console.error).toHaveBeenCalledWith('[start-all-instances]', expect.stringContaining('spawn failed'));
+    });
+
+    it('replies with the reason listing the servers fails', async () => {
+      mockManagement.getAllInstances.mockRejectedValue(new Error('disk gone'));
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(replies('start-all-instances')).toEqual([{ success: false, error: 'disk gone', requestId: 'r1' }]);
+      expect(mockLifecycle.startAllInstances).not.toHaveBeenCalled();
+    });
+
+    it('answers a request without a payload', async () => {
+      await request('start-all-instances', undefined);
+
+      expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['b', 'd'], requestId: undefined }]);
+    });
+  });
+
+  describe('stop-all-instances', () => {
+    const states: Record<string, string> = { a: 'running', b: 'stopped', c: 'starting', d: 'queued' };
+
+    beforeEach(() => {
+      mockManagement.getAllInstances.mockResolvedValue({ instances: Object.keys(states).map(id => ({ id })) });
+      mockProcess.getNormalizedInstanceState.mockImplementation(id => states[id]);
+      mockLifecycle.stopAllInstances.mockResolvedValue({ stopped: [], failed: [] });
+    });
+
+    it('marks every running or starting server as stopping, answers, then stops them', async () => {
+      await request('stop-all-instances', { requestId: 'r1' });
+
+      expect(broadcasts('server-instance-state')).toEqual([{ instanceId: 'a', state: 'stopping' }, { instanceId: 'c', state: 'stopping' }]);
+      expect(replies('stop-all-instances')).toEqual([{ success: true, stopping: ['a', 'c'], requestId: 'r1' }]);
+      expect(replyOrder('stop-all-instances')).toBeLessThan(mockLifecycle.stopAllInstances.mock.invocationCallOrder[0]);
+    });
+
+    it('replies with the reason listing the servers fails', async () => {
+      mockManagement.getAllInstances.mockRejectedValue(new Error('disk gone'));
+
+      await request('stop-all-instances', { requestId: 'r1' });
+
+      expect(replies('stop-all-instances')).toEqual([{ success: false, error: 'disk gone', requestId: 'r1' }]);
+      expect(mockLifecycle.stopAllInstances).not.toHaveBeenCalled();
+    });
+
+    it('answers a request without a payload', async () => {
+      await request('stop-all-instances', undefined);
+
+      expect(replies('stop-all-instances')).toEqual([{ success: true, stopping: ['a', 'c'], requestId: undefined }]);
+    });
+  });
+
+  describe('force-stop-server-instance', () => {
+    it('kills the server, tells everyone, stops polling and marks the stop as manual', async () => {
+      const result = { success: true, instanceId: 'a1', instanceName: 'Alpha', shouldNotifyAutomation: true };
+      mockInstance.forceStopInstance.mockResolvedValue(result);
+
+      await request('force-stop-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.forceStopInstance).toHaveBeenCalledWith('a1');
+      expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: false }]);
+      expect(broadcasts('server-instance-log')).toEqual([{ log: '[FORCE STOP] Server force stopped', instanceId: 'a1' }]);
+      expect(broadcasts('notification')).toEqual([{ type: 'warning', message: 'Alpha force stopped.', instanceId: 'a1' }]);
+      expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
+      expect(automationService.setManuallyStopped).toHaveBeenCalledWith('a1', true);
+      expect(replies('force-stop-server-instance')).toEqual([{ ...result, requestId: 'r1' }]);
+    });
+
+    it('leaves automation alone when the service does not ask for it', async () => {
+      mockInstance.forceStopInstance.mockResolvedValue({ success: true, instanceId: 'a1', instanceName: 'Alpha', shouldNotifyAutomation: false });
+
+      await request('force-stop-server-instance', { id: 'a1' });
+
+      expect(automationService.setManuallyStopped).not.toHaveBeenCalled();
+    });
+
+    it('passes on a failed stop without telling anyone else', async () => {
+      mockInstance.forceStopInstance.mockResolvedValue({ success: false, error: 'Invalid instance ID' });
+
+      await request('force-stop-server-instance', { id: '../x', requestId: 'r1' });
+
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+      expect(replies('force-stop-server-instance')).toEqual([{ success: false, error: 'Invalid instance ID', requestId: 'r1' }]);
+    });
+
+    it.each([
+      ['an Error', new Error('System error'), 'System error'],
+      ['nothing useful', undefined, 'Failed to force stop server']
+    ])('replies a failure when stopping throws %s', async (_label, thrown, error) => {
+      mockInstance.forceStopInstance.mockRejectedValue(thrown);
+
+      await request('force-stop-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('force-stop-server-instance')).toEqual([{ success: false, error, requestId: 'r1' }]);
+      expect(jest.mocked(console.error).mock.calls.map(([tag]) => tag)).toContain('[force-stop-server-instance]');
+    });
+
+    it('answers a request without a payload', async () => {
+      mockInstance.forceStopInstance.mockResolvedValue({ success: false, error: 'Invalid instance ID' });
+
+      await request('force-stop-server-instance', undefined);
+
+      expect(mockInstance.forceStopInstance).toHaveBeenCalledWith(undefined);
+      expect(replies('force-stop-server-instance')).toEqual([{ success: false, error: 'Invalid instance ID', requestId: undefined }]);
+    });
+  });
+
+  describe('stop-server-instance', () => {
+    it('stops the server gracefully, then stops polling, marks the stop as manual and reports RCON down', async () => {
+      mockLifecycle.stopServerInstance.mockResolvedValue({ success: true, instanceId: 'a1' });
+
+      await request('stop-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockLifecycle.stopServerInstance).toHaveBeenCalledWith('a1');
+      expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
+      expect(automationService.setManuallyStopped).toHaveBeenCalledWith('a1', true);
+      expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: false }]);
+      expect(replies('stop-server-instance')).toEqual([{ success: true, instanceId: 'a1', error: undefined, requestId: 'r1' }]);
+    });
+
+    it('passes on a failed stop and changes nothing else', async () => {
+      mockLifecycle.stopServerInstance.mockResolvedValue({ success: false, error: 'Server process not found', instanceId: 'a1' });
+
+      await request('stop-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockMonitoring.stopPlayerPolling).not.toHaveBeenCalled();
+      expect(automationService.setManuallyStopped).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+      expect(replies('stop-server-instance')).toEqual([
+        { success: false, instanceId: 'a1', error: 'Server process not found', requestId: 'r1' }
+      ]);
+    });
+
+    it('refuses an invalid id without stopping anything', async () => {
+      await request('stop-server-instance', { id: '../x', requestId: 'r1' });
+
+      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+      expect(replies('stop-server-instance')).toEqual([{ success: false, instanceId: '../x', error: 'Invalid instance ID', requestId: 'r1' }]);
+    });
+
+    it('replies a failure when stopping throws', async () => {
+      mockLifecycle.stopServerInstance.mockRejectedValue(new Error('RCON hung'));
+
+      await request('stop-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('stop-server-instance')).toEqual([{ success: false, instanceId: 'a1', error: 'RCON hung', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      await request('stop-server-instance', undefined);
+
+      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+      expect(replies('stop-server-instance')).toEqual([
+        { success: false, instanceId: undefined, error: 'Invalid instance ID', requestId: undefined }
+      ]);
+    });
+  });
+
+  describe('get-server-instance-state', () => {
+    it('replies with the state', async () => {
+      jest.mocked(getNormalizedInstanceState).mockReturnValue('running');
+
+      await request('get-server-instance-state', { id: 'a1', requestId: 'r1' });
+
+      expect(getNormalizedInstanceState).toHaveBeenCalledWith('a1');
+      expect(replies('get-server-instance-state')).toEqual([{ state: 'running', instanceId: 'a1', requestId: 'r1' }]);
+    });
+
+    it.each([new Error('State check failed'), 'fail', undefined])('replies "unknown" when reading the state throws %p', async thrown => {
+      jest.mocked(getNormalizedInstanceState).mockImplementation(() => { throw thrown; });
+
+      await request('get-server-instance-state', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-server-instance-state')).toEqual([{ state: 'unknown', instanceId: 'a1', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      jest.mocked(getNormalizedInstanceState).mockReturnValue('stopped');
+
+      await request('get-server-instance-state', undefined);
+
+      expect(replies('get-server-instance-state')).toEqual([{ state: 'stopped', instanceId: undefined, requestId: undefined }]);
+    });
+  });
+
+  describe('get-server-instance-logs', () => {
+    it('replies with the log to the requester only', async () => {
+      mockMonitoring.getInstanceLogs.mockReturnValue({ log: 'Server log line', instanceId: 'a1' });
+
+      await request('get-server-instance-logs', { id: 'a1', maxLines: 100, requestId: 'r1' });
+
+      expect(mockMonitoring.getInstanceLogs).toHaveBeenCalledWith('a1', 100);
+      expect(replies('get-server-instance-logs')).toEqual([{ log: 'Server log line', instanceId: 'a1', requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('replies with an empty log when reading fails', async () => {
+      mockMonitoring.getInstanceLogs.mockImplementation(() => { throw new Error('Log retrieval failed'); });
+
+      await request('get-server-instance-logs', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-server-instance-logs')).toEqual([{ log: '', instanceId: 'a1', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockMonitoring.getInstanceLogs.mockReturnValue({ log: '', instanceId: '' });
+
+      await request('get-server-instance-logs', undefined);
+
+      expect(mockMonitoring.getInstanceLogs).toHaveBeenCalledWith(undefined, undefined);
+      expect(replies('get-server-instance-logs')).toEqual([{ log: '', instanceId: '', requestId: undefined }]);
+    });
+  });
+
+  describe('connect-rcon', () => {
+    it('replies, then reports RCON up to everyone and starts counting players', async () => {
+      mockOperations.connectRcon.mockResolvedValue({ success: true, connected: true, instanceId: 'a1' });
+      mockMonitoring.startPlayerPolling.mockImplementation((id, report) => report(id, 42));
+
+      await request('connect-rcon', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('connect-rcon')).toEqual([{ success: true, connected: true, instanceId: 'a1', error: undefined, requestId: 'r1' }]);
+      expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: true }]);
+      expect(broadcasts('server-instance-players')).toEqual([{ instanceId: 'a1', players: 42 }]);
+      expect(replyOrder('connect-rcon')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
+    });
+
+    it('reports RCON down and counts nothing when it cannot connect', async () => {
+      mockOperations.connectRcon.mockResolvedValue({ success: false, connected: false, instanceId: 'a1', error: 'Connection failed' });
+
+      await request('connect-rcon', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('connect-rcon')).toEqual([
+        { success: false, connected: false, instanceId: 'a1', error: 'Connection failed', requestId: 'r1' }
+      ]);
+      expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: false }]);
+      expect(mockMonitoring.startPlayerPolling).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an Error', new Error('RCON connection error'), 'RCON connection error'],
+      ['nothing useful', undefined, 'Failed to connect RCON']
+    ])('replies a failure and tells nobody else when connecting throws %s', async (_label, thrown, error) => {
+      mockOperations.connectRcon.mockRejectedValue(thrown);
+
+      await request('connect-rcon', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('connect-rcon')).toEqual([{ success: false, connected: false, instanceId: 'a1', error, requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('answers a request without a payload', async () => {
+      mockOperations.connectRcon.mockResolvedValue({ success: false, connected: false, instanceId: '', error: 'Invalid instance ID' });
+
+      await request('connect-rcon', undefined);
+
+      expect(mockOperations.connectRcon).toHaveBeenCalledWith(undefined);
+      expect(replies('connect-rcon')).toHaveLength(1);
+    });
+  });
+
+  describe('get-online-players', () => {
+    it('replies with the players', async () => {
+      const players = [{ name: 'Rex', steamId: '7656' }];
+      jest.mocked(rconService.getOnlinePlayers).mockResolvedValue(players);
+
+      await request('get-online-players', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-online-players')).toEqual([{ success: true, instanceId: 'a1', players, requestId: 'r1' }]);
+    });
+
+    it('replies with the reason the list is unavailable', async () => {
+      jest.mocked(rconService.getOnlinePlayers).mockRejectedValue(new Error('RCON not connected'));
+
+      await request('get-online-players', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-online-players')).toEqual([{ success: false, instanceId: 'a1', error: 'RCON not connected', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      jest.mocked(rconService.getOnlinePlayers).mockResolvedValue([]);
+
+      await request('get-online-players', undefined);
+
+      expect(replies('get-online-players')).toEqual([{ success: true, instanceId: undefined, players: [], requestId: undefined }]);
+    });
+  });
+
+  describe('disconnect-rcon', () => {
+    it('replies, then reports RCON down to everyone and stops counting players', async () => {
+      mockOperations.disconnectRcon.mockResolvedValue({ success: true, connected: false, instanceId: 'a1' });
+
+      await request('disconnect-rcon', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('disconnect-rcon')).toEqual([{ success: true, connected: false, instanceId: 'a1', requestId: 'r1' }]);
+      expect(broadcasts('rcon-status')).toEqual([{ instanceId: 'a1', connected: false }]);
+      expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
+    });
+
+    it('replies a failure without an error and tells nobody else when disconnecting throws', async () => {
+      mockOperations.disconnectRcon.mockRejectedValue(new Error('RCON disconnect error'));
+
+      await request('disconnect-rcon', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('disconnect-rcon')).toEqual([{ success: false, connected: false, instanceId: 'a1', requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('answers a request without a payload', async () => {
+      mockOperations.disconnectRcon.mockResolvedValue({ success: true, connected: false, instanceId: '' });
+
+      await request('disconnect-rcon', undefined);
+
+      expect(mockOperations.disconnectRcon).toHaveBeenCalledWith(undefined);
+      expect(replies('disconnect-rcon')).toHaveLength(1);
+    });
+  });
+
+  describe('get-rcon-status', () => {
+    it('replies with the status', async () => {
+      mockOperations.getRconStatus.mockReturnValue({ success: true, connected: true, instanceId: 'a1' });
+
+      await request('get-rcon-status', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-rcon-status')).toEqual([{ success: true, connected: true, instanceId: 'a1', requestId: 'r1' }]);
+    });
+
+    it('replies disconnected, without an error, when reading the status throws', async () => {
+      mockOperations.getRconStatus.mockImplementation(() => { throw new Error('RCON status check failed'); });
+
+      await request('get-rcon-status', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-rcon-status')).toEqual([{ success: false, connected: false, instanceId: 'a1', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockOperations.getRconStatus.mockReturnValue({ success: false, connected: false, instanceId: '' });
+
+      await request('get-rcon-status', undefined);
+
+      expect(replies('get-rcon-status')).toEqual([{ success: false, connected: false, instanceId: '', requestId: undefined }]);
+    });
+  });
+
+  describe('rcon-command', () => {
+    it.each([
+      ['the response', { success: true, response: 'Player list', instanceId: 'a1' }, 'Player list'],
+      ['the error', { success: false, error: 'Not connected', instanceId: 'a1' }, 'Not connected'],
+      ['a placeholder', { success: true, instanceId: 'a1' }, 'No response']
+    ])('replies with %s in `response`', async (_label, result, response) => {
+      mockOperations.executeRconCommand.mockResolvedValue(result);
+
+      await request('rcon-command', { id: 'a1', command: 'listplayers', requestId: 'r1' });
+
+      expect(mockOperations.executeRconCommand).toHaveBeenCalledWith('a1', 'listplayers');
+      expect(replies('rcon-command')).toEqual([{ instanceId: 'a1', response, requestId: 'r1' }]);
+    });
+
+    it.each([
+      ['an Error', new Error('RCON command failed badly'), 'RCON command failed badly'],
+      ['nothing useful', undefined, 'RCON command failed']
+    ])('puts the failure in `response` when the command throws %s', async (_label, thrown, response) => {
+      mockOperations.executeRconCommand.mockRejectedValue(thrown);
+
+      await request('rcon-command', { id: 'a1', command: 'x', requestId: 'r1' });
+
+      expect(replies('rcon-command')).toEqual([{ instanceId: 'a1', response, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockOperations.executeRconCommand.mockResolvedValue({ success: false, error: 'Invalid instance ID', instanceId: '' });
+
+      await request('rcon-command', undefined);
+
+      expect(mockOperations.executeRconCommand).toHaveBeenCalledWith(undefined, undefined);
+      expect(replies('rcon-command')).toEqual([{ instanceId: '', response: 'Invalid instance ID', requestId: undefined }]);
+    });
+  });
+
+  describe('start-server-instance', () => {
+    const callbacks = { onLog: jest.fn(), onState: jest.fn() };
+
+    beforeEach(() => {
+      jest.mocked(getStandardEventCallbacks).mockReturnValue(callbacks);
+    });
+
+    it('clears the old log, starts with the standard callbacks and tells everyone', async () => {
+      mockInstance.startServerInstance.mockResolvedValue({ started: true, instanceId: 'a1', instanceName: 'Alpha' });
+
+      await request('start-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(broadcasts('clear-server-instance-logs')).toEqual([{ instanceId: 'a1' }]);
+      expect(mockInstance.startServerInstance).toHaveBeenCalledWith('a1', callbacks.onLog, callbacks.onState);
+      expect(broadcasts('notification')).toEqual([{ type: 'info', message: 'Alpha started.', instanceId: 'a1' }]);
+      expect(replies('start-server-instance')).toEqual([{ success: true, instanceId: 'a1', error: undefined, requestId: 'r1' }]);
+    });
+
+    it('tells only the requester about a port in use', async () => {
+      mockInstance.startServerInstance.mockResolvedValue({ started: false, portError: 'Port 7777 is in use', instanceId: 'a1' });
+
+      await request('start-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(broadcasts('notification')).toEqual([]);
+      expect(replies('notification')).toEqual([{ type: 'error', message: 'Port 7777 is in use' }]);
+      expect(replies('start-server-instance')).toEqual([
+        { success: false, instanceId: 'a1', error: 'Port 7777 is in use', requestId: 'r1' }
+      ]);
+    });
+
+    it.each([
+      ['an Error', new Error('spawn failed'), 'spawn failed'],
+      ['nothing useful', undefined, 'Failed to start server']
+    ])('replies a failure when starting throws %s', async (_label, thrown, error) => {
+      mockInstance.startServerInstance.mockRejectedValue(thrown);
+
+      await request('start-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('start-server-instance')).toEqual([{ success: false, instanceId: 'a1', error, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockInstance.startServerInstance.mockResolvedValue({ started: false, instanceId: '' });
+
+      await request('start-server-instance', undefined);
+
+      expect(mockInstance.startServerInstance).toHaveBeenCalledWith(undefined, callbacks.onLog, callbacks.onState);
+      expect(replies('start-server-instance')).toHaveLength(1);
+    });
+  });
+
+  describe('get-server-instance-players', () => {
+    it('replies with the player count', async () => {
+      mockMonitoring.getPlayerCount.mockReturnValue({ instanceId: 'a1', players: 5 });
+
+      await request('get-server-instance-players', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-server-instance-players')).toEqual([{ instanceId: 'a1', players: 5, requestId: 'r1' }]);
+    });
+
+    it('replies zero players when counting fails', async () => {
+      mockMonitoring.getPlayerCount.mockImplementation(() => { throw new Error('Player retrieval failed'); });
+
+      await request('get-server-instance-players', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-server-instance-players')).toEqual([{ instanceId: 'a1', players: 0, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockMonitoring.getPlayerCount.mockReturnValue({ instanceId: '', players: 0 });
+
+      await request('get-server-instance-players', undefined);
+
+      expect(mockMonitoring.getPlayerCount).toHaveBeenCalledWith(undefined);
+      expect(replies('get-server-instance-players')).toEqual([{ instanceId: '', players: 0, requestId: undefined }]);
+    });
+  });
+
+  describe('get-server-instances', () => {
+    const instances = [{ id: 'a1', name: 'Alpha' }];
+
+    it('replies with the list, then sends it to everyone', async () => {
+      mockManagement.getAllInstances.mockResolvedValue({ instances });
+
+      await request('get-server-instances', { requestId: 'r1' });
+
+      expect(replies('get-server-instances')).toEqual([{ instances, requestId: 'r1' }]);
+      expect(broadcasts('server-instances')).toEqual([instances]);
+      expect(replyOrder('get-server-instances')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
+    });
+
+    it('replies an empty list and sends nothing else when listing fails', async () => {
+      mockManagement.getAllInstances.mockRejectedValue(new Error('Instance retrieval failed'));
+
+      await request('get-server-instances', { requestId: 'r1' });
+
+      expect(replies('get-server-instances')).toEqual([{ instances: [], requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('answers a request without a payload', async () => {
+      mockManagement.getAllInstances.mockResolvedValue({ instances });
+
+      await request('get-server-instances', undefined);
+
+      expect(replies('get-server-instances')).toEqual([{ instances, requestId: undefined }]);
+    });
+  });
+
+  describe('get-server-instance', () => {
+    it('replies with the instance', async () => {
+      mockManagement.getInstance.mockResolvedValue({ instance: { id: 'a1', name: 'Alpha' } });
+
+      await request('get-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockManagement.getInstance).toHaveBeenCalledWith('a1');
+      expect(replies('get-server-instance')).toEqual([{ instance: { id: 'a1', name: 'Alpha' }, requestId: 'r1' }]);
+    });
+
+    it('replies null when reading fails', async () => {
+      mockManagement.getInstance.mockRejectedValue(new Error('Instance retrieval failed'));
+
+      await request('get-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('get-server-instance')).toEqual([{ instance: null, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockManagement.getInstance.mockResolvedValue({ instance: null });
+
+      await request('get-server-instance', undefined);
+
+      expect(mockManagement.getInstance).toHaveBeenCalledWith(undefined);
+      expect(replies('get-server-instance')).toEqual([{ instance: null, requestId: undefined }]);
+    });
+  });
+
+  describe('save-server-instance', () => {
+    beforeEach(() => {
+      mockInstanceUtils.getInstance.mockReset();
+    });
+
+    function notices(): unknown[] {
+      return mockMessaging.sendToAllOthers.mock.calls.map(([channel, data, to]) => [channel, data, to]);
+    }
+
+    it('replies, then sends the instance and the list to everyone and tells the others', async () => {
+      const saved = { id: 'a1', name: 'Alpha' };
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: saved });
+
+      await request('save-server-instance', { instance: saved, requestId: 'r1' });
+
+      expect(mockManagement.saveInstance).toHaveBeenCalledWith(saved);
+      expect(replies('save-server-instance')).toEqual([{ success: true, instance: saved, error: undefined, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.', instanceId: 'a1' }, sender]]);
+      expect(replyOrder('save-server-instance')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
+    });
+
+    it('still tells the others when sending the list fails', async () => {
+      const saved = { id: 'a1', name: 'Alpha' };
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: saved });
+      mockInstance.broadcastInstances.mockRejectedValueOnce(new Error('config.json unreadable'));
+
+      await request('save-server-instance', { instance: saved, requestId: 'r1' });
+
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.', instanceId: 'a1' }, sender]]);
+    });
+
+    it.each([
+      ['a rename', { id: 'a1', name: 'Old' }, { id: 'a1', name: 'New' }, 'Server renamed from "Old" to "New".'],
+      ['an update', { id: 'a1', name: 'Alpha' }, { id: 'a1', name: 'Alpha' }, 'Server "Alpha" updated.'],
+      ['an update of a nameless server', { id: 'a1' }, { id: 'a1' }, 'Server "a1" updated.'],
+      ['a new nameless server', null, { id: 'a1' }, 'Server "a1" added.'],
+      ['a server with neither name nor id', null, {}, 'Server "Unknown" added.']
+    ])('describes %s to the others', async (_label, previous, saved, message) => {
+      mockInstanceUtils.getInstance.mockReturnValue(previous);
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: saved });
+
+      await request('save-server-instance', { instance: saved });
+
+      expect(notices()).toEqual([['notification', { type: 'info', message, instanceId: (saved as { id?: string }).id }, sender]]);
+    });
+
+    it('passes on a refused save and tells nobody else', async () => {
+      mockManagement.saveInstance.mockResolvedValue({ success: false, error: 'A server with this name already exists.' });
+
+      await request('save-server-instance', { instance: { id: 'a1', name: 'Taken' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([
+        { success: false, instance: undefined, error: 'A server with this name already exists.', requestId: 'r1' }
+      ]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+      expect(mockInstance.broadcastInstances).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAllOthers).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an Error', new Error('Save failed'), 'Save failed'],
+      ['nothing useful', undefined, 'Failed to save server instance']
+    ])('replies a failure when saving throws %s', async (_label, thrown, error) => {
+      mockManagement.saveInstance.mockRejectedValue(thrown);
+
+      await request('save-server-instance', { instance: { id: 'a1' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockManagement.saveInstance.mockResolvedValue({ success: false, error: 'Invalid instance data' });
+
+      await request('save-server-instance', undefined);
+
+      expect(mockManagement.saveInstance).toHaveBeenCalledWith(undefined);
+      expect(replies('save-server-instance')).toHaveLength(1);
+    });
+  });
+
+  describe('delete-server-instance', () => {
+    it('replies, then sends the list to everyone, records who deleted it and tells the others', async () => {
+      jest.mocked(identifySender).mockReturnValue({ user: { username: 'jared' } } as ReturnType<typeof identifySender>);
+      mockInstance.deleteInstance.mockResolvedValue({ success: true, id: 'a1' });
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.deleteInstance).toHaveBeenCalledWith('a1');
+      expect(replies('delete-server-instance')).toEqual([{ success: true, id: 'a1', requestId: 'r1' }]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+      expect(identifySender).toHaveBeenCalledWith(sender);
+      expect(activityLogService.record).toHaveBeenCalledWith('info', 'Server deleted', 'a1', 'jared');
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.', instanceId: 'a1' }, sender);
+    });
+
+    it('still tells the others when the activity feed fails', async () => {
+      jest.mocked(identifySender).mockReturnValue({ user: null } as ReturnType<typeof identifySender>);
+      jest.mocked(activityLogService.record).mockImplementationOnce(() => { throw new Error('database locked'); });
+      mockInstance.deleteInstance.mockResolvedValue({ success: true, id: 'a1' });
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('delete-server-instance')).toEqual([{ success: true, id: 'a1', requestId: 'r1' }]);
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.', instanceId: 'a1' }, sender);
+    });
+
+    it('passes on a refused delete and tells nobody else', async () => {
+      mockInstance.deleteInstance.mockResolvedValue({ success: false, id: 'a1' });
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('delete-server-instance')).toEqual([{ success: false, id: 'a1', requestId: 'r1' }]);
+      expect(mockInstance.broadcastInstances).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToAllOthers).not.toHaveBeenCalled();
+    });
+
+    it.each([new Error('Delete failed'), 'fail', undefined])('replies a failure without an error when deleting throws %p', async thrown => {
+      mockInstance.deleteInstance.mockRejectedValue(thrown);
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(replies('delete-server-instance')).toEqual([{ success: false, id: 'a1', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockInstance.deleteInstance.mockResolvedValue({ success: false, id: '' });
+
+      await request('delete-server-instance', undefined);
+
+      expect(mockInstance.deleteInstance).toHaveBeenCalledWith(undefined);
+      expect(replies('delete-server-instance')).toEqual([{ success: false, id: '', requestId: undefined }]);
+    });
+  });
+
+  describe('import-server-from-backup', () => {
+    beforeEach(() => {
+      jest.mocked(identifySender).mockReturnValue({ user: null, permissions: [], isAdmin: true, isLocalDesktop: true });
+    });
+
+    it('replies, then sends the list to everyone', async () => {
+      const instance = { id: 'a1', name: 'Imported' };
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: true, instance, message: 'Imported' });
+
+      await request('import-server-from-backup', {
+        serverName: 'Imported', backupFilePath: 'C:\\b.zip', fileData: 'ZGF0YQ==', fileName: 'b.zip', requestId: 'r1'
+      });
+
+      expect(mockInstance.importServerFromBackup).toHaveBeenCalledWith('Imported', { filePath: 'C:\\b.zip', fileData: 'ZGF0YQ==' }, true);
+      expect(replies('import-server-from-backup')).toEqual([
+        { success: true, instance, message: 'Imported', error: undefined, requestId: 'r1' }
+      ]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+    });
+
+    it('passes on a failed import without a broadcast', async () => {
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: false, error: 'restore failed' });
+
+      await request('import-server-from-backup', { serverName: 's', requestId: 'r1' });
+
+      expect(replies('import-server-from-backup')).toEqual([
+        { success: false, instance: undefined, message: undefined, error: 'restore failed', requestId: 'r1' }
+      ]);
+      expect(mockInstance.broadcastInstances).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an Error', new Error('custom import error'), 'custom import error'],
+      ['nothing useful', undefined, 'Failed to import server from backup']
+    ])('replies a failure when importing throws %s', async (_label, thrown, error) => {
+      mockInstance.importServerFromBackup.mockRejectedValue(thrown);
+
+      await request('import-server-from-backup', { serverName: 's', requestId: 'r1' });
+
+      expect(replies('import-server-from-backup')).toEqual([{ success: false, error, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: false, error: 'Server name is required' });
+
+      await request('import-server-from-backup', undefined);
+
+      expect(mockInstance.importServerFromBackup).toHaveBeenCalledWith(undefined, { filePath: undefined, fileData: undefined }, true);
+      expect(replies('import-server-from-backup')).toHaveLength(1);
+    });
+
+    // With authentication off a web client has the desktop's rights, but the path would still name
+    // a file on the host.
+    it.each([
+      ['a signed-in web client', { type: 'api-process', cid: 'c1', user: { username: 'admin' }, authEnabled: true, send: jest.fn() }],
+      ['a web client with authentication off', { type: 'api-process', cid: 'c1', user: null, authEnabled: false, send: jest.fn() }],
+      ['a raw socket with authentication off', { _authEnabled: false, readyState: 1, send: jest.fn() }]
+    ])('tells the service the request did not come from the desktop window for %s', async (_label, webSender) => {
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: false, error: 'desktop only' });
+
+      await handlers['import-server-from-backup']({ serverName: 's', backupFilePath: '/etc/x.zip', requestId: 'r1' }, webSender);
+
+      expect(mockInstance.importServerFromBackup).toHaveBeenCalledWith('s', { filePath: '/etc/x.zip', fileData: undefined }, false);
+    });
+  });
+
+  describe('reorder-server-instances', () => {
+    it('saves each position as the sort order, sends the list to everyone, then replies', async () => {
+      const instances = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+      mockManagement.getAllInstances.mockResolvedValue({ instances });
+      mockManagement.saveInstance.mockResolvedValue({ success: true });
+
+      await request('reorder-server-instances', { orderedIds: ['c', 'gone', 'a'], requestId: 'r1' });
+
+      expect(mockManagement.saveInstance.mock.calls).toEqual([[{ id: 'c', sortOrder: 0 }], [{ id: 'a', sortOrder: 2 }]]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+      expect(replies('reorder-server-instances')).toEqual([{ success: true, requestId: 'r1' }]);
+      expect(mockInstance.broadcastInstances.mock.invocationCallOrder[0]).toBeLessThan(replyOrder('reorder-server-instances'));
+    });
+
+    it('refuses an order that is not a list', async () => {
+      await request('reorder-server-instances', { orderedIds: 'a,b', requestId: 'r1' });
+
+      expect(replies('reorder-server-instances')).toEqual([{ success: false, error: 'orderedIds must be an array', requestId: 'r1' }]);
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+    });
+
+    it('replies with the requestId when saving the order fails', async () => {
+      mockManagement.getAllInstances.mockRejectedValue(new Error('disk gone'));
+
+      await request('reorder-server-instances', { orderedIds: ['a'], requestId: 'r1' });
+
+      expect(replies('reorder-server-instances')).toEqual([{ success: false, error: 'disk gone', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      await request('reorder-server-instances', undefined);
+
+      expect(replies('reorder-server-instances')).toEqual([
+        { success: false, error: 'orderedIds must be an array', requestId: undefined }
+      ]);
+    });
+  });
+  describe('pools', () => {
+    const op1 = operatorIdentity('op1');
+    const s1 = { id: 's1', name: 'One', operatorUserId: 'op1', managerUserId: null };
+    const s2 = { id: 's2', name: 'Two', operatorUserId: null, managerUserId: null };
+    const people: Record<string, unknown> = {
+      m1: { id: 'm1', roleId: 'server-manager', ownerUserId: 'op1', active: true },
+      m2: { id: 'm2', roleId: 'server-manager', ownerUserId: 'op2', active: true },
+      op1: { id: 'op1', roleId: 'operator', ownerUserId: null, active: true },
+      op2: { id: 'op2', roleId: 'operator', ownerUserId: null, active: true }
+    };
+
+    beforeEach(() => {
+      mockUsers.getUser.mockImplementation(id => (people[id] ?? null) as never);
+      mockManagement.getAllInstances.mockResolvedValue({ instances: [s1, s2] });
+    });
+
+    it('filters get-server-instances for a non-admin', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+
+      await request('get-server-instances', { requestId: 'r1' });
+
+      expect(replies('get-server-instances')).toEqual([{ instances: [s1], requestId: 'r1' }]);
+      expect(broadcasts('server-instances')).toEqual([[s1, s2]]);
+    });
+
+    it('scopes start-all and stop-all to the visible servers', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: [], failed: [] });
+      mockLifecycle.stopAllInstances.mockResolvedValue({ stopped: [], failed: [] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+      await request('start-all-instances', { requestId: 'r1' });
+      expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['s1'], requestId: 'r1' }]);
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, ['s1']);
+
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
+      await request('stop-all-instances', { requestId: 'r2' });
+      expect(replies('stop-all-instances')).toEqual([{ success: true, stopping: ['s1'], requestId: 'r2' }]);
+      expect(mockLifecycle.stopAllInstances).toHaveBeenCalledWith(['s1']);
+    });
+
+    it('starts everything for an admin', async () => {
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: [], failed: [] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, undefined);
+    });
+
+    it('refuses a server manager creating without servers.create', async () => {
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('m1', ['servers.view', 'servers.configure']));
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+
+      await request('save-server-instance', { instance: { name: 'new' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'Only an admin or operator can add a server.', requestId: 'r1' }]);
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+    });
+
+    it('refuses editing without servers.configure', async () => {
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op1', ['servers.view', 'servers.create']));
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+
+      await request('save-server-instance', { instance: { ...s1, name: 'renamed' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'Your role cannot change server settings.', requestId: 'r1' }]);
+    });
+
+    it('puts an operator\'s new server in their pool and tells the others with the id', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: { id: 's3', name: 'new', operatorUserId: 'op1' } });
+
+      await request('save-server-instance', { instance: { name: 'new' }, requestId: 'r1' });
+
+      expect(mockManagement.saveInstance).toHaveBeenCalledWith({ name: 'new', operatorUserId: 'op1' });
+      expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server "new" added.', instanceId: 's3' }, sender);
+    });
+
+    it('refuses a save whose assignee is in another pool', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+
+      await request('save-server-instance', { instance: { ...s1, managerUserId: 'm2' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'That person is not in this server\'s pool.', requestId: 'r1' }]);
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+    });
+
+    it('assigns a manager and broadcasts the update', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      const saved = { ...s1, managerUserId: 'm1' };
+      mockInstanceUtils.saveInstance.mockResolvedValue(saved as never);
+
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm1', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith(saved);
+      expect(replies('assign-server-manager')).toEqual([{ success: true, instance: saved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(mockInstance.broadcastInstances).toHaveBeenCalled();
+    });
+
+    it('lets the pool\'s operator assign, and refuses another operator', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      mockInstanceUtils.saveInstance.mockResolvedValue({ ...s1, managerUserId: 'm1' } as never);
+
+      jest.mocked(identifySender).mockReturnValue(op1);
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm1', requestId: 'r1' });
+      expect(replies('assign-server-manager')).toEqual([expect.objectContaining({ success: true })]);
+
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op2'));
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm2', requestId: 'r2' });
+      expect(replies('assign-server-manager')[1]).toEqual({ success: false, error: 'That server is not in your pool.', requestId: 'r2' });
+    });
+
+    it('moves a server between pools and clears an assignee from the old pool', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue({ ...s1, managerUserId: 'm1' } as never);
+      const moved = { ...s1, operatorUserId: 'op2', managerUserId: null };
+      mockInstanceUtils.saveInstance.mockResolvedValue(moved as never);
+
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'op2', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith(moved);
+      expect(replies('set-server-operator')).toEqual([{ success: true, instance: moved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([moved]);
+    });
+
+    it('refuses set-server-operator from a non-admin and for an unknown server or operator', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'op2', requestId: 'r1' });
+      expect(replies('set-server-operator')[0]).toEqual({ success: false, error: 'Only an admin can move a server between pools.', requestId: 'r1' });
+
+      jest.mocked(identifySender).mockReturnValue(DESKTOP);
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      await request('set-server-operator', { instanceId: 'nope', operatorUserId: 'op2', requestId: 'r2' });
+      expect(replies('set-server-operator')[1]).toEqual({ success: false, error: 'That server was not found.', requestId: 'r2' });
+
+      mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'm1', requestId: 'r3' });
+      expect(replies('set-server-operator')[2]).toEqual({ success: false, error: 'Choose an active operator for this server.', requestId: 'r3' });
+    });
+
+    it('stamps an imported server with the importer\'s pool', async () => {
+      jest.mocked(identifySender).mockReturnValue(op1);
+      const imported = { id: 'i1', name: 'Imported' };
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: true, instance: imported, message: 'Imported' });
+      mockInstanceUtils.saveInstance.mockResolvedValue({ ...imported, operatorUserId: 'op1' } as never);
+
+      await request('import-server-from-backup', { serverName: 'Imported', fileData: 'ZGF0YQ==', requestId: 'r1' });
+
+      expect(mockInstanceUtils.saveInstance).toHaveBeenCalledWith({ ...imported, operatorUserId: 'op1' });
+      expect(replies('import-server-from-backup')).toEqual([expect.objectContaining({ success: true, instance: { ...imported, operatorUserId: 'op1' } })]);
     });
   });
 });

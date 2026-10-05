@@ -1,5 +1,5 @@
 import {
-  Component, Input, Output, EventEmitter, forwardRef, HostListener, ElementRef,
+  Component, Input, forwardRef, HostListener, ElementRef,
   ChangeDetectorRef, ChangeDetectionStrategy, ViewChild
 } from '@angular/core';
 import { NgIf, NgFor, NgClass } from '@angular/common';
@@ -30,9 +30,6 @@ export class DropdownComponent<T = any> implements ControlValueAccessor {
   @Input() placeholder = 'Select...';
   @Input() disabled = false;
   @Input() ariaLabel = '';
-  /** Optional id for the underlying button, for <label for>. */
-  @Input() inputId = '';
-  @Output() valueChange = new EventEmitter<T>();
 
   value: T | null = null;
   open = false;
@@ -56,8 +53,6 @@ export class DropdownComponent<T = any> implements ControlValueAccessor {
     return this.selectedOption?.label ?? this.placeholder;
   }
 
-  // -------------------- ControlValueAccessor --------------------
-
   writeValue(value: T | null): void {
     this.value = value;
     this.cdr.markForCheck();
@@ -76,8 +71,6 @@ export class DropdownComponent<T = any> implements ControlValueAccessor {
     if (isDisabled) this.open = false;
     this.cdr.markForCheck();
   }
-
-  // -------------------- Interaction --------------------
 
   toggle(): void {
     if (this.disabled) return;
@@ -103,7 +96,7 @@ export class DropdownComponent<T = any> implements ControlValueAccessor {
    * Place the list under (or over) the field in viewport coordinates.
    *
    * The list is fixed rather than absolute: an absolute list is clipped by any ancestor that
-   * hides its overflow — a modal or a drawer — which cut the options off mid-list.
+   * hides its overflow (a modal, a drawer), which cut the options off mid-list.
    */
   private positionMenu(): void {
     const field = this.trigger?.nativeElement;
@@ -150,10 +143,7 @@ export class DropdownComponent<T = any> implements ControlValueAccessor {
     const changed = option.value !== this.value;
     this.value = option.value;
     this.open = false;
-    if (changed) {
-      this.onChange(option.value);
-      this.valueChange.emit(option.value);
-    }
+    if (changed) this.onChange(option.value);
     this.onTouched();
     this.cdr.markForCheck();
   }

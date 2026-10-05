@@ -1,41 +1,96 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ArkPathUtils } from '../utils/ark.utils';
+import { getArkServerDir, getInstanceConfigDir, isInstanceIsolated } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { getInstanceDir } from '../utils/ark/instance.utils';
 import { validateInstanceId } from '../utils/validation.utils';
+import type { InstanceConfig } from '../types/server-instance.types';
 
-/**
- * Mapping entry for ARK server settings.
- * - key: property name on the config object (camelCase, must match ServerInstance model)
- * - iniKey: the exact key to write in the INI file (PascalCase ARK format)
- * - destination: which INI file to write to
- * - section: the INI section header
- */
+export type IniFileName = 'GameUserSettings.ini' | 'Game.ini';
+export type IniFiles = Record<IniFileName, string>;
+
+/** Lines of an existing INI file that the app does not manage, by lowercased section header. */
+export type PreservedSections = Map<string, { header: string; lines: string[] }>;
+
+export interface ParsedIniSettings {
+  config: Record<string, unknown>;
+  /** `section: key` for each line no mapping covers. */
+  unmapped: string[];
+}
+
 interface SettingsMapping {
+  /** Property on the instance config. */
   key: string;
+  /** The key as ARK spells it. */
   iniKey: string;
-  destination: string;
+  destination: IniFileName;
   section: string;
 }
 
+type IniSections = Map<string, string[]>;
+
+/** The config directory ARK reads, and whether it is the instance's own rather than the shared install's. */
+interface RuntimeConfigDir {
+  dir: string;
+  own: boolean;
+}
+
+const INI_FILES: IniFileName[] = ['GameUserSettings.ini', 'Game.ini'];
+const SERVER_SETTINGS = '[ServerSettings]';
+const GAME_MODE = '[/script/shootergame.shootergamemode]';
+const STAT_COUNT = 12;
+// Mod ids end up in section headers ([Mod_<id>]); ARK and CurseForge ids are plain tokens.
+const MOD_ID = /^[A-Za-z0-9_.-]+$/;
+
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
+
+// A line break in a value would start a new key or section in the file ARK reads, and UE stops
+// reading a line at a NUL.
+function iniValue(value: unknown): string {
+  return String(value).replace(CONTROL_CHARS, '');
+}
+
+// Mod setting keys are typed by users: each must stay one key on one line.
+function isUsableIniKey(key: string): boolean {
+  return key.trim() !== '' && !/[\x00-\x1f\x7f=]/.test(key) && !/^\s*[\[;#]/.test(key);
+}
+
+// ARK ends a line at a lone CR as well.
+const LINE_BREAK = /\r\n|\r|\n/;
+
+function isTrue(value: unknown): boolean {
+  return value === true || value === 'true';
+}
+
+function coerceIniValue(value: string): string | number | boolean {
+  const lower = value.toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  const number = Number(value);
+  return value !== '' && !isNaN(number) ? number : value;
+}
+
+function renderIni(managed: IniSections, preserved: PreservedSections = new Map()): string {
+  let content = '';
+  const append = (header: string, lines: string[]) => {
+    content += [header, ...lines].join('\n') + '\n\n';
+  };
+  for (const [header, lines] of managed) {
+    append(header, [...lines, ...(preserved.get(header.toLowerCase())?.lines ?? [])]);
+  }
+  const managedHeaders = new Set([...managed.keys()].map(header => header.toLowerCase()));
+  for (const [section, { header, lines }] of preserved) {
+    if (!managedHeaders.has(section) && lines.length > 0) append(header, lines);
+  }
+  return content;
+}
+
 export class ArkConfigService {
-  
   /**
-   * Complete settings mapping for ARK: Survival Ascended.
-   * 
-   * Each entry maps a config property (camelCase) to its correct ARK INI key (PascalCase).
-   * Organized by destination file and section.
-   *
-   * File placement matters: ARK only reads a key from the file/section it belongs to.
-   * [ServerSettings] keys live in GameUserSettings.ini; ShooterGameMode properties
-   * (breeding, crops, spoiling, custom recipes, the b* PvE/creative flags, ...) live in
-   * Game.ini [/script/shootergame.shootergamemode]. A key written to the wrong file is
-   * silently ignored, which is how CropGrowthSpeedMultiplier ended up doing nothing.
-   * Placement follows https://ark.wiki.gg/wiki/Server_configuration.
+   * ARK only reads a key from the file and section it belongs to and ignores it anywhere else:
+   * [ServerSettings] keys go in GameUserSettings.ini, ShooterGameMode properties (breeding, crops,
+   * spoiling, custom recipes, the b* PvE flags) in Game.ini. See ark.wiki.gg/wiki/Server_configuration.
    */
   private readonly asaSettingsMapping: SettingsMapping[] = [
-    // =====================================================
-    // GameUserSettings.ini - [ServerSettings]
-    // =====================================================
     { key: "altSaveDirectoryName",                     iniKey: "AltSaveDirectoryName",                      destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverPassword",                           iniKey: "ServerPassword",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverAdminPassword",                      iniKey: "ServerAdminPassword",                        destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -102,7 +157,6 @@ export class ArkConfigService {
     { key: "bAllowPlatformSaddleMultiFloors",          iniKey: "bAllowPlatformSaddleMultiFloors",            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bUseCorpseLocator",                        iniKey: "bUseCorpseLocator",                          destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bUseSingleplayerSettings",                 iniKey: "bUseSingleplayerSettings",                   destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
-    { key: "useExclusiveList",                         iniKey: "UseExclusiveList",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "serverCrosshair",                          iniKey: "ServerCrosshair",                             destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "showFloatingDamageText",                   iniKey: "ShowFloatingDamageText",                     destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowHitMarkers",                          iniKey: "AllowHitMarkers",                            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
@@ -132,23 +186,10 @@ export class ArkConfigService {
     { key: "disableCryopodFridgeRequirement",          iniKey: "DisableCryopodFridgeRequirement",            destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "disableCryopodEnemyCheck",                 iniKey: "DisableCryopodEnemyCheck",                   destination: "GameUserSettings.ini", section: "[ServerSettings]" },
     { key: "allowCryoFridgeOnSaddle",                  iniKey: "AllowCryoFridgeOnSaddle",                    destination: "GameUserSettings.ini", section: "[ServerSettings]" },
-
-    // =====================================================
-    // GameUserSettings.ini - [SessionSettings]
-    // =====================================================
     { key: "sessionName",                              iniKey: "SessionName",                                destination: "GameUserSettings.ini", section: "[SessionSettings]" },
+    // MaxPlayers is left out: ARK:SA ignores it in the INI and takes its cap from -WinLiveMaxPlayers.
 
-    // =====================================================
-    // Game.ini - [/script/engine.gamesession]
-    // =====================================================
-    // MaxPlayers is NOT written to INI — ARK:SA ignores [/script/engine.gamesession] MaxPlayers.
-    // It is passed exclusively via the command-line URL param (?MaxPlayers=N in ark-args.utils.ts).
-
-    // =====================================================
-    // Game.ini - [/script/shootergame.shootergamemode]
-    // =====================================================
-    // bDisableStructurePlacementCollision is a ShooterGameMode setting. ARK ignores it in
-    // GameUserSettings.ini [ServerSettings], so writing it there silently did nothing.
+    // A ShooterGameMode setting: ARK ignores it in GameUserSettings.ini [ServerSettings].
     { key: "bDisableStructurePlacementCollision",      iniKey: "bDisableStructurePlacementCollision",        destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bDisableGenesis",                          iniKey: "bDisableGenesis",                            destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
     { key: "bAutoUnlockAllEngrams",                    iniKey: "bAutoUnlockAllEngrams",                     destination: "Game.ini", section: "[/script/shootergame.shootergamemode]" },
@@ -206,342 +247,216 @@ export class ArkConfigService {
   ];
 
   /**
-   * INI keys this app used to write under a wrong name or file, or that are not ARK keys at all.
-   * They are treated as managed so stale lines from earlier versions are dropped on rewrite
-   * instead of being preserved as "custom" lines forever.
+   * Keys earlier versions wrote under a wrong name or file, or that are not ARK keys at all, and the
+   * property each held. A rewrite drops them instead of keeping them as custom lines, and reading an
+   * INI still understands them.
    */
-  private readonly legacyManagedIniKeys: string[] = [
-    'PlayerCharacterDamageMultiplier', 'PlayerCharacterResistanceMultiplier',
-    'DinoCharacterDamageMultiplier', 'DinoCharacterResistanceMultiplier',
-    'bDisableWeatherFog', 'bDisableStructureDecayPvE', 'bEnableExtraStructurePreventionVolumes',
-    'MaxStructuresInRange', 'bForceAllowCaveFlyers', 'bPreventMateBoost', 'AllowCustomRecipes', 'bPvE',
-  ];
+  private readonly legacyIniKeys: Record<string, string> = {
+    PlayerCharacterDamageMultiplier: 'playerCharacterDamageMultiplier',
+    PlayerCharacterResistanceMultiplier: 'playerCharacterResistanceMultiplier',
+    DinoCharacterDamageMultiplier: 'dinoCharacterDamageMultiplier',
+    DinoCharacterResistanceMultiplier: 'dinoCharacterResistanceMultiplier',
+    bDisableWeatherFog: 'bDisableWeatherFog',
+    bDisableStructureDecayPvE: 'bDisableStructureDecayPvE',
+    bEnableExtraStructurePreventionVolumes: 'bEnableExtraStructurePreventionVolumes',
+    MaxStructuresInRange: 'maxStructuresInRange',
+    bForceAllowCaveFlyers: 'forceAllowCaveFlyers',
+    bPreventMateBoost: 'preventMateBoost',
+    AllowCustomRecipes: 'allowCustomRecipes',
+    bPvE: 'bPvE',
+    // Not a key ARK reads: the whitelist is enabled by the -exclusivejoin launch flag alone, and
+    // with this key written the server refused even listed players. Dropped from existing files.
+    UseExclusiveList: 'useExclusiveList',
+  };
 
-  /**
-   * Per-level stat multiplier arrays to write to Game.ini.
-   * Maps config property to the ARK INI key prefix.
-   */
+  /** Twelve-entry per-level stat arrays, written to Game.ini as `<prefix>[i]=value`. */
   private readonly statMultiplierMapping: { key: string; iniKeyPrefix: string }[] = [
     { key: "perLevelStatsMultiplier_Player",              iniKeyPrefix: "PerLevelStatsMultiplier_Player" },
     { key: "perLevelStatsMultiplier_DinoTamed",           iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed" },
     { key: "perLevelStatsMultiplier_DinoWild",            iniKeyPrefix: "PerLevelStatsMultiplier_DinoWild" },
     { key: "perLevelStatsMultiplier_DinoTamed_Add",       iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed_Add" },
     { key: "perLevelStatsMultiplier_DinoTamed_Affinity",  iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed_Affinity" },
-    { key: "perLevelStatsMultiplier_DinoTamed_Torpidity",     iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed_Torpidity" },
+    { key: "perLevelStatsMultiplier_DinoTamed_Torpidity", iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed_Torpidity" },
     { key: "perLevelStatsMultiplier_DinoTamed_Clamp",     iniKeyPrefix: "PerLevelStatsMultiplier_DinoTamed_Clamp" },
   ];
 
   /**
-   * Write ARK configuration files (moved from ark-ini-utils.ts)
-   * 
-   * Generates GameUserSettings.ini and Game.ini based on provided config object
-   * and writes them to the appropriate ARK server config directory.
-   * Also copies them to the main ARK config directory for use by the server.
-   * 
-   * @param instanceDir - The directory of the server instance where config files will be generated.
-   * @param config - The configuration object containing settings to be written.
-   * @param instanceId - Instance id, used to resolve the config directory ARK actually reads.
+   * Writes both INI files to the instance's Config/WindowsServer and to the directory ARK reads.
+   * Lines the app does not manage are kept from the instance copy, and from the copy ARK reads when
+   * that is the instance's own (users edit it too). Throws, before writing anything, when an
+   * existing file cannot be read.
    */
-  writeArkConfigFiles(instanceDir: string, config: any, instanceId?: string): void {
+  writeArkConfigFiles(instanceDir: string, config: Partial<InstanceConfig>, instanceId?: string): void {
     try {
-      // Create Windows Server config directory if it doesn't exist
       const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
-      if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true });
-      }
+      const runtime = this.getRuntimeConfigDir(instanceDir, config, instanceId);
+      const files = this.buildIniFiles(config, this.collectPreservedFiles(this.preservedSources(configDir, runtime), config));
 
-      // Generate INI files based on mapping
-      const iniFiles: { [key: string]: { [section: string]: string[] } } = {};
-
-      this.asaSettingsMapping.forEach(mapping => {
-        const configValue = config[mapping.key];
-        if (configValue !== undefined && configValue !== null && configValue !== '') {
-          if (!iniFiles[mapping.destination]) {
-            iniFiles[mapping.destination] = {};
-          }
-          if (!iniFiles[mapping.destination][mapping.section]) {
-            iniFiles[mapping.destination][mapping.section] = [];
-          }
-
-          // Use the dedicated iniKey for the ARK INI key name
-          iniFiles[mapping.destination][mapping.section].push(`${mapping.iniKey}=${configValue}`);
-        }
-      });
-
-      // bPvE ("PvE Mode") is not an ARK INI key; ARK reads ServerPVE. Honour it the same way
-    // the launch args do, without duplicating a ServerPVE line when serverPVE already set it.
-    const toBool = (val: any) => val === true || val === 'true';
-    if (toBool(config.bPvE) && !toBool(config.serverPVE)) {
-      if (!iniFiles['GameUserSettings.ini']) {
-        iniFiles['GameUserSettings.ini'] = {};
-      }
-      if (!iniFiles['GameUserSettings.ini']['[ServerSettings]']) {
-        iniFiles['GameUserSettings.ini']['[ServerSettings]'] = [];
-      }
-      const serverSettings = iniFiles['GameUserSettings.ini']['[ServerSettings]'];
-      const idx = serverSettings.findIndex(l => l.toLowerCase().startsWith('serverpve='));
-      if (idx >= 0) {
-        serverSettings[idx] = 'ServerPVE=True';
-      } else {
-        serverSettings.push('ServerPVE=True');
-      }
-    }
-
-    // Write RCONEnabled=True when an RCON port is configured.
-      // Without this, ARK derives RCONEnabled from the command-line ?-params and
-      // concatenates it onto the ServerAdminPassword line in the INI file.
-      if (config.rconPort) {
-        if (!iniFiles['GameUserSettings.ini']) {
-          iniFiles['GameUserSettings.ini'] = {};
-        }
-        if (!iniFiles['GameUserSettings.ini']['[ServerSettings]']) {
-          iniFiles['GameUserSettings.ini']['[ServerSettings]'] = [];
-        }
-        iniFiles['GameUserSettings.ini']['[ServerSettings]'].push('RCONEnabled=True');
-      }
-
-      // Write stat multiplier arrays to Game.ini [/script/shootergame.shootergamemode]
-      const gameIniSection = '[/script/shootergame.shootergamemode]';
-      this.statMultiplierMapping.forEach(statMapping => {
-        const statArray = config[statMapping.key];
-        if (Array.isArray(statArray) && statArray.length === 12) {
-          if (!iniFiles['Game.ini']) {
-            iniFiles['Game.ini'] = {};
-          }
-          if (!iniFiles['Game.ini'][gameIniSection]) {
-            iniFiles['Game.ini'][gameIniSection] = [];
-          }
-          // Only write non-default values (not 1.0) to keep INI clean
-          for (let i = 0; i < statArray.length; i++) {
-            const val = statArray[i];
-            if (val !== undefined && val !== null && val !== 1.0) {
-              iniFiles['Game.ini'][gameIniSection].push(`${statMapping.iniKeyPrefix}[${i}]=${val}`);
-            }
-          }
-        }
-      });
-
-      // Add mod settings to GameUserSettings.ini
-      if (config.modSettings) {
-        Object.keys(config.modSettings).forEach(modId => {
-          const modSettings = config.modSettings[modId];
-          if (modSettings && Object.keys(modSettings).length > 0) {
-            // Create section name for the mod
-            const sectionName = `[Mod_${modId}]`;
-            
-            if (!iniFiles['GameUserSettings.ini']) {
-              iniFiles['GameUserSettings.ini'] = {};
-            }
-            if (!iniFiles['GameUserSettings.ini'][sectionName]) {
-              iniFiles['GameUserSettings.ini'][sectionName] = [];
-            }
-
-            // Add each mod setting
-            Object.keys(modSettings).forEach(settingKey => {
-              // Skip internal keys like _name
-              if (settingKey.startsWith('_')) {
-                return;
-              }
-              const settingValue = modSettings[settingKey];
-              if (settingValue !== undefined && settingValue !== null && settingValue !== '') {
-                iniFiles['GameUserSettings.ini'][sectionName].push(`${settingKey}=${settingValue}`);
-              }
-            });
-          }
-        });
-      }
-
-      // Build a set of all known INI keys (lowercase) that will be written by the
-      // managed output, so we can identify custom/unmapped lines to preserve.
-      const managedKeys = this.buildManagedKeySet(config);
-
-      // Collect the config dir the server will actually read, so we can pick up custom
-      // lines the user edited there directly — and, further down, write our INIs into it.
-      const mainConfigDir = this.getRuntimeConfigDir(instanceDir, config, instanceId);
-
-      // Write each INI file, preserving any unmapped lines from the existing file
-      Object.keys(iniFiles).forEach(filename => {
-        const filePath = path.join(configDir, filename);
-
-        // Collect unmapped lines from the instance config dir first.
-        const customSections = this.collectUnmappedLines(filePath, managedKeys);
-
-        // Also collect unmapped lines from the main ARK config dir in case the
-        // user edited that file directly (outside of expert mode).  Merge any
-        // lines that aren't already captured from the instance file.
-        const mainFilePath = path.join(mainConfigDir, filename);
-        if (mainFilePath !== filePath) {
-          const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
-          for (const [sectionKey, mainEntry] of mainCustom) {
-            const existing = customSections.get(sectionKey);
-            if (!existing) {
-              customSections.set(sectionKey, mainEntry);
-            } else {
-              // Merge lines that don't already exist in the instance set
-              const existingSet = new Set(existing.lines.map(l => l.toLowerCase()));
-              for (const line of mainEntry.lines) {
-                if (!existingSet.has(line.toLowerCase())) {
-                  existing.lines.push(line);
-                }
-              }
-            }
-          }
-        }
-
-        let content = '';
-        const writtenSections = new Set<string>();
-
-        Object.keys(iniFiles[filename]).forEach(section => {
-          const sectionLower = section.toLowerCase();
-          writtenSections.add(sectionLower);
-          content += `${section}\n`;
-          iniFiles[filename][section].forEach(line => {
-            content += `${line}\n`;
-          });
-          // Append any custom/unmapped lines that belong to this section
-          const custom = customSections.get(sectionLower);
-          if (custom && custom.lines.length > 0) {
-            custom.lines.forEach(line => {
-              content += `${line}\n`;
-            });
-          }
-          content += '\n';
-        });
-
-        // Append entire custom sections that weren't in the managed output
-        for (const [sectionLower, custom] of customSections) {
-          if (!writtenSections.has(sectionLower) && custom.lines.length > 0) {
-            content += `${custom.header}\n`;
-            custom.lines.forEach(line => {
-              content += `${line}\n`;
-            });
-            content += '\n';
-          }
-        }
-
-        fs.writeFileSync(filePath, content, 'utf8');
-      });
-
-      // Ensure both INI files are processed even if they have no managed entries.
-      // This preserves custom lines for files that only contain user-added content.
-      const configFiles = ['GameUserSettings.ini', 'Game.ini'];
-      for (const filename of configFiles) {
-        if (!iniFiles[filename]) {
-          const filePath = path.join(configDir, filename);
-          const customSections = this.collectUnmappedLines(filePath, managedKeys);
-          const mainFilePath = path.join(mainConfigDir, filename);
-          if (mainFilePath !== filePath) {
-            const mainCustom = this.collectUnmappedLines(mainFilePath, managedKeys);
-            for (const [sectionKey, mainEntry] of mainCustom) {
-              const existing = customSections.get(sectionKey);
-              if (!existing) {
-                customSections.set(sectionKey, mainEntry);
-              } else {
-                const existingSet = new Set(existing.lines.map(l => l.toLowerCase()));
-                for (const line of mainEntry.lines) {
-                  if (!existingSet.has(line.toLowerCase())) {
-                    existing.lines.push(line);
-                  }
-                }
-              }
-            }
-          }
-          if (customSections.size > 0) {
-            let content = '';
-            for (const [, custom] of customSections) {
-              if (custom.lines.length > 0) {
-                content += `${custom.header}\n`;
-                custom.lines.forEach(line => { content += `${line}\n`; });
-                content += '\n';
-              }
-            }
-            if (content) {
-              fs.writeFileSync(filePath, content, 'utf8');
-            }
-          }
-        }
-      }
-
-      // Copy config files to main ARK config directory
-      if (!fs.existsSync(mainConfigDir)) {
-        fs.mkdirSync(mainConfigDir, { recursive: true });
-      }
-      for (const file of configFiles) {
-        const src = path.join(configDir, file);
-        const dest = path.join(mainConfigDir, file);
-        if (fs.existsSync(src)) {
-          fs.copyFileSync(src, dest);
+      // Written even when empty, so a setting that was cleared does not live on in the old file.
+      for (const dir of new Set([configDir, runtime.dir])) {
+        fs.mkdirSync(dir, { recursive: true });
+        for (const file of INI_FILES) {
+          fs.writeFileSync(path.join(dir, file), files[file], 'utf8');
         }
       }
     } catch (error) {
-      console.error('[ark-config-service] Error writing ARK config files:', error);
+      console.error('[ark-config] Failed to write the ARK config files:', error);
       throw error;
     }
   }
 
   /**
-   * Build a set of all INI keys (lowercase, without array indices) that the app manages.
-   * Used to identify which lines in an existing INI file are "custom" and should be preserved.
+   * The custom lines writeArkConfigFiles would keep, for buildIniFiles. Only reads. Throws when a
+   * file exists but cannot be read.
    */
-  private buildManagedKeySet(config: any): Set<string> {
-    const keys = new Set<string>();
+  readPreservedLines(instanceDir: string, config: Partial<InstanceConfig>, instanceId?: string): Record<IniFileName, PreservedSections> {
+    const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
+    return this.collectPreservedFiles(this.preservedSources(configDir, this.getRuntimeConfigDir(instanceDir, config, instanceId)), config);
+  }
 
-    // All keys from the settings mapping
-    for (const m of this.asaSettingsMapping) {
-      keys.add(m.iniKey.toLowerCase());
-    }
-
-    // Keys written by earlier versions under a wrong name/file: never preserve as custom
-    for (const k of this.legacyManagedIniKeys) {
-      keys.add(k.toLowerCase());
-    }
-
-    // Stat multiplier prefixes — match keys like PerLevelStatsMultiplier_Player[0]
-    for (const m of this.statMultiplierMapping) {
-      for (let i = 0; i < 12; i++) {
-        keys.add(`${m.iniKeyPrefix}[${i}]`.toLowerCase());
-      }
-    }
-
-    // RCONEnabled is always managed when rconPort is set
-    if (config.rconPort) {
-      keys.add('rconenabled');
-    }
-
-    // Mod settings sections are managed entirely
-    // (handled at the section level — mod sections are fully owned by the app)
-
-    return keys;
+  // Every instance on the shared install writes the shared copy, so its custom lines may be another
+  // instance's.
+  private preservedSources(configDir: string, runtime: RuntimeConfigDir): string[] {
+    return runtime.own ? [configDir, runtime.dir] : [configDir];
   }
 
   /**
-   * Read an existing INI file and collect lines whose keys are NOT in the managed set.
-   * Returns a Map keyed by lowercase section name → { header, lines } where:
-   *   - header: the original-cased section header string (e.g. "[MyCustomSection]")
-   *   - lines: array of raw "Key=Value" strings that are not managed by the app
+   * The text of both INI files for `config`, with `preserved` custom lines merged into their
+   * sections. Reads and writes nothing; a file with nothing to say is ''.
    */
-  private collectUnmappedLines(filePath: string, managedKeys: Set<string>): Map<string, { header: string; lines: string[] }> {
-    const result = new Map<string, { header: string; lines: string[] }>();
+  buildIniFiles(config: Partial<InstanceConfig>, preserved: Partial<Record<IniFileName, PreservedSections>> = {}): IniFiles {
+    const managed = this.managedSections(config);
+    return {
+      'GameUserSettings.ini': renderIni(managed['GameUserSettings.ini'], preserved['GameUserSettings.ini']),
+      'Game.ini': renderIni(managed['Game.ini'], preserved['Game.ini']),
+    };
+  }
 
-    if (!fs.existsSync(filePath)) {
-      return result;
+  private managedSections(config: Partial<InstanceConfig>): Record<IniFileName, IniSections> {
+    const files: Record<IniFileName, IniSections> = { 'GameUserSettings.ini': new Map(), 'Game.ini': new Map() };
+    const add = (file: IniFileName, section: string, line: string) => {
+      const lines = files[file].get(section);
+      if (lines) lines.push(line);
+      else files[file].set(section, [line]);
+    };
+
+    for (const { key, iniKey, destination, section } of this.asaSettingsMapping) {
+      const value = config[key];
+      if (value !== undefined && value !== null && value !== '') {
+        add(destination, section, `${iniKey}=${iniValue(value)}`);
+      }
     }
+
+    // bPvE ("PvE Mode") is not an ARK key; ARK reads ServerPVE. Honour it as the launch args do,
+    // without a second ServerPVE line when serverPVE already set one.
+    if (isTrue(config.bPvE) && !isTrue(config.serverPVE)) {
+      const serverSettings = files['GameUserSettings.ini'].get(SERVER_SETTINGS) ?? [];
+      const serverPve = serverSettings.findIndex(line => line.toLowerCase().startsWith('serverpve='));
+      if (serverPve >= 0) serverSettings[serverPve] = 'ServerPVE=True';
+      else add('GameUserSettings.ini', SERVER_SETTINGS, 'ServerPVE=True');
+    }
+
+    // Without it ARK derives RCONEnabled from the ?-params and appends it to the
+    // ServerAdminPassword line in the INI.
+    if (config.rconPort) {
+      add('GameUserSettings.ini', SERVER_SETTINGS, 'RCONEnabled=True');
+    }
+
+    for (const { key, iniKeyPrefix } of this.statMultiplierMapping) {
+      const values = config[key];
+      if (!Array.isArray(values) || values.length !== STAT_COUNT) continue;
+      values.forEach((value, i) => {
+        // 1.0 is ARK's default, so it is left out.
+        if (value !== undefined && value !== null && value !== 1.0) {
+          add('Game.ini', GAME_MODE, `${iniKeyPrefix}[${i}]=${iniValue(value)}`);
+        }
+      });
+    }
+
+    for (const [modId, settings] of Object.entries(config.modSettings ?? {})) {
+      if (!settings || typeof settings !== 'object') continue;
+      if (!MOD_ID.test(modId)) {
+        console.warn(`[ark-config] Skipping the settings of mod "${iniValue(modId)}": not a usable section name`);
+        continue;
+      }
+      for (const [settingKey, value] of Object.entries(settings)) {
+        // Keys starting with _ are the app's own, such as the mod's display name.
+        if (settingKey.startsWith('_') || value === undefined || value === null || value === '') continue;
+        if (!isUsableIniKey(settingKey)) {
+          console.warn(`[ark-config] Skipping a setting of mod ${modId}: "${iniValue(settingKey)}" is not a usable INI key`);
+          continue;
+        }
+        add('GameUserSettings.ini', `[Mod_${modId}]`, `${settingKey.trim()}=${iniValue(value)}`);
+      }
+    }
+
+    return files;
+  }
+
+  /** Lowercased keys the app writes, so every other line in an existing file counts as custom. */
+  private buildManagedKeySet(config: Partial<InstanceConfig>): Set<string> {
+    const keys = new Set<string>();
+    for (const m of this.asaSettingsMapping) {
+      keys.add(m.iniKey.toLowerCase());
+    }
+    for (const iniKey of Object.keys(this.legacyIniKeys)) {
+      keys.add(iniKey.toLowerCase());
+    }
+    for (const m of this.statMultiplierMapping) {
+      for (let i = 0; i < STAT_COUNT; i++) {
+        keys.add(`${m.iniKeyPrefix}[${i}]`.toLowerCase());
+      }
+    }
+    if (config.rconPort) {
+      keys.add('rconenabled');
+    }
+    return keys;
+  }
+
+  private collectPreservedFiles(dirs: string[], config: Partial<InstanceConfig>): Record<IniFileName, PreservedSections> {
+    const managedKeys = this.buildManagedKeySet(config);
+    const preserved = {} as Record<IniFileName, PreservedSections>;
+    for (const file of INI_FILES) {
+      preserved[file] = this.collectPreservedLines(dirs.map(dir => path.join(dir, file)), managedKeys);
+    }
+    return preserved;
+  }
+
+  /** Custom lines from each file in turn, skipping lines an earlier file already had. */
+  private collectPreservedLines(filePaths: string[], managedKeys: Set<string>): PreservedSections {
+    const merged: PreservedSections = new Map();
+    for (const filePath of new Set(filePaths)) {
+      for (const [section, entry] of this.collectUnmappedLines(filePath, managedKeys)) {
+        const existing = merged.get(section);
+        if (!existing) {
+          merged.set(section, entry);
+          continue;
+        }
+        const seen = new Set(existing.lines.map(line => line.toLowerCase()));
+        existing.lines.push(...entry.lines.filter(line => !seen.has(line.toLowerCase())));
+      }
+    }
+    return merged;
+  }
+
+  /** The `key=value` lines of an existing file whose keys are not managed, by lowercased section. */
+  private collectUnmappedLines(filePath: string, managedKeys: Set<string>): PreservedSections {
+    const result: PreservedSections = new Map();
 
     let existingContent: string;
     try {
       existingContent = fs.readFileSync(filePath, 'utf8');
-    } catch {
-      return result;
+    } catch (error) {
+      // Anything but a missing file is thrown: the writer would replace a file it could not read.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return result;
+      throw error;
     }
-
-    if (!existingContent) {
-      return result;
-    }
+    if (!existingContent) return result;
 
     let currentSection = '';
     let currentSectionHeader = '';
 
-    for (const rawLine of existingContent.split('\n')) {
+    for (const rawLine of existingContent.split(LINE_BREAK)) {
       const line = rawLine.trim();
       if (!line || line.startsWith(';') || line.startsWith('#')) continue;
 
@@ -551,18 +466,13 @@ export class ArkConfigService {
         continue;
       }
 
-      if (!currentSection) continue;
-
-      // Skip lines in [Mod_*] sections — those are fully managed
-      if (currentSection.startsWith('[mod_')) continue;
+      // [Mod_*] sections are rebuilt from modSettings on every write.
+      if (!currentSection || currentSection.startsWith('[mod_')) continue;
 
       const eqIdx = line.indexOf('=');
       if (eqIdx === -1) continue;
 
-      const rawKey = line.substring(0, eqIdx).trim();
-
-      // Check if this key is managed
-      if (!managedKeys.has(rawKey.toLowerCase())) {
+      if (!managedKeys.has(line.substring(0, eqIdx).trim().toLowerCase())) {
         if (!result.has(currentSection)) {
           result.set(currentSection, { header: currentSectionHeader, lines: [] });
         }
@@ -574,215 +484,128 @@ export class ArkConfigService {
   }
 
   /**
-   * Get ARK launch parameters (moved from ark-ini-utils.ts)
-   * @param config - Configuration object
-   * @returns Array of launch parameters
+   * The config directory the running server reads. ARK resolves Saved/Config against the tree that
+   * owns the executable it launched, so an isolated instance reads its own copy and would otherwise
+   * run on ARK's defaults (a random "ARK #12345" session name). Falls back to the shared install's.
    */
-  getArkLaunchParameters(config: any): string[] {
-    // Extract launch parameters from config
-    return config.launchParameters ? config.launchParameters.split(' ').filter((param: string) => param.trim() !== '') : [];
-  }
-
-  /**
-   * Get ARK map name (moved from ark-ini-utils.ts)
-   * @param config - Configuration object
-   * @returns ARK map name
-   */
-  getArkMapName(config: any): string {
-    return config.mapName || 'TheIsland_WP';
-  }
-
-  /**
-   * Convert camelCase config key to ARK INI format
-   * @param key - Configuration key in camelCase
-   * @returns ARK INI format key
-   */
-  private convertToArkKey(key: string): string {
-    // Convert camelCase to PascalCase for ARK settings
-    return key.charAt(0).toUpperCase() + key.slice(1);
-  }
-
-  /**
-   * Get the main ARK config directory
-   * @returns Path to the main ARK configuration directory
-   * 
-   * Note: Always uses WindowsServer since we're running Windows binaries via Proton on Linux
-   */
-  /**
-   * The config directory the running server actually reads.
-   *
-   * ARK resolves Saved/Config against the tree that owns the executable it launched, so an
-   * instance with isolated binaries reads its own ShooterGame/Saved/Config/WindowsServer —
-   * NOT the shared install's. Writing to the shared directory leaves such an instance running
-   * on ARK's generated defaults (a random "ARK #12345" session name and stock rates).
-   * Falls back to the shared directory when the instance can't be resolved.
-   */
-  private getRuntimeConfigDir(instanceDir: string, config: any, instanceId?: string): string {
-    const id = instanceId || config?.id || path.basename(instanceDir);
+  private getRuntimeConfigDir(instanceDir: string, config: Partial<InstanceConfig>, instanceId?: string): RuntimeConfigDir {
+    const id = instanceId || config.id || path.basename(instanceDir);
     if (id) {
       try {
-        const { getInstanceConfigDir } = require('../utils/ark/ark-server/ark-server-paths.utils');
-        return getInstanceConfigDir(id);
-      } catch (e) {
-        console.warn(`[ark-config-service] Could not resolve runtime config dir for ${id}, using shared:`, e);
+        return { dir: getInstanceConfigDir(id), own: isInstanceIsolated(id) };
+      } catch (error) {
+        console.warn(`[ark-config] Could not resolve the runtime config dir for ${id}; using the shared one:`, error);
       }
     }
-    return this.getArkConfigDir();
+    // WindowsServer on both platforms: Linux runs the Windows binaries through Proton.
+    return { dir: path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Config', 'WindowsServer'), own: false };
   }
 
-  private getArkConfigDir(): string {
-      try {
-        const { loadGlobalConfig } = require('../utils/global-config.utils');
-        const config = loadGlobalConfig();
-        if (config.serverDataDir) {
-           return path.join(config.serverDataDir, 'AASMServer', 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
-        }
-      } catch (e) {}
-
-    const arkServerDir = ArkPathUtils.getArkServerDir();
-    // Always use WindowsServer since we're running Windows binaries via Proton on Linux
-    return path.join(arkServerDir, 'ShooterGame', 'Saved', 'Config', 'WindowsServer');
-  }
-
-  // ====================================================================
-  // Raw INI Editing Support (Feature #3)
-  // ====================================================================
-
-  /**
-   * Read raw content of an INI file for a specific instance
-   */
+  /** Raw text of one of an instance's own INI files, or '' when it does not exist. */
   readIniFile(instanceId: string, filename: string): string {
-      // Security: validate instanceId before using it in a file path
-      if (!validateInstanceId(instanceId)) {
-          throw new Error('Invalid instance ID');
-      }
+    if (!validateInstanceId(instanceId)) {
+      throw new Error('Invalid instance ID');
+    }
+    if (typeof filename !== 'string' || /[\\/]/.test(filename)) {
+      throw new Error('Invalid filename');
+    }
+    const filePath = path.join(getInstanceDir(instanceId), 'Config', 'WindowsServer', filename);
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  }
 
-      // Security: ensure filename is just a filename, not a path
-      if (filename.includes('/') || filename.includes('\\')) {
-          throw new Error('Invalid filename');
-      }
+  writeIniFile(instanceId: string, filename: string, content: string): void {
+    if (!validateInstanceId(instanceId)) {
+      throw new Error('Invalid instance ID');
+    }
+    if (typeof filename !== 'string' || /[\\/]/.test(filename) || !filename.toLowerCase().endsWith('.ini')) {
+      throw new Error('Invalid filename. Must be a .ini file.');
+    }
+    const instanceDir = getInstanceDir(instanceId);
+    const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
+    // The next start merges custom lines from the instance's own runtime copy too, which would
+    // otherwise bring back the old value of a line edited here. The editor is locked while the
+    // server runs, so nothing else is writing that copy.
+    const runtime = this.getRuntimeConfigDir(instanceDir, {}, instanceId);
+    for (const dir of runtime.own ? [configDir, runtime.dir] : [configDir]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, filename), content, 'utf8');
+    }
+  }
 
-      const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
-      const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-      const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
-      const filePath = path.join(configDir, filename);
-
-      if (fs.existsSync(filePath)) {
-          return fs.readFileSync(filePath, 'utf8');
-      }
-      return '';
+  /** The config properties set in one INI file, as the raw INI editor saves it. See readIniSettings. */
+  parseIniToConfig(filename: string, content: string): Record<string, unknown> {
+    return this.readIniSettings(content, { filename }).config;
   }
 
   /**
-   * Parse raw INI content back into a partial camelCase config object.
-   * Uses asaSettingsMapping and statMultiplierMapping to reverse-map iniKey → key.
-   * Handles typed coercion (number, boolean, string) automatically.
+   * Reads INI text back into config properties. Keys match case-insensitively, and the spellings
+   * earlier versions wrote are read unless the current one is present too. `filename` limits the
+   * match to keys ARK reads from that file; `extraKeys` maps more lowercased INI keys.
    */
-  parseIniToConfig(filename: string, content: string): Record<string, any> {
-    // Build reverse lookup: lowercase(iniKey) → camelCase key
-    const iniKeyToConfig = new Map<string, string>();
+  readIniSettings(content: string, options: { filename?: string; extraKeys?: Record<string, string> } = {}): ParsedIniSettings {
+    const { filename, extraKeys = {} } = options;
+    const keys = new Map<string, string>();
     for (const m of this.asaSettingsMapping) {
-      if (m.destination === filename) {
-        iniKeyToConfig.set(m.iniKey.toLowerCase(), m.key);
-      }
+      const iniKey = m.iniKey.toLowerCase();
+      // EnableExtraStructurePreventionVolumes is mapped twice; the first is the property the UI edits.
+      if ((!filename || m.destination === filename) && !keys.has(iniKey)) keys.set(iniKey, m.key);
     }
-
-    // Build reverse stat multiplier lookup: lowercase(iniKeyPrefix) → camelCase key
-    const statPrefixToKey = new Map<string, string>();
-    if (filename === 'Game.ini') {
-      for (const m of this.statMultiplierMapping) {
-        statPrefixToKey.set(m.iniKeyPrefix.toLowerCase(), m.key);
-      }
+    for (const [iniKey, key] of Object.entries(extraKeys)) {
+      if (!keys.has(iniKey)) keys.set(iniKey, key);
     }
+    const legacyKeys = new Map(Object.entries(this.legacyIniKeys).map(([iniKey, key]) => [iniKey.toLowerCase(), key]));
+    const statKeys = new Map(!filename || filename === 'Game.ini'
+      ? this.statMultiplierMapping.map(m => [m.iniKeyPrefix.toLowerCase(), m.key])
+      : []);
 
-    const result: Record<string, any> = {};
+    const config: Record<string, unknown> = {};
+    const fromLegacy: Record<string, unknown> = {};
+    const stats: Record<string, number[]> = {};
+    const unmapped: string[] = [];
+    let section = '';
 
-    for (const rawLine of content.split('\n')) {
+    for (const rawLine of content.split(LINE_BREAK)) {
       const line = rawLine.trim();
-      // Skip blank lines and section headers
-      if (!line || line.startsWith('[') || line.startsWith(';') || line.startsWith('#')) continue;
+      if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+
+      const header = /^\[(.*)\]$/.exec(line);
+      if (header) {
+        section = header[1].trim();
+        continue;
+      }
 
       const eqIdx = line.indexOf('=');
-      if (eqIdx === -1) continue;
-
+      if (eqIdx <= 0) continue;
       const rawKey = line.substring(0, eqIdx).trim();
-      const rawVal = line.substring(eqIdx + 1).trim();
+      const rawValue = line.substring(eqIdx + 1).trim();
+      const iniKey = rawKey.toLowerCase();
 
-      // Check for stat multiplier array pattern:  SomePrefix[N]=value
-      const bracketIdx = rawKey.indexOf('[');
-      if (bracketIdx !== -1 && rawKey.endsWith(']')) {
-        const prefix = rawKey.substring(0, bracketIdx).toLowerCase();
-        const idx = parseInt(rawKey.substring(bracketIdx + 1, rawKey.length - 1), 10);
-        const configKey = statPrefixToKey.get(prefix);
-        if (configKey !== undefined && !isNaN(idx)) {
-          if (!result[configKey]) result[configKey] = [];
-          result[configKey][idx] = this.coerceIniValue(rawVal);
+      const statEntry = /^(.+)\[(\d+)\]$/.exec(iniKey);
+      const statKey = statEntry ? statKeys.get(statEntry[1]) : undefined;
+      if (statEntry && statKey) {
+        const index = Number(statEntry[2]);
+        const value = Number(rawValue);
+        if (index < STAT_COUNT && rawValue !== '' && Number.isFinite(value)) {
+          // All twelve entries: the writer leaves out 1.0, and save-ini-file merges this over the
+          // stored array, which the writer skips unless it has exactly twelve.
+          (stats[statKey] ??= new Array(STAT_COUNT).fill(1.0))[index] = value;
           continue;
         }
       }
 
-      // Regular mapping
-      const configKey = iniKeyToConfig.get(rawKey.toLowerCase());
-      if (configKey !== undefined) {
-        result[configKey] = this.coerceIniValue(rawVal);
+      const configKey = keys.get(iniKey);
+      const legacyKey = legacyKeys.get(iniKey);
+      if (configKey) {
+        config[configKey] = coerceIniValue(rawValue);
+      } else if (legacyKey) {
+        fromLegacy[legacyKey] = coerceIniValue(rawValue);
+      } else {
+        unmapped.push(`${section}: ${rawKey}`);
       }
     }
 
-    // Fill sparse stat multiplier arrays to a full 12 elements (default 1.0).
-    // writeArkConfigFiles() only writes non-1.0 values, so parsed arrays are sparse.
-    // Without this, the shallow merge in the save-ini-file handler would replace a
-    // full 12-element config array with a sparse one, later failing the length === 12 check.
-    for (const m of this.statMultiplierMapping) {
-      const arr = result[m.key];
-      if (Array.isArray(arr)) {
-        const filled = new Array(12).fill(1.0);
-        for (let i = 0; i < Math.min(arr.length, 12); i++) {
-          if (arr[i] !== undefined && arr[i] !== null) {
-            filled[i] = arr[i];
-          }
-        }
-        result[m.key] = filled;
-      }
-    }
-
-    return result;
-  }
-
-  /** Coerce an INI string value to the most appropriate JS type. */
-  private coerceIniValue(val: string): any {
-    if (val.toLowerCase() === 'true') return true;
-    if (val.toLowerCase() === 'false') return false;
-    const num = Number(val);
-    if (!isNaN(num) && val !== '') return num;
-    return val;
-  }
-
-  /**
-   * Write raw content to an INI file for a specific instance
-   */
-  writeIniFile(instanceId: string, filename: string, content: string): void {
-      // Security: validate instanceId before using it in a file path
-      if (!validateInstanceId(instanceId)) {
-          throw new Error('Invalid instance ID');
-      }
-
-      // Security: ensure filename is just a filename, not a path
-      if (filename.includes('/') || filename.includes('\\') || !filename.toLowerCase().endsWith('.ini')) {
-          throw new Error('Invalid filename. Must be a .ini file.');
-      }
-
-      const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
-      const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-      const configDir = path.join(instanceDir, 'Config', 'WindowsServer');
-
-      if (!fs.existsSync(configDir)) {
-          fs.mkdirSync(configDir, { recursive: true });
-      }
-
-      const filePath = path.join(configDir, filename);
-      fs.writeFileSync(filePath, content, 'utf8');
+    return { config: { ...fromLegacy, ...stats, ...config }, unmapped };
   }
 }
 
-// Export singleton instance
 export const arkConfigService = new ArkConfigService();

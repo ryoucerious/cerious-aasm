@@ -1,166 +1,59 @@
-// Mock the services
-jest.mock('electron', () => ({
-  ipcMain: {
-    handle: jest.fn(),
-  },
-}));
+import { ipcMain } from 'electron';
+import { messagingService } from '../services/messaging.service';
 
-jest.mock('../services/message-routing.service', () => ({
-  MessageRoutingService: jest.fn(),
+jest.mock('electron', () => ({
+  ipcMain: { handle: jest.fn() },
 }));
 
 jest.mock('../services/messaging.service', () => ({
-  messagingService: {
-    emit: jest.fn(),
-  },
+  messagingService: { emit: jest.fn() },
 }));
 
-import { ipcMain } from 'electron';
-import { MessageRoutingService } from '../services/message-routing.service';
-import { messagingService } from '../services/messaging.service';
+type MessageListener = (event: { sender: unknown }, request?: unknown) => unknown;
 
-// Capture handler registrations
-const handlerMap: Record<string, Function> = {};
-(ipcMain.handle as jest.Mock).mockImplementation((channel, handler) => {
-  handlerMap[channel] = handler;
-});
-
-// Setup MessageRoutingService mock instance and force the handler to use it
-const mockMessageRoutingServiceInstance = {
-  validateChannel: jest.fn(),
-  createMessageResponse: jest.fn()
-};
-(MessageRoutingService as unknown as jest.Mock).mockImplementation(() => mockMessageRoutingServiceInstance);
-
-// Import after mocking so handlerMap is populated and handler uses our mock
-import './message-handler';
-
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
+const mockEmit = jest.mocked(messagingService.emit);
 
 describe('message-handler', () => {
-  let mockEvent: any;
+  const event = { sender: { id: 7 } };
+  let handleMessage: MessageListener;
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    mockEvent = { sender: {} };
+  beforeAll(() => {
+    require('./message-handler');
+    const [channel, listener] = jest.mocked(ipcMain.handle).mock.calls[0];
+    expect(channel).toBe('message');
+    handleMessage = listener as unknown as MessageListener;
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  it('puts the message on the bus with its sender and acknowledges only the channel', async () => {
+    // Payloads carry base64 backup uploads and passwords; the acknowledgement must not echo them.
+    const payload = { requestId: 'r1', fileData: 'UEsDBBQ=', password: 'secret' };
+
+    const reply = await handleMessage(event, { channel: 'import-server-from-backup', payload });
+
+    expect(mockEmit).toHaveBeenCalledWith('import-server-from-backup', payload, event.sender);
+    expect(reply).toEqual({ status: 'received', channel: 'import-server-from-backup' });
   });
 
-  it('should register IPC handler for message channel', () => {
-    expect(typeof handlerMap['message']).toBe('function');
+  it('refuses a malformed channel without emitting', async () => {
+    const reply = await handleMessage(event, { channel: 'get users', payload: {} });
+
+    expect(reply).toEqual({ status: 'error', error: 'Invalid channel format' });
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it('should handle valid channel successfully', async () => {
-    const validChannel = 'test-channel';
-    const payload = { data: 'test' };
+  it.each([undefined, null, 'get-users'])('answers a %p request with an error instead of throwing', async request => {
+    const reply = await handleMessage(event, request);
 
-    mockMessageRoutingServiceInstance.validateChannel.mockReturnValue({
-      valid: true,
-      sanitizedChannel: validChannel
-    });
-
-    mockMessageRoutingServiceInstance.createMessageResponse.mockReturnValue({
-      status: 'received',
-      transport: 'ipc',
-      channel: validChannel,
-      payload
-    });
-
-    const result = await handlerMap['message'](mockEvent, { channel: validChannel, payload });
-
-    expect(mockMessageRoutingServiceInstance.validateChannel).toHaveBeenCalledWith(validChannel);
-    expect(mockMessagingService.emit).toHaveBeenCalledWith(validChannel, payload, mockEvent.sender);
-    expect(mockMessageRoutingServiceInstance.createMessageResponse).toHaveBeenCalledWith('received', validChannel, payload);
-    expect(result).toEqual({
-      status: 'received',
-      transport: 'ipc',
-      channel: validChannel,
-      payload
-    });
+    expect(reply).toEqual({ status: 'error', error: 'Invalid channel' });
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it('should handle invalid channel', async () => {
-    const invalidChannel = 'invalid-channel';
-    const payload = { data: 'test' };
-    const validationError = 'Invalid channel format';
+  it('reports a listener that throws instead of rejecting the call', async () => {
+    mockEmit.mockImplementationOnce(() => { throw new Error('listener failed'); });
 
-    mockMessageRoutingServiceInstance.validateChannel.mockReturnValue({
-      valid: false,
-      error: validationError
-    });
+    const reply = await handleMessage(event, { channel: 'get-users' });
 
-    mockMessageRoutingServiceInstance.createMessageResponse.mockReturnValue({
-      status: 'error',
-      transport: 'ipc',
-      error: validationError
-    });
-
-    const result = await handlerMap['message'](mockEvent, { channel: invalidChannel, payload });
-
-    expect(mockMessageRoutingServiceInstance.validateChannel).toHaveBeenCalledWith(invalidChannel);
-    expect(mockMessagingService.emit).not.toHaveBeenCalled();
-    expect(mockMessageRoutingServiceInstance.createMessageResponse).toHaveBeenCalledWith('error', undefined, undefined, validationError);
-    expect(result).toEqual({
-      status: 'error',
-      transport: 'ipc',
-      error: validationError
-    });
-  });
-
-  it('should handle unexpected errors', async () => {
-    const validChannel = 'test-channel';
-    const payload = { data: 'test' };
-    const errorMessage = 'Unexpected error occurred';
-
-    mockMessageRoutingServiceInstance.validateChannel.mockImplementation(() => {
-      throw new Error(errorMessage);
-    });
-
-    mockMessageRoutingServiceInstance.createMessageResponse.mockReturnValue({
-      status: 'error',
-      transport: 'ipc',
-      error: errorMessage
-    });
-
-    const result = await handlerMap['message'](mockEvent, { channel: validChannel, payload });
-
-    expect(mockMessageRoutingServiceInstance.validateChannel).toHaveBeenCalledWith(validChannel);
-    expect(mockMessagingService.emit).not.toHaveBeenCalled();
-    expect(mockMessageRoutingServiceInstance.createMessageResponse).toHaveBeenCalledWith('error', undefined, undefined, errorMessage);
-    expect(result).toEqual({
-      status: 'error',
-      transport: 'ipc',
-      error: errorMessage
-    });
-  });
-
-  it('should handle non-Error exceptions', async () => {
-    const validChannel = 'test-channel';
-    const payload = { data: 'test' };
-
-    mockMessageRoutingServiceInstance.validateChannel.mockImplementation(() => {
-      throw 'String error';
-    });
-
-    mockMessageRoutingServiceInstance.createMessageResponse.mockReturnValue({
-      status: 'error',
-      transport: 'ipc',
-      error: 'Unexpected error'
-    });
-
-    const result = await handlerMap['message'](mockEvent, { channel: validChannel, payload });
-
-    expect(mockMessageRoutingServiceInstance.validateChannel).toHaveBeenCalledWith(validChannel);
-    expect(mockMessagingService.emit).not.toHaveBeenCalled();
-    expect(mockMessageRoutingServiceInstance.createMessageResponse).toHaveBeenCalledWith('error', undefined, undefined, 'Unexpected error');
-    expect(result).toEqual({
-      status: 'error',
-      transport: 'ipc',
-      error: 'Unexpected error'
-    });
+    expect(reply).toEqual({ status: 'error', error: 'listener failed' });
+    expect(console.error).toHaveBeenCalledWith('[message-handler] Unexpected error:', expect.any(Error));
   });
 });

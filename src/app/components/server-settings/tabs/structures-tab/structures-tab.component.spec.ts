@@ -1,13 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { StructuresTabComponent } from './structures-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { ServerInstanceService } from '../../../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
 
 describe('StructuresTabComponent', () => {
   let component: StructuresTabComponent;
@@ -15,19 +7,12 @@ describe('StructuresTabComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [StructuresTabComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [StructuresTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(StructuresTabComponent);
     component = fixture.componentInstance;
-    // Provide required @Input() values
     component.serverInstance = { gamePort: 7777 };
-    component.structuresFields = [{ key: 'structureLimit', label: 'Structure Limit', type: 'number', description: '' }];
+    component.structuresFields = [{ tab: 'structures', key: 'structureDamageMultiplier', label: 'Structure Damage', type: 'number', description: '' }];
     fixture.detectChanges();
   });
 
@@ -43,17 +28,23 @@ describe('StructuresTabComponent', () => {
 
   it('should emit validateField on onValidateField', () => {
     spyOn(component.validateField, 'emit');
-    component.onValidateField('structureLimit', 100);
-    expect(component.validateField.emit).toHaveBeenCalledWith({key: 'structureLimit', value: 100});
+    component.onValidateField('structureDamageMultiplier', 100);
+    expect(component.validateField.emit).toHaveBeenCalledWith({key: 'structureDamageMultiplier', value: 100});
   });
 
-  it('should return false for hasFieldError and hasFieldWarning', () => {
-    expect(component.hasFieldError('structureLimit')).toBeFalse();
-    expect(component.hasFieldWarning('structureLimit')).toBeFalse();
+  it('shows the PvE decay settings with the other damage and decay settings', () => {
+    component.structuresFields = [
+      { tab: 'structures', key: 'pveStructureDecayPeriodMultiplier', label: 'PvE Structure Decay Period Multiplier', type: 'number' },
+      { tab: 'structures', key: 'pveStructureDecayDelay', label: 'PvE Structure Decay Delay', type: 'number' }
+    ];
+    expect(component.getFieldsByCategory('damage').map(field => field.key))
+      .toEqual(['pveStructureDecayPeriodMultiplier', 'pveStructureDecayDelay']);
   });
 
-  it('should return empty string for getFieldError and getFieldWarning', () => {
-    expect(component.getFieldError('structureLimit')).toBe('');
-    expect(component.getFieldWarning('structureLimit')).toBe('');
+  it('shows validation messages under their fields', () => {
+    component.fieldErrors = { structureDamageMultiplier: 'Structure Damage must be a positive number' };
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.validation-error')?.textContent)
+      .toContain('Structure Damage must be a positive number');
   });
 });

@@ -1,108 +1,82 @@
 import { Injectable } from '@angular/core';
 import { ServerInstance } from '../models/server-instance.model';
 
+export const STAT_MULTIPLIER_TYPES = [
+  'Player', 'DinoTamed', 'DinoWild', 'DinoTamed_Add',
+  'DinoTamed_Affinity', 'DinoTamed_Torpidity', 'DinoTamed_Clamp'
+] as const;
+
+export type StatMultiplierType = typeof STAT_MULTIPLIER_TYPES[number];
+export type StatMultiplierKey = `perLevelStatsMultiplier_${StatMultiplierType}`;
+
+/** Anything carrying stat multiplier arrays: a saved server or one still being created. */
+export type StatMultipliers = Pick<ServerInstance, StatMultiplierKey>;
+
+const DEFAULT_MULTIPLIER = 1.0;
+
+function isStatMultiplierType(type: string): type is StatMultiplierType {
+  return (STAT_MULTIPLIER_TYPES as readonly string[]).includes(type);
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class StatMultiplierService {
-  
-  // Stat list for validation and UI purposes
+
   readonly statList: string[] = [
-    'Health', 'Stamina', 'Torpidity', 'Oxygen', 'Food', 'Water', 
+    'Health', 'Stamina', 'Torpidity', 'Oxygen', 'Food', 'Water',
     'Temperature', 'Weight', 'MeleeDamage', 'MovementSpeed', 'Fortitude', 'CraftingSkill'
   ];
 
-  // Multiplier types available in ARK
-  readonly multiplierTypes: string[] = [
-    'Player', 'DinoTamed', 'DinoWild', 'DinoTamed_Add', 
-    'DinoTamed_Affinity', 'DinoTamed_Torpidity', 'DinoTamed_Clamp'
-  ];
+  readonly multiplierTypes: readonly StatMultiplierType[] = STAT_MULTIPLIER_TYPES;
 
-  constructor() {}
-
-  /**
-   * Get stat multiplier value for a specific type and stat index
-   */
-  getStatMultiplier(serverInstance: ServerInstance, type: string, statIndex: number): number {
-    if (!serverInstance || statIndex < 0 || statIndex >= this.statList.length) {
-      return 1.0;
+  getStatMultiplier(serverInstance: StatMultipliers, type: string, statIndex: number): number {
+    if (!serverInstance || !this.isStatIndex(statIndex) || !isStatMultiplierType(type)) {
+      return DEFAULT_MULTIPLIER;
     }
-
-    const propertyName = `perLevelStatsMultiplier_${type}`;
-    const array = (serverInstance as any)[propertyName];
-    return array?.[statIndex] || 1.0;
+    return serverInstance[`perLevelStatsMultiplier_${type}`]?.[statIndex] ?? DEFAULT_MULTIPLIER;
   }
 
-  /**
-   * Set stat multiplier value for a specific type and stat index
-   */
-  setStatMultiplier(serverInstance: ServerInstance, type: string, statIndex: number, value: number): void {
-    if (!serverInstance || statIndex < 0 || statIndex >= this.statList.length) {
+  setStatMultiplier(serverInstance: StatMultipliers, type: string, statIndex: number, value: number): void {
+    if (!serverInstance || !this.isStatIndex(statIndex) || !isStatMultiplierType(type)) {
       return;
     }
-
-    const propertyName = `perLevelStatsMultiplier_${type}`;
-    if (!(serverInstance as any)[propertyName]) {
-      (serverInstance as any)[propertyName] = Array(12).fill(1.0);
-    }
-    (serverInstance as any)[propertyName][statIndex] = value;
+    this.statArray(serverInstance, type)[statIndex] = value;
   }
 
-  /**
-   * Reset a specific stat index to default values (1.0) for all multiplier types
-   */
-  resetStatToDefaults(serverInstance: ServerInstance, statIndex: number): void {
-    if (!serverInstance || statIndex < 0 || statIndex >= this.statList.length) {
+  /** Puts one stat back to 1.0 for every multiplier type. */
+  resetStatToDefaults(serverInstance: StatMultipliers, statIndex: number): void {
+    if (!serverInstance || !this.isStatIndex(statIndex)) {
       return;
     }
-
     this.multiplierTypes.forEach(type => {
-      const propertyName = `perLevelStatsMultiplier_${type}`;
-      if (!(serverInstance as any)[propertyName]) {
-        (serverInstance as any)[propertyName] = Array(12).fill(1.0);
-      }
-      (serverInstance as any)[propertyName][statIndex] = 1.0;
+      this.statArray(serverInstance, type)[statIndex] = DEFAULT_MULTIPLIER;
     });
   }
 
-  /**
-   * Copy multiplier values from one stat index to all other stat indices
-   */
-  copyStatToAll(serverInstance: ServerInstance, sourceStatIndex: number): void {
-    if (!serverInstance || sourceStatIndex < 0 || sourceStatIndex >= this.statList.length) {
+  /** Copies one stat's multipliers, for every type, onto all the other stats. */
+  copyStatToAll(serverInstance: StatMultipliers, sourceStatIndex: number): void {
+    if (!serverInstance || !this.isStatIndex(sourceStatIndex)) {
       return;
     }
-
-    const sourceValues: { [key: string]: number } = {};
-    
-    // Get current values for the selected stat
     this.multiplierTypes.forEach(type => {
-      sourceValues[type] = this.getStatMultiplier(serverInstance, type, sourceStatIndex);
+      const value = this.getStatMultiplier(serverInstance, type, sourceStatIndex);
+      this.statArray(serverInstance, type).fill(value);
     });
-    
-    // Apply these values to all stats
-    for (let i = 0; i < this.statList.length; i++) {
-      this.multiplierTypes.forEach(type => {
-        const propertyName = `perLevelStatsMultiplier_${type}`;
-        if (!(serverInstance as any)[propertyName]) {
-          (serverInstance as any)[propertyName] = Array(12).fill(1.0);
-        }
-        (serverInstance as any)[propertyName][i] = sourceValues[type];
-      });
-    }
   }
 
-  /**
-   * Initialize stat multiplier arrays to default values if they don't exist
-   */
-  initializeStatMultipliers(serverInstance: ServerInstance): void {
+  initializeStatMultipliers(serverInstance: StatMultipliers): void {
     if (!serverInstance) return;
+    this.multiplierTypes.forEach(type => this.statArray(serverInstance, type));
+  }
 
-    this.multiplierTypes.forEach(type => {
-      const propertyName = `perLevelStatsMultiplier_${type}`;
-      if (!(serverInstance as any)[propertyName]) {
-        (serverInstance as any)[propertyName] = Array(12).fill(1.0);
-      }
-    });
+  private isStatIndex(index: number): boolean {
+    return index >= 0 && index < this.statList.length;
+  }
+
+  /** The instance's array for `type`, created with defaults if it has none yet. */
+  private statArray(serverInstance: StatMultipliers, type: StatMultiplierType): number[] {
+    const key: StatMultiplierKey = `perLevelStatsMultiplier_${type}`;
+    return serverInstance[key] ??= Array(this.statList.length).fill(DEFAULT_MULTIPLIER);
   }
 }

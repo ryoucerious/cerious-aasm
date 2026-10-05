@@ -39,7 +39,7 @@ done
 if [ "$has_display" -eq 0 ]; then
   if [ "$is_headless" -eq 1 ]; then
     if command -v xvfb-run >/dev/null 2>&1; then
-      echo "[cerious-aasm] No display detected — launching via xvfb-run (virtual framebuffer)"
+      echo "[cerious-aasm] No display detected - launching via xvfb-run (virtual framebuffer)"
       exec xvfb-run -a "$BIN" "$@"
     fi
     echo "[cerious-aasm] ERROR: No display server and xvfb-run not found." >&2

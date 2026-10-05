@@ -1,33 +1,30 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ServerInstance } from '../../../../core/models/server-instance.model';
+import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
 
 @Component({
   selector: 'app-automation-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FieldMessagesComponent],
   templateUrl: './automation-tab.component.html'
 })
 export class AutomationTabComponent {
-  @Input() serverInstance: any = {};
-  @Input() isLocked = false;
+  @Input() serverInstance: Partial<ServerInstance> = {};
   @Input() restartFrequencyDropdownOpen = false;
+  @Input() fieldErrors: FieldMessages = {};
+  @Input() fieldWarnings: FieldMessages = {};
 
   @Output() saveAutoStartSettings = new EventEmitter<void>();
   @Output() saveCrashDetectionSettings = new EventEmitter<void>();
   @Output() saveScheduledRestartSettings = new EventEmitter<void>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
-  @Output() restartDayToggle = new EventEmitter<{dayIndex: number, event: any}>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
+  @Output() restartDayToggle = new EventEmitter<{dayIndex: number, checked: boolean}>();
   @Output() restartFrequencySelect = new EventEmitter<string>();
   @Output() toggleRestartFrequencyDropdown = new EventEmitter<void>();
 
-  // Automation-related properties
   weekDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-  get isAutomationLocked(): boolean {
-    // Automation settings should always be editable regardless of server state
-    return false;
-  }
 
   getAutoStartStatus(): string {
     if (!this.serverInstance) return 'Disabled';
@@ -63,12 +60,10 @@ export class AutomationTabComponent {
   private getSelectedDaysText(): string {
     if (!this.serverInstance?.restartDays?.length) return 'No days selected';
 
-    const selectedDays = this.serverInstance.restartDays
-      .sort((a: number, b: number) => a - b)
-      .map((dayIndex: number) => this.weekDays[dayIndex])
+    return [...this.serverInstance.restartDays]
+      .sort((a, b) => a - b)
+      .map(dayIndex => this.weekDays[dayIndex])
       .join(', ');
-
-    return selectedDays;
   }
 
   isRestartDaySelected(dayIndex: number): boolean {
@@ -84,30 +79,13 @@ export class AutomationTabComponent {
     ];
   }
 
-  getRestartFrequencyDisplayName(frequency: string): string {
+  getRestartFrequencyDisplayName(frequency: string | undefined): string {
     const frequencyMap: { [key: string]: string } = {
       'none': 'No Restart',
       'daily': 'Daily',
       'weekly': 'Weekly'
     };
-    return frequencyMap[frequency] || frequency;
-  }
-
-  hasFieldError(key: string): boolean {
-    // This would be implemented based on your validation logic
-    return false;
-  }
-
-  getFieldError(key: string): string {
-    return '';
-  }
-
-  hasFieldWarning(key: string): boolean {
-    return false;
-  }
-
-  getFieldWarning(key: string): string {
-    return '';
+    return (frequency && frequencyMap[frequency]) || frequency || '';
   }
 
   onSaveAutoStartSettings(): void {
@@ -122,12 +100,12 @@ export class AutomationTabComponent {
     this.saveScheduledRestartSettings.emit();
   }
 
-  onValidateField(key: string, value: any): void {
+  onValidateField(key: string, value: unknown): void {
     this.validateField.emit({key, value});
   }
 
-  onRestartDayToggle(dayIndex: number, event: any): void {
-    this.restartDayToggle.emit({dayIndex, event});
+  onRestartDayToggle(dayIndex: number, event: Event): void {
+    this.restartDayToggle.emit({ dayIndex, checked: (event.target as HTMLInputElement).checked });
   }
 
   onRestartFrequencySelect(value: string): void {

@@ -1,17 +1,12 @@
-/**
- * Crypto Utilities - Handles cryptographic operations and password generation
- */
+import { randomInt } from 'crypto';
 
-/**
- * Generate a random password using alphanumeric characters
- * @param length The length of the password to generate
- * @returns A randomly generated password string
- */
+const PASSWORD_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/** A random alphanumeric password from the crypto RNG, for secrets such as RCON passwords. */
 export function generateRandomPassword(length: number): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += PASSWORD_CHARACTERS[randomInt(PASSWORD_CHARACTERS.length)];
   }
   return result;
 }

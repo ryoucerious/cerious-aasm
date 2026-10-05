@@ -1,13 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ClusterTabComponent } from './cluster-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { ServerInstanceService } from '../../../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
 
 describe('ClusterTabComponent', () => {
   let component: ClusterTabComponent;
@@ -15,13 +7,7 @@ describe('ClusterTabComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [ClusterTabComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [ClusterTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(ClusterTabComponent);
     component = fixture.componentInstance;
@@ -38,24 +24,37 @@ describe('ClusterTabComponent', () => {
     expect(component.validateField.emit).toHaveBeenCalledWith({key: 'clusterSetting', value: 'value'});
   });
 
-  it('should get storage type label', () => {
-    expect(component.getStorageTypeLabel('local')).toBe('Local Directory (Single Machine)');
-    expect(component.getStorageTypeLabel('unknown')).toBe('unknown');
-  });
-
-  it('should emit validateField for testClusterConnectivity', () => {
-    spyOn(component.validateField, 'emit');
+  it('asks the host to test the cluster directory', () => {
+    spyOn(component.testConnectivity, 'emit');
     component.testClusterConnectivity();
-    expect(component.validateField.emit).toHaveBeenCalledWith({key: 'testConnectivity', value: true});
+    expect(component.testConnectivity.emit).toHaveBeenCalled();
   });
 
-  it('should return false for hasFieldError and hasFieldWarning', () => {
-    expect(component.hasFieldError('clusterSetting')).toBeFalse();
-    expect(component.hasFieldWarning('clusterSetting')).toBeFalse();
+  describe('the directory test', () => {
+    const testButton = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Test Cluster Directory Connection'));
+
+    beforeEach(() => {
+      fixture.componentRef.setInput('serverInstance', { clusterDirOverride: 'D:/ark-cluster' });
+    });
+
+    it('is offered in the desktop app', () => {
+      fixture.componentRef.setInput('isElectron', true);
+      fixture.detectChanges();
+      expect(testButton()).toBeTruthy();
+    });
+
+    it('is not offered in the web UI, where the backend refuses it', () => {
+      fixture.componentRef.setInput('isElectron', false);
+      fixture.detectChanges();
+      expect(testButton()).toBeUndefined();
+    });
   });
 
-  it('should return empty string for getFieldError and getFieldWarning', () => {
-    expect(component.getFieldError('clusterSetting')).toBe('');
-    expect(component.getFieldWarning('clusterSetting')).toBe('');
+  it('shows validation messages for its fields', () => {
+    component.fieldErrors = { clusterId: 'Cluster ID contains invalid characters' };
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.validation-error')?.textContent)
+      .toContain('Cluster ID contains invalid characters');
   });
 });

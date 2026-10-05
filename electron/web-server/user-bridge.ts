@@ -1,28 +1,20 @@
 /**
  * The web server child's link to the user database, which lives in the main process.
  *
- * Only one process opens the SQLite file, so credential checks are a request/response over
- * the existing Node IPC channel rather than a second connection to the same database.
- * If the main process is unreachable (tests, or the server run standalone) every check
- * resolves to null, and login falls back to the legacy single account.
+ * Only one process opens the SQLite file, so credential checks are a request/response over the
+ * existing Node IPC channel rather than a second connection to the same database. When main is
+ * unreachable (tests, or the server run standalone) every check resolves to null and login falls
+ * back to the legacy single account.
  */
+import type { AuthenticatedUser } from '../types/auth.types';
+import type { ChildToMainMessage } from '../types/messaging.types';
 
-export interface VerifiedAccount {
-  id: string;
-  username: string;
-  displayName: string;
-  roleId: string;
-  roleName: string;
-  permissions: string[];
-  active: boolean;
-}
+export type VerifiedAccount = AuthenticatedUser;
 
 const VERIFY_TIMEOUT_MS = 5000;
 
-/**
- * Set by web-server.service when it forks this process. Without it there is no main process
- * listening for auth-verify, so asking would only stall the login.
- */
+// Set by web-server.service when it forks this process. Without it nothing in main answers
+// auth-verify, so asking would only stall the login.
 function mainProcessAvailable(): boolean {
   return process.env.AASM_USER_DB === '1' && typeof process.send === 'function';
 }
@@ -30,9 +22,9 @@ function mainProcessAvailable(): boolean {
 let nextRequestId = 1;
 const pending = new Map<string, { resolve: (account: VerifiedAccount | null) => void; timer: NodeJS.Timeout }>();
 
-/** Ask the main process to check a username and password. */
+/** Ask the main process to check a username and password. Resolves null on a mismatch or timeout. */
 export function verifyWithUserDatabase(username: string, password: string): Promise<VerifiedAccount | null> {
-  if (typeof process === 'undefined' || !mainProcessAvailable()) {
+  if (!mainProcessAvailable()) {
     return Promise.resolve(null);
   }
 
@@ -46,7 +38,8 @@ export function verifyWithUserDatabase(username: string, password: string): Prom
 
     pending.set(requestId, { resolve, timer });
     try {
-      process.send!({ type: 'auth-verify', requestId, username, password });
+      const message: ChildToMainMessage = { type: 'auth-verify', requestId, username, password };
+      process.send!(message);
     } catch (error) {
       clearTimeout(timer);
       pending.delete(requestId);
@@ -56,20 +49,10 @@ export function verifyWithUserDatabase(username: string, password: string): Prom
   });
 }
 
-/** Called by the IPC handler when the main process answers. */
 export function resolveAuthVerify(requestId: string, account: VerifiedAccount | null): void {
   const entry = pending.get(requestId);
   if (!entry) return;
   clearTimeout(entry.timer);
   pending.delete(requestId);
   entry.resolve(account);
-}
-
-/** Test hook: drop any in-flight checks. */
-export function resetUserBridge(): void {
-  for (const entry of pending.values()) {
-    clearTimeout(entry.timer);
-    entry.resolve(null);
-  }
-  pending.clear();
 }

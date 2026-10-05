@@ -1,125 +1,209 @@
-/// <reference types="jest" />
 import * as fs from 'fs';
-import * as path from 'path';
-import { ArkPathUtils, ARK_APP_ID } from './ark-path.utils';
-import * as steamcmdUtils from '../steamcmd.utils';
-import * as installerUtils from '../installer.utils';
-import * as platformUtils from '../platform.utils';
-import {
-  getArkServerDir,
-  isArkServerInstalled,
-  getCurrentInstalledVersion,
-  installArkServer
-} from './ark-install.utils';
+import { InstallCancelledError, InstallerOptions, runInstaller } from '../installer.utils';
+import { getPlatform } from '../platform.utils';
+import { getCurrentInstalledVersion, installArkServer, isArkServerInstalled } from './ark-install.utils';
 
-jest.mock('node-pty', () => ({
-  spawn: jest.fn(),
+jest.mock('../installer.utils', () => ({
+  ...jest.requireActual('../installer.utils'),
+  runInstaller: jest.fn()
+}));
+jest.mock('../platform.utils', () => ({ getPlatform: jest.fn(() => 'windows') }));
+jest.mock('../steamcmd.utils', () => ({
+  getSteamCmdDir: jest.fn(() => '/steamcmd'),
+  getSteamCmdExecutable: jest.fn(() => '/steamcmd/steamcmd.exe')
+}));
+jest.mock('./ark-server/ark-server-paths.utils', () => ({
+  ARK_APP_ID: '2430930',
+  getArkServerDir: jest.fn(() => '/ark'),
+  getArkExecutablePath: jest.fn(() => '/ark/ShooterGame/Binaries/Win64/ArkAscendedServer.exe')
 }));
 
-jest.mock('../platform.utils', () => ({
-  ...jest.requireActual('../platform.utils'),
-  getPlatform: jest.fn(() => 'windows'),
-}));
+const mockFs = jest.mocked(fs);
+const mockRunInstaller = jest.mocked(runInstaller);
+const MANIFEST = '/ark/steamapps/appmanifest_2430930.acf';
 
-jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
-  existsSync: jest.fn(),
-  readFileSync: jest.fn(),
-  unlinkSync: jest.fn(),
-}));
-
-jest.mock('path', () => ({
-  ...jest.requireActual('path'),
-  join: jest.fn((...args: string[]) => args.join('/')),
-}));
-
-const steamcmdExe = process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh';
+function existing(...files: string[]): void {
+  mockFs.existsSync.mockImplementation(file => files.includes(String(file)));
+}
 
 describe('ark-install.utils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('getArkServerDir', () => {
-    it('should return server dir from ArkPathUtils', () => {
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      expect(getArkServerDir()).toBe('/ark/server');
-    });
+    mockFs.existsSync.mockReset();
+    mockFs.readFileSync.mockReset();
+    mockRunInstaller.mockReset();
+    jest.mocked(getPlatform).mockReturnValue('windows');
   });
 
   describe('isArkServerInstalled', () => {
-    it('should return true if executable exists', () => {
-      jest.spyOn(ArkPathUtils, 'getArkExecutablePath').mockReturnValue('/ark/server/ark.exe');
-      (fs.existsSync as jest.Mock).mockReturnValue(true);
-      expect(isArkServerInstalled()).toBe(true);
-    });
-    it('should return false if executable does not exist', () => {
-      jest.spyOn(ArkPathUtils, 'getArkExecutablePath').mockReturnValue('/ark/server/ark.exe');
-      (fs.existsSync as jest.Mock).mockReturnValue(false);
-      expect(isArkServerInstalled()).toBe(false);
+    it.each([true, false])('reports whether the server executable exists (%p)', exists => {
+      mockFs.existsSync.mockReturnValue(exists);
+
+      expect(isArkServerInstalled()).toBe(exists);
+      expect(mockFs.existsSync).toHaveBeenCalledWith('/ark/ShooterGame/Binaries/Win64/ArkAscendedServer.exe');
     });
   });
 
   describe('getCurrentInstalledVersion', () => {
-    it('should return version from version.txt', async () => {
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === '/ark/server/version.txt');
-      (fs.readFileSync as jest.Mock).mockReturnValue('1.2.3\n');
+    it('prefers the build id in the Steam manifest over version.txt', async () => {
+      existing('/ark/steamapps', MANIFEST, '/ark/version.txt');
+      mockFs.readFileSync.mockImplementation(file =>
+        file === MANIFEST ? '"AppState"\n{\n\t"buildid"\t\t"19934105"\n}' : '1.2.3\n'
+      );
+
+      await expect(getCurrentInstalledVersion()).resolves.toBe('19934105');
+    });
+
+    it('falls back to version.txt when there is no manifest', async () => {
+      existing('/ark/version.txt');
+      mockFs.readFileSync.mockReturnValue('1.2.3\n');
+
       await expect(getCurrentInstalledVersion()).resolves.toBe('1.2.3');
     });
-    
-    it('should return null if no version found', async () => {
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      (fs.existsSync as jest.Mock).mockReturnValue(false);
+
+    it('returns null when nothing is installed', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+
       await expect(getCurrentInstalledVersion()).resolves.toBeNull();
     });
-    it('should return null on error', async () => {
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockImplementation(() => { throw new Error('fail'); });
+
+    it('returns null when the files cannot be read', async () => {
+      existing('/ark/steamapps', MANIFEST);
+      mockFs.readFileSync.mockImplementation(() => { throw new Error('EACCES'); });
+
       await expect(getCurrentInstalledVersion()).resolves.toBeNull();
     });
   });
 
   describe('installArkServer', () => {
-    it('should callback error if steamcmd not found', () => {
-      jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      (fs.existsSync as jest.Mock).mockReturnValue(false);
-      const cb = jest.fn();
-      installArkServer(cb);
-      expect(cb).toHaveBeenCalledWith(expect.any(Error));
-    });
-    it('should call runInstaller with correct options if steamcmd exists', () => {
-      jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      (fs.existsSync as jest.Mock).mockImplementation((file: string) => file === `/steamcmd/${steamcmdExe}` || file === '/ark/server');
-      jest.spyOn(installerUtils, 'runInstaller').mockImplementation((opts, onProgress, onDone) => {
-        onProgress({ percent: 50, step: 'downloading', message: 'Mock progress' });
-        onDone(null, 'done');
-      });
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      const cb = jest.fn();
-      const onData = jest.fn();
-      installArkServer(cb, onData);
-      expect(installerUtils.runInstaller).toHaveBeenCalled();
-      expect(cb).toHaveBeenCalledWith(null, 'done');
-      expect(onData).toHaveBeenCalledWith({ percent: 50, step: 'downloading', message: 'Mock progress' });
+    function lastOptions(): InstallerOptions {
+      return mockRunInstaller.mock.calls[mockRunInstaller.mock.calls.length - 1][0];
+    }
+
+    it('fails without running anything when SteamCMD is missing', () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const done = jest.fn();
+
+      installArkServer(done);
+
+      expect(done).toHaveBeenCalledWith(new Error('SteamCMD not found. Please install SteamCMD first.'));
+      expect(mockRunInstaller).not.toHaveBeenCalled();
     });
 
-    it('should request the Windows depot on Linux and remove a stuck appmanifest', () => {
-      (platformUtils.getPlatform as jest.Mock).mockReturnValue('linux');
-      jest.spyOn(steamcmdUtils, 'getSteamCmdDir').mockReturnValue('/steamcmd');
-      jest.spyOn(ArkPathUtils, 'getArkServerDir').mockReturnValue('/ark/server');
-      (fs.existsSync as jest.Mock).mockImplementation((file: string) =>
-        String(file).endsWith(steamcmdExe) || String(file).endsWith(`appmanifest_${ARK_APP_ID}.acf`)
-      );
-      (fs.readFileSync as jest.Mock).mockReturnValue('"UpdateResult"\t\t"6"');
-      jest.spyOn(installerUtils, 'runInstaller').mockImplementation((_opts, _onProgress, onDone) => {
-        onDone(null, 'done');
-      });
+    it('runs SteamCMD against the shared install and reports its result', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(null));
+      const done = jest.fn();
+
+      installArkServer(done);
+
+      expect(lastOptions()).toEqual(expect.objectContaining({
+        command: '/steamcmd/steamcmd.exe',
+        args: ['+force_install_dir', '/ark', '+login', 'anonymous', '+app_update', '2430930', 'validate', '+quit'],
+        cwd: '/steamcmd',
+        stallTimeoutMs: 30 * 60 * 1000
+      }));
+      expect(done).toHaveBeenCalledWith(null);
+    });
+
+    it('requests the Windows depot on Linux and removes a stuck app manifest first', () => {
+      jest.mocked(getPlatform).mockReturnValue('linux');
+      mockFs.existsSync.mockImplementation(file => String(file).endsWith('steamcmd.exe') || file === MANIFEST);
+      mockFs.readFileSync.mockReturnValue('"UpdateResult"\t\t"6"');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(null));
 
       installArkServer(jest.fn());
 
-      expect(fs.unlinkSync).toHaveBeenCalledWith(`/ark/server/steamapps/appmanifest_${ARK_APP_ID}.acf`);
-      const opts = (installerUtils.runInstaller as jest.Mock).mock.calls[0][0];
-      expect(opts.args.slice(0, 2)).toEqual(['+@sSteamCmdForcePlatformType', 'windows']);
+      expect(mockFs.unlinkSync).toHaveBeenCalledWith(MANIFEST);
+      expect(lastOptions().args.slice(0, 2)).toEqual(['+@sSteamCmdForcePlatformType', 'windows']);
+    });
+
+    it('retries a failed SteamCMD run twice before giving up', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(new Error('Failed to download.')));
+      const done = jest.fn();
+
+      installArkServer(done);
+
+      expect(mockRunInstaller).toHaveBeenCalledTimes(3);
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(done).toHaveBeenCalledWith(new Error('Failed to download.'));
+    });
+
+    it('does not retry a cancelled install', () => {
+      existing('/steamcmd/steamcmd.exe');
+      const cancelled = new InstallCancelledError();
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(cancelled));
+      const done = jest.fn();
+
+      installArkServer(done);
+
+      expect(mockRunInstaller).toHaveBeenCalledTimes(1);
+      expect(done).toHaveBeenCalledWith(cancelled);
+    });
+
+    it('hands its signal to each run, and stops retrying once it has aborted', () => {
+      existing('/steamcmd/steamcmd.exe');
+      const controller = new AbortController();
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => {
+        controller.abort();
+        onDone(new InstallCancelledError());
+      });
+      const done = jest.fn();
+
+      installArkServer(done, undefined, controller.signal);
+
+      expect(lastOptions().signal).toBe(controller.signal);
+      expect(mockRunInstaller).toHaveBeenCalledTimes(1);
+      expect(done).toHaveBeenCalledWith(expect.any(InstallCancelledError));
+    });
+
+    it('still calls back when a progress report throws', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(null));
+      const done = jest.fn();
+
+      installArkServer(done, () => { throw new Error('socket closed'); });
+
+      expect(done).toHaveBeenCalledWith(null);
+    });
+
+    it('passes the installer progress on', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, onProgress, onDone) => {
+        onProgress({ percent: 100, step: 'complete', message: 'Download complete.' });
+        onDone(null);
+      });
+      const onProgress = jest.fn();
+
+      installArkServer(jest.fn(), onProgress);
+
+      expect(onProgress).toHaveBeenCalledWith({ percent: 0, step: 'download', message: 'Checking Ark Server...' });
+      expect(onProgress).toHaveBeenCalledWith({ percent: 100, step: 'complete', message: 'Download complete.' });
+    });
+
+    describe('reading SteamCMD progress', () => {
+      function parse(chunk: string) {
+        existing('/steamcmd/steamcmd.exe');
+        installArkServer(jest.fn());
+        return lastOptions().parseProgress!(chunk);
+      }
+
+      it('reads the download percentage', () => {
+        expect(parse(' Update state (0x61) downloading, progress: 42.57 (1234 / 5678)\r\n')).toEqual({
+          percent: 42, step: 'downloading', message: 'Downloading Ark Server (42.6%)'
+        });
+      });
+
+      it('treats verification as the end of the download', () => {
+        expect(parse(' Update state (0x81) verifying update, progress: 3.10 (1 / 2)\r\n')).toEqual({
+          percent: 100, step: 'downloading', message: 'Verifying Ark Server installation...'
+        });
+      });
+
+      it('ignores other output', () => {
+        expect(parse('Logging in user anonymous to Steam Public...OK\r\n')).toBeNull();
+        expect(parse('[ 45%] Downloading update (12,345 of 67,890 KB)...\r\n')).toBeNull();
+      });
     });
   });
 });

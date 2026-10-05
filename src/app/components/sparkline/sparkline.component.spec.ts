@@ -21,7 +21,6 @@ describe('SparklineComponent', () => {
 
   it('rebuilds paths when values change', () => {
     component.values = [0, 5, 2];
-    component.width = 100;
     component.height = 40;
     component.ngOnChanges();
     const first = component.line;

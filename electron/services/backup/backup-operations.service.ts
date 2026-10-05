@@ -1,433 +1,284 @@
-import * as path from 'path';
+import AdmZip from 'adm-zip';
 import * as fs from 'fs';
-import { promisify } from 'util';
-import { BackupSettings, BackupMetadata } from '../../types/backup.types';
+import * as path from 'path';
+import { BackupMetadata } from '../../types/backup.types';
 import { BackupFilenameUtils, BackupPathUtils } from '../../utils/backup.utils';
-import { BackupResult, BackupListResult, BackupRestoreResult } from '../../types/backup.types';
+import { copyDirectory, moveFile, removeDirectory } from '../../utils/fs.utils';
 
-// File system operations
-const mkdir = promisify(fs.mkdir);
-const stat = promisify(fs.stat);
-const readdir = promisify(fs.readdir);
-const unlink = promisify(fs.unlink);
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-
-// Note: Using require() due to lack of proper TypeScript definitions for adm-zip
-const AdmZip = require('adm-zip') as any;
+// Names the backup list never shows: an archive being written, and a restore's extraction.
+const ARCHIVE_TEMP_SUFFIX = '.zip.tmp';
+const RESTORE_TEMP_PREFIX = '.restore-';
 
 export class BackupOperationsService {
-  /**
-   * Create a backup (internal implementation)
-   */
   async createBackupInternal(
     instanceId: string,
     serverPath: string,
     type: 'manual' | 'scheduled',
     customName?: string
   ): Promise<BackupMetadata> {
-    try {
-      const instanceBackupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-      await mkdir(instanceBackupDir, { recursive: true });
+    const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+    await fs.promises.mkdir(backupDir, { recursive: true });
 
-      // Generate structured filename
-      const backupFileName = BackupFilenameUtils.generateFilename(type, customName);
-      const backupFilePath = path.join(instanceBackupDir, backupFileName);
-
-      // Create the zip archive
-      await this.createZipArchive(serverPath, backupFilePath, instanceId);
-
-      // Get file size and parse metadata from filename
-      const stats = await stat(backupFilePath);
-      const metadata = BackupFilenameUtils.parseFilename(backupFileName, backupFilePath, instanceId);
-
-      if (!metadata) {
-        throw new Error('Failed to parse backup filename');
-      }
-
-      // Update size from file stats
-      metadata.size = stats.size;
-
-      return metadata;
-    } catch (error) {
-      console.error('[backup-operations] Failed to create backup:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Create a zip archive excluding the backup folder
-   */
-  private async createZipArchive(sourcePath: string, outputPath: string, instanceId: string): Promise<void> {
+    const fileName = this.unusedFileName(backupDir, BackupFilenameUtils.generateFilename(type, customName));
+    const filePath = path.join(backupDir, fileName);
+    // Written under a name the list ignores, then moved into place: a half-written zip must never
+    // be listed, restored or counted by retention.
+    const tempPath = `${filePath}.tmp`;
     try {
       const zip = new AdmZip();
-
-      // Add all files and directories except backup folders
-      await this.addToZip(zip, sourcePath, '', instanceId);
-
-      // Write the zip file
-      zip.writeZip(outputPath);
+      await this.addToZip(zip, serverPath, '');
+      zip.writeZip(tempPath);
+      moveFile(tempPath, filePath);
     } catch (error) {
-      console.error('[backup-operations] Failed to create zip archive:', error);
+      // The move falls back to copying, which can fail with part of the archive under the final
+      // name; that name was unused, so nothing else is lost.
+      await Promise.allSettled([fs.promises.rm(tempPath, { force: true }), fs.promises.rm(filePath, { force: true })]);
       throw error;
     }
+
+    const stats = await fs.promises.stat(filePath);
+    const metadata = BackupFilenameUtils.parseFilename(fileName, filePath, instanceId, stats.mtime);
+    if (!metadata) {
+      throw new Error('Failed to parse backup filename');
+    }
+    metadata.size = stats.size;
+    return metadata;
   }
 
-  /**
-   * True for an instance's ARK log directory (<instance>/ShooterGame/Saved/Logs).
-   * Matched on the path tail so it only ever excludes ARK's own log folder, not a
-   * user folder that happens to be called "Logs".
-   */
+  /** `name.zip`, or `name (2).zip` and so on when that is taken: a backup never replaces another. */
+  private unusedFileName(backupDir: string, fileName: string): string {
+    const stem = BackupFilenameUtils.getBackupId(fileName);
+    let candidate = fileName;
+    for (let copy = 2; fs.existsSync(path.join(backupDir, candidate)); copy++) {
+      candidate = `${stem} (${copy}).zip`;
+    }
+    return candidate;
+  }
+
+  // Matched on the path tail so that only ARK's own log folder is skipped, never a user folder that
+  // happens to be called "Logs".
   private isInstanceLogsDir(dirPath: string): boolean {
     return /[/\\]ShooterGame[/\\]Saved[/\\]Logs$/i.test(dirPath);
   }
 
   /**
-   * Recursively add files to zip, excluding backup directories and junctions/symlinks.
-   * Uses lstat() (not stat()) so junction points to the shared Content (~70 GB) and
-   * Engine (~3 GB) directories are detected as symlinks and skipped rather than
-   * traversed, which would otherwise read the entire game installation into memory.
+   * Adds a directory's contents, skipping backup folders and links. lstat, not stat: the junctions
+   * into the shared install (Content ~70 GB, Engine ~3 GB) must be skipped, not read into memory.
    */
-  private async addToZip(zip: any, sourcePath: string, relativePath: string, instanceId: string): Promise<void> {
-    try {
-      const items = await readdir(sourcePath);
+  private async addToZip(zip: AdmZip, sourcePath: string, relativePath: string): Promise<void> {
+    const items = await fs.promises.readdir(sourcePath);
 
-      // Files directly inside Binaries/Win64 are exe/dlls that are always re-copied
-      // from the shared install on server start — skip them to avoid bloating the backup
-      // with ~200 MB of deterministic binaries. Subdirectories (e.g. ArkApi/) are still
-      // recursed so user-installed plugins are preserved.
-      const isWin64Dir = /[/\\]ShooterGame[/\\]Binaries[/\\]Win64$/i.test(sourcePath);
+    // The exe and DLLs directly in Win64 (~200 MB) are copied from the shared install on every
+    // start. Its subfolders, ArkApi with the user's plugins among them, are kept.
+    const isWin64Dir = /[/\\]ShooterGame[/\\]Binaries[/\\]Win64$/i.test(sourcePath);
 
-      for (const item of items) {
-        const itemPath = path.join(sourcePath, item);
-        const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
+    for (const item of items) {
+      const itemPath = path.join(sourcePath, item);
+      const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
+      const stats = await fs.promises.lstat(itemPath);
 
-        // Use lstat so junction/symlink entries are not followed
-        const lstats = await fs.promises.lstat(itemPath);
-
-        // Skip backup directories
-        if (item.toLowerCase().includes('backup')) {
-          continue;
-        }
-
-        // Skip symlinks and junctions — these point to the shared game installation
-        // (Content ~70 GB, Engine ~3 GB) and must never be archived
-        if (lstats.isSymbolicLink()) {
-          continue;
-        }
-
-        if (lstats.isDirectory()) {
-          // Never archive the instance's ARK log directory. Since binaries were isolated
-          // per instance, ShooterGame/Saved/Logs lives inside the instance folder rather
-          // than the shared install, so the backup walk reaches it. ARK log files grow to
-          // several GB and every file here is read fully into memory by AdmZip, which
-          // bloats the archive and can fail the whole backup. Logs are disposable runtime
-          // output — a restore has no use for them.
-          if (this.isInstanceLogsDir(itemPath)) {
-            continue;
-          }
-          // Recursively add real directory contents
-          await this.addToZip(zip, itemPath, itemRelativePath, instanceId);
-        } else if (lstats.isFile()) {
-          // Skip raw exe/dll files in Win64 root — they are recoverable from the shared install
-          if (isWin64Dir) continue;
-          const fileBuffer = await fs.promises.readFile(itemPath);
-          zip.addFile(itemRelativePath, fileBuffer);
-        }
+      if (item.toLowerCase().includes('backup') || stats.isSymbolicLink()) {
+        continue;
       }
-    } catch (error) {
-      console.error('[backup-operations] Failed to add items to zip:', error);
-      throw error;
+
+      if (stats.isDirectory()) {
+        // ARK logs grow to several GB and AdmZip reads every file fully into memory, which can fail
+        // the whole backup. A restore has no use for them.
+        if (this.isInstanceLogsDir(itemPath)) {
+          continue;
+        }
+        await this.addToZip(zip, itemPath, itemRelativePath);
+      } else if (stats.isFile() && !isWin64Dir) {
+        zip.addFile(itemRelativePath, await fs.promises.readFile(itemPath));
+      }
     }
   }
 
-  /**
-   * Get instance backups (internal implementation)
-   */
-  async getInstanceBackupsInternal(serverPath: string): Promise<BackupMetadata[]> {
+  /** Removes what a backup or restore interrupted by an exit left in the instance's backup folder. */
+  async removeStaleTempFiles(serverPath: string): Promise<void> {
+    const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+    let entries: string[];
     try {
-      const instanceBackupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-
-      if (!fs.existsSync(instanceBackupDir)) {
-        return [];
-      }
-
-      const files = await readdir(instanceBackupDir);
-      // Filter for backup ZIP files only
-      const backupFiles = files.filter(f => BackupFilenameUtils.isBackupFile(f));
-
-      const backups: BackupMetadata[] = [];
-
-      for (const backupFile of backupFiles) {
-        try {
-          const backupFilePath = path.join(instanceBackupDir, backupFile);
-
-          // Check if file exists and get stats
-          if (!fs.existsSync(backupFilePath)) {
-            continue;
-          }
-
-          const stats = await stat(backupFilePath);
-
-          // Parse metadata from filename. The backup dir is now
-          // `<installDir>/backups/<instanceId>`, so the instance ID is its basename.
-          const instanceId = path.basename(instanceBackupDir);
-          const metadata = BackupFilenameUtils.parseFilename(backupFile, backupFilePath, instanceId);
-
-          if (metadata) {
-            metadata.size = stats.size;
-            backups.push(metadata);
-          }
-        } catch (error) {
-          console.error(`[backup-operations] Failed to process backup file ${backupFile}:`, error);
-        }
-      }
-
-      // Sort by creation date (newest first)
-      backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      return backups;
+      entries = await fs.promises.readdir(backupDir);
     } catch (error) {
-      console.error('[backup-operations] Failed to get instance backups:', error);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[backup-operations] Failed to look for leftover temporary files:', error);
+      }
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.endsWith(ARCHIVE_TEMP_SUFFIX) && !entry.startsWith(RESTORE_TEMP_PREFIX)) continue;
+      try {
+        await fs.promises.rm(path.join(backupDir, entry), { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`[backup-operations] Failed to remove the leftover ${entry}:`, error);
+      }
+    }
+  }
+
+  /** The instance's backups, newest first. */
+  async getInstanceBackupsInternal(serverPath: string): Promise<BackupMetadata[]> {
+    const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+    const instanceId = path.basename(backupDir);
+
+    let files: string[];
+    try {
+      files = await fs.promises.readdir(backupDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('[backup-operations] Failed to list backups:', error);
+      }
       return [];
     }
-  }
 
-  /**
-   * Restore backup (internal implementation)
-   */
-  async restoreBackupInternal(backupId: string, serverPath: string): Promise<void> {
-    try {
-      // Safety guard: never operate on an empty path or the instances root. A bad
-      // serverPath here would let clearServerDirectory() wipe every server on disk.
-      if (!serverPath || typeof serverPath !== 'string' || !path.isAbsolute(serverPath)) {
-        throw new Error(`Refusing to restore backup: invalid server path "${serverPath}"`);
-      }
-
-      // Find the backup file by searching for files with matching ID
-      const instanceBackupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-
-      if (!fs.existsSync(instanceBackupDir)) {
-        throw new Error(`Backup directory not found: ${instanceBackupDir}`);
-      }
-
-      const files = await readdir(instanceBackupDir);
-      const backupFile = files.find(f => f.startsWith(backupId) && f.endsWith('.zip'));
-
-      if (!backupFile) {
-        throw new Error(`Backup with ID ${backupId} not found`);
-      }
-
-      const backupFilePath = path.join(instanceBackupDir, backupFile);
-
-      // Check if backup file exists
-      if (!fs.existsSync(backupFilePath)) {
-        throw new Error(`Backup file not found: ${backupFilePath}`);
-      }
-
-      // Preserve the instance's config.json. It is what makes the server appear in
-      // the server list; if the restore fails partway (e.g. a file locked by a
-      // running server on Windows) or the backup happens not to contain a config,
-      // we must not leave the instance without one — otherwise the whole server
-      // silently vanishes from the list.
-      const configPath = path.join(serverPath, 'config.json');
-      let preservedConfig: Buffer | null = null;
-      if (fs.existsSync(configPath)) {
-        try {
-          preservedConfig = await readFile(configPath);
-        } catch (error) {
-          console.warn('[backup-operations] Failed to read existing config.json before restore:', error);
-        }
-      }
-
-      // Create temporary directory for extraction
-      const tempDir = path.join(path.dirname(backupFilePath), `temp_${backupId}`);
-      await mkdir(tempDir, { recursive: true });
-
+    const backups: BackupMetadata[] = [];
+    for (const file of files.filter(name => BackupFilenameUtils.isBackupFile(name))) {
       try {
-        // Extract backup fully BEFORE clearing anything, so a bad archive can't
-        // leave the server directory emptied.
-        const zip = new AdmZip(backupFilePath);
-        zip.extractAllTo(tempDir, true);
-
-        // Remove existing server files (except backup folder)
-        await this.clearServerDirectory(serverPath);
-
-        // Copy extracted files to server directory
-        await this.copyDirectory(tempDir, serverPath);
-      } finally {
-        // Guarantee the instance still has a config.json so it never drops out of
-        // the server list, even if the restore threw partway through. Do this
-        // first, before temp cleanup, so a cleanup failure can't skip it.
-        try {
-          if (preservedConfig && !fs.existsSync(configPath)) {
-            await writeFile(configPath, preservedConfig);
-          }
-        } catch (error) {
-          console.error('[backup-operations] Failed to restore preserved config.json:', error);
+        const filePath = path.join(backupDir, file);
+        const stats = await fs.promises.stat(filePath);
+        const metadata = BackupFilenameUtils.parseFilename(file, filePath, instanceId, stats.mtime);
+        if (metadata) {
+          metadata.size = stats.size;
+          backups.push(metadata);
         }
-
-        // Clean up temporary directory
-        try {
-          await this.removeDirectory(tempDir);
-        } catch (error) {
-          console.error('[backup-operations] Failed to clean up temp restore directory:', error);
-        }
+      } catch (error) {
+        console.error(`[backup-operations] Failed to read backup ${file}:`, error);
       }
-    } catch (error) {
-      console.error('[backup-operations] Failed to restore backup:', error);
-      throw error;
     }
+
+    return backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  /**
-   * Delete backup (internal implementation)
-   */
-  async deleteBackupInternal(backupId: string, serverPath: string): Promise<void> {
+  async restoreBackupInternal(backupId: string, serverPath: string): Promise<void> {
+    // Never operate on an empty path or the instances root: clearServerDirectory() would wipe every
+    // server on disk.
+    if (!serverPath || typeof serverPath !== 'string' || !path.isAbsolute(serverPath)) {
+      throw new Error(`Refusing to restore backup: invalid server path "${serverPath}"`);
+    }
+
+    const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+    const backupFilePath = await this.findBackupFile(backupDir, backupId);
+
+    // config.json is what puts the server in the list. A restore that fails partway (a file locked
+    // by a running server on Windows) or a backup without one must not make the server vanish.
+    const configPath = path.join(serverPath, 'config.json');
+    let preservedConfig: Buffer | null = null;
     try {
-      const instanceBackupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-
-      if (!fs.existsSync(instanceBackupDir)) {
-        throw new Error(`Backup directory not found: ${instanceBackupDir}`);
-      }
-
-      const files = await readdir(instanceBackupDir);
-
-      // First try: exact filename match (new format)
-      let backupFile = files.find(f => f === `${backupId}.zip`);
-
-      // Second try: startsWith match (handles legacy or partial matches)
-      if (!backupFile) {
-        backupFile = files.find(f => f.startsWith(backupId) && f.endsWith('.zip'));
-      }
-
-      // Third try: search by parsing all backup files and matching ID (most robust)
-      if (!backupFile) {
-        const instanceId = path.basename(instanceBackupDir);
-        for (const file of files) {
-          if (BackupFilenameUtils.isBackupFile(file)) {
-            const filePath = path.join(instanceBackupDir, file);
-            const metadata = BackupFilenameUtils.parseFilename(file, filePath, instanceId);
-            if (metadata && metadata.id === backupId) {
-              backupFile = file;
-              break;
-            }
-          }
-        }
-      }
-
-      if (!backupFile) {
-        throw new Error(`Backup with ID ${backupId} not found`);
-      }
-
-      const backupFilePath = path.join(instanceBackupDir, backupFile);
-      await unlink(backupFilePath);
+      preservedConfig = await fs.promises.readFile(configPath);
     } catch (error) {
-      console.error('[backup-operations] Failed to delete backup:', error);
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[backup-operations] Failed to read config.json before the restore:', error);
+      }
+    }
+
+    const tempDir = await fs.promises.mkdtemp(path.join(backupDir, RESTORE_TEMP_PREFIX));
+    try {
+      // Extracted in full before anything is cleared, so a bad archive cannot leave the server
+      // directory empty.
+      new AdmZip(backupFilePath).extractAllTo(tempDir, true);
+      await this.clearServerDirectory(serverPath);
+      await copyDirectory(tempDir, serverPath);
+    } finally {
+      // Before the temp cleanup, so a cleanup failure cannot skip it.
+      try {
+        if (preservedConfig && !fs.existsSync(configPath)) {
+          await fs.promises.writeFile(configPath, preservedConfig);
+        }
+      } catch (error) {
+        console.error('[backup-operations] Failed to put config.json back:', error);
+      }
+      try {
+        await removeDirectory(tempDir);
+      } catch (error) {
+        console.error('[backup-operations] Failed to remove the restore temp directory:', error);
+      }
     }
   }
 
-  /**
-   * Migrate backups from the legacy location (inside the server instance folder)
-   * to the new app-data location. Best-effort and idempotent — safe to run on
-   * every startup.
-   */
+  async deleteBackupInternal(backupId: string, serverPath: string): Promise<void> {
+    const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
+    await fs.promises.unlink(await this.findBackupFile(backupDir, backupId));
+  }
+
+  /** The archive whose id is exactly `backupId`: `My` must never match `My (old).zip`. */
+  private async findBackupFile(backupDir: string, backupId: string): Promise<string> {
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(backupDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const match = files.find(file => BackupFilenameUtils.isBackupFile(file) && BackupFilenameUtils.getBackupId(file) === backupId);
+    if (!match) {
+      throw new Error(`Backup with ID ${backupId} not found`);
+    }
+    return path.join(backupDir, match);
+  }
+
+  /** Moves backups from inside the instance directory, where older versions kept them. Idempotent. */
   async migrateLegacyBackups(serverPath: string): Promise<void> {
     try {
       const legacyDir = BackupPathUtils.getLegacyInstanceBackupDir(serverPath);
       const newDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-
-      // Nothing to migrate, or the two resolve to the same place.
-      if (!fs.existsSync(legacyDir)) {
-        return;
-      }
-      if (path.resolve(legacyDir) === path.resolve(newDir)) {
+      if (!fs.existsSync(legacyDir) || path.resolve(legacyDir) === path.resolve(newDir)) {
         return;
       }
 
-      await mkdir(newDir, { recursive: true });
-
-      const entries = await readdir(legacyDir);
-      for (const entry of entries) {
-        const src = path.join(legacyDir, entry);
-        const dest = path.join(newDir, entry);
+      await fs.promises.mkdir(newDir, { recursive: true });
+      for (const entry of await fs.promises.readdir(legacyDir)) {
+        const source = path.join(legacyDir, entry);
+        const destination = path.join(newDir, entry);
         try {
-          const st = await stat(src);
-          // Only migrate backup files; leave anything else in place.
-          if (!st.isFile() || !BackupFilenameUtils.isBackupFile(entry)) {
-            continue;
-          }
-          if (fs.existsSync(dest)) {
+          const stats = await fs.promises.stat(source);
+          if (!stats.isFile() || !BackupFilenameUtils.isBackupFile(entry) || fs.existsSync(destination)) {
             continue;
           }
           try {
-            await fs.promises.rename(src, dest);
+            await fs.promises.rename(source, destination);
           } catch {
-            // rename fails across volumes — fall back to copy + delete.
-            await fs.promises.copyFile(src, dest);
-            await unlink(src);
+            // A rename cannot cross volumes. The copy keeps the file time, which dates a manual
+            // backup: without it the copy would count as the newest backup.
+            await fs.promises.copyFile(source, destination);
+            await fs.promises.utimes(destination, stats.atime, stats.mtime);
+            await fs.promises.unlink(source);
           }
         } catch (error) {
           console.error(`[backup-operations] Failed to migrate backup ${entry}:`, error);
         }
       }
 
-      // Remove the legacy directory if it is now empty.
-      try {
-        const remaining = await readdir(legacyDir);
-        if (remaining.length === 0) {
-          fs.rmdirSync(legacyDir);
-        }
-      } catch {
-        // ignore — non-empty or already gone
+      if ((await fs.promises.readdir(legacyDir)).length === 0) {
+        await fs.promises.rmdir(legacyDir);
       }
     } catch (error) {
       console.error('[backup-operations] Failed to migrate legacy backups:', error);
     }
   }
 
-  /**
-   * Clear server directory (except backup folders)
-   */
   private async clearServerDirectory(serverPath: string): Promise<void> {
-    try {
-      const items = await readdir(serverPath);
-
-      for (const item of items) {
-        // Skip backup-related directories
-        if (item.toLowerCase().includes('backup')) {
-          continue;
-        }
-
-        const itemPath = path.join(serverPath, item);
-        // lstat, never stat: an instance directory is mostly junctions into the shared
-        // install (ShooterGame/Content, Engine, Win64/RedpointEOS, ShooterGame/Plugins).
-        // stat() follows a junction and reports a directory, which would send the removal
-        // walking into the shared game files and deleting them for every instance on the
-        // machine. lstat describes the link itself so it is unlinked, not traversed.
-        const stats = await fs.promises.lstat(itemPath);
-
-        if (stats.isSymbolicLink()) {
-          await this.removeLink(itemPath);
-        } else if (stats.isDirectory()) {
-          await this.removeDirectory(itemPath);
-        } else {
-          await unlink(itemPath);
-        }
+    for (const item of await fs.promises.readdir(serverPath)) {
+      if (item.toLowerCase().includes('backup')) {
+        continue;
       }
-    } catch (error) {
-      console.error('[backup-operations] Failed to clear server directory:', error);
-      throw error;
+
+      const itemPath = path.join(serverPath, item);
+      // lstat, never stat: an instance directory is mostly junctions into the shared install
+      // (ShooterGame/Content, Engine, Win64/RedpointEOS, ShooterGame/Plugins). stat() follows a
+      // junction and reports a directory, which would send the removal into the shared game files
+      // of every instance on the machine.
+      const stats = await fs.promises.lstat(itemPath);
+      if (stats.isSymbolicLink()) {
+        await this.removeLink(itemPath);
+      } else if (stats.isDirectory()) {
+        await removeDirectory(itemPath);
+      } else {
+        await fs.promises.unlink(itemPath);
+      }
     }
   }
 
-  /**
-   * Remove a symlink/junction without touching whatever it points at.
-   *
-   * Windows represents a directory junction as a reparse point that unlink() refuses;
-   * rmdir() removes the link itself and leaves the target intact.
-   */
+  // Windows refuses unlink() on a directory junction; rmdir() removes the link and not its target.
   private async removeLink(linkPath: string): Promise<void> {
     try {
       await fs.promises.unlink(linkPath);
@@ -435,51 +286,4 @@ export class BackupOperationsService {
       await fs.promises.rmdir(linkPath);
     }
   }
-
-  /**
-   * Copy directory recursively
-   */
-  private async copyDirectory(source: string, destination: string): Promise<void> {
-    try {
-      await mkdir(destination, { recursive: true });
-      const items = await readdir(source);
-
-      for (const item of items) {
-        const sourcePath = path.join(source, item);
-        const destPath = path.join(destination, item);
-        const stats = await stat(sourcePath);
-
-        if (stats.isDirectory()) {
-          await this.copyDirectory(sourcePath, destPath);
-        } else {
-          const fileBuffer = await readFile(sourcePath);
-          await writeFile(destPath, fileBuffer);
-        }
-      }
-    } catch (error) {
-      console.error('[backup-operations] Failed to copy directory:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Remove directory recursively
-   */
-  private async removeDirectory(dirPath: string): Promise<void> {
-    try {
-      if (!fs.existsSync(dirPath)) {
-        return;
-      }
-
-      // fs.rm unlinks symlinks/junctions instead of recursing through them, so a
-      // junction into the shared install (Content, Engine, RedpointEOS, Plugins) is
-      // removed without deleting the game files it points at.
-      await fs.promises.rm(dirPath, { recursive: true, force: true });
-    } catch (error) {
-      console.error('[backup-operations] Failed to remove directory:', error);
-      throw error;
-    }
-  }
 }
-
-export const backupOperationsService = new BackupOperationsService();

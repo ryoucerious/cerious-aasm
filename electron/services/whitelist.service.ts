@@ -1,7 +1,7 @@
-// Whitelist Service - Manages ARK server exclusive join/whitelist functionality
 import * as fs from 'fs';
 import * as path from 'path';
-import { ArkPathUtils } from '../utils/ark/ark-path.utils';
+import { getArkServerDir, getInstanceWhitelistPath } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { getInstanceDir } from '../utils/ark/instance.utils';
 
 export interface WhitelistResult {
   success: boolean;
@@ -10,284 +10,135 @@ export interface WhitelistResult {
   error?: string;
 }
 
+/** The panel's copy, in the instance folder. */
+const LIST_FILE = 'PlayersExclusiveJoinList.txt';
+/** The file the dedicated server reads, next to the executable; see getInstanceWhitelistPath. */
+const RUNTIME_LIST_FILE = 'PlayersJoinNoCheckList.txt';
+const HEADER_LINES = [
+  '# ARK: Survival Ascended Exclusive Join List',
+  '# One EOS/Player ID per line',
+  '# Lines starting with # are comments and will be ignored',
+  '# This file is managed by Cerious AASM',
+];
+
+function renderList(playerIds: string[]): string {
+  return [...HEADER_LINES, '', ...playerIds].join('\n');
+}
+
+/** One EOS id per line and nothing else: ARK takes every line, a '#' comment included, as an id. */
+function renderRuntimeList(playerIds: string[]): string {
+  return playerIds.map(id => `${id}\n`).join('');
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
- * Service for managing ARK server whitelist (exclusive join) functionality
- * Integrates with the config file system to copy whitelist files during server startup
+ * The exclusive-join list. The instance folder holds the panel's copy, PlayersExclusiveJoinList.txt
+ * with a comment header. The server reads a different file, PlayersJoinNoCheckList.txt next to the
+ * executable it runs, as bare ids and only at startup, so that one is rewritten on every save and
+ * before every start.
  */
 export class WhitelistService {
-
-  /**
-   * Get the path to the PlayersExclusiveJoinList.txt file in an instance directory
-   */
-  private getInstanceWhitelistPath(instanceDir: string): string {
-    return path.join(instanceDir, 'PlayersExclusiveJoinList.txt');
+  private getListPath(instanceId: string): string {
+    return path.join(getInstanceDir(instanceId), LIST_FILE);
   }
 
   /**
-   * Get the path to the PlayersExclusiveJoinList.txt file the running server actually reads.
-   *
-   * ARK looks for the exclusive-join list next to the executable it launched, so an instance
-   * with isolated binaries reads its own Win64 folder rather than the shared install's.
-   * Falls back to the shared install when the instance can't be resolved.
+   * An instance with isolated binaries reads the list from its own Win64 folder, not the shared
+   * install's. Falls back to the shared install when the instance cannot be resolved.
    */
-  private getMainWhitelistPath(instanceDir?: string): string {
-    if (instanceDir) {
-      try {
-        const { getInstanceWhitelistPath } = require('../utils/ark/ark-server/ark-server-paths.utils');
-        return getInstanceWhitelistPath(path.basename(instanceDir));
-      } catch (e) {
-        console.warn('[whitelist-service] Could not resolve instance whitelist path, using shared:', e);
-      }
-    }
-    const arkServerDir = ArkPathUtils.getArkServerDir();
-    return path.join(arkServerDir, 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
-  }
-
-  /**
-   * Write whitelist file to instance directory and copy to main ARK directory
-   * This follows the same pattern as the config files
-   */
-  writeWhitelistFile(instanceDir: string, playerIds: string[]): WhitelistResult {
+  private getRuntimeListPath(instanceId: string): string {
     try {
-      // Ensure instance directory exists
-      if (!fs.existsSync(instanceDir)) {
-        fs.mkdirSync(instanceDir, { recursive: true });
-      }
-
-      // Create content with header comment
-      const content = [
-        '# ARK: Survival Ascended Exclusive Join List',
-        '# One EOS/Player ID per line',
-        '# Lines starting with # are comments and will be ignored',
-        '# This file is managed by Cerious AASM',
-        '',
-        ...playerIds.filter(id => id && id.trim().length > 0)
-      ].join('\n');
-
-      // Write to instance directory
-      const instanceWhitelistPath = this.getInstanceWhitelistPath(instanceDir);
-      fs.writeFileSync(instanceWhitelistPath, content, 'utf8');
-
-      // Copy to main ARK directory (like config files do)
-      const mainWhitelistPath = this.getMainWhitelistPath(instanceDir);
-      const mainDir = path.dirname(mainWhitelistPath);
-      if (!fs.existsSync(mainDir)) {
-        fs.mkdirSync(mainDir, { recursive: true });
-      }
-      fs.copyFileSync(instanceWhitelistPath, mainWhitelistPath);
-
-      return {
-        success: true,
-        playerIds,
-        message: `Saved ${playerIds.length} whitelisted players`
-      };
+      return getInstanceWhitelistPath(instanceId);
     } catch (error) {
-      return {
-        success: false,
-        error: `Failed to write whitelist file: ${error instanceof Error ? error.message : String(error)}`
-      };
+      console.warn(`[whitelist] Could not resolve the whitelist path ARK reads for ${instanceId}; using the shared one:`, error);
+      return path.join(getArkServerDir(), 'ShooterGame', 'Binaries', 'Win64', RUNTIME_LIST_FILE);
     }
   }
 
-  /**
-   * Load whitelist from instance directory
-   */
-  loadWhitelistFromInstance(instanceDir: string): WhitelistResult {
+  private writeRuntimeList(instanceId: string, playerIds: string[]): void {
+    const runtimePath = this.getRuntimeListPath(instanceId);
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+    fs.writeFileSync(runtimePath, renderRuntimeList(playerIds), 'utf8');
+  }
+
+  /** Replaces the list. Fails, creating nothing, when the instance folder does not exist. */
+  writeWhitelistFile(instanceId: string, playerIds: string[]): WhitelistResult {
     try {
-      const whitelistPath = this.getInstanceWhitelistPath(instanceDir);
-      
-      if (!fs.existsSync(whitelistPath)) {
-        return {
-          success: true,
-          playerIds: [],
-          message: 'No whitelist file found (empty whitelist)'
-        };
+      const listPath = this.getListPath(instanceId);
+      const ids = playerIds.filter(id => id && id.trim().length > 0);
+      fs.writeFileSync(listPath, renderList(ids), 'utf8');
+      this.writeRuntimeList(instanceId, ids);
+      return { success: true, playerIds, message: `Saved ${playerIds.length} whitelisted players` };
+    } catch (error) {
+      return { success: false, error: `Failed to write whitelist file: ${describeError(error)}` };
+    }
+  }
+
+  loadWhitelistFromInstance(instanceId: string): WhitelistResult {
+    try {
+      const listPath = this.getListPath(instanceId);
+      if (!fs.existsSync(listPath)) {
+        return { success: true, playerIds: [], message: 'No whitelist file found (empty whitelist)' };
       }
 
-      const content = fs.readFileSync(whitelistPath, 'utf8');
-      const playerIds = content
+      const playerIds = fs.readFileSync(listPath, 'utf8')
         .split('\n')
         .map(line => line.trim())
-        .filter(line => line.length > 0 && !line.startsWith('#')); // Filter out empty lines and comments
-
-      return {
-        success: true,
-        playerIds,
-        message: `Loaded ${playerIds.length} whitelisted players`
-      };
+        .filter(line => line.length > 0 && !line.startsWith('#'));
+      return { success: true, playerIds, message: `Loaded ${playerIds.length} whitelisted players` };
     } catch (error) {
-      return {
-        success: false,
-        error: `Failed to load whitelist: ${error instanceof Error ? error.message : String(error)}`
-      };
+      return { success: false, error: `Failed to load whitelist: ${describeError(error)}` };
     }
   }
 
-  /**
-   * Add a player ID to the whitelist for a specific instance
-   */
-  addToInstanceWhitelist(instanceDir: string, playerId: string): WhitelistResult {
-    try {
-      const loadResult = this.loadWhitelistFromInstance(instanceDir);
-      if (!loadResult.success) {
-        return loadResult;
-      }
+  addToInstanceWhitelist(instanceId: string, playerId: string): WhitelistResult {
+    const loaded = this.loadWhitelistFromInstance(instanceId);
+    if (!loaded.success) return loaded;
 
-      const playerIds = loadResult.playerIds || [];
-      
-      // Check if player is already whitelisted
-      if (playerIds.includes(playerId)) {
-        return {
-          success: true,
-          playerIds,
-          message: `Player ${playerId} is already whitelisted`
-        };
-      }
-
-      // Add the player
-      playerIds.push(playerId);
-      return this.writeWhitelistFile(instanceDir, playerIds);
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to add player to whitelist: ${error instanceof Error ? error.message : String(error)}`
-      };
+    const playerIds = loaded.playerIds || [];
+    if (playerIds.includes(playerId)) {
+      return { success: true, playerIds, message: `Player ${playerId} is already whitelisted` };
     }
+    return this.writeWhitelistFile(instanceId, [...playerIds, playerId]);
   }
 
-  /**
-   * Remove a player ID from the whitelist for a specific instance
-   */
-  removeFromInstanceWhitelist(instanceDir: string, playerId: string): WhitelistResult {
-    try {
-      const loadResult = this.loadWhitelistFromInstance(instanceDir);
-      if (!loadResult.success) {
-        return loadResult;
-      }
+  removeFromInstanceWhitelist(instanceId: string, playerId: string): WhitelistResult {
+    const loaded = this.loadWhitelistFromInstance(instanceId);
+    if (!loaded.success) return loaded;
 
-      const playerIds = loadResult.playerIds || [];
-      const index = playerIds.indexOf(playerId);
-      
-      if (index === -1) {
-        return {
-          success: true,
-          playerIds,
-          message: `Player ${playerId} was not in the whitelist`
-        };
-      }
-
-      // Remove the player
-      playerIds.splice(index, 1);
-      return this.writeWhitelistFile(instanceDir, playerIds);
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to remove player from whitelist: ${error instanceof Error ? error.message : String(error)}`
-      };
+    const playerIds = loaded.playerIds || [];
+    if (!playerIds.includes(playerId)) {
+      return { success: true, playerIds, message: `Player ${playerId} was not in the whitelist` };
     }
+    return this.writeWhitelistFile(instanceId, playerIds.filter(id => id !== playerId));
+  }
+
+  clearInstanceWhitelist(instanceId: string): WhitelistResult {
+    return this.writeWhitelistFile(instanceId, []);
   }
 
   /**
-   * Check if a player ID is whitelisted for a specific instance
+   * Writes the instance's list where ARK reads it before a start, as bare ids: an empty file when
+   * the instance has none. ARK reads the file only at startup.
    */
-  isPlayerWhitelistedInInstance(instanceDir: string, playerId: string): boolean {
+  copyWhitelistToMainDir(instanceId: string): WhitelistResult {
     try {
-      const loadResult = this.loadWhitelistFromInstance(instanceDir);
-      if (!loadResult.success) {
-        return false;
-      }
-      return (loadResult.playerIds || []).includes(playerId);
+      const hasList = fs.existsSync(this.getListPath(instanceId));
+      const loaded = this.loadWhitelistFromInstance(instanceId);
+      if (!loaded.success) throw new Error(loaded.error);
+
+      const playerIds = loaded.playerIds ?? [];
+      this.writeRuntimeList(instanceId, playerIds);
+      return hasList
+        ? { success: true, playerIds, message: `Copied whitelist with ${playerIds.length} players to main ARK directory` }
+        : { success: true, playerIds: [], message: 'Created empty whitelist file in main ARK directory' };
     } catch (error) {
-      console.error('Failed to check whitelist status:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Clear all players from the whitelist for a specific instance
-   */
-  clearInstanceWhitelist(instanceDir: string): WhitelistResult {
-    return this.writeWhitelistFile(instanceDir, []);
-  }
-
-  /**
-   * Get whitelist statistics for a specific instance
-   */
-  getInstanceWhitelistStats(instanceDir: string): { playerCount: number; fileExists: boolean; filePath: string } {
-    try {
-      const whitelistPath = this.getInstanceWhitelistPath(instanceDir);
-      const fileExists = fs.existsSync(whitelistPath);
-      
-      if (!fileExists) {
-        return {
-          playerCount: 0,
-          fileExists: false,
-          filePath: whitelistPath
-        };
-      }
-
-      const loadResult = this.loadWhitelistFromInstance(instanceDir);
-      return {
-        playerCount: loadResult.playerIds?.length || 0,
-        fileExists: true,
-        filePath: whitelistPath
-      };
-    } catch (error) {
-      return {
-        playerCount: 0,
-        fileExists: false,
-        filePath: this.getInstanceWhitelistPath(instanceDir)
-      };
-    }
-  }
-
-  /**
-   * Copy whitelist file from instance directory to main ARK directory during server startup
-   * This is called during server startup to ensure the whitelist is in place
-   */
-  copyWhitelistToMainDir(instanceDir: string): WhitelistResult {
-    try {
-      const instanceWhitelistPath = this.getInstanceWhitelistPath(instanceDir);
-      const mainWhitelistPath = this.getMainWhitelistPath(instanceDir);
-      
-      // Ensure main directory exists
-      const mainDir = path.dirname(mainWhitelistPath);
-      if (!fs.existsSync(mainDir)) {
-        fs.mkdirSync(mainDir, { recursive: true });
-      }
-
-      if (fs.existsSync(instanceWhitelistPath)) {
-        // Copy existing whitelist file
-        fs.copyFileSync(instanceWhitelistPath, mainWhitelistPath);
-        const loadResult = this.loadWhitelistFromInstance(instanceDir);
-        return {
-          success: true,
-          playerIds: loadResult.playerIds || [],
-          message: `Copied whitelist with ${loadResult.playerIds?.length || 0} players to main ARK directory`
-        };
-      } else {
-        // Create empty whitelist file
-        fs.writeFileSync(mainWhitelistPath, [
-          '# ARK: Survival Ascended Exclusive Join List',
-          '# One EOS/Player ID per line',
-          '# Lines starting with # are comments and will be ignored',
-          '# This file is managed by Cerious AASM',
-          ''
-        ].join('\n'), 'utf8');
-        return {
-          success: true,
-          playerIds: [],
-          message: 'Created empty whitelist file in main ARK directory'
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to copy whitelist to main directory: ${error instanceof Error ? error.message : String(error)}`
-      };
+      return { success: false, error: `Failed to copy whitelist to main directory: ${describeError(error)}` };
     }
   }
 }
 
-// Export singleton instance
 export const whitelistService = new WhitelistService();

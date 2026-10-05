@@ -1,507 +1,216 @@
-import { serverMonitoringService } from './server-monitoring.service';
+jest.mock('../../utils/platform.utils', () => ({
+  getProcessMemoryUsage: jest.fn(),
+  getProcessCpuSeconds: jest.fn(),
+  processCpuPercent: jest.fn(() => 25)
+}));
+jest.mock('../rcon.service', () => ({ rconService: { executeRconCommand: jest.fn(), connectRcon: jest.fn() } }));
+jest.mock('../../utils/rcon.utils', () => ({ isRconConnected: jest.fn(), isRconConnecting: jest.fn() }));
+jest.mock('../../utils/ark/ark-server/ark-server-logging.utils', () => ({ getInstanceLogs: jest.fn() }));
+jest.mock('../../utils/ark/ark-server/ark-server-state.utils', () => ({ getNormalizedInstanceState: jest.fn() }));
+jest.mock('./server-process.service', () => ({ serverProcessService: { getServerProcess: jest.fn() } }));
+jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn() } }));
 
-// Mock all dependencies
-jest.mock('../../utils/platform.utils');
-jest.mock('../rcon.service');
-jest.mock('../../utils/rcon.utils');
-jest.mock('../../utils/ark/ark-server/ark-server-logging.utils');
-jest.mock('../../utils/ark/instance.utils');
-jest.mock('../../utils/ark/ark-server/ark-server-state.utils');
-jest.mock('path');
-jest.mock('./server-process.service');
+import { ServerMonitoringService } from './server-monitoring.service';
+import { getProcessCpuSeconds, getProcessMemoryUsage } from '../../utils/platform.utils';
+import { rconService } from '../rcon.service';
+import { isRconConnected, isRconConnecting } from '../../utils/rcon.utils';
+import { getInstanceLogs } from '../../utils/ark/ark-server/ark-server-logging.utils';
+import { getNormalizedInstanceState } from '../../utils/ark/ark-server/ark-server-state.utils';
+import { serverProcessService } from './server-process.service';
+import { messagingService } from '../messaging.service';
+
+const mockRcon = jest.mocked(rconService);
+const mockProcess = jest.mocked(serverProcessService);
+
+function listPlayers(response: string) {
+  mockRcon.executeRconCommand.mockResolvedValue({ success: true, response, instanceId: 'a1' });
+}
 
 describe('ServerMonitoringService', () => {
-  let getProcessMemoryUsageMock: any;
-  let rconServiceMock: any;
-  let setupLogTailingMock: any;
-  let getInstanceMock: any;
-  let getInstanceStateMock: any;
-  let pathMock: any;
-  let serverProcessServiceMock: any;
-  let storedIntervalCallbacks: { [key: string]: Function } = {};
-
-  // Helper to execute stored interval callbacks
-  const executePollingCallbacks = async () => {
-    for (const callback of Object.values(storedIntervalCallbacks)) {
-      await callback();
-    }
-  };
+  let service: ServerMonitoringService;
 
   beforeEach(() => {
-    jest.clearAllMocks();
     jest.useFakeTimers();
-    storedIntervalCallbacks = {};
-
-    // Mock setInterval to store callbacks for manual execution in tests
-    jest.spyOn(global, 'setInterval').mockImplementation((cb: any, delay?: number) => {
-      const id = `interval_${Object.keys(storedIntervalCallbacks).length}`;
-      storedIntervalCallbacks[id] = cb;
-      return id as any;
-    });
-
-    // Mock clearInterval to remove stored callbacks
-    jest.spyOn(global, 'clearInterval').mockImplementation((id: any) => {
-      if (storedIntervalCallbacks[id]) {
-        delete storedIntervalCallbacks[id];
-      }
-    });
-
-    // Setup mocks
-    getProcessMemoryUsageMock = jest.fn();
-    jest.mocked(require('../../utils/platform.utils')).getProcessMemoryUsage = getProcessMemoryUsageMock;
-
-    rconServiceMock = {
-      executeRconCommand: jest.fn()
-    };
-    jest.mocked(require('../rcon.service')).rconService = rconServiceMock;
-
-    // Mock RCON connection checks — assume connected so player polling proceeds
-    jest.mocked(require('../../utils/rcon.utils')).isRconConnected = jest.fn().mockReturnValue(true);
-    jest.mocked(require('../../utils/rcon.utils')).isRconConnecting = jest.fn().mockReturnValue(false);
-
-    setupLogTailingMock = jest.fn();
-    jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).setupLogTailing = setupLogTailingMock;
-
-    getInstanceMock = jest.fn();
-    jest.mocked(require('../../utils/ark/instance.utils')).getInstance = getInstanceMock;
-    jest.mocked(require('../../utils/ark/instance.utils')).getInstancesBaseDir = jest.fn(() => '/instances');
-
-    getInstanceStateMock = jest.fn();
-    jest.mocked(require('../../utils/ark/ark-server/ark-server-state.utils')).getInstanceState = getInstanceStateMock;
-
-    pathMock = {
-      join: jest.fn()
-    };
-    jest.mocked(require('path')).join = pathMock.join;
-
-    serverProcessServiceMock = {
-      getServerProcess: jest.fn()
-    };
-    jest.mocked(require('./server-process.service')).serverProcessService = serverProcessServiceMock;
+    service = new ServerMonitoringService();
+    jest.mocked(isRconConnected).mockReturnValue(true);
+    jest.mocked(isRconConnecting).mockReturnValue(false);
+    jest.mocked(getNormalizedInstanceState).mockReturnValue('running');
   });
 
   afterEach(() => {
     jest.useRealTimers();
   });
 
-  describe('getInstanceState', () => {
-    it('should get instance state successfully', () => {
-      getInstanceStateMock.mockReturnValue('running');
-
-      const result = serverMonitoringService.getInstanceState('instance1');
-
-      expect(result).toEqual({
-        state: 'running',
-        instanceId: 'instance1'
-      });
-    });
-
-    it('should handle unknown state', () => {
-      getInstanceStateMock.mockReturnValue(null);
-
-      const result = serverMonitoringService.getInstanceState('instance1');
-
-      expect(result).toEqual({
-        state: 'unknown',
-        instanceId: 'instance1'
-      });
-    });
-  });
+  /** Runs one polling interval and lets its async body finish. */
+  async function tick(ms: number): Promise<void> {
+    await jest.advanceTimersByTimeAsync(ms);
+  }
 
   describe('getInstanceLogs', () => {
-    it('should get logs for running server', () => {
-      getInstanceStateMock.mockReturnValue('running');
-      const getInstanceLogsMock = jest.fn().mockReturnValue(['line1', 'line2']);
-      jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).getInstanceLogs = getInstanceLogsMock;
+    it('joins the log lines', () => {
+      jest.mocked(getInstanceLogs).mockReturnValue(['line1', 'line2']);
 
-      const result = serverMonitoringService.getInstanceLogs('instance1', 100);
-
-      expect(result).toEqual({
-        log: 'line1\nline2',
-        instanceId: 'instance1'
-      });
-      expect(getInstanceLogsMock).toHaveBeenCalledWith('instance1', 100);
+      expect(service.getInstanceLogs('a1', 100)).toEqual({ log: 'line1\nline2', instanceId: 'a1' });
+      expect(getInstanceLogs).toHaveBeenCalledWith('a1', 100);
     });
 
-    it('should get logs for starting server', () => {
-      getInstanceStateMock.mockReturnValue('starting');
-      const getInstanceLogsMock = jest.fn().mockReturnValue(['starting log']);
-      jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).getInstanceLogs = getInstanceLogsMock;
+    it('returns an empty log when reading fails', () => {
+      jest.mocked(getInstanceLogs).mockImplementation(() => { throw new Error('EBUSY'); });
 
-      const result = serverMonitoringService.getInstanceLogs('instance1');
-
-      expect(result).toEqual({
-        log: 'starting log',
-        instanceId: 'instance1'
-      });
-    });
-
-    it('should get logs for stopping server', () => {
-      getInstanceStateMock.mockReturnValue('stopping');
-      const getInstanceLogsMock = jest.fn().mockReturnValue(['stopping log']);
-      jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).getInstanceLogs = getInstanceLogsMock;
-
-      const result = serverMonitoringService.getInstanceLogs('instance1');
-
-      expect(result).toEqual({
-        log: 'stopping log',
-        instanceId: 'instance1'
-      });
-    });
-
-    it('should return empty logs for stopped server', () => {
-      getInstanceStateMock.mockReturnValue('stopped');
-
-      const result = serverMonitoringService.getInstanceLogs('instance1');
-
-      expect(result).toEqual({
-        log: '',
-        instanceId: 'instance1'
-      });
-    });
-
-    it('should handle exception', () => {
-      getInstanceStateMock.mockReturnValue('running');
-      const getInstanceLogsMock = jest.fn().mockImplementation(() => { throw new Error('Log error'); });
-      jest.mocked(require('../../utils/ark/ark-server/ark-server-logging.utils')).getInstanceLogs = getInstanceLogsMock;
-
-      const result = serverMonitoringService.getInstanceLogs('instance1');
-
-      expect(result).toEqual({
-        log: '',
-        instanceId: 'instance1'
-      });
+      expect(service.getInstanceLogs('a1')).toEqual({ log: '', instanceId: 'a1' });
     });
   });
 
-  describe('setupLogMonitoring', () => {
-    it('should setup log monitoring successfully', () => {
-      const instance = { name: 'Server 1' };
-      getInstanceMock.mockReturnValue(instance);
-      pathMock.join.mockReturnValue('/instances/instance1');
-
-      serverMonitoringService.setupLogMonitoring('instance1', instance, jest.fn(), jest.fn());
-
-      expect(getInstanceMock).toHaveBeenCalledWith('instance1');
-      expect(pathMock.join).toHaveBeenCalledWith('/instances', 'instance1');
-      expect(setupLogTailingMock).toHaveBeenCalled();
-      const callArgs = setupLogTailingMock.mock.calls[0];
-      expect(callArgs[0]).toBe('instance1');
-      expect(callArgs[1]).toBe('/instances/instance1');
-      expect(callArgs[2]).toBe(instance);
-      expect(typeof callArgs[3]).toBe('function');
-      expect(typeof callArgs[4]).toBe('function');
-    });
-
-    it('should handle missing instance', () => {
-      getInstanceMock.mockReturnValue(null);
-
-      serverMonitoringService.setupLogMonitoring('instance1', {}, jest.fn(), jest.fn());
-
-      expect(setupLogTailingMock).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('startPlayerPolling', () => {
-    it('should start player polling', async () => {
+  describe('player polling', () => {
+    it('reports the player count every 30 seconds when it changes', async () => {
       const callback = jest.fn();
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 5 players connected'
-      });
+      listPlayers('There are 5 players connected');
 
-      serverMonitoringService.startPlayerPolling('instance1', callback);
+      service.startPlayerPolling('a1', callback);
+      await tick(30000);
+      await tick(30000);
 
-      await executePollingCallbacks();
-
-      expect(callback).toHaveBeenCalledWith('instance1', 5);
-      expect(serverMonitoringService.getLatestPlayerCount('instance1')).toBe(5);
-    });
-
-    it('should not call callback if player count unchanged', async () => {
-      const callback = jest.fn();
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 3 players connected'
-      });
-
-      serverMonitoringService.startPlayerPolling('instance1', callback);
-
-      // First poll
-      await executePollingCallbacks();
       expect(callback).toHaveBeenCalledTimes(1);
-
-      // Second poll with same count - should not call again
-      await executePollingCallbacks();
-      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith('a1', 5);
+      expect(service.getLatestPlayerCount('a1')).toBe(5);
+      expect(service.getPlayerCount('a1')).toEqual({ instanceId: 'a1', players: 5 });
     });
 
-    it('should handle polling errors silently', async () => {
+    it('keeps polling after an RCON error', async () => {
       const callback = jest.fn();
-      rconServiceMock.executeRconCommand.mockRejectedValue(new Error('RCON error'));
+      mockRcon.executeRconCommand.mockRejectedValueOnce(new Error('RCON error'));
+      listPlayers('There are 2 players connected');
 
-      serverMonitoringService.startPlayerPolling('instance1', callback);
+      service.startPlayerPolling('a1', callback);
+      await tick(30000);
+      await tick(30000);
 
-      // Should not throw
-      await executePollingCallbacks();
-
-      expect(callback).not.toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledWith('a1', 2);
     });
 
-    it('should clear existing polling when starting new', async () => {
-      const callback1 = jest.fn();
-      const callback2 = jest.fn();
+    it('replaces an earlier poller for the same instance', async () => {
+      const first = jest.fn();
+      const second = jest.fn();
+      listPlayers('There are 2 players connected');
 
-      serverMonitoringService.startPlayerPolling('instance1', callback1);
-      serverMonitoringService.startPlayerPolling('instance1', callback2);
+      service.startPlayerPolling('a1', first);
+      service.startPlayerPolling('a1', second);
+      await tick(30000);
 
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 2 players connected'
-      });
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledWith('a1', 2);
+    });
 
-      await executePollingCallbacks();
+    // A stopped server used to keep its last count in the instance list, and its next start
+    // logged a spurious "N players left".
+    it('forgets the last count when polling stops', async () => {
+      listPlayers('There are 4 players connected');
+      service.startPlayerPolling('a1', jest.fn());
+      await tick(30000);
 
-      expect(callback1).not.toHaveBeenCalled();
-      expect(callback2).toHaveBeenCalledWith('instance1', 2);
+      service.stopPlayerPolling('a1');
+      await tick(30000);
+
+      expect(service.getLatestPlayerCount('a1')).toBe(0);
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconnects RCON while the server runs and tells every client once it connects', async () => {
+      jest.mocked(isRconConnected).mockReturnValue(false);
+      mockRcon.connectRcon.mockResolvedValue({ success: true, connected: true, instanceId: 'a1' });
+
+      service.startPlayerPolling('a1', jest.fn());
+      await tick(30000);
+
+      expect(mockRcon.connectRcon).toHaveBeenCalledWith('a1');
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('rcon-status', { instanceId: 'a1', connected: true });
+      expect(mockRcon.executeRconCommand).not.toHaveBeenCalled();
+    });
+
+    it('leaves a connect already in progress alone', async () => {
+      jest.mocked(isRconConnected).mockReturnValue(false);
+      jest.mocked(isRconConnecting).mockReturnValue(true);
+
+      service.startPlayerPolling('a1', jest.fn());
+      await tick(30000);
+
+      expect(mockRcon.connectRcon).not.toHaveBeenCalled();
     });
   });
 
-  describe('stopPlayerPolling', () => {
-    it('should stop player polling', () => {
+  describe('memory polling', () => {
+    it('reports the memory of the tracked process every minute', async () => {
       const callback = jest.fn();
-      serverMonitoringService.startPlayerPolling('instance1', callback);
+      mockProcess.getServerProcess.mockReturnValue({ pid: 123 } as never);
+      jest.mocked(getProcessMemoryUsage).mockResolvedValue(512);
 
-      serverMonitoringService.stopPlayerPolling('instance1');
+      service.startMemoryPolling('a1', callback);
+      await tick(60000);
 
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 1 players connected'
-      });
+      expect(callback).toHaveBeenCalledWith('a1', 512);
+      expect(getProcessMemoryUsage).toHaveBeenCalledWith(123);
+    });
 
-      jest.advanceTimersByTime(30000);
+    it('stays quiet without a process or a reading', async () => {
+      const callback = jest.fn();
+      mockProcess.getServerProcess.mockReturnValueOnce(null).mockReturnValue({ pid: 123 } as never);
+      jest.mocked(getProcessMemoryUsage).mockResolvedValue(null);
+
+      service.startMemoryPolling('a1', callback);
+      await tick(60000);
+      await tick(60000);
 
       expect(callback).not.toHaveBeenCalled();
     });
 
-    it('should handle stopping non-existent polling', () => {
-      // Should not throw
-      serverMonitoringService.stopPlayerPolling('nonexistent');
+    it('stops', async () => {
+      const callback = jest.fn();
+      mockProcess.getServerProcess.mockReturnValue({ pid: 123 } as never);
+      jest.mocked(getProcessMemoryUsage).mockResolvedValue(512);
+
+      service.startMemoryPolling('a1', callback);
+      service.stopMemoryPolling('a1');
+      await tick(60000);
+
+      expect(callback).not.toHaveBeenCalled();
     });
   });
 
-  describe('startMemoryPolling', () => {
-    it('should start memory polling', async () => {
+  describe('CPU polling', () => {
+    it('reports a percentage from the second sample on, and forgets it when stopped', async () => {
       const callback = jest.fn();
-      const mockProcess = { pid: 123 };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
-      getProcessMemoryUsageMock.mockReturnValue(512);
+      mockProcess.getServerProcess.mockReturnValue({ pid: 123 } as never);
+      jest.mocked(getProcessCpuSeconds).mockResolvedValueOnce(10).mockResolvedValueOnce(12);
 
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      await executePollingCallbacks();
-
-      expect(callback).toHaveBeenCalledWith('instance1', 512);
-      expect(serverProcessServiceMock.getServerProcess).toHaveBeenCalledWith('instance1');
-      expect(getProcessMemoryUsageMock).toHaveBeenCalledWith(123);
-    });
-
-    it('should handle no process found', async () => {
-      const callback = jest.fn();
-      serverProcessServiceMock.getServerProcess.mockReturnValue(null);
-
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      await executePollingCallbacks();
-
+      service.startCpuPolling('a1', callback, 10000);
+      await tick(10000);
       expect(callback).not.toHaveBeenCalled();
-    });
+      await tick(10000);
 
-    it('should handle process without pid', async () => {
-      const callback = jest.fn();
-      serverProcessServiceMock.getServerProcess.mockReturnValue({});
-
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      await executePollingCallbacks();
-
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    it('should handle memory usage null', async () => {
-      const callback = jest.fn();
-      const mockProcess = { pid: 123 };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
-      getProcessMemoryUsageMock.mockReturnValue(null);
-
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      await executePollingCallbacks();
-
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    it('should handle polling errors silently', async () => {
-      const callback = jest.fn();
-      serverProcessServiceMock.getServerProcess.mockImplementation(() => { throw new Error('Process error'); });
-
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      // Should not throw
-      await executePollingCallbacks();
-
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    it('should clear existing polling when starting new', async () => {
-      const callback1 = jest.fn();
-      const callback2 = jest.fn();
-
-      serverMonitoringService.startMemoryPolling('instance1', callback1);
-      serverMonitoringService.startMemoryPolling('instance1', callback2);
-
-      const mockProcess = { pid: 456 };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
-      getProcessMemoryUsageMock.mockReturnValue(256);
-
-      await executePollingCallbacks();
-
-      expect(callback1).not.toHaveBeenCalled();
-      expect(callback2).toHaveBeenCalledWith('instance1', 256);
-    });
-  });
-
-  describe('stopMemoryPolling', () => {
-    it('should stop memory polling', () => {
-      const callback = jest.fn();
-      serverMonitoringService.startMemoryPolling('instance1', callback);
-
-      serverMonitoringService.stopMemoryPolling('instance1');
-
-      const mockProcess = { pid: 123 };
-      serverProcessServiceMock.getServerProcess.mockReturnValue(mockProcess);
-      getProcessMemoryUsageMock.mockReturnValue(512);
-
-      jest.advanceTimersByTime(60000);
-
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    it('should handle stopping non-existent polling', () => {
-      // Should not throw
-      serverMonitoringService.stopMemoryPolling('nonexistent');
+      expect(callback).toHaveBeenCalledWith('a1', 25);
+      expect(service.getLatestCpuPercent('a1')).toBe(25);
+      service.stopCpuPolling('a1');
+      expect(service.getLatestCpuPercent('a1')).toBeNull();
     });
   });
 
   describe('getPlayerCountFromRcon', () => {
-    it('should parse standard player count format', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 7 players connected'
-      });
+    it.each([
+      ['There are 7 players connected', 7],
+      ['There are 3 of a max 10 players connected', 3],
+      ['1. PlayerOne\n2. PlayerTwo\n3. PlayerThree\nSome other text', 3],
+      ['No Players Connected', 0],
+      ['Some unparseable response', 0]
+    ])('reads %p as %p', async (response, count) => {
+      listPlayers(response);
 
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBe(7);
+      await expect(service.getPlayerCountFromRcon('a1')).resolves.toBe(count);
     });
 
-    it('should parse alternative player count format', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'There are 3 of a max 10 players connected'
-      });
+    it('returns null when the command fails', async () => {
+      mockRcon.executeRconCommand.mockResolvedValue({ success: false, instanceId: 'a1' });
 
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBe(3);
-    });
-
-    it('should parse player list format', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: '1. PlayerOne\n2. PlayerTwo\n3. PlayerThree\nSome other text'
-      });
-
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBe(3);
-    });
-
-    it('should return 0 for no players connected', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'No Players Connected'
-      });
-
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBe(0);
-    });
-
-    it('should return 0 when unable to parse', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: true,
-        response: 'Some unparseable response'
-      });
-
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBe(0);
-    });
-
-    it('should return null on command failure', async () => {
-      rconServiceMock.executeRconCommand.mockResolvedValue({
-        success: false
-      });
-
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBeNull();
-    });
-
-    it('should return null on exception', async () => {
-      rconServiceMock.executeRconCommand.mockRejectedValue(new Error('RCON error'));
-
-      const result = await serverMonitoringService.getPlayerCountFromRcon('instance1');
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('getLatestPlayerCount', () => {
-    it('should return stored player count', () => {
-      serverMonitoringService.updatePlayerCount('instance1', 5);
-
-      const result = serverMonitoringService.getLatestPlayerCount('instance1');
-
-      expect(result).toBe(5);
-    });
-
-    it('should return 0 for unknown instance', () => {
-      const result = serverMonitoringService.getLatestPlayerCount('unknown');
-
-      expect(result).toBe(0);
-    });
-  });
-
-  describe('getPlayerCount', () => {
-    it('should return player count result', () => {
-      serverMonitoringService.updatePlayerCount('instance1', 8);
-
-      const result = serverMonitoringService.getPlayerCount('instance1');
-
-      expect(result).toEqual({
-        instanceId: 'instance1',
-        players: 8
-      });
-    });
-  });
-
-  describe('updatePlayerCount', () => {
-    it('should update player count', () => {
-      serverMonitoringService.updatePlayerCount('instance1', 12);
-
-      expect(serverMonitoringService.getLatestPlayerCount('instance1')).toBe(12);
+      await expect(service.getPlayerCountFromRcon('a1')).resolves.toBeNull();
     });
   });
 });

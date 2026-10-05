@@ -2,12 +2,14 @@ import { Component, EventEmitter, Input, Output, ViewChild, ElementRef, ChangeDe
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { take } from 'rxjs';
+import { Observable, switchMap } from 'rxjs';
 import { ModalComponent } from '../modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../dropdown/dropdown.component';
-import { ServerInstance } from '../../core/models/server-instance.model';
-import { ServerInstanceService } from '../../core/services/server-instance.service';
+import { SaveInstanceResult, ServerInstance } from '../../core/models/server-instance.model';
+import { ImportServerResult, ServerInstanceService, withoutRuntimeFields } from '../../core/services/server-instance.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { IpcService } from '../../core/services/ipc.service';
+import type { DesktopFile } from '../../core/types/electron-api';
 
 export type ImportMode = 'create' | 'import' | 'clone';
 
@@ -49,6 +51,7 @@ export class AddServerModalComponent implements OnChanges {
     private router: Router,
     private serverInstanceService: ServerInstanceService,
     private notificationService: NotificationService,
+    private ipc: IpcService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -85,52 +88,41 @@ export class AddServerModalComponent implements OnChanges {
     else this.cloneServer();
   }
 
+  /** Cancel, Escape or the backdrop. Ignored while a server is being added, as the Cancel button is. */
   onCancel(): void {
+    if (this.busy) return;
     this.close();
   }
 
-  onBackupFileSelect(event: any): void {
-    const file = event?.target?.files?.[0];
+  onBackupFileSelect(event: Event): void {
+    const file: DesktopFile | undefined = (event.target as HTMLInputElement | null)?.files?.[0];
     if (file && file.name.endsWith('.zip')) {
       this.selectedBackupFile = file;
-      const isElectron = (window as any).electronAPI !== undefined ||
-        navigator.userAgent.toLowerCase().indexOf('electron') > -1;
-      this.selectedBackupFilePath = isElectron && (file as any).path ? (file as any).path : file.name;
+      this.selectedBackupFilePath = this.ipc.isElectron && file.path ? file.path : file.name;
       this.cdr.markForCheck();
     }
   }
 
-  async selectBackupFile(): Promise<void> {
-    if (this.backupFileInput?.nativeElement) {
-      this.backupFileInput.nativeElement.click();
-      return;
-    }
-    const filePath = prompt('Enter the full path to your backup ZIP file:');
-    if (filePath && filePath.trim()) {
-      this.selectedBackupFilePath = filePath.trim();
-      this.selectedBackupFile = { name: this.selectedBackupFilePath.split(/[/\\]/).pop() || '' } as File;
-      this.cdr.markForCheck();
-    }
+  selectBackupFile(): void {
+    this.backupFileInput?.nativeElement.click();
   }
 
   private createNewServer(): void {
     this.busy = true;
-    this.serverInstanceService.getDefaultInstanceFromMeta().pipe(take(1)).subscribe(defaults => {
-      const newInstance = { ...defaults, name: this.serverName, sessionName: this.serverName };
-      this.serverInstanceService.save(newInstance).pipe(take(1)).subscribe({
-        next: (result) => this.handleSaveResult(result),
-        error: () => this.fail('Failed to create server')
-      });
+    this.serverInstanceService.getDefaultInstanceFromMeta().pipe(
+      switchMap(defaults => this.serverInstanceService.save({ ...defaults, name: this.serverName, sessionName: this.serverName }))
+    ).subscribe({
+      next: result => this.handleSaveResult(result, 'Failed to create server'),
+      error: () => this.fail('Failed to create server')
     });
   }
 
   private cloneServer(): void {
     if (!this.selectedServerToClone) return;
     this.busy = true;
-    const { id, ...source } = this.selectedServerToClone;
-    const clonedInstance = { ...source, name: this.serverName, sessionName: this.serverName };
-    this.serverInstanceService.save(clonedInstance).pipe(take(1)).subscribe({
-      next: (result) => this.handleSaveResult(result),
+    const { id, ...source } = withoutRuntimeFields(this.selectedServerToClone);
+    this.serverInstanceService.save({ ...source, name: this.serverName, sessionName: this.serverName }).subscribe({
+      next: result => this.handleSaveResult(result, 'Failed to clone server'),
       error: () => this.fail('Failed to clone server')
     });
   }
@@ -138,11 +130,8 @@ export class AddServerModalComponent implements OnChanges {
   private async importFromBackup(): Promise<void> {
     this.busy = true;
     try {
-      const isElectron = (window as any).electronAPI !== undefined ||
-        navigator.userAgent.toLowerCase().indexOf('electron') > -1;
-
-      let result;
-      if (isElectron && this.selectedBackupFilePath) {
+      let result: Observable<ImportServerResult>;
+      if (this.ipc.isElectron && this.selectedBackupFilePath) {
         result = this.serverInstanceService.importServerFromBackup(this.serverName, this.selectedBackupFilePath);
       } else if (this.selectedBackupFile) {
         const fileData = await this.fileToBase64(this.selectedBackupFile);
@@ -151,8 +140,8 @@ export class AddServerModalComponent implements OnChanges {
         throw new Error('No backup file selected');
       }
 
-      result.pipe(take(1)).subscribe({
-        next: (response: any) => {
+      result.subscribe({
+        next: response => {
           if (response?.success && response.instance) {
             this.notificationService.success(response.message || 'Server imported successfully');
             this.finish(response.instance);
@@ -160,20 +149,20 @@ export class AddServerModalComponent implements OnChanges {
             this.fail(response?.error || 'Failed to import server from backup');
           }
         },
-        error: (error: any) => {
-          console.error('Failed to import backup:', error);
+        error: error => {
+          console.error('[add-server-modal] Failed to import backup:', error);
           this.fail('Failed to import server from backup');
         }
       });
     } catch (error) {
-      console.error('Failed to import backup:', error);
+      console.error('[add-server-modal] Failed to import backup:', error);
       this.fail('Failed to import server from backup');
     }
   }
 
-  private handleSaveResult(result: any): void {
-    if (result && result.success === false && result.error) {
-      this.notificationService.warning(result.error);
+  private handleSaveResult(result: SaveInstanceResult | null, failure: string): void {
+    if (result?.success === false) {
+      this.notificationService.warning(result.error || failure);
       this.busy = false;
       this.cdr.markForCheck();
       return;

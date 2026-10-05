@@ -3,7 +3,7 @@ import { NgIf } from '@angular/common';
 import { areaPath, linePath, toPoints } from '../../core/utils/chart.utils';
 
 /**
- * A tiny inline area chart with no axes — the "recent players" trace on a server card.
+ * A tiny inline area chart with no axes: the "recent players" trace on a server card.
  * Pure SVG so it scales with its container and takes its colour from the parent.
  */
 @Component({
@@ -27,10 +27,9 @@ import { areaPath, linePath, toPoints } from '../../core/utils/chart.utils';
 export class SparklineComponent implements OnChanges {
   @Input() values: number[] = [];
   @Input() color = 'var(--primary)';
-  @Input() width = 300;
   @Input() height = 40;
-  /** Optional fixed ceiling so several sparklines share a scale. */
-  @Input() max?: number;
+  /** viewBox width only: the SVG stretches to its container. */
+  readonly width = 300;
 
   line = '';
   area = '';
@@ -38,7 +37,7 @@ export class SparklineComponent implements OnChanges {
 
   ngOnChanges(): void {
     const values = Array.isArray(this.values) && this.values.length ? this.values : [0, 0];
-    const points = toPoints(values, this.width, this.height, this.max, 2);
+    const points = toPoints(values, this.width, this.height, undefined, 2);
     this.line = linePath(points);
     this.area = areaPath(points, this.height, 2);
   }

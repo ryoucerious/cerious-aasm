@@ -1,95 +1,35 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { ElementRef, SimpleChange } from '@angular/core';
 import { ServerStateComponent } from './server-state.component';
-import { MessagingService } from '../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../core/services/notification.service';
-import { ServerInstanceService } from '../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
 
 describe('ServerStateComponent', () => {
-  it('should handle ngOnChanges and auto-scroll logs', (done) => {
-    // Setup logContainer mock
-    const nativeElement = {
-      scrollTop: 0,
-      clientHeight: 100,
-      scrollHeight: 200,
-      lastElementChild: { scrollIntoView: jasmine.createSpy() },
-      scrollTo: jasmine.createSpy()
-    };
-    component.logContainer = { nativeElement } as any;
-    component.logs = ['a', 'b'];
-  component.ngOnChanges({ logs: { currentValue: ['a', 'b'], previousValue: [], firstChange: true, isFirstChange: () => true } });
-    setTimeout(() => {
-      expect(nativeElement.scrollTo).toHaveBeenCalledWith(0, nativeElement.scrollHeight);
-      expect(nativeElement.lastElementChild.scrollIntoView).toHaveBeenCalled();
-      done();
-    }, 60);
-  });
-
-  it('should not auto-scroll if user is not near bottom', (done) => {
-    const nativeElement = {
-      scrollTop: 0,
-      clientHeight: 100,
-      scrollHeight: 1000,
-      lastElementChild: { scrollIntoView: jasmine.createSpy() },
-      scrollTo: jasmine.createSpy()
-    };
-    component.logContainer = { nativeElement } as any;
-    component.logs = ['a', 'b', 'c'];
-  component.ngOnChanges({ logs: { currentValue: ['a', 'b', 'c'], previousValue: ['a', 'b'], firstChange: false, isFirstChange: () => false } });
-    setTimeout(() => {
-      expect(nativeElement.scrollTo).not.toHaveBeenCalled();
-      done();
-    }, 60);
-  });
-
-  it('should handle statusClasses for all states', () => {
-    const states = ['running', 'stopped', 'starting', 'stopping', 'error', undefined];
-    const expected = ['status-running', 'status-stopped', 'status-starting', 'status-stopping', 'status-error', 'status-stopped'];
-    states.forEach((state, i) => {
-      component.serverInstance = { state };
-      const classes = component.statusClasses;
-      expect(classes[expected[i]]).toBeTrue();
-    });
-  });
-
-  it('should handle edge cases for computed properties', () => {
-    component.serverInstance = undefined;
-    expect(component.statusText).toBe('Offline');
-    expect(component.currentPlayers).toBe(0);
-    expect(component.maxPlayers).toBe(70);
-    expect(component.serverMessage).toBeNull();
-    expect(component.memoryUsage).toBeUndefined();
-  });
-
-  it('should handle canStart/canStop/canForceStop for unknown/error', () => {
-    component.serverInstance = { state: undefined };
-    expect(component.canStart).toBeTrue();
-    component.serverInstance = { state: 'error' };
-    expect(component.canStart).toBeTrue();
-  component.serverInstance = { state: 'Unknown' };
-  expect(component.canStart).toBeTrue();
-  });
   let component: ServerStateComponent;
   let fixture: ComponentFixture<ServerStateComponent>;
 
+  /** A detached log container of the given content height with a 100 px viewport, scrolled to the top. */
+  const container = (scrollHeight: number): HTMLElement => {
+    const element = document.createElement('div');
+    const lastLine = element.appendChild(document.createElement('div'));
+    Object.defineProperty(element, 'scrollHeight', { value: scrollHeight });
+    Object.defineProperty(element, 'clientHeight', { value: 100 });
+    spyOn(element, 'scrollTo');
+    spyOn(lastLine, 'scrollIntoView');
+    component.logContainer = new ElementRef(element);
+    return element;
+  };
+
+  const show = (logs: string[], previous: string[]) => {
+    component.logs = logs;
+    component.ngOnChanges({ logs: new SimpleChange(previous, logs, previous.length === 0) });
+  };
+
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [ServerStateComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [ServerStateComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(ServerStateComponent);
     component = fixture.componentInstance;
-    // Provide required @Input() values
-    component.serverInstance = { state: 'running', gamePort: 7777 };
+    component.serverInstance = { message: undefined };
     fixture.detectChanges();
   });
 
@@ -104,60 +44,49 @@ describe('ServerStateComponent', () => {
     expect(el.querySelector('.collapsible-header')).toBeNull();
   });
 
-  it('should emit startServer on onStartServer', () => {
-    spyOn(component.startServer, 'emit');
-    const event = { stopPropagation: jasmine.createSpy() } as any;
-    component.onStartServer(event);
-    expect(event.stopPropagation).toHaveBeenCalled();
-    expect(component.startServer.emit).toHaveBeenCalled();
+  it('shows the server message in place of the default description', () => {
+    expect(component.serverMessage).toBeNull();
+    component.serverInstance = { message: 'Downloading mods' };
+    expect(component.serverMessage).toBe('Downloading mods');
   });
 
-  it('should emit stopServer on onStopServer', () => {
-    spyOn(component.stopServer, 'emit');
-    const event = { stopPropagation: jasmine.createSpy() } as any;
-    component.onStopServer(event);
-    expect(event.stopPropagation).toHaveBeenCalled();
-    expect(component.stopServer.emit).toHaveBeenCalled();
-  });
+  it('should handle ngOnChanges and auto-scroll logs', fakeAsync(() => {
+    const element = container(200);
+    show(['a', 'b'], []);
+    tick(50);
+    expect(element.scrollTo).toHaveBeenCalledWith(0, 200);
+    expect(element.lastElementChild!.scrollIntoView).toHaveBeenCalled();
+  }));
 
-  it('should emit forceStopServer on onForceStopServer', () => {
-    spyOn(component.forceStopServer, 'emit');
-    const event = { stopPropagation: jasmine.createSpy() } as any;
-    component.onForceStopServer(event);
-    expect(event.stopPropagation).toHaveBeenCalled();
-    expect(component.forceStopServer.emit).toHaveBeenCalled();
-  });
+  it('should not auto-scroll if user is not near bottom', fakeAsync(() => {
+    const element = container(1000);
+    show(['a', 'b', 'c'], ['a', 'b']);
+    tick(50);
+    expect(element.scrollTo).not.toHaveBeenCalled();
+  }));
 
-  it('should compute statusText and statusClasses', () => {
-    component.serverInstance = { state: 'running' };
-    expect(component.statusText).toBe('Online');
-    expect(component.statusClasses['status-running']).toBeTrue();
-    component.serverInstance = { state: 'stopped' };
-    expect(component.statusText).toBe('Offline');
-    expect(component.statusClasses['status-stopped']).toBeTrue();
-    component.serverInstance = { state: 'Preparing to start' };
-    expect(component.statusText).toBe('Queued');
-    expect(component.statusClasses['status-starting']).toBeTrue();
-  });
+  it('keeps following the output once the buffer is full', fakeAsync(() => {
+    const element = container(200);
+    const full = Array.from({ length: 1000 }, (_, i) => `line ${i}`);
+    show(full, []);
+    tick(50);
+    (element.scrollTo as jasmine.Spy).calls.reset();
 
-  it('should compute currentPlayers and maxPlayers', () => {
-    component.serverInstance = { players: 5, maxPlayers: 100 };
-    expect(component.currentPlayers).toBe(5);
-    expect(component.maxPlayers).toBe(100);
-  });
+    show([...full.slice(1), 'line 1000'], full);
+    tick(50);
 
-  it('should compute serverMessage and memoryUsage', () => {
-    component.serverInstance = { message: 'msg', memory: 123456 };
-    expect(component.serverMessage).toBe('msg');
-    expect(component.memoryUsage).toBe('123,456');
-  });
+    expect(element.scrollTo).toHaveBeenCalled();
+  }));
 
-  it('should compute canStart, canStop, canForceStop', () => {
-    component.serverInstance = { state: 'stopped' };
-    expect(component.canStart).toBeTrue();
-    component.serverInstance = { state: 'running' };
-    expect(component.canStop).toBeTrue();
-    component.serverInstance = { state: 'starting' };
-    expect(component.canForceStop).toBeTrue();
-  });
+  it('does not scroll again for the same output', fakeAsync(() => {
+    const element = container(200);
+    show(['a', 'b'], []);
+    tick(50);
+    (element.scrollTo as jasmine.Spy).calls.reset();
+
+    show(['a', 'b'], ['a', 'b']);
+    tick(50);
+
+    expect(element.scrollTo).not.toHaveBeenCalled();
+  }));
 });

@@ -4,7 +4,7 @@ import { BehaviorSubject, Observable } from 'rxjs';
 /** What the user picked. 'system' defers to the OS and keeps following it as it changes. */
 export type ThemePreference = 'system' | 'light' | 'dark';
 
-/** What is actually on screen — 'system' is always resolved to one of these. */
+/** What is actually on screen: 'system' is always resolved to one of these. */
 export type ResolvedTheme = 'light' | 'dark';
 
 /**
@@ -21,8 +21,7 @@ export const THEME_STORAGE_KEY = 'cerious-aasm.theme';
  * preference belongs to the person looking at the screen, not to the server.
  *
  * Applying a theme means stamping `data-theme` on <html>; every colour in the app is a CSS
- * custom property that resolves off that attribute (see styles/_theme.scss). `data-bs-theme`
- * is set alongside it so Bootstrap 5.3's own components follow along.
+ * custom property that resolves off that attribute (see styles/_theme.scss).
  */
 @Injectable({ providedIn: 'root' })
 export class ThemeService {
@@ -88,16 +87,6 @@ export class ThemeService {
     this.setPreference(this.resolved === 'dark' ? 'light' : 'dark');
   }
 
-  /** Stop listening to OS changes. */
-  destroy(): void {
-    if (!this.mediaQuery) return;
-    if (typeof this.mediaQuery.removeEventListener === 'function') {
-      this.mediaQuery.removeEventListener('change', this.onSystemChange);
-    } else if (typeof (this.mediaQuery as any).removeListener === 'function') {
-      (this.mediaQuery as any).removeListener(this.onSystemChange);
-    }
-  }
-
   private resolve(preference: ThemePreference): ResolvedTheme {
     if (preference === 'light' || preference === 'dark') {
       return preference;
@@ -111,7 +100,6 @@ export class ThemeService {
     const root = typeof document !== 'undefined' ? document.documentElement : null;
     if (root) {
       root.setAttribute('data-theme', theme);
-      root.setAttribute('data-bs-theme', theme);
     }
     if (this.resolvedSubject.value !== theme) {
       this.resolvedSubject.next(theme);
@@ -125,7 +113,7 @@ export class ThemeService {
         return stored;
       }
     } catch {
-      // Storage unavailable — fall through to the default
+      // Storage unavailable; fall through to the default
     }
     return 'system';
   }

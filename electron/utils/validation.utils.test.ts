@@ -1,18 +1,15 @@
 import {
-    validateInstanceId,
-    validatePort,
-    validateServerName,
-    sanitizeString,
-    validateAuthInput,
-    validateEmail,
-    validateIPAddress,
-    validateFilename,
-    sanitizeFilename,
-    validateURL,
-    isNumeric
-} from '../utils/validation.utils';
-
-// ...previous tests...
+  validateInstanceId,
+  validatePort,
+  parsePort,
+  validateServerName,
+  sanitizeString,
+  validateAuthInput,
+  validateIPAddress,
+  validateFilename,
+  sanitizeFilename,
+  validateURL
+} from './validation.utils';
 
 describe('Validation Utils', () => {
   describe('validateInstanceId', () => {
@@ -51,6 +48,20 @@ describe('Validation Utils', () => {
       expect(validatePort(3.14)).toBe(false); // Not integer
       expect(validatePort('not-a-number')).toBe(false);
       expect(validatePort('')).toBe(false);
+    });
+  });
+
+  describe('parsePort', () => {
+    it('reads a port number from a string or number', () => {
+      expect(parsePort('1')).toBe(1);
+      expect(parsePort('8080')).toBe(8080);
+      expect(parsePort(65535)).toBe(65535);
+    });
+
+    it('returns undefined for anything that is not a port', () => {
+      for (const value of [undefined, '', '0', '65536', '-1', '80abc', '8.5', ' 80', 'abc', 3.5, null]) {
+        expect(parsePort(value)).toBeUndefined();
+      }
     });
   });
 
@@ -172,157 +183,114 @@ describe('Validation Utils', () => {
       const result = validateAuthInput('user', '   ');
       expect(result.valid).toBe(true); // whitespace is counted as valid string
     });
+  });
 
-    describe('validateEmail', () => {
-        it('should return true for valid emails', () => {
-            expect(validateEmail('test@example.com')).toBe(true);
-            expect(validateEmail('user.name+tag@domain.co.uk')).toBe(true);
-            expect(validateEmail('user_name@sub.domain.com')).toBe(true);
-        });
-
-        it('should return false for invalid emails', () => {
-            expect(validateEmail('')).toBe(false);
-            expect(validateEmail('plainaddress')).toBe(false);
-            expect(validateEmail('missing@domain')).toBe(false);
-            expect(validateEmail('missing.domain@')).toBe(false);
-            expect(validateEmail('@missingusername.com')).toBe(false);
-            expect(validateEmail('user@.com')).toBe(false);
-            expect(validateEmail('user@domain..com')).toBe(false);
-            expect(validateEmail(null as any)).toBe(false);
-            expect(validateEmail(undefined as any)).toBe(false);
-            expect(validateEmail(123 as any)).toBe(false);
-        });
+  describe('validateIPAddress', () => {
+    it('should return true for valid IPv4 addresses', () => {
+      expect(validateIPAddress('192.168.1.1')).toBe(true);
+      expect(validateIPAddress('0.0.0.0')).toBe(true);
+      expect(validateIPAddress('255.255.255.255')).toBe(true);
+      expect(validateIPAddress('127.0.0.1')).toBe(true);
     });
 
-    describe('validateIPAddress', () => {
-        it('should return true for valid IPv4 addresses', () => {
-            expect(validateIPAddress('192.168.1.1')).toBe(true);
-            expect(validateIPAddress('0.0.0.0')).toBe(true);
-            expect(validateIPAddress('255.255.255.255')).toBe(true);
-            expect(validateIPAddress('127.0.0.1')).toBe(true);
-        });
+    it('should return false for invalid IPv4 addresses', () => {
+      expect(validateIPAddress('')).toBe(false);
+      expect(validateIPAddress('256.256.256.256')).toBe(false);
+      expect(validateIPAddress('192.168.1')).toBe(false);
+      expect(validateIPAddress('192.168.1.1.1')).toBe(false);
+      expect(validateIPAddress('abc.def.ghi.jkl')).toBe(false);
+      expect(validateIPAddress('1234.123.123.123')).toBe(false);
+      expect(validateIPAddress('1234')).toBe(false);
+      expect(validateIPAddress('192.168.001.1')).toBe(false); // zero-padded octet
+      expect(validateIPAddress('192.168.1.1?Foo=bar')).toBe(false);
+      expect(validateIPAddress('192.168.1.1 ')).toBe(false);
+      expect(validateIPAddress('192.168.1.-1')).toBe(false);
+      expect(validateIPAddress(null as any)).toBe(false);
+      expect(validateIPAddress(undefined as any)).toBe(false);
+      expect(validateIPAddress(123 as any)).toBe(false);
+    });
+  });
 
-        it('should return false for invalid IPv4 addresses', () => {
-            expect(validateIPAddress('')).toBe(false);
-            expect(validateIPAddress('256.256.256.256')).toBe(false);
-            expect(validateIPAddress('192.168.1')).toBe(false);
-            expect(validateIPAddress('192.168.1.1.1')).toBe(false);
-            expect(validateIPAddress('abc.def.ghi.jkl')).toBe(false);
-            expect(validateIPAddress('1234.123.123.123')).toBe(false);
-            expect(validateIPAddress('1234')).toBe(false);
-            expect(validateIPAddress('192.168.001.1')).toBe(false); // zero-padded octet
-            expect(validateIPAddress('192.168.1.1?Foo=bar')).toBe(false);
-            expect(validateIPAddress('192.168.1.1 ')).toBe(false);
-            expect(validateIPAddress('192.168.1.-1')).toBe(false);
-            expect(validateIPAddress(null as any)).toBe(false);
-            expect(validateIPAddress(undefined as any)).toBe(false);
-            expect(validateIPAddress(123 as any)).toBe(false);
-        });
+  describe('validateFilename', () => {
+    it('should return true for valid filenames', () => {
+      expect(validateFilename('file.txt')).toBe(true);
+      expect(validateFilename('my_file-01.log')).toBe(true);
+      expect(validateFilename('a'.repeat(255))).toBe(true);
     });
 
-    describe('validateFilename', () => {
-        it('should return true for valid filenames', () => {
-            expect(validateFilename('file.txt')).toBe(true);
-            expect(validateFilename('my_file-01.log')).toBe(true);
-            expect(validateFilename('a'.repeat(255))).toBe(true);
-        });
+    it('should return false for invalid filenames', () => {
+      expect(validateFilename('')).toBe(false);
+      expect(validateFilename('file/name.txt')).toBe(false);
+      expect(validateFilename('file<name>.txt')).toBe(false);
+      expect(validateFilename('file|name.txt')).toBe(false);
+      expect(validateFilename('file:name.txt')).toBe(false);
+      expect(validateFilename('a'.repeat(256))).toBe(false);
+      expect(validateFilename(null as any)).toBe(false);
+      expect(validateFilename(undefined as any)).toBe(false);
+      expect(validateFilename(123 as any)).toBe(false);
+    });
+  });
 
-        it('should return false for invalid filenames', () => {
-            expect(validateFilename('')).toBe(false);
-            expect(validateFilename('file/name.txt')).toBe(false);
-            expect(validateFilename('file<name>.txt')).toBe(false);
-            expect(validateFilename('file|name.txt')).toBe(false);
-            expect(validateFilename('file:name.txt')).toBe(false);
-            expect(validateFilename('a'.repeat(256))).toBe(false);
-            expect(validateFilename(null as any)).toBe(false);
-            expect(validateFilename(undefined as any)).toBe(false);
-            expect(validateFilename(123 as any)).toBe(false);
-        });
+  describe('sanitizeFilename', () => {
+    it('should replace invalid characters with underscores', () => {
+      expect(sanitizeFilename('file<name>.txt')).toBe('file_name_.txt');
+      expect(sanitizeFilename('file|name?.txt')).toBe('file_name_.txt');
+      expect(sanitizeFilename('file:name.txt')).toBe('file_name.txt');
     });
 
-    describe('sanitizeFilename', () => {
-        it('should replace invalid characters with underscores', () => {
-            expect(sanitizeFilename('file<name>.txt')).toBe('file_name_.txt');
-            expect(sanitizeFilename('file|name?.txt')).toBe('file_name_.txt');
-            expect(sanitizeFilename('file:name.txt')).toBe('file_name.txt');
-        });
-
-        it('should trim leading/trailing spaces and dots', () => {
-            expect(sanitizeFilename('  file.txt  ')).toBe('file.txt');
-            expect(sanitizeFilename('...file.txt...')).toBe('file.txt');
-        });
-
-        it('should return "unnamed" for empty or invalid input', () => {
-            expect(sanitizeFilename('')).toBe('unnamed');
-            expect(sanitizeFilename(null as any)).toBe('unnamed');
-            expect(sanitizeFilename(undefined as any)).toBe('unnamed');
-            expect(sanitizeFilename(123 as any)).toBe('unnamed');
-            expect(sanitizeFilename('   ')).toBe('unnamed'); // Just spaces
-            expect(sanitizeFilename('...')).toBe('unnamed'); // Just dots
-        });
-
-        it('should truncate filenames longer than 255 characters', () => {
-            const longName = 'a'.repeat(300) + '.txt';
-            expect(sanitizeFilename(longName).length).toBe(255);
-        });
+    it('should trim leading/trailing spaces and dots', () => {
+      expect(sanitizeFilename('  file.txt  ')).toBe('file.txt');
+      expect(sanitizeFilename('...file.txt...')).toBe('file.txt');
     });
 
-    describe('validateURL', () => {
-        it('should return true for valid URLs', () => {
-            expect(validateURL('http://example.com')).toBe(true);
-            expect(validateURL('https://example.com/path?query=1')).toBe(true);
-            expect(validateURL('ftp://ftp.example.com')).toBe(true);
-            expect(validateURL('http://localhost:8080')).toBe(true);
-        });
-
-        it('should return false for invalid URLs', () => {
-            expect(validateURL('')).toBe(false);
-            expect(validateURL('not a url')).toBe(false);
-            expect(validateURL('http:/example.com')).toBe(false);
-            expect(validateURL('http://')).toBe(false);
-            expect(validateURL(null as any)).toBe(false);
-            expect(validateURL(undefined as any)).toBe(false);
-            expect(validateURL(123 as any)).toBe(false);
-        });
-
-        it('should return false for URLs missing protocol or hostname (line 146)', () => {
-            // Test cases that pass initial regex but fail protocol/hostname check
-            expect(validateURL('://example.com')).toBe(false); // Missing protocol
-            expect(validateURL('http://')).toBe(false); // Missing hostname
-            expect(validateURL('https://:8080')).toBe(false); // Empty hostname with port
-            expect(validateURL('ftp://:21')).toBe(false); // Empty hostname with port
-        });
-
-        it('should validate protocol and hostname existence (line 146)', () => {
-            // These should pass because they have both protocol and hostname
-            expect(validateURL('http://example.com')).toBe(true);
-            expect(validateURL('https://subdomain.example.com')).toBe(true);
-            expect(validateURL('ftp://ftp.example.org')).toBe(true);
-            
-            // These should fail due to missing protocol or hostname
-            expect(validateURL('://missing-protocol.com')).toBe(false);
-            expect(validateURL('http://')).toBe(false);
-            expect(validateURL('https://')).toBe(false);
-        });
+    it('should return "unnamed" for empty or invalid input', () => {
+      expect(sanitizeFilename('')).toBe('unnamed');
+      expect(sanitizeFilename(null as any)).toBe('unnamed');
+      expect(sanitizeFilename(undefined as any)).toBe('unnamed');
+      expect(sanitizeFilename(123 as any)).toBe('unnamed');
+      expect(sanitizeFilename('   ')).toBe('unnamed'); // Just spaces
+      expect(sanitizeFilename('...')).toBe('unnamed'); // Just dots
     });
 
-    describe('isNumeric', () => {
-        it('should return true for numeric strings', () => {
-            expect(isNumeric('123')).toBe(true);
-            expect(isNumeric('3.14')).toBe(true);
-            expect(isNumeric('-42')).toBe(true);
-            expect(isNumeric('0')).toBe(true);
-            expect(isNumeric('1e5')).toBe(true);
-        });
+    it('should truncate filenames longer than 255 characters', () => {
+      const longName = 'a'.repeat(300) + '.txt';
+      expect(sanitizeFilename(longName).length).toBe(255);
+    });
+  });
 
-        it('should return false for non-numeric strings', () => {
-            expect(isNumeric('')).toBe(false);
-            expect(isNumeric('abc')).toBe(false);
-            expect(isNumeric('123abc')).toBe(false);
-            expect(isNumeric('NaN')).toBe(false);
-            expect(isNumeric(null as any)).toBe(false);
-            expect(isNumeric(undefined as any)).toBe(false);
-        });
+  describe('validateURL', () => {
+    it('should return true for valid URLs', () => {
+      expect(validateURL('http://example.com')).toBe(true);
+      expect(validateURL('https://example.com/path?query=1')).toBe(true);
+      expect(validateURL('ftp://ftp.example.com')).toBe(true);
+      expect(validateURL('http://localhost:8080')).toBe(true);
+    });
+
+    it('should return false for invalid URLs', () => {
+      expect(validateURL('')).toBe(false);
+      expect(validateURL('not a url')).toBe(false);
+      expect(validateURL('http:/example.com')).toBe(false);
+      expect(validateURL('http://')).toBe(false);
+      expect(validateURL(null as any)).toBe(false);
+      expect(validateURL(undefined as any)).toBe(false);
+      expect(validateURL(123 as any)).toBe(false);
+    });
+
+    it('should return false for URLs that pass the pattern but have no protocol or hostname', () => {
+      expect(validateURL('://example.com')).toBe(false); // Missing protocol
+      expect(validateURL('http://')).toBe(false); // Missing hostname
+      expect(validateURL('https://:8080')).toBe(false); // Empty hostname with port
+      expect(validateURL('ftp://:21')).toBe(false); // Empty hostname with port
+    });
+
+    it('should validate protocol and hostname existence', () => {
+      expect(validateURL('http://example.com')).toBe(true);
+      expect(validateURL('https://subdomain.example.com')).toBe(true);
+      expect(validateURL('ftp://ftp.example.org')).toBe(true);
+
+      expect(validateURL('://missing-protocol.com')).toBe(false);
+      expect(validateURL('http://')).toBe(false);
+      expect(validateURL('https://')).toBe(false);
     });
   });
 });

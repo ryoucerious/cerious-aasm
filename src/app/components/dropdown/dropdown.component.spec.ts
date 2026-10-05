@@ -123,9 +123,9 @@ describe('DropdownComponent', () => {
     expect((dropdown as any).menuPosition).toEqual(before);
   });
 
-  it('emits valueChange only when the value actually changes', () => {
-    const emitted: any[] = [];
-    dropdown.valueChange.subscribe(v => emitted.push(v));
+  it('reports a change only when the value actually changes', () => {
+    const emitted: unknown[] = [];
+    dropdown.registerOnChange(value => emitted.push(value));
     dropdown.select({ value: 'b', label: 'Beta' });
     dropdown.select({ value: 'a', label: 'Alpha' });
     expect(emitted).toEqual(['a']);

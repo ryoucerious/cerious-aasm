@@ -1,5 +1,6 @@
-import { getLinuxFirewallInstructions } from '../utils/firewall.utils';
+import { getLinuxFirewallInstructions, getLinuxWebFirewallInstructions } from '../utils/firewall.utils';
 import { getPlatform } from '../utils/platform.utils';
+import { parsePort } from '../utils/validation.utils';
 
 export interface LinuxFirewallInstructionsResult {
   success: boolean;
@@ -8,76 +9,39 @@ export interface LinuxFirewallInstructionsResult {
   error?: string;
 }
 
+const INVALID_PORT = 'Invalid port';
+
+// Unset optional ports are left out; anything else must be a port, since the text is meant to be
+// pasted into a root shell.
+function optionalPort(value: unknown): number | undefined | null {
+  if (value === undefined || value === null || value === '') return undefined;
+  return parsePort(value) ?? null;
+}
+
 /**
- * Firewall Service - Provides Linux firewall configuration instructions
- * Windows firewall is handled automatically by the OS, this service only provides
- * manual configuration instructions for Linux users
+ * Firewall instructions for Linux users to follow by hand. Windows asks the user itself the first
+ * time a server listens.
  */
 export class FirewallService {
-  
-  /**
-   * Get Linux firewall instructions for ARK server ports
-   * @param gamePort - The game port for the ARK server
-   * @param queryPort - The query port for the ARK server (Steam discovery)
-   * @param rconPort - The RCON port for the ARK server
-   * @returns An object containing the success status and firewall instructions
-   */
-  async getArkServerFirewallInstructions(gamePort: number, queryPort: number, rconPort: number): Promise<LinuxFirewallInstructionsResult> {
-    try {
-      const instructions = getLinuxFirewallInstructions({ 
-        game: gamePort, 
-        query: queryPort, 
-        rcon: rconPort 
-      });
-      
-      return {
-        success: true,
-        instructions,
-        platform: getPlatform()
-      };
-    } catch (error) {
-      console.error('[firewall-service] Error generating ARK server firewall instructions:', error);
-      return {
-        success: false,
-        platform: getPlatform(),
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
+  async getArkServerFirewallInstructions(gamePort: unknown, queryPort: unknown, rconPort: unknown): Promise<LinuxFirewallInstructionsResult> {
+    const platform = getPlatform();
+    const game = parsePort(gamePort);
+    const query = optionalPort(queryPort);
+    const rcon = optionalPort(rconPort);
+    if (game === undefined || query === null || rcon === null) {
+      return { success: false, platform, error: INVALID_PORT };
     }
+    return { success: true, platform, instructions: getLinuxFirewallInstructions({ game, query, rcon }) };
   }
 
-  /**
-   * Get Linux firewall instructions for web server port
-   * @param port - The web server port
-   * @returns An object containing the success status and firewall instructions
-   */
-  async getWebServerFirewallInstructions(port: number): Promise<LinuxFirewallInstructionsResult> {
-    try {
-      let instructions = `# Linux Firewall Configuration for Web Server\n\n`;
-      
-      // UFW instructions
-      instructions += `# For UFW (Ubuntu/Debian):\n`;
-      instructions += `sudo ufw allow ${port}/tcp  # Web server port\n\n`;
-
-      // Firewalld instructions
-      instructions += `# For firewalld (CentOS/RHEL/Fedora):\n`;
-      instructions += `sudo firewall-cmd --permanent --add-port=${port}/tcp\n`;
-      instructions += `sudo firewall-cmd --reload\n`;
-      
-      return {
-        success: true,
-        instructions,
-        platform: getPlatform()
-      };
-    } catch (error) {
-      console.error('[firewall-service] Error generating web server firewall instructions:', error);
-      return {
-        success: false,
-        platform: getPlatform(),
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
+  async getWebServerFirewallInstructions(port: unknown): Promise<LinuxFirewallInstructionsResult> {
+    const platform = getPlatform();
+    const webPort = parsePort(port);
+    if (webPort === undefined) {
+      return { success: false, platform, error: INVALID_PORT };
     }
+    return { success: true, platform, instructions: getLinuxWebFirewallInstructions(webPort) };
   }
 }
 
-// Export singleton instance
 export const firewallService = new FirewallService();

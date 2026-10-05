@@ -1,73 +1,54 @@
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { getDefaultInstallDir } from '../utils/platform.utils';
-
-// =============================================================================
-// CONSTANTS & CONFIGURATION
-// =============================================================================
+import { readJsonOrQuarantine, writeJsonAtomic } from '../utils/fs.utils';
+import { UNMATCHABLE_BCRYPT_HASH } from '../types/auth.types';
 
 const SALT_ROUNDS = 12;
 
-// Authentication configuration interface
+/** The single web login that predates accounts. */
 export interface AuthConfig {
   enabled: boolean;
   username: string;
   passwordHash: string;
 }
 
-// Global auth configuration state
 let authConfig: AuthConfig = {
   enabled: false,
   username: '',
   passwordHash: ''
 };
 
-// Auth config persistence - store config in the installation directory's data folder
 const authConfigFile = path.join(getDefaultInstallDir(), 'data', 'auth-config.json');
 
-// Track initialization state
-let authInitialized = false;
-
-// =============================================================================
-// AUTHENTICATION CONFIGURATION MANAGEMENT
-// =============================================================================
-
-/**
- * Load authentication configuration from disk
- */
 export function loadAuthConfig(): void {
   try {
-    if (fs.existsSync(authConfigFile)) {
-      const data = fs.readFileSync(authConfigFile, 'utf-8');
-      const savedConfig = JSON.parse(data);
-      authConfig = { ...authConfig, ...savedConfig };
+    const saved = readJsonOrQuarantine<Record<string, unknown>>(authConfigFile);
+    if (saved) {
+      authConfig = {
+        enabled: typeof saved.enabled === 'boolean' ? saved.enabled : authConfig.enabled,
+        username: typeof saved.username === 'string' ? saved.username : authConfig.username,
+        passwordHash: typeof saved.passwordHash === 'string' ? saved.passwordHash : authConfig.passwordHash
+      };
     }
   } catch (error) {
-    console.error('[Auth] Failed to load saved auth config:', error);
+    console.error('[auth-config] Failed to load the saved login:', error);
   }
 }
 
-/**
- * Save authentication configuration to disk
- */
+// Main writes this file too (settings.service updateWebServerAuth); both writes are atomic.
 export function saveAuthConfig(): void {
   try {
-    // Ensure data directory exists
-    const dataDir = path.dirname(authConfigFile);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    fs.writeFileSync(authConfigFile, JSON.stringify(authConfig, null, 2), { mode: 0o600 });
+    fs.mkdirSync(path.dirname(authConfigFile), { recursive: true });
+    writeJsonAtomic(authConfigFile, authConfig, { mode: 0o600 });
   } catch (error) {
-    console.error('[Auth] Failed to save auth config:', error);
+    console.error('[auth-config] Failed to save the login:', error);
   }
 }
 
-/**
- * Migrate old auth config from app directory to install directory
- */
+/** Older versions kept the file under process.cwd()/data, which moves with the app. */
 export function migrateAuthConfig(): void {
   try {
     const oldAuthFile = path.join(process.cwd(), 'data', 'auth-config.json');
@@ -80,132 +61,98 @@ export function migrateAuthConfig(): void {
     if (fs.existsSync(oldAuthFile) && !fs.existsSync(authConfigFile)) {
       try {
         fs.renameSync(oldAuthFile, authConfigFile);
-      } catch (e) {
-        console.error('[Auth] Failed to migrate auth-config.json:', e);
+      } catch (error) {
+        console.error('[auth-config] Failed to migrate auth-config.json:', error);
       }
     }
-  } catch (e) {
-    console.error('[Auth] Auth config migration check failed:', e);
+  } catch (error) {
+    console.error('[auth-config] Migration check failed:', error);
   }
 }
 
-// =============================================================================
-// PASSWORD SECURITY
-// =============================================================================
-
-/**
- * Hash a password using bcrypt
- */
 export async function hashPassword(password: string): Promise<string> {
   if (!password || typeof password !== 'string') {
     throw new Error('Password must be a non-empty string');
   }
-  return await bcrypt.hash(password, SALT_ROUNDS);
+  return bcrypt.hash(password, SALT_ROUNDS);
 }
 
-/**
- * Verify a password against a hash
- */
+/** False for a missing hash as well, but only after a full-cost comparison, so timing tells nothing. */
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   if (!password || typeof password !== 'string') {
     return false;
   }
-  if (!hash || typeof hash !== 'string') {
-    return false;
-  }
+  const usable = typeof hash === 'string' && hash.length > 0;
   try {
-    return await bcrypt.compare(password, hash);
+    const matches = await bcrypt.compare(password, usable ? hash : UNMATCHABLE_BCRYPT_HASH);
+    return usable && matches;
   } catch (error) {
-    console.error('[Auth] Password verification error:', error);
+    console.error('[auth-config] Password verification error:', error);
     return false;
   }
 }
 
-// =============================================================================
-// AUTHENTICATION CONFIGURATION
-// =============================================================================
-
 /**
- * Update authentication configuration
+ * An empty username or password hash is accepted: authentication stays on and only accounts can
+ * sign in, since the single login needs both (see the login route).
  */
 export function updateAuthConfig(config: AuthConfig): void {
-  // Validate the configuration
-  if (config.enabled) {
-    if (!config.username || typeof config.username !== 'string') {
-      console.error('[Auth] Invalid username in auth config');
-      return;
-    }
-    if (!config.passwordHash || typeof config.passwordHash !== 'string') {
-      console.error('[Auth] Invalid password hash in auth config');
-      return;
-    }
+  if (typeof config.enabled !== 'boolean' || typeof config.username !== 'string' || typeof config.passwordHash !== 'string') {
+    console.error('[auth-config] Refused a malformed login update.');
+    return;
   }
 
-  authConfig = { ...config };
+  // Only these fields: an older version saved a plaintext password alongside them.
+  authConfig = { enabled: config.enabled, username: config.username, passwordHash: config.passwordHash };
   saveAuthConfig();
 }
 
-/**
- * Get current authentication configuration
- */
 export function getAuthConfig(): AuthConfig {
   return { ...authConfig };
 }
 
 /**
- * Check if authentication is initialized
+ * Identifies a legacy login's username and password hash (the current login's by default). A legacy
+ * session is stamped with it, so a login changed since (even while the server was down) no longer
+ * honours the session.
  */
-export function isAuthInitialized(): boolean {
-  return authInitialized;
+export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'passwordHash'> = authConfig): string {
+  return crypto.createHash('sha256').update(JSON.stringify([login.username, login.passwordHash])).digest('hex');
 }
 
-/**
- * Set authentication initialized state
- */
-export function setAuthInitialized(initialized: boolean): void {
-  authInitialized = initialized;
-}
-
-/**
- * Initialize authentication from environment variables (for headless mode)
- */
+/** Applies AUTH_ENABLED / AUTH_USERNAME / AUTH_PASSWORD, which main sets when it forks this process. */
 export async function initializeAuthFromEnv(): Promise<void> {
-  // First, load any saved configuration
   loadAuthConfig();
 
   const authEnabled = process.env.AUTH_ENABLED === 'true';
   const authUsername = process.env.AUTH_USERNAME || 'admin';
   const authPassword = process.env.AUTH_PASSWORD || '';
 
-  // Only override config if environment variables are explicitly set
   if (authEnabled && authPassword) {
+    // bcrypt salts every hash, so a fresh one for the same password would change the login's
+    // fingerprint and sign out every legacy session at each restart.
+    const unchanged = await verifyPassword(authPassword, authConfig.passwordHash);
     authConfig = {
       enabled: true,
       username: authUsername,
-      passwordHash: await hashPassword(authPassword)
+      passwordHash: unchanged ? authConfig.passwordHash : await hashPassword(authPassword)
     };
-    saveAuthConfig(); // Save the new config
+    saveAuthConfig();
   } else if (authEnabled) {
     // No single password given: accounts are the login. Turning authentication off here
     // instead would leave the web interface open to anyone who can reach it.
     authConfig = { ...authConfig, enabled: true };
     saveAuthConfig();
-    console.log('[Auth] Authentication is on with no single login; accounts are the way in.');
+    console.log('[auth-config] Authentication is on with no single login; accounts are the way in.');
   }
 }
 
-/**
- * Initialize authentication system
- */
 export async function initializeAuth(): Promise<void> {
+  migrateAuthConfig();
   try {
     await initializeAuthFromEnv();
-    authInitialized = true;
   } catch (error) {
-    console.error('[Auth] Failed to initialize authentication:', error);
-    authInitialized = true; // Set to true anyway to allow startup, but auth will be disabled
+    // The server still starts, with whatever login was saved before.
+    console.error('[auth-config] Failed to initialize authentication:', error);
   }
 }
-
-// Initialize migration on startup
-migrateAuthConfig();

@@ -5,7 +5,10 @@ import { AuthService } from '../../../core/services/auth.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ModalComponent } from '../../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../../components/dropdown/dropdown.component';
-import { Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID } from '../../../core/models/auth.model';
+import {
+  Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID, MIN_PASSWORD_LENGTH, OPERATOR_ROLE_ID, PERMISSIONS,
+  accountPermissionFor, isPoolRole
+} from '../../../core/models/auth.model';
 
 interface PermissionGroup {
   name: string;
@@ -27,6 +30,7 @@ interface PermissionGroup {
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class UsersSettingsComponent implements OnInit {
+  readonly minPasswordLength = MIN_PASSWORD_LENGTH;
   view: 'users' | 'roles' = 'users';
   loading = true;
 
@@ -36,28 +40,27 @@ export class UsersSettingsComponent implements OnInit {
   /**
    * Derived once per load rather than per change detection pass. As getters these rebuilt
    * their *ngFor rows constantly, which stopped the checkboxes and dropdown from being
-   * clickable — see the note in settings.component.ts.
+   * clickable (see the note in settings.component.ts).
    */
   permissionGroups: PermissionGroup[] = [];
   roleOptions: DropdownOption<string>[] = [];
+  /** The admin pool first, then every active operator. */
+  ownerOptions: DropdownOption<string>[] = [];
+  /** False when the current account may create no kind of account at all. */
+  canAddUser = false;
 
-  // User editor
   showUserModal = false;
   editingUser: User | null = null;
-  form = { username: '', displayName: '', password: '', roleId: '', active: true };
+  form = { username: '', displayName: '', password: '', roleId: '', active: true, ownerUserId: '' };
   saving = false;
 
-  // Role editor
   showRoleModal = false;
   editingRole: Role | null = null;
   roleForm: { name: string; description: string; permissions: Set<Permission> } =
     { name: '', description: '', permissions: new Set<Permission>() };
 
-  // Deletion
   userToDelete: User | null = null;
   roleToDelete: Role | null = null;
-
-  // Change own password
 
   constructor(
     private auth: AuthService,
@@ -68,8 +71,6 @@ export class UsersSettingsComponent implements OnInit {
   ngOnInit(): void {
     this.reload();
   }
-
-  // -------------------- Loading --------------------
 
   async reload(): Promise<void> {
     this.loading = true;
@@ -82,20 +83,80 @@ export class UsersSettingsComponent implements OnInit {
       this.users = usersAndRoles.users;
       this.roles = roleInfo.roles.length ? roleInfo.roles : usersAndRoles.roles;
       this.permissionCatalog = roleInfo.permissions;
-      this.roleOptions = this.roles.map(role => ({ value: role.id, label: role.name }));
+      this.roleOptions = this.roleChoices(null);
+      this.canAddUser = this.roleOptions.length > 0;
+      this.ownerOptions = [
+        { value: '', label: 'Admin pool' },
+        ...this.users.filter(user => user.roleId === OPERATOR_ROLE_ID && user.active).map(user => ({ value: user.id, label: user.displayName || user.username }))
+      ];
       this.permissionGroups = this.buildPermissionGroups();
+    } catch (error) {
+      console.error('[users-settings] Could not load the accounts:', error);
+      this.notification.error('Could not load the accounts.', 'Accounts');
     } finally {
       this.loading = false;
       this.cdr.markForCheck();
     }
   }
 
-  get isDesktop(): boolean {
-    return this.auth.identity.isLocalDesktop;
-  }
-
   get currentUserId(): string | null {
     return this.auth.currentUser?.id ?? null;
+  }
+
+  get isAdmin(): boolean {
+    return this.auth.identity.isAdmin;
+  }
+
+  /** Roles are edited by admins and users.manage holders; a pool owner only sees their accounts. */
+  get canManageRoles(): boolean {
+    return this.isAdmin || this.auth.can(PERMISSIONS.USERS_MANAGE);
+  }
+
+  /** Whether the pool field is offered: only those who may place accounts, and only for pool roles. */
+  get showOwnerField(): boolean {
+    return this.canManageRoles && isPoolRole(this.form.roleId);
+  }
+
+  canEditAccount(user: User): boolean {
+    if (this.canManageRoles) return true;
+    return this.holds(user.roleId, 'create');
+  }
+
+  canDeleteAccount(user: User): boolean {
+    if (this.canManageRoles) return true;
+    return this.holds(user.roleId, 'delete');
+  }
+
+  /** Where an account sits: "Admin", "Operators", "Admin pool", or the owning operator's name. */
+  poolLabel(user: User): string {
+    if (user.roleId === ADMIN_ROLE_ID) return 'Admin';
+    if (user.roleId === OPERATOR_ROLE_ID) return 'Operators';
+    if (!user.ownerUserId) return 'Admin pool';
+    const owner = this.users.find(account => account.id === user.ownerUserId);
+    return owner ? (owner.displayName || owner.username) : 'Operator';
+  }
+
+  private holds(roleId: string, action: 'create' | 'delete'): boolean {
+    const permission = accountPermissionFor(roleId, action);
+    return !!permission && this.auth.can(permission);
+  }
+
+  /**
+   * The roles the current account may hand out, for the role dropdown. An admin may give any;
+   * a users.manage holder any whose permissions they hold; a pool owner the pool roles they may
+   * create. The account being edited keeps its own role in the list.
+   */
+  private roleChoices(editing: User | null): DropdownOption<string>[] {
+    return this.roles
+      .filter(role => role.id === editing?.roleId || this.canOfferRole(role))
+      .map(role => ({ value: role.id, label: role.name }));
+  }
+
+  private canOfferRole(role: Role): boolean {
+    if (this.isAdmin) return true;
+    if (role.id === ADMIN_ROLE_ID) return false;
+    if (this.auth.can(PERMISSIONS.USERS_MANAGE)) return role.permissions.every(permission => this.auth.can(permission));
+    return isPoolRole(role.id) && this.holds(role.id, 'create');
   }
 
   private buildPermissionGroups(): PermissionGroup[] {
@@ -120,24 +181,25 @@ export class UsersSettingsComponent implements OnInit {
     return this.roles.find(role => role.id === roleId)?.name || 'Unknown';
   }
 
-  isAdminRole(role: Role): boolean {
-    return role.id === ADMIN_ROLE_ID;
+  isAdminRole(role: Role | null): boolean {
+    return role?.id === ADMIN_ROLE_ID;
   }
 
   trackById(_index: number, item: { id: string }): string {
     return item.id;
   }
 
-  // -------------------- Users --------------------
-
   openCreateUser(): void {
     this.editingUser = null;
+    this.roleOptions = this.roleChoices(null);
+    const offered = this.roleOptions.map(option => option.value);
     this.form = {
       username: '',
       displayName: '',
       password: '',
-      roleId: this.roles.find(role => role.id !== ADMIN_ROLE_ID)?.id || this.roles[0]?.id || '',
-      active: true
+      roleId: offered.find(id => id !== ADMIN_ROLE_ID) || offered[0] || '',
+      active: true,
+      ownerUserId: ''
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -145,12 +207,14 @@ export class UsersSettingsComponent implements OnInit {
 
   openEditUser(user: User): void {
     this.editingUser = user;
+    this.roleOptions = this.roleChoices(user);
     this.form = {
       username: user.username,
       displayName: user.displayName,
       password: '',
       roleId: user.roleId,
-      active: user.active
+      active: user.active,
+      ownerUserId: user.ownerUserId || ''
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -165,7 +229,8 @@ export class UsersSettingsComponent implements OnInit {
   get canSaveUser(): boolean {
     if (this.saving || !this.form.username.trim() || !this.form.roleId) return false;
     // A new account needs a password; an existing one only when changing it.
-    return this.editingUser ? true : this.form.password.length >= 8;
+    if (this.editingUser && !this.form.password) return true;
+    return this.form.password.length >= MIN_PASSWORD_LENGTH;
   }
 
   async saveUser(): Promise<void> {
@@ -173,6 +238,10 @@ export class UsersSettingsComponent implements OnInit {
     this.saving = true;
     this.cdr.markForCheck();
 
+    // A pool owner's accounts always land in their own pool; only those who may choose send one.
+    const owner = this.canManageRoles
+      ? { ownerUserId: isPoolRole(this.form.roleId) ? (this.form.ownerUserId || null) : null }
+      : {};
     const result = this.editingUser
       ? await this.auth.updateUser({
           id: this.editingUser.id,
@@ -180,6 +249,7 @@ export class UsersSettingsComponent implements OnInit {
           displayName: this.form.displayName.trim(),
           roleId: this.form.roleId,
           active: this.form.active,
+          ...owner,
           ...(this.form.password ? { password: this.form.password } : {})
         })
       : await this.auth.createUser({
@@ -187,7 +257,8 @@ export class UsersSettingsComponent implements OnInit {
           displayName: this.form.displayName.trim(),
           password: this.form.password,
           roleId: this.form.roleId,
-          active: this.form.active
+          active: this.form.active,
+          ...owner
         });
 
     this.saving = false;
@@ -219,8 +290,6 @@ export class UsersSettingsComponent implements OnInit {
       this.cdr.markForCheck();
     }
   }
-
-  // -------------------- Roles --------------------
 
   openCreateRole(): void {
     this.editingRole = null;
@@ -255,9 +324,9 @@ export class UsersSettingsComponent implements OnInit {
     return this.roleForm.permissions.has(permission);
   }
 
-  /** The Admin role is fixed, so its editor is read-only. */
+  /** Built-in roles have a fixed permission set, so the editor only shows it. */
   get roleEditorLocked(): boolean {
-    return !!this.editingRole && this.isAdminRole(this.editingRole);
+    return !!this.editingRole?.builtIn;
   }
 
   async saveRole(): Promise<void> {

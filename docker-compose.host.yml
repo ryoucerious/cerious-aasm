@@ -1,6 +1,5 @@
-# =============================================================================
-# Cerious AASM — host networking override (Linux hosts)
-# =============================================================================
+# Cerious AASM - host networking override (Linux hosts).
+#
 # The container shares the host's network: every port a server listens on is a
 # port on the host, with no ranges to stay inside. Open ports with the host
 # firewall (ufw, firewalld) as on a native Linux install.
@@ -9,7 +8,6 @@
 #
 # Docker Desktop (Windows, macOS) runs containers in a VM, so use the default
 # published ports there instead.
-# =============================================================================
 
 services:
   aasm:

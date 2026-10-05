@@ -1,58 +1,50 @@
-
+import * as fs from 'fs';
 import * as path from 'path';
 import * as pty from 'node-pty';
 import axios from 'axios';
-import { getDefaultInstallDir } from './platform.utils';
-import { setCurrentAbort } from './installer.utils';
-import * as fs from 'fs';
 import * as crypto from 'crypto';
-
-
-
-export function getSteamCmdDir() {
-  return path.join(getDefaultInstallDir(), 'steamcmd');
-}
-
-
-export function isSteamCmdInstalled(): boolean {
-  const dir = getSteamCmdDir();
-  if (process.platform === 'win32') {
-    return fs.existsSync(path.join(dir, 'steamcmd.exe'));
-  } else {
-    // An install whose first-time update failed has steamcmd.sh but can't download
-    // anything; report it missing so the installer runs again and repairs it.
-    return fs.existsSync(path.join(dir, 'steamcmd.sh'))
-      && (process.platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir));
-  }
-}
+import { InstallCancelledError, InstallProgress, onInstallCancel, reportSafely } from './installer.utils';
+import { getDefaultInstallDir, getPlatform } from './platform.utils';
 
 const STEAMCMD_URLS = {
-  win32: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
+  windows: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
   linux: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz',
 };
 
 /** Download and extract share the progress bar: 0-50% download, 50-100% extract. */
 const PHASE_SPLIT = 50;
 
+const MAX_INIT_ATTEMPTS = 5;
+const INIT_ATTEMPT_TIMEOUT_MS = 10 * 60 * 1000;
+
+export function getSteamCmdDir(): string {
+  return path.join(getDefaultInstallDir(), 'steamcmd');
+}
+
+export function getSteamCmdExecutable(): string {
+  return path.join(getSteamCmdDir(), getPlatform() === 'windows' ? 'steamcmd.exe' : 'steamcmd.sh');
+}
+
+export function isSteamCmdInstalled(): boolean {
+  if (!fs.existsSync(getSteamCmdExecutable())) return false;
+  // An install whose first-time update failed has steamcmd.sh but can't download anything;
+  // report it missing so the installer runs again and repairs it.
+  return getPlatform() !== 'linux' || isLinuxSteamCmdBootstrapped(getSteamCmdDir());
+}
+
 /**
- * Stream a URL to disk, reporting real byte progress.
- *
- * This used to shell out — `powershell.exe -Command Invoke-WebRequest` on Windows and
- * `bash -c curl` on Linux — and scrape percentages out of a pty. Streaming it here means
- * no shell at all: no PowerShell download cradle for antivirus to flag, no dependence on
- * curl/tar being present, and Content-Length gives exact progress instead of the 5 MB
- * guess the old Windows path divided by.
+ * Streams a URL to disk, reporting real byte progress. No shell is involved: no PowerShell
+ * download cradle for antivirus to flag, no dependence on curl being present. Rejects with
+ * InstallCancelledError when `signal` aborts.
  */
-async function downloadFile(
+export async function downloadFile(
   url: string,
   destination: string,
   signal: AbortSignal,
   onBytes: (received: number, total: number) => void
 ): Promise<void> {
-  const response = await axios.get(url, {
-    responseType: 'stream',
-    signal,
-    maxRedirects: 5,
+  const response = await axios.get(url, { responseType: 'stream', signal, maxRedirects: 5 }).catch((error: unknown) => {
+    throw signal.aborted ? new InstallCancelledError() : error;
   });
 
   const total = Number(response.headers['content-length']) || 0;
@@ -71,7 +63,7 @@ async function downloadFile(
 
     // An abort mid-stream must reject rather than leave a truncated archive behind that
     // the extract step would then fail on with a confusing error.
-    const onAbort = () => fail(new Error('Install cancelled.'));
+    const onAbort = () => fail(new InstallCancelledError());
     signal.addEventListener('abort', onAbort, { once: true });
 
     response.data.on('data', (chunk: Buffer) => {
@@ -91,49 +83,48 @@ async function downloadFile(
   });
 }
 
-/**
- * Unpack the SteamCMD archive. The format differs by platform — a zip on Windows, a
- * gzipped tar on Linux — so the two branches are inherent, but neither spawns a process.
- */
+// `tar` and `adm-zip` are required lazily rather than imported at the top: `tar` reads
+// `path.win32` during module init, which throws in any test that mocks the path module.
+export async function extractTarball(archivePath: string, options: { cwd: string; strip?: number }): Promise<void> {
+  const tar = require('tar');
+  await tar.x({ file: archivePath, ...options });
+}
+
+/** A zip on Windows, a gzipped tar on Linux; neither spawns a process. */
 async function extractArchive(archivePath: string, destination: string): Promise<void> {
-  // Both libraries are required lazily rather than imported at the top: `tar` reads
-  // `path.win32` during module init, which throws in any test that mocks the path module,
-  // and each platform only ever needs one of the two.
-  if (process.platform === 'win32') {
+  if (getPlatform() === 'windows') {
     const AdmZip = require('adm-zip');
     // adm-zip is synchronous; SteamCMD's zip is a few MB, so this is not worth a worker.
     new AdmZip(archivePath).extractAllTo(destination, true);
   } else {
-    const tar = require('tar');
-    await tar.x({ file: archivePath, cwd: destination });
+    await extractTarball(archivePath, { cwd: destination });
   }
 }
 
-export function installSteamCmd(callback: (err: Error | null, output?: string) => void, onData?: (data: any) => void) {
+export function installSteamCmd(callback: (err: Error | null) => void, onProgress?: (progress: InstallProgress) => void): void {
   const dir = getSteamCmdDir();
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const isWindows = process.platform === 'win32';
-  const url = isWindows ? STEAMCMD_URLS.win32 : STEAMCMD_URLS.linux;
-  const archivePath = path.join(dir, isWindows ? 'steamcmd.zip' : 'steamcmd_linux.tar.gz');
+  const platform = getPlatform();
+  const archivePath = path.join(dir, platform === 'windows' ? 'steamcmd.zip' : 'steamcmd_linux.tar.gz');
+  const safeReport = reportSafely(onProgress);
+  const report = (percent: number, step: string, message: string) => safeReport({ percent, step, message });
 
-  const report = (percent: number, step: string, message: string) => {
-    if (onData) {
-      onData({ percent, step, message });
-    }
-  };
-
-  // Registered so the existing Cancel button (cancelInstaller) can stop the download.
+  // One signal covers the download and the first-run initialisation after it.
   const abort = new AbortController();
-  setCurrentAbort(abort);
+  const unregisterCancel = onInstallCancel(() => abort.abort());
+  const finish = (err: Error | null) => {
+    unregisterCancel();
+    callback(err);
+  };
 
   report(0, 'download', 'Downloading SteamCMD...');
 
   let lastPercent = 0;
   const run = async () => {
-    await downloadFile(url, archivePath, abort.signal, (received, total) => {
+    await downloadFile(STEAMCMD_URLS[platform], archivePath, abort.signal, (received, total) => {
       if (!total) return;
       const percent = Math.min(Math.floor((received / total) * PHASE_SPLIT), PHASE_SPLIT);
       if (percent > lastPercent) {
@@ -149,54 +140,57 @@ export function installSteamCmd(callback: (err: Error | null, output?: string) =
 
   run().then(
     () => {
-      setCurrentAbort(null);
-
-      // On Linux, ensure steamcmd.sh is executable after extraction
-      if (process.platform !== 'win32') {
-        const steamcmdSh = path.join(dir, 'steamcmd.sh');
-        if (fs.existsSync(steamcmdSh)) {
-          try { fs.chmodSync(steamcmdSh, '755'); } catch (e) {
-            console.warn('[steamcmd] Could not chmod steamcmd.sh:', e);
+      if (platform === 'linux') {
+        const steamCmdSh = getSteamCmdExecutable();
+        if (fs.existsSync(steamCmdSh)) {
+          try {
+            fs.chmodSync(steamCmdSh, '755');
+          } catch (error) {
+            console.warn('[steamcmd] Could not chmod steamcmd.sh:', error);
           }
         }
       }
 
-      // SteamCMD must self-update on first run before it can process commands.
-      // Run it once with +quit to complete the self-update.
-      initializeSteamCmd(dir, onData, () => {
-        if (process.platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir)) {
-          callback(null, 'SteamCMD installed');
+      initializeSteamCmd(dir, safeReport, abort.signal, err => {
+        if (err || platform !== 'linux' || isLinuxSteamCmdBootstrapped(dir)) {
+          finish(err);
           return;
         }
 
+        // The bootstrapper's own update host is gone (see LINUX_PACKAGE_HOSTS), so it left no
+        // usable client behind. Fetch the current packages and let the new steamcmd.sh finish
+        // its first start.
         console.warn('[steamcmd] First-time update did not complete; installing the SteamCMD packages directly.');
         report(95, 'init', 'Downloading SteamCMD update...');
-        installLinuxPackages(dir).then(
-          () => initializeSteamCmd(dir, onData, () => callback(null, 'SteamCMD installed')),
-          (err: any) => {
-            const message = `SteamCMD could not finish its first-time update: ${err?.message || err}`;
+        installLinuxPackages(dir, abort.signal).then(
+          () => initializeSteamCmd(dir, safeReport, abort.signal, finish),
+          (error: unknown) => {
+            if (error instanceof InstallCancelledError) {
+              finish(error);
+              return;
+            }
+            const message = `SteamCMD could not finish its first-time update: ${error instanceof Error ? error.message : String(error)}`;
             console.error('[steamcmd]', message);
             report(95, 'error', message);
-            callback(new Error(message));
+            finish(new Error(message));
           }
         );
       });
     },
-    (err: any) => {
-      setCurrentAbort(null);
-      const message = err?.message || String(err);
-      console.error('[steamcmd] Install failed:', message);
-      report(lastPercent, 'error', message);
-      callback(err instanceof Error ? err : new Error(message));
+    (error: unknown) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error('[steamcmd] Install failed:', err.message);
+      report(lastPercent, 'error', err.message);
+      finish(err);
     }
   );
 }
 
 /**
- * steamcmd_linux.tar.gz holds a bootstrapper from 2018 that takes its first update only
- * from client-download.steampowered.com. When that host doesn't resolve, the bootstrap
- * exits 1 in under a second and SteamCMD never becomes usable. The current packages are
- * still published on the host the updated client uses, so install them from there.
+ * steamcmd_linux.tar.gz holds a bootstrapper from 2018 that takes its first update only from
+ * client-download.steampowered.com. When that host doesn't resolve, the bootstrap exits 1 in
+ * under a second and SteamCMD never becomes usable. The current packages are still published on
+ * the host the updated client uses, so install them from there.
  */
 const LINUX_PACKAGE_HOSTS = [
   'https://client-update.steamstatic.com',
@@ -222,128 +216,165 @@ function parsePackageManifest(text: string): { file: string; sha2: string }[] {
   return packages;
 }
 
-async function installLinuxPackagesFrom(host: string, dir: string): Promise<void> {
-  const abort = new AbortController();
-  setCurrentAbort(abort);
-  try {
-    const manifest = await axios.get(`${host}/steam_cmd_linux`, { responseType: 'text', signal: abort.signal });
-    const packages = parsePackageManifest(String(manifest.data));
-    if (packages.length === 0) {
-      throw new Error(`no packages listed in ${host}/steam_cmd_linux`);
-    }
+/** Rejects with InstallCancelledError when `signal` aborts, like downloadFile. */
+async function installLinuxPackagesFrom(host: string, dir: string, signal: AbortSignal): Promise<void> {
+  const manifest = await axios.get(`${host}/steam_cmd_linux`, { responseType: 'text', signal }).catch((error: unknown) => {
+    throw signal.aborted ? new InstallCancelledError() : error;
+  });
+  const packages = parsePackageManifest(String(manifest.data));
+  if (packages.length === 0) {
+    throw new Error(`no packages listed in ${host}/steam_cmd_linux`);
+  }
 
-    const packageDir = path.join(dir, 'package');
-    fs.mkdirSync(packageDir, { recursive: true });
-    for (const { file, sha2 } of packages) {
-      const zipPath = path.join(packageDir, file);
-      await downloadFile(`${host}/${file}`, zipPath, abort.signal, () => {});
-      const actual = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
-      if (actual !== sha2) {
-        throw new Error(`checksum mismatch for ${file}`);
-      }
-      const AdmZip = require('adm-zip');
-      new AdmZip(zipPath).extractAllTo(dir, true);
+  const packageDir = path.join(dir, 'package');
+  fs.mkdirSync(packageDir, { recursive: true });
+  for (const { file, sha2 } of packages) {
+    const zipPath = path.join(packageDir, file);
+    await downloadFile(`${host}/${file}`, zipPath, signal, () => {});
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
+    if (actual !== sha2) {
+      throw new Error(`checksum mismatch for ${file}`);
     }
+    const AdmZip = require('adm-zip');
+    new AdmZip(zipPath).extractAllTo(dir, true);
+  }
 
-    // The zips store DOS attributes, so nothing comes out executable.
-    const executables = [path.join(dir, 'steamcmd.sh')];
-    for (const platformDir of ['linux32', 'linux64']) {
-      try {
-        for (const name of fs.readdirSync(path.join(dir, platformDir)) ?? []) {
-          executables.push(path.join(dir, platformDir, name));
-        }
-      } catch {
-        // A package set without this platform is fine.
+  // The zips store DOS attributes, so nothing comes out executable.
+  const executables = [path.join(dir, 'steamcmd.sh')];
+  for (const platformDir of ['linux32', 'linux64']) {
+    try {
+      for (const name of fs.readdirSync(path.join(dir, platformDir)) ?? []) {
+        executables.push(path.join(dir, platformDir, name));
       }
+    } catch {
+      // A package set without this platform is fine.
     }
-    for (const file of executables) {
-      try { fs.chmodSync(file, 0o755); } catch (e) {
-        console.warn(`[steamcmd] Could not chmod ${file}:`, e);
-      }
+  }
+  for (const file of executables) {
+    try {
+      fs.chmodSync(file, 0o755);
+    } catch (error) {
+      console.warn(`[steamcmd] Could not chmod ${file}:`, error);
     }
-  } finally {
-    setCurrentAbort(null);
   }
 }
 
-async function installLinuxPackages(dir: string): Promise<void> {
-  let lastError: any;
+/** Tries each host in turn; a cancel stops at once. */
+async function installLinuxPackages(dir: string, signal: AbortSignal): Promise<void> {
+  let lastError: unknown;
   for (const host of LINUX_PACKAGE_HOSTS) {
     try {
-      await installLinuxPackagesFrom(host, dir);
+      await installLinuxPackagesFrom(host, dir, signal);
       return;
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[steamcmd] Could not install packages from ${host}:`, err?.message || err);
+    } catch (error) {
+      if (error instanceof InstallCancelledError || signal.aborted) throw new InstallCancelledError();
+      lastError = error;
+      console.warn(`[steamcmd] Could not install packages from ${host}:`, error instanceof Error ? error.message : error);
     }
   }
   throw lastError;
 }
 
-const MAX_INIT_ATTEMPTS = 5;
-
 /**
- * Run SteamCMD with +quit repeatedly until it exits with code 0.
- * SteamCMD's first-time self-update on Windows can require multiple restarts
- * before it fully completes. Without this, the first real command fails.
+ * Runs SteamCMD with +quit until it exits 0. Its first-time self-update on Windows can need
+ * several restarts, and until it has finished the first real command fails. Best effort: a
+ * failed or hung run never fails the install; only a cancel does.
  */
 function initializeSteamCmd(
   dir: string,
-  onData: ((data: any) => void) | undefined,
-  done: () => void
-) {
-  const exe = process.platform === 'win32'
-    ? path.join(dir, 'steamcmd.exe')
-    : path.join(dir, 'steamcmd.sh');
-
+  report: (progress: InstallProgress) => void,
+  signal: AbortSignal,
+  done: (err: Error | null) => void
+): void {
+  const executable = getSteamCmdExecutable();
   let attempt = 0;
+  let current: pty.IPty | undefined;
+  let currentTimer: NodeJS.Timeout | undefined;
+  let finished = false;
 
-  function runAttempt() {
-    attempt++;
-    const pct = Math.min(70 + attempt * 5, 95);
-    if (onData) {
-      onData({
-        percent: pct,
-        step: 'init',
-        message: attempt === 1
-          ? 'Initializing SteamCMD (first-time setup)...'
-          : `SteamCMD updating (attempt ${attempt}/${MAX_INIT_ATTEMPTS})...`
-      });
-    }
-    console.log(`[steamcmd] Initialization attempt ${attempt}/${MAX_INIT_ATTEMPTS}`);
-
-    let proc: pty.IPty;
+  const finish = (err: Error | null) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(currentTimer);
+    signal.removeEventListener('abort', onAbort);
+    done(err);
+  };
+  const onAbort = () => {
     try {
-      proc = pty.spawn(exe, ['+quit'], { cwd: dir });
-    } catch (spawnErr: any) {
-      console.warn('[steamcmd] Failed to spawn during init:', spawnErr.message);
-      done();
+      current?.kill();
+    } catch (error) {
+      console.warn('[steamcmd] Could not stop SteamCMD:', error);
+    }
+    finish(new InstallCancelledError());
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  const initialized = () => {
+    report({ percent: 95, step: 'init', message: 'SteamCMD initialized' });
+    finish(null);
+  };
+
+  const runAttempt = () => {
+    if (signal.aborted) {
+      finish(new InstallCancelledError());
       return;
     }
+    attempt++;
+    report({
+      percent: Math.min(70 + attempt * 5, 95),
+      step: 'init',
+      message: attempt === 1
+        ? 'Initializing SteamCMD (first-time setup)...'
+        : `SteamCMD updating (attempt ${attempt}/${MAX_INIT_ATTEMPTS})...`
+    });
+    console.log(`[steamcmd] Initialization attempt ${attempt}/${MAX_INIT_ATTEMPTS}`);
 
-    proc.onData(() => {});
+    let child: pty.IPty;
+    try {
+      child = pty.spawn(executable, ['+quit'], { cwd: dir });
+    } catch (error) {
+      console.warn('[steamcmd] Could not start SteamCMD to initialize it:', error instanceof Error ? error.message : error);
+      finish(null);
+      return;
+    }
+    current = child;
 
-    proc.onExit((result) => {
-      console.log(`[steamcmd] Init attempt ${attempt} exited with code ${result.exitCode}`);
-      if (result.exitCode === 0) {
-        if (onData) {
-          onData({ percent: 95, step: 'init', message: 'SteamCMD initialized' });
-        }
-        done();
+    let settled = false;
+    const attemptEnded = (exitCode: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (finished) {
+        return;
+      }
+      if (exitCode === 0) {
+        initialized();
       } else if (attempt < MAX_INIT_ATTEMPTS) {
         // SteamCMD needs another restart to finish updating
         runAttempt();
       } else {
         console.warn(`[steamcmd] Init did not reach exit code 0 after ${MAX_INIT_ATTEMPTS} attempts, proceeding anyway`);
-        if (onData) {
-          onData({ percent: 95, step: 'init', message: 'SteamCMD initialized' });
-        }
-        done();
+        initialized();
       }
+    };
+
+    const timer = setTimeout(() => {
+      console.warn(`[steamcmd] Init attempt ${attempt} still running after ${INIT_ATTEMPT_TIMEOUT_MS / 60000} minutes; stopping it`);
+      try {
+        child.kill();
+      } catch (error) {
+        console.warn('[steamcmd] Could not stop SteamCMD:', error);
+      }
+      attemptEnded(null);
+    }, INIT_ATTEMPT_TIMEOUT_MS);
+    currentTimer = timer;
+
+    child.onData(() => {});
+    child.onExit(({ exitCode }) => {
+      console.log(`[steamcmd] Init attempt ${attempt} exited with code ${exitCode}`);
+      attemptEnded(exitCode);
     });
-  }
+  };
 
   runAttempt();
 }
-
-// Inline exports are used above

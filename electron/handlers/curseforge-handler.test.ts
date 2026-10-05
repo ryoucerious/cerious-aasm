@@ -14,7 +14,6 @@ jest.mock('electron', () => ({
   },
 }));
 
-// Mock https module
 const mockGet = jest.fn();
 jest.mock('https', () => ({
   get: mockGet,
@@ -79,7 +78,6 @@ describe('curseforge-handler', () => {
     });
 
     it('should make API request with valid key', async () => {
-      // Mock the https.get to simulate a successful response
       const responseData = JSON.stringify({
         data: [{
           id: 123,
@@ -264,6 +262,35 @@ describe('curseforge-handler', () => {
       expect(shell.openExternal).toHaveBeenCalledWith('https://custom.url');
     });
 
+    it.each([
+      'file:///C:/Windows/System32/calc.exe',
+      '\\\\evil-host\\share\\payload.exe',
+      'http://www.curseforge.com/ark-survival-ascended',
+      'ms-settings:privacy',
+      'javascript:alert(1)',
+      'not a url'
+    ])('refuses to open %s', async url => {
+      const { shell } = require('electron');
+
+      await handlers['curseforge-open-website']({ url }, mockSender);
+
+      expect(shell.openExternal).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'curseforge-open-website',
+        { success: false, error: 'Only https links can be opened.' },
+        mockSender
+      );
+    });
+
+    it('opens the CurseForge page for a request without a payload', async () => {
+      const { shell } = require('electron');
+      (shell.openExternal as jest.Mock<any>).mockResolvedValue(undefined);
+
+      await handlers['curseforge-open-website'](undefined, mockSender);
+
+      expect(shell.openExternal).toHaveBeenCalledWith('https://www.curseforge.com/ark-survival-ascended');
+    });
+
     it('should handle open errors', async () => {
       const { shell } = require('electron');
       (shell.openExternal as jest.Mock<any>).mockRejectedValue(new Error('Cannot open'));
@@ -275,6 +302,24 @@ describe('curseforge-handler', () => {
         { success: false, error: 'Cannot open' },
         mockSender
       );
+    });
+
+    it('echoes the requestId on success, refusal and failure', async () => {
+      const { shell } = require('electron');
+      (shell.openExternal as jest.Mock<any>).mockResolvedValueOnce(undefined);
+      await handlers['curseforge-open-website']({ requestId: 'r-ok' }, mockSender);
+
+      await handlers['curseforge-open-website']({ url: 'file:///C:/x.exe', requestId: 'r-refused' }, mockSender);
+
+      (shell.openExternal as jest.Mock<any>).mockRejectedValueOnce(new Error('Cannot open'));
+      await handlers['curseforge-open-website']({ requestId: 'r-failed' }, mockSender);
+
+      const replies = (mockMessaging.sendToOriginator as jest.Mock<any>).mock.calls.map(call => call[1]);
+      expect(replies).toEqual([
+        { success: true, requestId: 'r-ok' },
+        { success: false, error: 'Only https links can be opened.', requestId: 'r-refused' },
+        { success: false, error: 'Cannot open', requestId: 'r-failed' },
+      ]);
     });
   });
 

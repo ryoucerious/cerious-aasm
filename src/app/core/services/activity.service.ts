@@ -1,8 +1,9 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { BehaviorSubject, Observable, Subscription, merge } from 'rxjs';
-import { debounceTime, map, take, filter } from 'rxjs/operators';
+import { debounceTime, map, filter } from 'rxjs/operators';
 import { MessagingService } from './messaging/messaging.service';
 import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
 export type ActivityKind =
   | 'start' | 'stop' | 'crash' | 'backup' | 'join' | 'leave' | 'update' | 'error' | 'info' | 'account';
@@ -17,6 +18,21 @@ export interface ActivityItem {
   username?: string | null;
 }
 
+/** One row of get-activity's reply. It arrives unchecked, so toItem copes with missing fields. */
+interface ActivityEntry {
+  id?: string | number;
+  kind?: ActivityKind;
+  message?: string;
+  createdAt?: number;
+  instanceId?: string | null;
+  username?: string | null;
+}
+
+interface ActivityReply {
+  success?: boolean;
+  entries?: ActivityEntry[];
+}
+
 /** When this device last looked at the feed. Personal, so it stays on the device. */
 export const ACTIVITY_SEEN_KEY = 'cerious-aasm.activity-seen';
 
@@ -24,7 +40,7 @@ export const ACTIVITY_SEEN_KEY = 'cerious-aasm.activity-seen';
  * The "Recent Activity" feed and the bell badge in the top bar.
  *
  * The entries themselves are recorded and kept by the backend, so every client sees the same
- * history and events that happen with no UI open — a scheduled backup, an overnight crash —
+ * history and events that happen with no UI open (a scheduled backup, an overnight crash)
  * are still there afterwards. This service just mirrors that list and reloads it when one of
  * the live channels says something happened.
  *
@@ -37,33 +53,32 @@ export class ActivityService implements OnDestroy {
   private readonly lastSeenSubject = new BehaviorSubject<number>(0);
   private readonly subs: Subscription[] = [];
 
-  constructor(private messaging: MessagingService, private webSocket: WebSocketService) {
+  constructor(private messaging: MessagingService, webSocket: WebSocketService, ipc: IpcService) {
     this.lastSeenSubject.next(this.readSeen());
-    this.refresh();
 
-    // Same as the server list: the first request can be made before the socket is open, so
-    // ask again whenever the connection comes up.
-    this.subs.push(
-      this.webSocket.connected$.pipe(filter((connected: boolean) => connected)).subscribe(() => this.refresh())
-    );
+    // Same as the server list: the web UI asks whenever its socket comes up, since a reconnect
+    // can follow a backend restart that happened while the feed was not listening. The desktop
+    // app has no socket and asks once.
+    this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
+    if (ipc.isElectron) this.refresh();
 
     // These are the broadcasts the backend turns into activity entries. Rather than
     // duplicating that classification here, any of them simply prompts a reload; the
     // debounce collapses the bursts that arrive when several servers change at once.
     this.subs.push(
       merge(
-        this.messaging.receiveMessage<any>('server-instance-state'),
-        this.messaging.receiveMessage<any>('server-instance-players'),
-        this.messaging.receiveMessage<any>('backup-created'),
-        this.messaging.receiveMessage<any>('notification'),
-        this.messaging.receiveMessage<any>('activity-changed'),
-        this.messaging.receiveMessage<any>('users-changed')
+        this.messaging.receiveMessage<unknown>('server-instance-state'),
+        this.messaging.receiveMessage<unknown>('server-instance-players'),
+        this.messaging.receiveMessage<unknown>('backup-created'),
+        this.messaging.receiveMessage<unknown>('notification'),
+        this.messaging.receiveMessage<unknown>('activity-changed'),
+        this.messaging.receiveMessage<unknown>('users-changed')
       ).pipe(debounceTime(400)).subscribe(() => this.refresh())
     );
   }
 
   ngOnDestroy(): void {
-    this.subs.forEach(sub => sub?.unsubscribe?.());
+    this.subs.forEach(sub => sub.unsubscribe());
   }
 
   get items(): ActivityItem[] {
@@ -85,10 +100,10 @@ export class ActivityService implements OnDestroy {
 
   /** Pull the current feed from the backend. */
   refresh(limit = 100): void {
-    this.messaging.sendMessage<any>('get-activity', { limit }).pipe(take(1)).subscribe({
-      next: (res) => {
+    this.messaging.sendMessage<ActivityReply | null>('get-activity', { limit }).subscribe({
+      next: res => {
         if (!res || res.success === false || !Array.isArray(res.entries)) return;
-        this.itemsSubject.next(res.entries.map((entry: any) => this.toItem(entry)));
+        this.itemsSubject.next(res.entries.map(entry => this.toItem(entry)));
       },
       error: () => { /* the feed is a convenience; leave the last list in place */ }
     });
@@ -109,16 +124,16 @@ export class ActivityService implements OnDestroy {
 
   /** Clear the shared history. Needs the settings permission; refused otherwise. */
   clear(): void {
-    this.messaging.sendMessage<any>('clear-activity', {}).pipe(take(1)).subscribe({
+    this.messaging.sendMessage('clear-activity', {}).subscribe({
       next: () => this.refresh(),
       error: () => { /* the backend reports the refusal through its own notification */ }
     });
   }
 
-  private toItem(entry: any): ActivityItem {
+  private toItem(entry: ActivityEntry): ActivityItem {
     return {
       id: String(entry.id),
-      kind: (entry.kind || 'info') as ActivityKind,
+      kind: entry.kind || 'info',
       message: String(entry.message || ''),
       timestamp: Number(entry.createdAt) || Date.now(),
       instanceId: entry.instanceId || undefined,

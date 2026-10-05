@@ -1,14 +1,41 @@
 import { Injectable, ChangeDetectorRef } from '@angular/core';
-import { Observable, take } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 import { MessagingService } from './messaging/messaging.service';
 import { RconManagementService } from './rcon-management.service';
 import { ServerStateService } from './server-state.service';
 import { NotificationService } from './notification.service';
+import { LiveServersService } from './live-servers.service';
+import { ServerInstanceService } from './server-instance.service';
+import { ServerInstance } from '../models/server-instance.model';
+import { serverStatusKey } from '../utils/server-status';
 
+const SHUTDOWN_WARNING = 'ServerChat Server is shutting down in 5 seconds!';
+export const SHUTDOWN_WARNING_MS = 5_000;
 /**
- * Service responsible for managing server lifecycle operations
- * Handles start, stop, restart, and force stop operations
+ * The backend saves, sends DoExit, waits up to two minutes for the process to go, then sends
+ * SIGTERM and kills it: about 190 s at worst.
  */
+export const STOP_TIMEOUT_MS = 210_000;
+/** Closing the app stops waiting on its servers after this long and exits anyway. Not above STOP_TIMEOUT_MS. */
+export const EXIT_SHUTDOWN_CAP_MS = 150_000;
+
+/** Reply to stop-server-instance, or the local stand-in when the request itself failed. */
+export interface StopServerResult {
+  success: boolean;
+  instanceId?: string;
+  error?: string;
+}
+
+/** Reply to start-all-instances and stop-all-instances, which answer before the servers change state. */
+interface ControlAllResult {
+  success?: boolean;
+  error?: string;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -18,97 +45,142 @@ export class ServerLifecycleService {
     private messaging: MessagingService,
     private rconManagementService: RconManagementService,
     private serverStateService: ServerStateService,
-    private notificationService: NotificationService
+    private notificationService: NotificationService,
+    private liveServers: LiveServersService,
+    private serverInstanceService: ServerInstanceService
   ) {}
 
-  /**
-   * Start a server instance
-   */
-  startServer(serverInstance: any, cdr: ChangeDetectorRef): void {
+  startServer(serverInstance: ServerInstance, cdr: ChangeDetectorRef): void {
     if (!serverInstance || !serverInstance.id) return;
-    
-    // Clear logs and reset state
-    serverInstance.logs = [];
-    serverInstance.state = null;
+
+    serverInstance.state = undefined;
     this.serverStateService.clearLogsForInstance(serverInstance.id);
     cdr.markForCheck();
-    
-    // Send start command
-    this.messaging.sendMessage('start-server-instance', { id: serverInstance.id })
-      .pipe(take(1))
-      .subscribe();
-  }
 
-  /**
-   * Gracefully stop a server instance with warning
-   * Broadcasts shutdown message and waits 5 seconds before stopping
-   */
-  stopServer(serverInstance: any): void {
-    if (!serverInstance || !serverInstance.id) return;
-    
-    // Show toast notification that we're stopping the server
-    const serverName = serverInstance.name || serverInstance.id;
-    this.notificationService.info(`Stopping ${serverName}...`, 'Server Control');
-    
-    // First, broadcast a shutdown message to the server using ServerChat
-    this.rconManagementService.sendRconCommand(
-      serverInstance.id, 
-      'ServerChat Server is shutting down in 5 seconds!'
-    ).subscribe(() => {
-      // Wait 5 seconds, then send DoExit
-      setTimeout(() => {
-        this.rconManagementService.sendRconCommand(
-          serverInstance.id, 
-          'DoExit'
-        ).pipe(take(1)).subscribe(() => {
-          this.messaging.sendMessage('stop-server-instance', { id: serverInstance.id })
-            .pipe(take(1))
-            .subscribe();
-        });
-      }, 5000);
+    // A delivered request needs no handling: the outcome arrives as a server-instance-state broadcast.
+    this.messaging.sendMessage('start-server-instance', { id: serverInstance.id }).subscribe({
+      error: error => this.reportFailedRequest('start', serverInstance, error)
     });
   }
 
   /**
-   * Force stop a server instance immediately
-   * Does not send warning or graceful shutdown
+   * Warns the players, waits five seconds, then has the backend stop the server gracefully.
+   * Never rejects: a failure is shown to the user and returned.
    */
-  forceStopServer(serverInstance: any): void {
+  async stopServer(serverInstance: ServerInstance): Promise<StopServerResult> {
+    const id = serverInstance?.id;
+    if (!id) return { success: false, error: 'No server to stop' };
+
+    this.notificationService.info(`Stopping ${serverInstance.name || id}...`, 'Server Control');
+    this.rconManagementService.sendRconCommand(id, SHUTDOWN_WARNING).subscribe({
+      error: () => { /* RCON is not up yet while a server starts; stop it regardless */ }
+    });
+    await delay(SHUTDOWN_WARNING_MS);
+
+    let result: StopServerResult;
+    try {
+      result = await firstValueFrom(
+        this.messaging.sendMessage<StopServerResult>('stop-server-instance', { id }, { timeoutMs: STOP_TIMEOUT_MS })
+      );
+    } catch (error) {
+      result = { success: false, instanceId: id, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    if (!result.success) {
+      this.notificationService.error(result.error || `Could not stop ${serverInstance.name || id}`, 'Server Control');
+    }
+    return result;
+  }
+
+  forceStopServer(serverInstance: ServerInstance): void {
     if (!serverInstance || !serverInstance.id) return;
-    
-    this.messaging.sendMessage('force-stop-server-instance', { id: serverInstance.id })
-      .pipe(take(1))
-      .subscribe();
+
+    this.messaging.sendMessage('force-stop-server-instance', { id: serverInstance.id }).subscribe({
+      error: error => this.reportFailedRequest('force stop', serverInstance, error)
+    });
+  }
+
+  /** Queues every server that is not already up; the backend starts them one after another. */
+  startAllServers(): void {
+    if (!this.liveServers.servers.length) return;
+    this.controlAll('start-all-instances', 'All servers are starting.', 'Failed to start all servers.');
+  }
+
+  /** Stops every running or starting server. */
+  stopAllServers(): void {
+    if (!this.runningServers().length) {
+      this.notificationService.info('No servers are running.', 'Server Control');
+      return;
+    }
+    this.controlAll('stop-all-instances', 'All servers are stopping.', 'Failed to stop all servers.');
   }
 
   /**
-   * Restart a server instance
-   * Combines stop and start operations
+   * False, after telling the user why, when `server` may not be deleted: it is the last one, or
+   * its live state is anything but stopped.
    */
-  restartServer(serverInstance: any, cdr: ChangeDetectorRef): void {
-    if (!serverInstance || !serverInstance.id) return;
-    
-    // Stop the server first
-    this.stopServer(serverInstance);
-    
-    // Wait for server to stop, then start it again
-    // Note: In a real implementation, you might want to listen for server stopped events
-    setTimeout(() => {
-      this.startServer(serverInstance, cdr);
-    }, 7000); // Wait 7 seconds to ensure shutdown completes
+  checkDeletable(server: ServerInstance): boolean {
+    let refusal: string | null = null;
+    if (this.liveServers.servers.length <= 1) {
+      refusal = 'At least one server must remain.';
+    } else if (serverStatusKey((this.liveServers.find(server.id) ?? server).state) !== 'stopped') {
+      refusal = 'Server must be stopped before it can be deleted.';
+    }
+    if (refusal) this.notificationService.warning(refusal, 'Cannot Delete Server');
+    return !refusal;
+  }
+
+  /** Deletes `server` if checkDeletable allows it. Resolves true once the backend has; never rejects. */
+  async deleteServer(server: ServerInstance): Promise<boolean> {
+    if (!this.checkDeletable(server)) return false;
+    try {
+      const result = await firstValueFrom(this.serverInstanceService.delete(server.id));
+      if (result?.success) return true;
+      this.notificationService.error(result?.error || `Could not delete ${server.name || server.id}`, 'Server Control');
+    } catch (error) {
+      this.reportFailedRequest('delete', server, error);
+    }
+    return false;
+  }
+
+  /** Servers that closing the app would take down: running, or on their way up. */
+  runningServers(): ServerInstance[] {
+    return this.liveServers.servers.filter(server => {
+      const status = serverStatusKey(server.state);
+      return status === 'running' || status === 'starting';
+    });
   }
 
   /**
-   * Check if an instance can be started based on its current state
+   * Stops every running server in parallel. Resolves when all have answered or after
+   * EXIT_SHUTDOWN_CAP_MS, whichever comes first; never rejects.
    */
-  canStartInstance(state: string | null | undefined): boolean {
-    return this.serverStateService.canStartInstance(state);
+  async shutdownAllServers(): Promise<void> {
+    const stops = Promise.all(this.runningServers().map(server => this.stopServer(server)));
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    const capped = new Promise<void>(resolve => cap = setTimeout(resolve, EXIT_SHUTDOWN_CAP_MS));
+    try {
+      await Promise.race([stops, capped]);
+    } finally {
+      clearTimeout(cap);
+    }
   }
 
-  /**
-   * Map server state to human readable format
-   */
-  mapServerState(state: string | null | undefined): string {
-    return this.serverStateService.mapServerState(state);
+  private controlAll(channel: string, accepted: string, failed: string): void {
+    this.messaging.sendMessage<ControlAllResult>(channel, {}).subscribe({
+      next: result => {
+        if (result?.success) this.notificationService.success(accepted, 'Server Control');
+        else this.notificationService.error(result?.error || failed, 'Server Control');
+      },
+      error: error => {
+        console.error(`[server-lifecycle] ${channel} failed:`, error);
+        this.notificationService.error(failed, 'Server Control');
+      }
+    });
+  }
+
+  private reportFailedRequest(action: string, server: ServerInstance, error: unknown): void {
+    console.error(`[server-lifecycle] Could not ${action} ${server.id}:`, error);
+    this.notificationService.error(`Could not ${action} ${server.name || server.id}`, 'Server Control');
   }
 }

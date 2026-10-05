@@ -1,58 +1,46 @@
-import axios from 'axios';
 import { autoUpdater, UpdateInfo, ProgressInfo } from 'electron-updater';
+import { fetchLatestRelease, isNewerVersion, LATEST_RELEASE_PAGE } from '../utils/github-release.utils';
 import { messagingService } from './messaging.service';
 import { linuxPackageUpdaterService } from './linux-package-updater.service';
 import { platformService } from './platform.service';
 
+type UpdateStatus = Record<string, unknown>;
+
 /**
- * AutoUpdateService
- * 
- * Manages automatic application updates via GitHub Releases using electron-updater.
- * Downloads updates silently in the background, then notifies the renderer so the
- * user can choose when to restart and apply the update.
- *
- * Platform support:
- *   - Windows (NSIS .exe)  → full auto-update via electron-updater + latest.yml
- *   - Linux   (AppImage)   → full auto-update via electron-updater + latest-linux.yml
- *   - Linux   (.deb/.rpm)  → custom updater via GitHub Releases API + pkexec install
- *   - macOS   (dmg)        → full auto-update via electron-updater + latest-mac.yml (requires code-signing)
- *
- * Headless and the web UI report a newer release and explain how to apply it.
- * They do not download or restart the process.
+ * App updates from GitHub Releases:
+ *   - Windows (NSIS), Linux AppImage and macOS: electron-updater, downloading only when the user asks.
+ *   - Linux .deb/.rpm: LinuxPackageUpdaterService, installing with pkexec.
+ *   - Headless and the web UI: a newer release is reported with steps to apply it, never installed.
  */
 export class AutoUpdateService {
   private updateDownloaded = false;
   private supported = true;
-  /** Headless: tell the web UI a release is available, and never install it. */
   private manualOnly = false;
-  /** When true, delegate to LinuxPackageUpdaterService instead of electron-updater */
   private useLinuxPackageUpdater = false;
-  /** Last status payload — replayed to renderers that connect after the event fired */
-  private lastStatus: Record<string, any> | null = null;
+  /** Replayed to renderers that connect after the event fired. */
+  private lastStatus: UpdateStatus | null = null;
+  private periodicCheck: NodeJS.Timeout | null = null;
 
   constructor() {
-    // The browser has no installer. Still look for a newer release so the sidebar
-    // can explain how to update.
     if (process.argv.includes('--headless')) {
       this.manualOnly = true;
-      console.log('[AutoUpdateService] Headless mode reports updates and does not install them.');
+      console.log('[auto-update] Headless mode reports updates and does not install them.');
       return;
     }
 
-    // On Linux, auto-update only works natively for AppImage installs.
-    // For .deb/.rpm we fall back to the custom Linux package updater.
+    // electron-updater handles only the AppImage on Linux.
     if (process.platform === 'linux' && !process.env.APPIMAGE) {
       if (linuxPackageUpdaterService.isSupported()) {
         this.useLinuxPackageUpdater = true;
-        console.log('[AutoUpdateService] Using Linux package updater for .deb/.rpm.');
+        console.log('[auto-update] Using the Linux package updater for .deb/.rpm.');
       } else {
         this.supported = false;
-        console.log('[AutoUpdateService] Auto-update disabled — no supported package manager detected.');
+        console.log('[auto-update] Auto-update disabled: no supported package manager detected.');
       }
       return;
     }
 
-    // Do NOT auto-download — the user decides when to download and install.
+    // Do NOT auto-download: the user decides when to download and install.
     // autoInstallOnAppQuit is also disabled for the same reason.
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
@@ -60,23 +48,20 @@ export class AutoUpdateService {
     this.setupEventHandlers();
   }
 
-  /**
-   * Wire up electron-updater events to broadcast status via the messaging service.
-   */
-  private setupEventHandlers(): void {
-    const broadcast = (payload: Record<string, any>) => {
-      this.lastStatus = payload;
-      messagingService.sendToAllRenderers('app-update-status', payload);
-    };
+  private broadcast(payload: UpdateStatus): void {
+    this.lastStatus = payload;
+    messagingService.sendToAllRenderers('app-update-status', payload);
+  }
 
+  private setupEventHandlers(): void {
     autoUpdater.on('checking-for-update', () => {
-      console.log('[AutoUpdateService] Checking for application update...');
-      broadcast({ status: 'checking' });
+      console.log('[auto-update] Checking for an application update');
+      this.broadcast({ status: 'checking' });
     });
 
     autoUpdater.on('update-available', (info: UpdateInfo) => {
-      console.log(`[AutoUpdateService] Update available: v${info.version}`);
-      broadcast({
+      console.log(`[auto-update] Update available: v${info.version}`);
+      this.broadcast({
         status: 'available',
         version: info.version,
         releaseNotes: info.releaseNotes,
@@ -85,16 +70,13 @@ export class AutoUpdateService {
     });
 
     autoUpdater.on('update-not-available', (info: UpdateInfo) => {
-      console.log(`[AutoUpdateService] App is up to date (v${info.version})`);
-      broadcast({
-        status: 'up-to-date',
-        version: info.version,
-      });
+      console.log(`[auto-update] App is up to date (v${info.version})`);
+      this.broadcast({ status: 'up-to-date', version: info.version });
     });
 
     autoUpdater.on('download-progress', (progress: ProgressInfo) => {
-      console.log(`[AutoUpdateService] Download progress: ${progress.percent.toFixed(1)}%`);
-      broadcast({
+      console.log(`[auto-update] Download progress: ${progress.percent.toFixed(1)}%`);
+      this.broadcast({
         status: 'downloading',
         percent: progress.percent,
         bytesPerSecond: progress.bytesPerSecond,
@@ -104,9 +86,9 @@ export class AutoUpdateService {
     });
 
     autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
-      console.log(`[AutoUpdateService] Update downloaded: v${info.version}`);
+      console.log(`[auto-update] Update downloaded: v${info.version}`);
       this.updateDownloaded = true;
-      broadcast({
+      this.broadcast({
         status: 'downloaded',
         version: info.version,
         releaseNotes: info.releaseNotes,
@@ -115,18 +97,12 @@ export class AutoUpdateService {
     });
 
     autoUpdater.on('error', (err: Error) => {
-      console.error('[AutoUpdateService] Update error:', err.message);
-      broadcast({
-        status: 'error',
-        error: err.message,
-      });
+      console.error('[auto-update] Update error:', err.message);
+      this.broadcast({ status: 'error', error: err.message });
     });
   }
 
-  /**
-   * Check for updates. Call this on app ready and/or on a periodic interval.
-   * No-ops gracefully on unsupported platforms or headless mode.
-   */
+  /** Looks for a newer release. Does nothing where updates are not supported. */
   async checkForUpdates(): Promise<void> {
     if (this.manualOnly) {
       await this.checkForManualUpdate();
@@ -140,47 +116,65 @@ export class AutoUpdateService {
     }
 
     try {
-      // checkForUpdates() only checks — it does NOT download because autoDownload=false.
+      // Only checks: autoDownload is off.
       await autoUpdater.checkForUpdates();
-    } catch (err: any) {
-      console.error('[AutoUpdateService] Failed to check for updates:', err.message);
+    } catch (error) {
+      console.error('[auto-update] Failed to check for updates:', error instanceof Error ? error.message : error);
     }
   }
 
-  /**
-   * Trigger the actual download of an available update.
-   * Only call this after the user has explicitly opted in.
-   */
+  /** Downloads an available update. Only after the user has asked for it. */
   async downloadUpdate(): Promise<void> {
     if (this.manualOnly || !this.supported || this.useLinuxPackageUpdater) return;
-    // Immediately signal that download is starting so the UI transitions before
-    // the first download-progress event arrives (or before an error fires).
-    this.lastStatus = { status: 'downloading', percent: 0 };
-    messagingService.sendToAllRenderers('app-update-status', this.lastStatus);
+    // Straight away, so the UI moves on before the first progress event (or an error) arrives.
+    this.broadcast({ status: 'downloading', percent: 0 });
     try {
       await autoUpdater.downloadUpdate();
-    } catch (err: any) {
-      console.error('[AutoUpdateService] Failed to download update:', err.message);
-      this.lastStatus = { status: 'error', error: err.message };
-      messagingService.sendToAllRenderers('app-update-status', this.lastStatus);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[auto-update] Failed to download the update:', message);
+      this.broadcast({ status: 'error', error: message });
     }
   }
 
-  /**
-   * Start a periodic update check every `intervalMs` milliseconds (default 4 hours).
-   * Call once from main.ts after the app is ready.
-   */
+  /** Checks every `intervalMs` (4 hours by default). */
   startPeriodicUpdateCheck(intervalMs = 4 * 60 * 60 * 1000): void {
-    if (!this.supported && !this.manualOnly) return;
-    setInterval(() => {
-      this.checkForUpdates().catch(console.error);
+    if ((!this.supported && !this.manualOnly) || this.periodicCheck) return;
+    this.periodicCheck = setInterval(() => {
+      this.checkForUpdates().catch(error => console.error('[auto-update] Periodic check failed:', error));
     }, intervalMs);
+    this.periodicCheck.unref();
   }
 
-  /**
-   * Quit the app and install the downloaded update.
-   * Only works after an update has been fully downloaded.
-   */
+  /** Dev only (--test-update): plays a fake update to the renderers so the banner can be checked. */
+  simulateUpdateLifecycleForDev(): void {
+    console.log('[auto-update] Simulating an update lifecycle for dev testing');
+    const release = {
+      version: '99.0.0',
+      releaseNotes: 'Test release notes for dev simulation.',
+      releaseDate: new Date().toISOString(),
+    };
+    const steps = 10;
+    const stepBytes = 5 * 1024 * 1024;
+    const sendAt = (delayMs: number, status: UpdateStatus) => {
+      setTimeout(() => messagingService.sendToAllRenderers('app-update-status', status), delayMs);
+    };
+
+    sendAt(2000, { status: 'checking' });
+    sendAt(3000, { status: 'available', ...release });
+    for (let step = 1; step <= steps; step++) {
+      sendAt(3000 + step * 500, {
+        status: 'downloading',
+        percent: (step / steps) * 100,
+        bytesPerSecond: 2 * 1024 * 1024,
+        transferred: step * stepBytes,
+        total: steps * stepBytes,
+      });
+    }
+    sendAt(3000 + (steps + 1) * 500, { status: 'downloaded', ...release });
+  }
+
+  /** Quits and installs a downloaded update. */
   quitAndInstall(): void {
     if (this.manualOnly) return;
 
@@ -190,23 +184,17 @@ export class AutoUpdateService {
     }
 
     if (this.updateDownloaded) {
-      console.log('[AutoUpdateService] Quitting and installing update...');
+      console.log('[auto-update] Quitting to install the update');
       autoUpdater.quitAndInstall();
     } else {
-      console.warn('[AutoUpdateService] No update downloaded yet.');
+      console.warn('[auto-update] No update downloaded yet.');
     }
   }
 
-  /**
-   * Returns the last broadcast status so late-connecting renderers can replay it.
-   */
-  getLastStatus(): Record<string, any> | null {
+  getLastStatus(): UpdateStatus | null {
     return this.lastStatus;
   }
 
-  /**
-   * Returns whether an update has been downloaded and is ready to install.
-   */
   isUpdateReady(): boolean {
     if (this.manualOnly) return false;
     if (this.useLinuxPackageUpdater) {
@@ -215,45 +203,33 @@ export class AutoUpdateService {
     return this.updateDownloaded;
   }
 
-  /**
-   * Ask GitHub whether a newer release exists. The web UI shows the result and
-   * the steps to apply it; this process does not download the package.
-   */
+  /** Headless: tells the web UI about a newer release and how to apply it; downloads nothing. */
   private async checkForManualUpdate(): Promise<void> {
-    const broadcast = (payload: Record<string, any>) => {
-      this.lastStatus = payload;
-      messagingService.sendToAllRenderers('app-update-status', payload);
-    };
+    this.broadcast({ status: 'checking' });
 
-    broadcast({ status: 'checking' });
-    try {
-      const current = this.currentVersion();
-      const release = await this.fetchLatestRelease();
-      const remote = (release?.tag_name || '').replace(/^v/, '');
-      if (!release || !remote) {
-        broadcast({ status: 'error', error: 'Could not check for an update.' });
-        return;
-      }
-      if (!this.isNewerVersion(remote, current)) {
-        console.log(`[AutoUpdateService] App is up to date (v${current})`);
-        broadcast({ status: 'up-to-date', version: current, manual: true });
-        return;
-      }
-
-      console.log(`[AutoUpdateService] Update available for manual install: v${remote}`);
-      broadcast({
-        status: 'available',
-        version: remote,
-        releaseNotes: release.body,
-        releaseDate: release.published_at,
-        manual: true,
-        instructions: this.manualInstructions(remote),
-        instructionsUrl: 'https://github.com/ryoucerious/cerious-aasm/releases/latest',
-      });
-    } catch (err: any) {
-      console.error('[AutoUpdateService] Failed to check for updates:', err.message);
-      broadcast({ status: 'error', error: err.message || 'Could not check for an update.' });
+    const current = this.currentVersion();
+    const release = await fetchLatestRelease();
+    const remote = (release?.tag_name || '').replace(/^v/, '');
+    if (!release || !remote) {
+      this.broadcast({ status: 'error', error: 'Could not check for an update.' });
+      return;
     }
+    if (!isNewerVersion(remote, current)) {
+      console.log(`[auto-update] App is up to date (v${current})`);
+      this.broadcast({ status: 'up-to-date', version: current, manual: true });
+      return;
+    }
+
+    console.log(`[auto-update] Update available for manual install: v${remote}`);
+    this.broadcast({
+      status: 'available',
+      version: remote,
+      releaseNotes: release.body,
+      releaseDate: release.published_at,
+      manual: true,
+      instructions: this.manualInstructions(remote),
+      instructionsUrl: LATEST_RELEASE_PAGE,
+    });
   }
 
   private currentVersion(): string {
@@ -272,29 +248,6 @@ export class AutoUpdateService {
       // Tests and unpackaged runs still compare against a version string.
     }
     return '0.0.0';
-  }
-
-  private async fetchLatestRelease(): Promise<{ tag_name?: string; body?: string; published_at?: string } | null> {
-    const url = 'https://api.github.com/repos/ryoucerious/cerious-aasm/releases/latest';
-    const resp = await axios.get(url, {
-      headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'cerious-aasm-updater' },
-      timeout: 15000,
-    });
-    return resp.data || null;
-  }
-
-  /** True when `remote` is a newer dotted version than `current`. */
-  private isNewerVersion(remote: string, current: string): boolean {
-    const parts = (value: string) => value.split('-')[0].split('.').map(part => Number(part) || 0);
-    const remoteParts = parts(remote);
-    const currentParts = parts(current);
-    for (let i = 0; i < Math.max(remoteParts.length, currentParts.length); i++) {
-      const r = remoteParts[i] ?? 0;
-      const c = currentParts[i] ?? 0;
-      if (r > c) return true;
-      if (r < c) return false;
-    }
-    return false;
   }
 
   private manualInstructions(version: string): string {
@@ -318,5 +271,4 @@ export class AutoUpdateService {
   }
 }
 
-// Export singleton
 export const autoUpdateService = new AutoUpdateService();

@@ -7,11 +7,11 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ThemeService, ResolvedTheme } from '../../core/services/theme.service';
-import { ActivityService, ActivityItem, ActivityKind } from '../../core/services/activity.service';
+import { ActivityService, ActivityItem } from '../../core/services/activity.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
-import { UtilityService } from '../../core/services/utility.service';
+import { IpcService } from '../../core/services/ipc.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
@@ -19,6 +19,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { AuthenticatedUser } from '../../core/models/auth.model';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { formatRelativeTime, initialOf } from '../../core/utils/format.utils';
+import { ACTIVITY_ICONS } from '../../core/utils/activity-icons';
 import { mapDisplayName } from '../../core/utils/map-visuals';
 import { WindowControlsComponent } from '../window-controls/window-controls.component';
 import { ModalComponent } from '../modal/modal.component';
@@ -31,19 +32,6 @@ export interface SearchResult {
   icon: string;
   action: () => void;
 }
-
-export const ACTIVITY_ICONS: Record<ActivityKind, { icon: string; tone: string }> = {
-  start:  { icon: 'play_arrow',    tone: 'success' },
-  stop:   { icon: 'stop',          tone: 'danger' },
-  crash:  { icon: 'error',         tone: 'danger' },
-  backup: { icon: 'backup',        tone: 'primary' },
-  join:   { icon: 'person_add',    tone: 'info' },
-  leave:  { icon: 'person_remove', tone: 'muted' },
-  update: { icon: 'system_update', tone: 'warning' },
-  error:  { icon: 'warning',       tone: 'danger' },
-  info:   { icon: 'info',          tone: 'info' },
-  account:{ icon: 'manage_accounts', tone: 'violet' }
-};
 
 /**
  * The app-wide header: brand, global search, theme toggle, notification bell and user menu.
@@ -83,11 +71,8 @@ export class TopbarComponent implements OnInit, OnDestroy {
 
   /** The signed-in account, when there is one. Null in the desktop app. */
   private account: AuthenticatedUser | null = null;
-  /** Legacy single-password username, used only when no account backs this session. */
-  private configUsername = '';
 
   private servers: ServerInstance[] = [];
-  private selectedServerId: string | null = null;
   private subs: Subscription[] = [];
 
   readonly activityIcons = ACTIVITY_ICONS;
@@ -99,14 +84,14 @@ export class TopbarComponent implements OnInit, OnDestroy {
     private liveServers: LiveServersService,
     private serverInstanceService: ServerInstanceService,
     private globalConfigService: GlobalConfigService,
-    private utility: UtilityService,
+    ipc: IpcService,
     private notificationService: NotificationService,
     private serverNav: ServerNavService,
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
     private cdr: ChangeDetectorRef
   ) {
-    this.isWebMode = this.utility.getPlatform() === 'Web';
+    this.isWebMode = !ipc.isElectron;
   }
 
   ngOnInit(): void {
@@ -125,23 +110,20 @@ export class TopbarComponent implements OnInit, OnDestroy {
       if (this.searchOpen) this.runSearch();
       this.cdr.markForCheck();
     }));
-    this.subs.push(this.serverInstanceService.getActiveServer().subscribe(server => {
-      this.selectedServerId = server?.id || null;
+    this.subs.push(this.auth.displayName$.subscribe(name => {
+      this.userName = name;
+      this.cdr.markForCheck();
     }));
-    // Who is actually signed in, once accounts exist. The desktop owns the machine and has
-    // no account of its own, so it keeps the local-administrator label.
     this.subs.push(this.auth.identity$.subscribe(identity => {
       this.account = identity.user;
-      this.applyIdentity();
+      this.applyRole();
     }));
 
-    this.globalConfigService.loadConfig().then(config => {
+    // Until the settings are known the defaults stand; GlobalConfigService asks once the connection is up.
+    this.subs.push(this.globalConfigService.config$.subscribe(config => {
       this.authenticationEnabled = !!config?.authenticationEnabled;
-      this.configUsername = (config as any)?.authenticationUsername || '';
-      this.applyIdentity();
-    }).catch(() => {
-      // Config unavailable (e.g. before the connection is up); defaults are fine.
-    });
+      this.applyRole();
+    }));
   }
 
   ngOnDestroy(): void {
@@ -159,8 +141,6 @@ export class TopbarComponent implements OnInit, OnDestroy {
   get themeTitle(): string {
     return this.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
   }
-
-  // -------------------- Keyboard & outside clicks --------------------
 
   @HostListener('document:keydown', ['$event'])
   onDocumentKeydown(event: KeyboardEvent): void {
@@ -190,8 +170,6 @@ export class TopbarComponent implements OnInit, OnDestroy {
     this.notificationsOpen = false;
     this.userMenuOpen = false;
   }
-
-  // -------------------- Search --------------------
 
   focusSearch(): void {
     this.searchInput?.nativeElement.focus();
@@ -283,8 +261,6 @@ export class TopbarComponent implements OnInit, OnDestroy {
     this.router.navigate(['/server', this.serverNav.lastTab]);
   }
 
-  // -------------------- Theme, notifications, user --------------------
-
   toggleTheme(): void {
     this.themeService.toggle();
   }
@@ -322,20 +298,13 @@ export class TopbarComponent implements OnInit, OnDestroy {
     this.settingsDrawer.open();
   }
 
-  /**
-   * There is only something to sign out of in the web interface with authentication on.
-   * The desktop app is the machine owner and has no session to end.
-   */
-  /** Name and role shown in the menu, preferring the account over the legacy config. */
-  private applyIdentity(): void {
+  /** The role under the name: the account's, else what kind of session this is. */
+  private applyRole(): void {
     if (this.account) {
-      this.userName = this.account.displayName || this.account.username;
       this.userRole = this.account.roleName || 'Administrator';
     } else if (this.isWebMode) {
-      this.userName = this.authenticationEnabled && this.configUsername ? this.configUsername : 'Admin';
       this.userRole = this.authenticationEnabled ? 'Administrator' : 'Web Console';
     } else {
-      this.userName = 'Admin';
       this.userRole = 'Local Administrator';
     }
     this.cdr.markForCheck();
@@ -346,6 +315,10 @@ export class TopbarComponent implements OnInit, OnDestroy {
     return this.isWebMode ? 'Authentication is off' : 'Signed in on this machine';
   }
 
+  /**
+   * There is only something to sign out of in the web interface with authentication on.
+   * The desktop app is the machine owner and has no session to end.
+   */
   get canSignOut(): boolean {
     if (!this.isWebMode) return false;
     return this.authenticationEnabled || !!this.account;
@@ -378,16 +351,9 @@ export class TopbarComponent implements OnInit, OnDestroy {
   async logout(): Promise<void> {
     this.closeAll();
     if (!this.isWebMode) return;
-    try {
-      const response = await fetch('/api/logout', { method: 'POST', credentials: 'include' });
-      if (response.ok) {
-        this.router.navigate(['/login']);
-      } else {
-        console.error('Logout failed with status:', response.status);
-        this.notificationService.error('Failed to logout', 'Authentication');
-      }
-    } catch (error) {
-      console.error('Logout failed:', error);
+    if (await this.auth.logout()) {
+      this.router.navigate(['/login']);
+    } else {
       this.notificationService.error('Failed to logout', 'Authentication');
     }
   }

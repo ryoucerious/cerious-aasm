@@ -1,22 +1,21 @@
-import { messagingService } from '../services/messaging.service';
-import { playerHistoryService } from '../services/player-history.service';
+import { PlayerHistoryService, playerHistoryService } from '../services/player-history.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { visibleInstanceIds } from '../services/auth/pool-access';
+import { getAllInstances } from '../utils/ark/instance.utils';
+import { onRequest } from './handler.utils';
 
-/**
- * Handles 'get-player-history': the last 24 hours of per-instance player counts, sampled once
- * a minute by PlayerHistoryService. Feeds the dashboard's Player Activity chart and the
- * sparkline on each server card.
- */
-messagingService.on('get-player-history', (payload: any, sender: any) => {
-  const { requestId } = payload || {};
-  try {
-    messagingService.sendToOriginator('get-player-history', {
-      samples: playerHistoryService.getSamples(),
-      intervalMs: 60 * 1000,
-      requestId
-    }, sender);
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.error('[player-history-handler] Failed to read player history:', errMsg);
-    messagingService.sendToOriginator('get-player-history', { error: errMsg, samples: [], requestId }, sender);
+onRequest('get-player-history', async (_payload, { sender }) => {
+  let samples = playerHistoryService.getSamples();
+  const identity = identifySender(sender);
+  if (!identity.isAdmin) {
+    // The chart adds up the counts it is given, so a pool member's chart must only hold their servers.
+    const visible = visibleInstanceIds(identity.user, await getAllInstances());
+    if (visible !== null) {
+      samples = samples.map(sample => ({
+        t: sample.t,
+        counts: Object.fromEntries(Object.entries(sample.counts).filter(([id]) => visible.has(id)))
+      }));
+    }
   }
-});
+  return { samples, intervalMs: PlayerHistoryService.SAMPLE_INTERVAL_MS };
+}, { onError: error => ({ error, samples: [] }) });

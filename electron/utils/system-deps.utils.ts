@@ -1,11 +1,16 @@
+import { app } from 'electron';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { InstallCancelledError } from './installer.utils';
 import { getPlatform } from './platform.utils';
+
+type PackageManagerName = 'apt' | 'dnf' | 'yum' | 'pacman' | 'zypper';
 
 export interface LinuxDependency {
   name: string;
-  packageName: string | { [key: string]: string }; // Support per-distro package names
+  /** One name for every distribution, or a name per package manager. */
+  packageName: string | Partial<Record<PackageManagerName, string>>;
   /** For apt: try these package names in order if the primary packageName fails to install */
   aptAlternatives?: string[];
   checkCommand: string;
@@ -24,6 +29,19 @@ export interface LinuxDepsInstallProgress {
   message: string;
   percent: number;
   dependency?: string;
+}
+
+export interface LinuxDepsInstallOutcome {
+  success: boolean;
+  message: string;
+  details: string[];
+}
+
+interface PackageManager {
+  manager: PackageManagerName;
+  /** Installs the package name appended to it. */
+  install: string[];
+  update: string[];
 }
 
 // Required dependencies for ARK server on Linux
@@ -78,28 +96,21 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
   {
     name: 'ALSA Audio Library',
     packageName: {
-      'apt': 'libasound2',         // Ubuntu 22.04 and older
+      'apt': 'libasound2',
       'dnf': 'alsa-lib',
       'yum': 'alsa-lib',
       'pacman': 'alsa-lib',
       'zypper': 'alsa'
     },
-    // Ubuntu 23.04+ renamed libasound2 → libasound2t64 (64-bit time_t transition).
-    // Try libasound2t64 first; fall back to libasound2 for older distros.
+    // Ubuntu 23.04+ renamed libasound2 to libasound2t64 (64-bit time_t transition), so t64 is
+    // tried first. A transitional libasound2 stub on 24.04 shows as installed without providing
+    // snd_device_name_get_hint, which crashes Electron at startup. The check therefore:
+    //   - passes when libasound2t64 is installed;
+    //   - fails when it is in the apt cache but not installed (the stub must not count);
+    //   - otherwise passes when libasound2 ships libasound.so.2 (Debian Bookworm, Ubuntu 22.04).
+    //     dpkg -L rejects the 24.04 stub even when the apt lists are gone;
+    //   - off apt, looks for the .so with ldconfig.
     aptAlternatives: ['libasound2t64', 'libasound2'],
-    // Verify the real ALSA library is installed, not just a package name.
-    // On Ubuntu 24.04, a transitional libasound2 stub can show as installed without
-    // providing snd_device_name_get_hint, which crashes Electron at startup.
-    //
-    // On apt systems:
-    //   - Pass when libasound2t64 is installed (Ubuntu 24.04+).
-    //   - Fail when that package is in the apt cache but not installed. The
-    //     transitional libasound2 stub must not count.
-    //   - Pass when libasound2t64 is not in the apt cache and libasound2 ships
-    //     libasound.so.2 (Debian Bookworm, Ubuntu 22.04). dpkg -L rejects the
-    //     Ubuntu 24.04 stub, which does not contain the shared library, including
-    //     when apt lists have been removed and apt-cache cannot see t64.
-    // On non-apt systems: fall back to checking ldconfig for the .so presence.
     checkCommand: [
       'if command -v dpkg >/dev/null 2>&1; then',
       '  if dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; then exit 0; fi',
@@ -121,422 +132,342 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
   }
 ];
 
-/**
- * Checks if a single dependency is installed
- */
-export async function checkDependency(dependency: LinuxDependency): Promise<DependencyCheckResult> {
-  return new Promise((resolve) => {
-    if (getPlatform() !== 'linux') {
-      resolve({ dependency, installed: true, version: 'N/A (not Linux)' });
-      return;
-    }
+const CHECK_TIMEOUT_MS = 5000;
+// Long enough for a big apt download on a slow mirror. A command stopped at this point may be apt
+// or dpkg part way through, which can leave the package database needing repair.
+const SUDO_TIMEOUT_MS = 15 * 60 * 1000;
+const INSTALL_LOG_NAME = 'linux-deps-install.log';
 
-    const proc = spawn('bash', ['-c', dependency.checkCommand], {
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
+// Package names only come from LINUX_DEPENDENCIES; they are checked anyway because they reach a
+// root package manager. A leading dash would be read as an option.
+const PACKAGE_NAME = /^[a-z0-9.+:_-]+$/i;
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function checkDependency(dependency: LinuxDependency): Promise<DependencyCheckResult> {
+  if (getPlatform() !== 'linux') {
+    return Promise.resolve({ dependency, installed: true, version: 'N/A (not Linux)' });
+  }
+
+  return new Promise(resolve => {
     let stdout = '';
-    let stderr = '';
+    let settled = false;
+    const finish = (result: DependencyCheckResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
 
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
+    const child = spawn('bash', ['-c', dependency.checkCommand], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ dependency, installed: false });
+    }, CHECK_TIMEOUT_MS);
+
+    child.stdout?.on('data', data => { stdout += data.toString(); });
+    child.on('error', error => {
+      console.warn(`[system-deps] Could not check ${dependency.name}:`, error.message);
+      finish({ dependency, installed: false });
     });
-
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    // Timeout after 5 seconds
-    const timeout = setTimeout(() => {
-      proc.kill();
-      resolve({ dependency, installed: false });
-    }, 5000);
-
-    proc.on('close', (code) => {
-      clearTimeout(timeout);
-      const installed = code === 0;
-      let version = '';
-      
-      if (installed && stdout) {
-        // Try to extract version from first line of output
-        const firstLine = stdout.split('\n')[0];
-        const versionMatch = firstLine.match(/\d+\.\d+[\.\d]*/);
-        version = versionMatch ? versionMatch[0] : 'installed';
+    child.on('close', code => {
+      if (code !== 0) {
+        finish({ dependency, installed: false, version: undefined });
+        return;
       }
-
-      resolve({
-        dependency,
-        installed,
-        version: installed ? version : undefined
-      });
+      const version = stdout ? /\d+\.\d+[.\d]*/.exec(stdout.split('\n')[0])?.[0] ?? 'installed' : '';
+      finish({ dependency, installed: true, version });
     });
   });
 }
 
-/**
- * Checks all Linux dependencies
- */
 export async function checkAllDependencies(): Promise<DependencyCheckResult[]> {
   const results: DependencyCheckResult[] = [];
-  
   for (const dependency of LINUX_DEPENDENCIES) {
-    const result = await checkDependency(dependency);
-    results.push(result);
+    results.push(await checkDependency(dependency));
   }
-  
   return results;
 }
 
-/**
- * Gets the correct package name for the current distribution
- */
-export function getPackageNameForDistribution(dependency: LinuxDependency): string {
+/** The known dependencies with these names, or undefined when any entry is not a known name. */
+export function findDependencies(names: readonly unknown[]): LinuxDependency[] | undefined {
+  const found: LinuxDependency[] = [];
+  for (const name of names) {
+    const dependency = typeof name === 'string' ? LINUX_DEPENDENCIES.find(dep => dep.name === name) : undefined;
+    if (!dependency) return undefined;
+    found.push(dependency);
+  }
+  return found;
+}
+
+function packageNameFor(dependency: LinuxDependency, manager: PackageManagerName | undefined): string {
   if (typeof dependency.packageName === 'string') {
     return dependency.packageName;
   }
-
-  const pkgInfo = getPackageManagerInfo();
-  if (!pkgInfo) {
-    // Fallback to first available package name
-    return Object.values(dependency.packageName)[0];
-  }
-
-  // Return the package name for the current package manager, or fallback
-  return dependency.packageName[pkgInfo.manager] || dependency.packageName['apt'] || Object.values(dependency.packageName)[0];
+  const names = dependency.packageName;
+  return (manager && names[manager]) || names.apt || Object.values(names)[0] || '';
 }
 
-/**
- * Generates manual installation instructions for missing dependencies
- */
+export function getPackageNameForDistribution(dependency: LinuxDependency): string {
+  return packageNameFor(dependency, getPackageManagerInfo()?.manager);
+}
+
 export function generateInstallInstructions(missingDeps: LinuxDependency[]): string {
-  const pkgInfo = getPackageManagerInfo();
-  if (!pkgInfo) {
+  const packageManager = getPackageManagerInfo();
+  if (!packageManager) {
     return 'Could not detect package manager. Please install the missing dependencies manually.';
   }
 
-  const packageNames = missingDeps.map(dep => getPackageNameForDistribution(dep));
-  const packageList = packageNames.join(' ');
-
-  let instructions = `To install the missing dependencies, run the following command:\n\n`;
-  
-  switch (pkgInfo.manager) {
+  const packageList = missingDeps.map(dep => packageNameFor(dep, packageManager.manager)).join(' ');
+  const intro = 'To install the missing dependencies, run the following command:\n\n';
+  switch (packageManager.manager) {
     case 'dnf':
-      instructions += `sudo dnf install ${packageList}\n\n`;
-      instructions += `For Fedora users, you may also need to enable RPM Fusion repositories:\n`;
-      instructions += `sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm`;
-      break;
+      return `${intro}sudo dnf install ${packageList}\n\n` +
+        'For Fedora users, you may also need to enable RPM Fusion repositories:\n' +
+        'sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm';
     case 'yum':
-      instructions += `sudo yum install ${packageList}`;
-      break;
+      return `${intro}sudo yum install ${packageList}`;
     case 'apt':
-      instructions += `sudo apt-get update && sudo apt-get install ${packageList}`;
-      break;
+      return `${intro}sudo apt-get update && sudo apt-get install ${packageList}`;
     case 'pacman':
-      instructions += `sudo pacman -S ${packageList}`;
-      break;
+      return `${intro}sudo pacman -S ${packageList}`;
     case 'zypper':
-      instructions += `sudo zypper install ${packageList}`;
-      break;
-    default:
-      instructions += `Using your package manager, install: ${packageList}`;
+      return `${intro}sudo zypper install ${packageList}`;
   }
-
-  return instructions;
 }
 
-/**
- * Gets the package manager command for the current Linux distribution
- */
-export function getPackageManagerInfo(): { manager: string; installCmd: string; updateCmd: string; installExtra?: string } | null {
+export function getPackageManagerInfo(): PackageManager | null {
   if (getPlatform() !== 'linux') {
     return null;
   }
-
-  try {
-    // Check for common package managers
-    if (fs.existsSync('/usr/bin/apt') || fs.existsSync('/usr/bin/apt-get')) {
-      return {
-        manager: 'apt',
-        installCmd: 'apt-get install -y',
-        updateCmd: 'apt-get update'
-      };
-    } else if (fs.existsSync('/usr/bin/dnf')) {
-      return {
-        manager: 'dnf',
-        installCmd: 'dnf install -y',
-        // Use makecache to update metadata without performing a full system upgrade
-        updateCmd: 'dnf makecache',
-        installExtra: ''
-      };
-    } else if (fs.existsSync('/usr/bin/yum')) {
-      return {
-        manager: 'yum',
-        installCmd: 'yum install -y',
-        // Use makecache for yum as well to avoid full system upgrades
-        updateCmd: 'yum makecache'
-      };
-    } else if (fs.existsSync('/usr/bin/dnf')) {
-      return {
-        manager: 'dnf',
-        installCmd: 'dnf install -y',
-        // Use makecache to update metadata without performing a full system upgrade
-        updateCmd: 'dnf makecache',
-        // optional extra flags (e.g. --allowerasing) can be appended when needed
-        installExtra: ''
-      };
-    } else if (fs.existsSync('/usr/bin/pacman')) {
-      return {
-        manager: 'pacman',
-        installCmd: 'pacman -S --noconfirm',
-        updateCmd: 'pacman -Sy'
-      };
-    } else if (fs.existsSync('/usr/bin/zypper')) {
-      return {
-        manager: 'zypper',
-        installCmd: 'zypper install -y',
-        updateCmd: 'zypper refresh'
-      };
-    }
-  } catch (error) {
-    console.error('Error detecting package manager:', error);
+  if (fs.existsSync('/usr/bin/apt') || fs.existsSync('/usr/bin/apt-get')) {
+    return { manager: 'apt', install: ['apt-get', 'install', '-y'], update: ['apt-get', 'update'] };
   }
-
+  // makecache refreshes the metadata without upgrading the whole system.
+  if (fs.existsSync('/usr/bin/dnf')) {
+    return { manager: 'dnf', install: ['dnf', 'install', '-y'], update: ['dnf', 'makecache'] };
+  }
+  if (fs.existsSync('/usr/bin/yum')) {
+    return { manager: 'yum', install: ['yum', 'install', '-y'], update: ['yum', 'makecache'] };
+  }
+  if (fs.existsSync('/usr/bin/pacman')) {
+    return { manager: 'pacman', install: ['pacman', '-S', '--noconfirm'], update: ['pacman', '-Sy'] };
+  }
+  if (fs.existsSync('/usr/bin/zypper')) {
+    return { manager: 'zypper', install: ['zypper', 'install', '-y'], update: ['zypper', 'refresh'] };
+  }
   return null;
 }
 
+function installLogPath(): string {
+  return path.join(app.getPath('logs'), INSTALL_LOG_NAME);
+}
+
+/** Keeps the output of a failed command for the user; the summary shown in the UI is short. */
+function logFailure(argv: string[], code: number | null, stdout: string, stderr: string): void {
+  try {
+    fs.mkdirSync(app.getPath('logs'), { recursive: true });
+    const entry = `\n==== ${new Date().toISOString()} ${argv.join(' ')} (exit ${code}) ====\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}\n`;
+    fs.appendFileSync(installLogPath(), entry);
+  } catch (error) {
+    console.warn('[system-deps] Could not write the install log:', describeError(error));
+  }
+}
+
 /**
- * Installs missing Linux dependencies with sudo password
+ * Runs `argv` as root, with no shell. -k makes sudo ignore cached credentials, so it always reads
+ * the password line from stdin instead of passing it on to the command; -p '' keeps the prompt
+ * out of the output. stdin is closed after the password, so a wrong one fails at once instead of
+ * re-prompting until the timeout. DEBIAN_FRONTEND goes through env(1) because sudo's env_reset
+ * drops variables set on sudo itself.
+ */
+function runAsRoot(argv: string[], password: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const settle = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(stdout);
+    };
+
+    const child = spawn('sudo', ['-S', '-k', '-p', '', '--', 'env', 'DEBIAN_FRONTEND=noninteractive', ...argv], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    const timer = setTimeout(() => {
+      const repairHint = argv[0] === 'apt-get' || argv[0] === 'dpkg'
+        ? 'If apt or dpkg now reports errors, run "sudo dpkg --configure -a".'
+        : 'The package manager may need to finish or repair the interrupted run before the next install.';
+      console.error(`[system-deps] ${argv.join(' ')} still running after ${SUDO_TIMEOUT_MS / 60000} minutes; stopping it. ${repairHint}`);
+      child.kill();
+      settle(new Error(`${argv.join(' ')} timed out`));
+    }, SUDO_TIMEOUT_MS);
+
+    child.stdout?.on('data', data => { stdout += data.toString(); });
+    child.stderr?.on('data', data => { stderr += data.toString(); });
+    child.on('error', settle);
+    child.on('close', code => {
+      if (code === 0) {
+        settle(null);
+        return;
+      }
+      logFailure(argv, code, stdout, stderr);
+      settle(new Error(`${argv.join(' ')} failed with code ${code}: ${(stderr || stdout).trim()}`));
+    });
+
+    // sudo exiting before it reads stdin surfaces as EPIPE here; the exit code reports the failure.
+    child.stdin?.on('error', () => {});
+    // Root is never asked, and the line would reach the command instead.
+    if (process.getuid?.() !== 0) {
+      child.stdin?.write(`${password}\n`);
+    }
+    child.stdin?.end();
+  });
+}
+
+function installPackage(packageManager: PackageManager, packageName: string, password: string, extraArgs: string[] = []): Promise<string> {
+  if (!PACKAGE_NAME.test(packageName) || packageName.startsWith('-')) {
+    return Promise.reject(new Error(`Refusing to install "${packageName}": not a valid package name`));
+  }
+  return runAsRoot([...packageManager.install, ...extraArgs, packageName], password);
+}
+
+/**
+ * Installs the named dependencies (names from LINUX_DEPENDENCIES) with the user's sudo password.
+ * An aborted `signal` stops it before the next command: a running apt or dpkg is never killed,
+ * because that can leave the package database broken.
  */
 export async function installMissingDependencies(
-  missingDeps: LinuxDependency[],
+  dependencyNames: readonly string[],
   sudoPassword: string,
-  onProgress: (progress: LinuxDepsInstallProgress) => void
-): Promise<{ success: boolean; message: string; details: string[] }> {
+  onProgress: (progress: LinuxDepsInstallProgress) => void,
+  signal?: AbortSignal
+): Promise<LinuxDepsInstallOutcome> {
   if (getPlatform() !== 'linux') {
     return { success: true, message: 'Not running on Linux, dependencies not required', details: [] };
   }
 
+  const missingDeps = findDependencies(dependencyNames);
+  if (!missingDeps) {
+    return { success: false, message: 'Unknown dependency requested', details: [] };
+  }
   if (missingDeps.length === 0) {
     return { success: true, message: 'All dependencies already installed', details: [] };
   }
 
-  const pkgInfo = getPackageManagerInfo();
-  if (!pkgInfo) {
-    return { 
-      success: false, 
-      message: 'Could not detect package manager. Supported: apt, yum, dnf, pacman, zypper', 
-      details: [] 
-    };
+  const packageManager = getPackageManagerInfo();
+  if (!packageManager) {
+    return { success: false, message: 'Could not detect package manager. Supported: apt, yum, dnf, pacman, zypper', details: [] };
   }
 
   const results: string[] = [];
-  const totalSteps = missingDeps.length + 2; // +1 for dpkg fix, +1 for package manager update
+  // One step for the apt fix-ups (skipped elsewhere), one for the package list, one per package.
+  const totalSteps = missingDeps.length + 2;
   let currentStep = 0;
+  const percent = () => Math.round((currentStep / totalSteps) * 100);
+  const stopIfCancelled = () => {
+    if (signal?.aborted) throw new InstallCancelledError();
+  };
 
   try {
-    // Step 0: apt-specific pre-flight
-    if (pkgInfo.manager === 'apt') {
-      // Step 0a: Fix any interrupted dpkg configurations
-      onProgress({
-        step: 'dpkg-fix',
-        message: 'Fixing any interrupted package configurations...',
-        percent: Math.round((currentStep / totalSteps) * 100)
-      });
+    stopIfCancelled();
+    if (packageManager.manager === 'apt') {
+      onProgress({ step: 'dpkg-fix', message: 'Fixing any interrupted package configurations...', percent: percent() });
       try {
-        await runSudoCommand('dpkg --configure -a', sudoPassword);
-        results.push('✓ Fixed dpkg configurations');
+        await runAsRoot(['dpkg', '--configure', '-a'], sudoPassword);
+        results.push('Fixed interrupted dpkg configurations');
       } catch (error) {
-        results.push(`⚠ dpkg fix warning: ${error}`);
+        results.push(`Warning: dpkg --configure -a failed: ${describeError(error)}`);
       }
 
-      // Step 0b: Enable i386 multi-arch if any dep uses an :i386 package.
-      // Without this, apt simply reports the package as "not found".
-      const needs32bit = missingDeps.some(d => {
-        const pkg = typeof d.packageName === 'string' ? d.packageName : (d.packageName['apt'] || '');
-        return pkg.includes(':i386') || pkg.includes(':i386');
-      });
-      if (needs32bit) {
-        onProgress({
-          step: 'enable-i386',
-          message: 'Enabling 32-bit (i386) architecture support...',
-          percent: Math.round((currentStep / totalSteps) * 100)
-        });
+      // Without i386 multi-arch, apt reports a :i386 package as not found.
+      if (missingDeps.some(dep => packageNameFor(dep, 'apt').includes(':i386'))) {
+        onProgress({ step: 'enable-i386', message: 'Enabling 32-bit (i386) architecture support...', percent: percent() });
         try {
-          await runSudoCommand('dpkg --add-architecture i386', sudoPassword);
-          results.push('✓ Enabled i386 architecture');
+          await runAsRoot(['dpkg', '--add-architecture', 'i386'], sudoPassword);
+          results.push('Enabled the i386 architecture');
         } catch (error) {
-          // May already be enabled — log and continue
-          results.push(`⚠ dpkg add-architecture i386: ${error}`);
+          // It may already be enabled.
+          results.push(`Warning: dpkg --add-architecture i386 failed: ${describeError(error)}`);
         }
       }
-
-      currentStep++;
-    } else {
-      currentStep++; // Skip apt pre-flight for non-apt systems
     }
-
-    // Step 1: Update package manager (always after any arch changes)
-    onProgress({
-      step: 'update',
-      message: `Updating ${pkgInfo.manager} package list...`,
-      percent: Math.round((currentStep / totalSteps) * 100)
-    });
-
-    await runSudoCommand(pkgInfo.updateCmd, sudoPassword);
     currentStep++;
-    results.push(`✓ Updated ${pkgInfo.manager} package list`);
 
-    // Step 2+: Install each missing dependency
+    // After any architecture change, so the new package lists are fetched.
+    stopIfCancelled();
+    onProgress({ step: 'update', message: `Updating ${packageManager.manager} package list...`, percent: percent() });
+    await runAsRoot(packageManager.update, sudoPassword);
+    currentStep++;
+    results.push(`Updated the ${packageManager.manager} package list`);
+
     for (const dep of missingDeps) {
+      stopIfCancelled();
       currentStep++;
-      const percent = Math.round((currentStep / totalSteps) * 100);
-      const packageName = getPackageNameForDistribution(dep);
+      const packageName = packageNameFor(dep, packageManager.manager);
+      // apt tries the alternatives in order: Ubuntu renames packages between releases.
+      const candidates = packageManager.manager === 'apt' && dep.aptAlternatives?.length ? dep.aptAlternatives : [packageName];
 
-      // For apt, prefer aptAlternatives (tried in order) over the primary packageName.
-      // This handles Ubuntu version splits, e.g. libasound2 → libasound2t64 on 23.04+.
-      const aptCandidates: string[] =
-        pkgInfo.manager === 'apt' && dep.aptAlternatives?.length
-          ? dep.aptAlternatives
-          : [packageName];
-
-      onProgress({
-        step: 'install',
-        message: `Installing ${dep.name} (${aptCandidates[0]})...`,
-        percent,
-        dependency: dep.name
-      });
+      onProgress({ step: 'install', message: `Installing ${dep.name} (${candidates[0]})...`, percent: percent(), dependency: dep.name });
 
       let installed = false;
-      let lastError: string = '';
-
-      for (const candidate of aptCandidates) {
+      let lastError = '';
+      for (const candidate of candidates) {
         try {
-          const extra = (pkgInfo as any).installExtra ? `${(pkgInfo as any).installExtra} ` : '';
-          const installCommand = `${pkgInfo.installCmd} ${extra}${candidate}`.trim();
-          await runSudoCommand(installCommand, sudoPassword);
-          results.push(`✓ Installed ${dep.name} (${candidate})`);
+          await installPackage(packageManager, candidate, sudoPassword);
+          results.push(`Installed ${dep.name} (${candidate})`);
           installed = true;
           break;
         } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-          results.push(`⚠ ${candidate} not available, trying next alternative...`);
+          lastError = describeError(error);
+          results.push(`${candidate} could not be installed; trying the next alternative`);
         }
       }
 
       if (!installed) {
-        results.push(`✗ Failed to install ${dep.name}: ${lastError}`);
+        results.push(`Failed to install ${dep.name}: ${lastError}`);
 
-        // If using dnf, attempt a safe retry with --allowerasing once
-        if (pkgInfo.manager === 'dnf') {
+        if (packageManager.manager === 'dnf') {
+          stopIfCancelled();
           try {
-            const retryCmd = `${pkgInfo.installCmd} --allowerasing ${packageName}`.trim();
-            results.push(`! Retry with --allowerasing: ${retryCmd}`);
-            await runSudoCommand(retryCmd, sudoPassword);
-            results.push(`✓ Installed ${dep.name} (after retry with --allowerasing)`);
+            results.push(`Retrying ${packageName} with --allowerasing`);
+            await installPackage(packageManager, packageName, sudoPassword, ['--allowerasing']);
+            results.push(`Installed ${dep.name} (after retrying with --allowerasing)`);
             installed = true;
           } catch (retryError) {
-            results.push(`✗ Retry failed for ${dep.name}: ${retryError}`);
+            results.push(`Retry failed for ${dep.name}: ${describeError(retryError)}`);
           }
         }
 
         if (!installed && dep.required) {
           return {
             success: false,
-            message: `Failed to install required dependency: ${dep.name}. See /tmp/cerious-aasm-deps-install.log for details.`,
+            message: `Failed to install required dependency: ${dep.name}. See ${installLogPath()} for details.`,
             details: results
           };
         }
       }
     }
 
-    onProgress({
-      step: 'complete',
-      message: 'Linux dependencies installation completed',
-      percent: 100
-    });
-
-    return {
-      success: true,
-      message: 'All dependencies installed successfully',
-      details: results
-    };
-
+    onProgress({ step: 'complete', message: 'Linux dependencies installation completed', percent: 100 });
+    return { success: true, message: 'All dependencies installed successfully', details: results };
   } catch (error) {
-    return {
-      success: false,
-      message: `Dependency installation failed: ${error}`,
-      details: results
-    };
+    if (error instanceof InstallCancelledError) {
+      return { success: false, message: error.message, details: results };
+    }
+    return { success: false, message: `Dependency installation failed: ${describeError(error)}`, details: results };
   }
 }
 
-/**
- * Runs a command with sudo privileges using the provided password
- */
-async function runSudoCommand(command: string, password: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('sudo', ['-S', 'bash', '-c', command], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    // (close/error handlers are attached later after timeout so we can log failures)
-
-    // Send password to sudo and keep stdin open so interactive programs don't receive EOF
-    try {
-      proc.stdin?.write(`${password}\n`);
-    } catch (e) {
-      // ignore
-    }
-
-    // Timeout after 5 minutes
-    const timeoutMs = 5 * 60 * 1000;
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(new Error('Command timed out'));
-    }, timeoutMs);
-
-    // On non-zero exit we append stdout/stderr to a log for debugging
-    proc.on('close', (code) => {
-      clearTimeout(timeout);
-      // Ensure stdin is closed now that the process is finished
-      try { proc.stdin?.end(); } catch (e) { /* ignore */ }
-      if (code === 0) {
-        resolve(stdout);
-      } else {
-        try {
-          const logPath = '/tmp/cerious-aasm-deps-install.log';
-          const entry = `\n==== Failed command: ${command} ===\nExit code: ${code}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}\n`;
-          fs.appendFileSync(logPath, entry);
-        } catch (e) {
-          // ignore logging errors
-        }
-        reject(new Error(`Command failed with code ${code}: ${stderr || stdout}`));
-      }
-    });
-    proc.on('error', (error) => {
-      reject(error);
-    });
-
-  });
-}
-
-/**
- * Validates sudo password
- */
+/** True when sudo accepts the password. */
 export async function validateSudoPassword(password: string): Promise<boolean> {
   try {
-    await runSudoCommand('echo "sudo test"', password);
+    await runAsRoot(['true'], password);
     return true;
   } catch {
     return false;

@@ -1,6 +1,6 @@
 import { Component, EventEmitter, Input, Output, ChangeDetectionStrategy } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
-import { ServerInstance } from '../../core/models/server-instance.model';
+import { ServerInstance, ServerInstanceDraft } from '../../core/models/server-instance.model';
 import { getMapVisual, MapVisual } from '../../core/utils/map-visuals';
 import { formatUptime, formatMegabytes, formatPercent } from '../../core/utils/format.utils';
 import {
@@ -24,7 +24,7 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ServerHeaderComponent {
-  @Input() server: ServerInstance | null = null;
+  @Input() server: ServerInstanceDraft | null = null;
   @Input() live: ServerInstance | null = null;
   @Input() pageTitle = '';
   @Input() now = Date.now();

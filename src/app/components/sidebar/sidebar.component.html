@@ -5,7 +5,6 @@
       <span class="nav-item-label">Dashboard</span>
     </button>
 
-    <!-- Server list -->
     <div class="nav-section">
       <div class="nav-section-header" (click)="showServers = !showServers">
         <span class="nav-section-title">
@@ -15,10 +14,10 @@
           <button type="button" class="nav-mini-btn" title="Start all servers" *ngIf="servers.length" (click)="startAllServers()">
             <span class="material-icons">play_arrow</span>
           </button>
-          <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" (click)="stopAllServers()">
+          <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="stopAllServers()">
             <span class="material-icons">stop</span>
           </button>
-          <button type="button" class="nav-mini-btn" title="Add server" (click)="onAddServerClick()">
+          <button type="button" class="nav-mini-btn" title="Add server" *ngIf="canCreateServer" (click)="onAddServerClick()">
             <span class="material-icons">add</span>
           </button>
         </div>
@@ -32,11 +31,13 @@
              [class.selected]="selectedServerId === server.id"
              (click)="onServerClick(server)">
           <span class="server-status-dot" [ngClass]="getServerStatusClass(server)" [title]="getServerStatusLabel(server)"></span>
-          <span *ngIf="editingServerId !== server.id"
-                class="server-name"
-                [title]="server.name"
-                (dblclick)="onServerNameDoubleClick(server, $event)">
-            {{ server.name }}
+          <span class="server-name-block" *ngIf="editingServerId !== server.id">
+            <span class="server-name"
+                  [title]="server.name"
+                  (dblclick)="onServerNameDoubleClick(server, $event)">
+              {{ server.name }}
+            </span>
+            <span class="server-item-manager" *ngIf="listLabel(server) as label" [title]="label">{{ label }}</span>
           </span>
           <input *ngIf="editingServerId === server.id"
                  type="text"
@@ -46,7 +47,7 @@
                  (keydown)="onServerNameKeydown($event, server)"
                  (blur)="onServerNameBlur(server)" />
           <span class="server-item-players" *ngIf="isServerRunning(server) && editingServerId !== server.id">{{ server.players || 0 }}</span>
-          <button *ngIf="servers.length > 1 && editingServerId !== server.id && isServerStopped(server)"
+          <button *ngIf="canDeleteServer && servers.length > 1 && editingServerId !== server.id && isServerStopped(server)"
                   type="button"
                   class="delete-server-btn"
                   title="Delete Server"
@@ -56,12 +57,11 @@
         </div>
         <div class="server-list-empty" *ngIf="!servers.length">
           No servers yet.
-          <button type="button" class="link-btn" (click)="onAddServerClick()">Add one</button>
+          <button type="button" class="link-btn" *ngIf="canCreateServer" (click)="onAddServerClick()">Add one</button>
         </div>
       </div>
     </div>
 
-    <!-- Selected server pages -->
     <div class="nav-section" *ngIf="selectedServer">
       <div class="nav-section-header static">
         <span class="nav-section-title nav-section-server" [title]="selectedServer.name">{{ selectedServer.name }}</span>

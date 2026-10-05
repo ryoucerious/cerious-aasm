@@ -1,6 +1,5 @@
 import { jest } from '@jest/globals';
 
-// Mock electron-updater
 const mockAutoUpdater = {
   autoDownload: true,
   autoInstallOnAppQuit: true,
@@ -35,13 +34,8 @@ jest.mock('./linux-package-updater.service', () => ({
 }));
 
 import { messagingService } from './messaging.service';
-import { linuxPackageUpdaterService } from './linux-package-updater.service';
-
-const mockMessaging = messagingService as jest.Mocked<typeof messagingService>;
-const mockLinuxUpdater = linuxPackageUpdaterService as jest.Mocked<typeof linuxPackageUpdaterService>;
 
 describe('AutoUpdateService', () => {
-  let AutoUpdateService: any;
   const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 
   beforeEach(() => {
@@ -55,12 +49,10 @@ describe('AutoUpdateService', () => {
     // Linux package updater and skip autoUpdater setup entirely.
     Object.defineProperty(process, 'platform', { value: 'win32' });
 
-    // Reset module cache so each test gets a fresh class
     jest.resetModules();
   });
 
   afterEach(() => {
-    // Restore original platform
     if (originalPlatform) {
       Object.defineProperty(process, 'platform', originalPlatform);
     }
@@ -103,10 +95,50 @@ describe('AutoUpdateService', () => {
       else process.env.AASM_DOCKER = origDocker;
     });
 
+    async function inHeadlessMode(run: () => Promise<void>): Promise<void> {
+      const origArgv = process.argv;
+      process.argv = [...origArgv, '--headless'];
+      try {
+        await jest.isolateModulesAsync(run);
+      } finally {
+        process.argv = origArgv;
+      }
+    }
+
+    it('in headless mode, offers the release of the pre-release it runs', async () => {
+      await inHeadlessMode(async () => {
+        const { app } = require('electron');
+        app.getVersion.mockReturnValue('1.2.0-beta.1');
+        app.isPackaged = true;
+        require('axios').default.get.mockResolvedValue({ data: { tag_name: 'v1.2.0', body: 'notes', published_at: '2026-01-01', assets: [] } });
+        const { messagingService: bus } = require('./messaging.service');
+        const service = new (require('./auto-update.service').AutoUpdateService)();
+
+        await service.checkForUpdates();
+
+        expect(bus.sendToAllRenderers).toHaveBeenLastCalledWith('app-update-status', expect.objectContaining({
+          status: 'available',
+          version: '1.2.0',
+          instructionsUrl: 'https://github.com/ryoucerious/cerious-aasm/releases/latest'
+        }));
+      });
+    });
+
+    it('in headless mode, reports a release it cannot fetch', async () => {
+      await inHeadlessMode(async () => {
+        require('axios').default.get.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
+        const { messagingService: bus } = require('./messaging.service');
+        const service = new (require('./auto-update.service').AutoUpdateService)();
+
+        await service.checkForUpdates();
+
+        expect(bus.sendToAllRenderers).toHaveBeenLastCalledWith('app-update-status', { status: 'error', error: 'Could not check for an update.' });
+      });
+    });
+
     it('should set autoDownload to false', () => {
       jest.isolateModules(() => {
         require('./auto-update.service');
-        // autoDownload should be set to false by the constructor
         expect(mockAutoUpdater.autoDownload).toBe(false);
       });
     });
@@ -131,7 +163,6 @@ describe('AutoUpdateService', () => {
       jest.isolateModules(() => {
         serviceRef = require('./auto-update.service').autoUpdateService;
       });
-      // Should not throw
       await serviceRef.checkForUpdates();
     });
   });
@@ -141,7 +172,7 @@ describe('AutoUpdateService', () => {
       (mockAutoUpdater.downloadUpdate as jest.Mock<any>).mockResolvedValue(undefined);
 
       let serviceRef: any;
-      let localMessaging: any;
+      let localMessaging!: jest.Mocked<typeof messagingService>;
       jest.isolateModules(() => {
         localMessaging = require('./messaging.service').messagingService;
         serviceRef = require('./auto-update.service').autoUpdateService;
@@ -279,6 +310,32 @@ describe('AutoUpdateService', () => {
     });
   });
 
+  describe('simulateUpdateLifecycleForDev', () => {
+    it('plays a check, a ten-step download and a finished update to the renderers', () => {
+      jest.useFakeTimers();
+      let localMessaging!: jest.Mocked<typeof messagingService>;
+      jest.isolateModules(() => {
+        localMessaging = require('./messaging.service').messagingService;
+        require('./auto-update.service').autoUpdateService.simulateUpdateLifecycleForDev();
+      });
+      const statuses = () => localMessaging.sendToAllRenderers.mock.calls.map(([, data]) => (data as { status: string }).status);
+
+      jest.advanceTimersByTime(1999);
+      expect(statuses()).toEqual([]);
+
+      jest.advanceTimersByTime(1);
+      expect(statuses()).toEqual(['checking']);
+
+      jest.advanceTimersByTime(10000);
+      expect(statuses()).toEqual(['checking', 'available', ...Array(10).fill('downloading'), 'downloaded']);
+      expect(localMessaging.sendToAllRenderers).toHaveBeenCalledWith('app-update-status', expect.objectContaining({ status: 'downloading', percent: 100 }));
+      expect(localMessaging.sendToAllRenderers).toHaveBeenLastCalledWith('app-update-status', expect.objectContaining({ status: 'downloaded', version: '99.0.0' }));
+      expect(localMessaging.sendToAllRenderers.mock.calls.every(([channel]) => channel === 'app-update-status')).toBe(true);
+
+      jest.useRealTimers();
+    });
+  });
+
   describe('startPeriodicUpdateCheck', () => {
     it('should set up interval for periodic checks', () => {
       jest.useFakeTimers();
@@ -291,6 +348,23 @@ describe('AutoUpdateService', () => {
 
         jest.advanceTimersByTime(60000);
         expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalled();
+      });
+
+      jest.useRealTimers();
+    });
+
+    it('keeps a single timer, which never holds the process open', () => {
+      jest.useFakeTimers();
+
+      jest.isolateModules(() => {
+        const { autoUpdateService } = require('./auto-update.service');
+        const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+        autoUpdateService.startPeriodicUpdateCheck(60000);
+        autoUpdateService.startPeriodicUpdateCheck(60000);
+
+        expect(jest.getTimerCount()).toBe(1);
+        expect(setIntervalSpy.mock.results.map(result => (result.value as NodeJS.Timeout).hasRef())).not.toContain(true);
       });
 
       jest.useRealTimers();

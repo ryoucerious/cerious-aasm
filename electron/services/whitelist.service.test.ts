@@ -1,52 +1,59 @@
 import { jest } from '@jest/globals';
 
 // This suite exercises real filesystem behaviour in a temp directory, so it opts out of
-// the global fs/path mocks in test/setup.ts — both here and inside the service under test.
+// the global fs/path mocks in test/setup.ts, both here and inside the service under test.
 jest.unmock('fs');
 jest.unmock('path');
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getInstanceWhitelistPath } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { GlobalConfig, loadGlobalConfig } from '../utils/global-config.utils';
+import { WhitelistService } from './whitelist.service';
 
-const mockGetArkServerDir = jest.fn();
-jest.mock('../utils/ark/ark-path.utils', () => ({
-  ArkPathUtils: {
-    getArkServerDir: mockGetArkServerDir,
-  },
+// Instance folders resolve under <serverDataDir>/AASMServer/ShooterGame/Saved/Servers.
+jest.mock('../utils/global-config.utils', () => ({ loadGlobalConfig: jest.fn() }));
+jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({
+  getArkServerDir: jest.fn(),
+  getInstanceWhitelistPath: jest.fn(),
 }));
 
+const LIST = 'PlayersExclusiveJoinList.txt';
+const HEADER = [
+  '# ARK: Survival Ascended Exclusive Join List',
+  '# One EOS/Player ID per line',
+  '# Lines starting with # are comments and will be ignored',
+  '# This file is managed by Cerious AASM',
+  ''
+].join('\n');
+
 describe('WhitelistService', () => {
-  let WhitelistService: any;
-  let service: any;
+  let service: WhitelistService;
   let tmpDir: string;
   let instanceDir: string;
-  let mainArkDir: string;
-
-  beforeAll(() => {
-    const mod = require('./whitelist.service');
-    WhitelistService = mod.WhitelistService;
-  });
+  let runtimeList: string;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whitelist-test-'));
-    instanceDir = path.join(tmpDir, 'instance1');
-    mainArkDir = path.join(tmpDir, 'ark-server');
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whitelist test-'));
+    instanceDir = path.join(tmpDir, 'AASMServer', 'ShooterGame', 'Saved', 'Servers', 'instance1');
+    // The dedicated server opens PlayersJoinNoCheckList.txt, not PlayersExclusiveJoinList.txt.
+    runtimeList = path.join(tmpDir, 'AASMServer', 'ShooterGame', 'Binaries', 'Win64', 'PlayersJoinNoCheckList.txt');
     fs.mkdirSync(instanceDir, { recursive: true });
-    mockGetArkServerDir.mockReturnValue(mainArkDir);
+    jest.mocked(loadGlobalConfig).mockReturnValue({ serverDataDir: tmpDir } as GlobalConfig);
+    jest.mocked(getInstanceWhitelistPath).mockReturnValue(runtimeList);
     service = new WhitelistService();
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
+  const instanceList = () => fs.readFileSync(path.join(instanceDir, LIST), 'utf8');
+
   describe('loadWhitelistFromInstance', () => {
     it('should return empty list when no whitelist file exists', () => {
-      const result = service.loadWhitelistFromInstance(instanceDir);
+      const result = service.loadWhitelistFromInstance('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual([]);
@@ -54,17 +61,10 @@ describe('WhitelistService', () => {
     });
 
     it('should load player IDs from whitelist file', () => {
-      const content = [
-        '# Comment line',
-        'player123',
-        'player456',
-        '',
-        '# Another comment',
-        'player789',
-      ].join('\n');
-      fs.writeFileSync(path.join(instanceDir, 'PlayersExclusiveJoinList.txt'), content, 'utf8');
+      const content = ['# Comment line', 'player123', 'player456', '', '# Another comment', 'player789'].join('\r\n');
+      fs.writeFileSync(path.join(instanceDir, LIST), content, 'utf8');
 
-      const result = service.loadWhitelistFromInstance(instanceDir);
+      const result = service.loadWhitelistFromInstance('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player123', 'player456', 'player789']);
@@ -72,69 +72,73 @@ describe('WhitelistService', () => {
     });
 
     it('should handle file read errors', () => {
-      // Create a directory where the file should be to cause a read error
-      const whitelistPath = path.join(instanceDir, 'PlayersExclusiveJoinList.txt');
-      fs.mkdirSync(whitelistPath, { recursive: true });
+      // A directory where the file should be makes the read fail.
+      fs.mkdirSync(path.join(instanceDir, LIST), { recursive: true });
 
-      const result = service.loadWhitelistFromInstance(instanceDir);
+      const result = service.loadWhitelistFromInstance('instance1');
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
+
+    it('refuses an instance id that could leave the servers directory', () => {
+      const result = service.loadWhitelistFromInstance('../instance1');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid instance ID');
+    });
   });
 
   describe('writeWhitelistFile', () => {
-    it('should write whitelist file to instance directory', () => {
-      const result = service.writeWhitelistFile(instanceDir, ['player1', 'player2']);
+    // ARK reads one id per line and takes a '#' line as an id, so the copy it reads carries no header.
+    it('writes the list to the instance folder and, as bare ids, to the file ARK reads', () => {
+      const result = service.writeWhitelistFile('instance1', ['player1', 'player2']);
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1', 'player2']);
-
-      const content = fs.readFileSync(
-        path.join(instanceDir, 'PlayersExclusiveJoinList.txt'),
-        'utf8'
-      );
-      expect(content).toContain('player1');
-      expect(content).toContain('player2');
-      expect(content).toContain('# ARK: Survival Ascended');
+      expect(getInstanceWhitelistPath).toHaveBeenCalledWith('instance1');
+      expect(instanceList()).toBe(`${HEADER}\nplayer1\nplayer2`);
+      expect(fs.readFileSync(runtimeList, 'utf8')).toBe('player1\nplayer2\n');
     });
 
     it('should filter out empty player IDs', () => {
-      service.writeWhitelistFile(instanceDir, ['player1', '', '  ', 'player2']);
+      service.writeWhitelistFile('instance1', ['player1', '', '  ', 'player2']);
 
-      const content = fs.readFileSync(
-        path.join(instanceDir, 'PlayersExclusiveJoinList.txt'),
-        'utf8'
-      );
-      const lines = content.split('\n').filter((l: string) => l && !l.startsWith('#'));
+      const lines = instanceList().split('\n').filter((l: string) => l && !l.startsWith('#'));
       expect(lines).toEqual(['player1', 'player2']);
     });
 
-    it('should create instance directory if not exists', () => {
-      const newDir = path.join(tmpDir, 'new-instance');
-      const result = service.writeWhitelistFile(newDir, ['player1']);
+    it('does not create a folder for a server that does not exist', () => {
+      const result = service.writeWhitelistFile('missing', ['player1']);
 
-      expect(result.success).toBe(true);
-      expect(fs.existsSync(path.join(newDir, 'PlayersExclusiveJoinList.txt'))).toBe(true);
+      expect(result.success).toBe(false);
+      expect(fs.existsSync(path.join(path.dirname(instanceDir), 'missing'))).toBe(false);
+    });
+
+    it('refuses an invalid instance id without writing anything', () => {
+      const result = service.writeWhitelistFile('..', ['player1']);
+
+      expect(result.success).toBe(false);
+      expect(fs.existsSync(path.join(path.dirname(instanceDir), LIST))).toBe(false);
+      expect(fs.existsSync(runtimeList)).toBe(false);
     });
   });
 
   describe('addToInstanceWhitelist', () => {
     it('should add a new player', () => {
-      // Start with one player
-      service.writeWhitelistFile(instanceDir, ['existing']);
+      service.writeWhitelistFile('instance1', ['existing']);
 
-      const result = service.addToInstanceWhitelist(instanceDir, 'newplayer');
+      const result = service.addToInstanceWhitelist('instance1', 'newplayer');
 
       expect(result.success).toBe(true);
-      expect(result.playerIds).toContain('existing');
-      expect(result.playerIds).toContain('newplayer');
+      expect(result.playerIds).toEqual(['existing', 'newplayer']);
+      expect(instanceList()).toContain('newplayer');
     });
 
     it('should not duplicate existing player', () => {
-      service.writeWhitelistFile(instanceDir, ['player1']);
+      service.writeWhitelistFile('instance1', ['player1']);
 
-      const result = service.addToInstanceWhitelist(instanceDir, 'player1');
+      const result = service.addToInstanceWhitelist('instance1', 'player1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1']);
@@ -142,27 +146,27 @@ describe('WhitelistService', () => {
     });
 
     it('should add to empty whitelist', () => {
-      const result = service.addToInstanceWhitelist(instanceDir, 'first_player');
+      const result = service.addToInstanceWhitelist('instance1', 'first_player');
 
       expect(result.success).toBe(true);
-      expect(result.playerIds).toContain('first_player');
+      expect(result.playerIds).toEqual(['first_player']);
     });
   });
 
   describe('removeFromInstanceWhitelist', () => {
     it('should remove an existing player', () => {
-      service.writeWhitelistFile(instanceDir, ['player1', 'player2', 'player3']);
+      service.writeWhitelistFile('instance1', ['player1', 'player2', 'player3']);
 
-      const result = service.removeFromInstanceWhitelist(instanceDir, 'player2');
+      const result = service.removeFromInstanceWhitelist('instance1', 'player2');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1', 'player3']);
     });
 
     it('should handle removing non-existent player', () => {
-      service.writeWhitelistFile(instanceDir, ['player1']);
+      service.writeWhitelistFile('instance1', ['player1']);
 
-      const result = service.removeFromInstanceWhitelist(instanceDir, 'nonexistent');
+      const result = service.removeFromInstanceWhitelist('instance1', 'nonexistent');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1']);
@@ -172,85 +176,41 @@ describe('WhitelistService', () => {
 
   describe('clearInstanceWhitelist', () => {
     it('should clear all players', () => {
-      service.writeWhitelistFile(instanceDir, ['p1', 'p2', 'p3']);
+      service.writeWhitelistFile('instance1', ['p1', 'p2', 'p3']);
 
-      const result = service.clearInstanceWhitelist(instanceDir);
+      const result = service.clearInstanceWhitelist('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual([]);
-    });
-  });
-
-  describe('isPlayerWhitelistedInInstance', () => {
-    it('should return true for whitelisted player', () => {
-      service.writeWhitelistFile(instanceDir, ['player1', 'player2']);
-
-      expect(service.isPlayerWhitelistedInInstance(instanceDir, 'player1')).toBe(true);
-    });
-
-    it('should return false for non-whitelisted player', () => {
-      service.writeWhitelistFile(instanceDir, ['player1']);
-
-      expect(service.isPlayerWhitelistedInInstance(instanceDir, 'other')).toBe(false);
-    });
-
-    it('should return false when no whitelist file exists', () => {
-      const emptyDir = path.join(tmpDir, 'empty');
-      fs.mkdirSync(emptyDir, { recursive: true });
-
-      expect(service.isPlayerWhitelistedInInstance(emptyDir, 'player1')).toBe(false);
-    });
-  });
-
-  describe('getInstanceWhitelistStats', () => {
-    it('should return stats for existing whitelist', () => {
-      service.writeWhitelistFile(instanceDir, ['p1', 'p2']);
-
-      const stats = service.getInstanceWhitelistStats(instanceDir);
-
-      expect(stats.playerCount).toBe(2);
-      expect(stats.fileExists).toBe(true);
-      expect(stats.filePath).toContain('PlayersExclusiveJoinList.txt');
-    });
-
-    it('should return zero counts for non-existent whitelist', () => {
-      const emptyDir = path.join(tmpDir, 'empty');
-      fs.mkdirSync(emptyDir, { recursive: true });
-
-      const stats = service.getInstanceWhitelistStats(emptyDir);
-
-      expect(stats.playerCount).toBe(0);
-      expect(stats.fileExists).toBe(false);
+      expect(instanceList()).toBe(HEADER);
     });
   });
 
   describe('copyWhitelistToMainDir', () => {
-    it('should create empty whitelist when no instance file exists', () => {
-      const result = service.copyWhitelistToMainDir(instanceDir);
+    it('writes an empty file ARK reads when the instance has no list', () => {
+      const result = service.copyWhitelistToMainDir('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual([]);
       expect(result.message).toContain('empty whitelist');
-
-      // Should have created WhitelistFile in main ARK dir
-      const mainPath = path.join(mainArkDir, 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
-      expect(fs.existsSync(mainPath)).toBe(true);
+      expect(fs.readFileSync(runtimeList, 'utf8')).toBe('');
     });
 
-    it('should copy existing whitelist to main dir', () => {
-      // Write a whitelist file to instance dir first
-      service.writeWhitelistFile(instanceDir, ['player1', 'player2']);
+    it('rewrites the instance list as bare ids, dropping comments and blank lines', () => {
+      fs.writeFileSync(path.join(instanceDir, LIST), `${HEADER}\r\nplayer1\r\n\r\n# note\r\nplayer2\r\n`, 'utf8');
 
-      // Clear and re-create a fresh service so we can copy
-      const result = service.copyWhitelistToMainDir(instanceDir);
+      const result = service.copyWhitelistToMainDir('instance1');
 
       expect(result.success).toBe(true);
       expect(result.playerIds).toEqual(['player1', 'player2']);
+      expect(fs.readFileSync(runtimeList, 'utf8')).toBe('player1\nplayer2\n');
+    });
 
-      const mainPath = path.join(mainArkDir, 'ShooterGame', 'Binaries', 'Win64', 'PlayersExclusiveJoinList.txt');
-      const content = fs.readFileSync(mainPath, 'utf8');
-      expect(content).toContain('player1');
-      expect(content).toContain('player2');
+    it('reports an instance id the instance store refuses', () => {
+      const result = service.copyWhitelistToMainDir('bad id');
+
+      expect(result.success).toBe(false);
+      expect(fs.existsSync(runtimeList)).toBe(false);
     });
   });
 });

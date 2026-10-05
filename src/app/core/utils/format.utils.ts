@@ -3,7 +3,7 @@
  * Pure functions, no Angular dependencies, so they are trivial to unit test.
  */
 
-/** "3d 14h", "1d 6h", "5h 23m", "12m", "45s" — the compact style used on server cards. */
+/** "3d 14h", "1d 6h", "5h 23m", "12m", "45s": the compact style used on server cards. */
 export function formatUptime(startedAt: number | null | undefined, now: number = Date.now()): string {
   if (!startedAt || startedAt > now) return '--';
   const totalSeconds = Math.floor((now - startedAt) / 1000);
@@ -61,12 +61,40 @@ export function toPercent(used: number | null | undefined, total: number | null 
   return Math.max(0, Math.min(100, (used / total) * 100));
 }
 
+/**
+ * Date and time in the browser's time zone and locale, "Unknown" when missing. Local, because
+ * scheduled work such as backups runs on the host's clock and users compare it with their own.
+ */
+export function formatLocalDateTime(value: Date | string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return 'Unknown';
+  return new Date(value).toLocaleString();
+}
+
 /** "12am", "3am", "12pm", "9pm" for chart axes. */
 export function formatHourLabel(timestamp: number): string {
   const hours = new Date(timestamp).getHours();
   const suffix = hours >= 12 ? 'pm' : 'am';
   const twelve = hours % 12 === 0 ? 12 : hours % 12;
   return `${twelve}${suffix}`;
+}
+
+/** Hosts the desktop app and a local dev server load from; useless in a join address. */
+const LOCAL_JOIN_HOSTS = new Set(['', 'localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * What a player pastes into the game: the host this panel was opened on and the game port.
+ * On localhost, a MultiHome address is the one players can use. Without one, the page host
+ * is still shown so the port is visible in the desktop app.
+ */
+export function joinAddress(
+  server: { gamePort?: number | null; multiHome?: string | null } | null | undefined,
+  pageHost: string
+): string {
+  const port = Number(server?.gamePort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+  const multiHome = String(server?.multiHome || '').trim();
+  const host = LOCAL_JOIN_HOSTS.has(pageHost) && multiHome ? multiHome : pageHost.trim();
+  return host ? `${host}:${port}` : '';
 }
 
 /** First letter of a name for an avatar, uppercase. */

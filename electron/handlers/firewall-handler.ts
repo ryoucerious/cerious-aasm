@@ -1,163 +1,64 @@
-import { messagingService } from '../services/messaging.service';
 import { firewallService } from '../services/firewall.service';
 import { getPlatform } from '../utils/platform.utils';
 import { getDockerNetworkInfo } from '../utils/docker-network.utils';
+import { onRequest } from './handler.utils';
 
-/**
- * Handles the 'setup-ark-server-firewall' message event from the messaging service.
- *
- * When triggered, this handler invokes the FirewallService to get the ARK server firewall instructions.
- * It then sends the result back to the originator of the message, including details such as
- * success status and any error information.
- * In case of unexpected errors during the firewall instructions retrieval, it logs the error and sends a failure
- * response to the originator.
- *
- * @param payload - The payload received with the message, expected to contain `gamePort`, `queryPort`, `rconPort`, and `requestId`.
- * @param sender - The sender of the message, used to route the response.
- */
-messagingService.on('setup-ark-server-firewall', async (payload, sender) => {
-  const { gamePort, queryPort, rconPort, requestId } = payload || {};
-  
-  try {
-    const result = await firewallService.getArkServerFirewallInstructions(gamePort, queryPort, rconPort);
-    
-    // Return in the format expected by frontend
-    messagingService.sendToOriginator('setup-ark-server-firewall', {
-      success: result.success,
-      platform: result.platform,
-      instructions: result.instructions,
-      message: result.success 
-        ? 'Linux firewall configuration instructions provided'
-        : 'Failed to generate firewall instructions',
-      error: result.error,
-      requestId
-    }, sender);
-  } catch (error) {
-    console.error('[firewall-handler] Failed to handle setup-ark-server-firewall:', error);
-    messagingService.sendToOriginator('setup-ark-server-firewall', {
-      success: false,
-      platform: getPlatform(),
-      message: 'Failed to generate ARK server firewall instructions',
-      error: (error as Error)?.message || 'Failed to generate ARK server firewall instructions',
-      requestId
-    }, sender);
-  }
+const ARK_FAILURE = 'Failed to generate ARK server firewall instructions';
+const WEB_FAILURE = 'Failed to generate web server firewall instructions';
+const CHECK_FAILURE = 'Failed to check firewall status';
+
+onRequest('setup-ark-server-firewall', async payload => {
+  const { gamePort, queryPort, rconPort } = payload;
+  const result = await firewallService.getArkServerFirewallInstructions(gamePort, queryPort, rconPort);
+  return {
+    success: result.success,
+    platform: result.platform,
+    instructions: result.instructions,
+    message: result.success ? 'Linux firewall configuration instructions provided' : 'Failed to generate firewall instructions',
+    error: result.error
+  };
+}, {
+  fallbackError: ARK_FAILURE,
+  onError: error => ({ success: false, platform: getPlatform(), message: ARK_FAILURE, error })
 });
 
-/**
- * Handles the 'setup-web-server-firewall' message event from the messaging service.
- *
- * When triggered, this handler invokes the FirewallService to get the web server firewall instructions.
- * It then sends the result back to the originator of the message, including details such as
- * success status and any error information.
- * In case of unexpected errors during the firewall instructions retrieval, it logs the error and sends a failure
- * response to the originator.
- *
- * @param payload - The payload received with the message, expected to contain `port` and `requestId`.
- * @param sender - The sender of the message, used to route the response.
- */
-messagingService.on('setup-web-server-firewall', async (payload, sender) => {
-  const { port, requestId } = payload || {};
-  
-  try {
-    const result = await firewallService.getWebServerFirewallInstructions(port);
-    
-    messagingService.sendToOriginator('setup-web-server-firewall', {
-      success: result.success,
-      platform: result.platform,
-      instructions: result.instructions,
-      message: result.success 
-        ? `Linux firewall configuration instructions for port ${port} provided`
-        : 'Failed to generate web server firewall instructions',
-      error: result.error,
-      requestId
-    }, sender);
-  } catch (error) {
-    console.error('[firewall-handler] Failed to handle setup-web-server-firewall:', error);
-    messagingService.sendToOriginator('setup-web-server-firewall', {
-      success: false,
-      platform: getPlatform(),
-      message: 'Failed to generate web server firewall instructions',
-      error: (error as Error)?.message || 'Failed to generate web server firewall instructions',
-      requestId
-    }, sender);
-  }
+onRequest('setup-web-server-firewall', async payload => {
+  const { port } = payload;
+  const result = await firewallService.getWebServerFirewallInstructions(port);
+  return {
+    success: result.success,
+    platform: result.platform,
+    instructions: result.instructions,
+    message: result.success ? `Linux firewall configuration instructions for port ${port} provided` : WEB_FAILURE,
+    error: result.error
+  };
+}, {
+  fallbackError: WEB_FAILURE,
+  onError: error => ({ success: false, platform: getPlatform(), message: WEB_FAILURE, error })
 });
 
-/**
- * Handles the 'get-linux-firewall-instructions' message event from the messaging service.
- *
- * When triggered, this handler invokes the FirewallService to get the Linux firewall instructions.
- * It then sends the result back to the originator of the message, including details such as
- * success status and any error information.
- * In case of unexpected errors during the firewall instructions retrieval, it logs the error and sends a failure
- * response to the originator.
- *
- * @param payload - The payload received with the message, expected to contain `gamePort`, `queryPort`, `rconPort`, and `requestId`.
- * @param sender - The sender of the message, used to route the response.
- */
-messagingService.on('get-linux-firewall-instructions', async (payload, sender) => {
-  const { gamePort, queryPort, rconPort, requestId } = payload || {};
-  
-  try {
-    const result = await firewallService.getArkServerFirewallInstructions(gamePort, queryPort, rconPort);
-    
-    messagingService.sendToOriginator('get-linux-firewall-instructions', {
-      success: result.success,
-      instructions: result.instructions,
-      platform: result.platform,
-      error: result.error,
-      requestId
-    }, sender);
-  } catch (error) {
-    console.error('[firewall-handler] Failed to handle get-linux-firewall-instructions:', error);
-    messagingService.sendToOriginator('get-linux-firewall-instructions', {
-      success: false,
-      platform: getPlatform(),
-      error: (error as Error)?.message || 'Failed to get Linux firewall instructions',
-      requestId
-    }, sender);
-  }
+onRequest('get-linux-firewall-instructions', async payload => {
+  const { gamePort, queryPort, rconPort } = payload;
+  const { success, instructions, platform, error } = await firewallService.getArkServerFirewallInstructions(gamePort, queryPort, rconPort);
+  return { success, instructions, platform, error };
+}, {
+  fallbackError: 'Failed to get Linux firewall instructions',
+  onError: error => ({ success: false, platform: getPlatform(), error })
 });
 
-/**
- * Handles the 'check-firewall-enabled' message event from the messaging service.
- *
- * When triggered, this handler checks the current platform and returns firewall status.
- * It sends the result back to the originator of the message, including platform information.
- * In case of unexpected errors, it logs the error and sends a failure response.
- *
- * @param payload - The payload received with the message, expected to contain `requestId`.
- * @param sender - The sender of the message, used to route the response.
- */
-messagingService.on('check-firewall-enabled', async (payload, sender) => {
-  const { requestId } = payload || {};
-  
-  try {
-    const platform = getPlatform();
-    const isEnabled = platform === 'linux'; // Firewall management is only relevant on Linux
-    // In Docker the ports are decided by how the container is networked, not by ufw inside it.
-    const docker = getDockerNetworkInfo();
-
-    messagingService.sendToOriginator('check-firewall-enabled', {
-      success: true,
-      platform,
-      enabled: isEnabled,
-      message: platform === 'linux'
-        ? 'Firewall management available on Linux'
-        : 'Firewall management not available on this platform',
-      ...(docker ? { docker } : {}),
-      requestId
-    }, sender);
-  } catch (error) {
-    console.error('[firewall-handler] Failed to handle check-firewall-enabled:', error);
-    messagingService.sendToOriginator('check-firewall-enabled', {
-      success: false,
-      platform: getPlatform(),
-      enabled: false,
-      message: 'Failed to check firewall status',
-      error: (error as Error)?.message || 'Failed to check firewall status',
-      requestId
-    }, sender);
-  }
+onRequest('check-firewall-enabled', () => {
+  const platform = getPlatform();
+  const enabled = platform === 'linux';
+  // In Docker the ports are decided by how the container is networked, not by ufw inside it.
+  const docker = getDockerNetworkInfo();
+  return {
+    success: true,
+    platform,
+    enabled,
+    message: enabled ? 'Firewall management available on Linux' : 'Firewall management not available on this platform',
+    ...(docker ? { docker } : {})
+  };
+}, {
+  fallbackError: CHECK_FAILURE,
+  onError: error => ({ success: false, platform: getPlatform(), enabled: false, message: CHECK_FAILURE, error })
 });

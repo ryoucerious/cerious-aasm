@@ -1,179 +1,244 @@
-
-import { loginHandler, logoutHandler, authStatusHandler } from './auth-routes';
-import { validateAuthInput, sanitizeString } from '../utils/validation.utils';
-import { getAuthConfig, verifyPassword } from './auth-config';
+import httpMocks from 'node-mocks-http';
+import { authStatusHandler, loginHandler, logoutHandler } from './auth-routes';
+import { getAuthConfig, legacyLoginFingerprint, verifyPassword } from './auth-config';
 import { createSession, destroySession, isAuthenticated } from './auth-middleware';
 import { verifyWithUserDatabase } from './user-bridge';
-import httpMocks from 'node-mocks-http';
+import type { AuthenticatedUser } from '../types/auth.types';
 
-// Use jest.mock with factory to override all relevant exports with jest.fn mocks
-jest.mock('../utils/validation.utils', () => {
-  const actual = jest.requireActual('../utils/validation.utils');
-  return {
-    ...actual,
-    validateAuthInput: jest.fn(() => ({ valid: true })),
-    sanitizeString: jest.fn((str: string) => str),
-  };
-});
-jest.mock('../web-server/auth-config', () => {
-  const actual = jest.requireActual('../web-server/auth-config');
-  return {
-    ...actual,
-    getAuthConfig: jest.fn(() => ({ enabled: true, username: 'testuser', passwordHash: 'hashedpassword' })),
-    verifyPassword: jest.fn(() => Promise.resolve(true)),
-  };
-});
-// The account check talks to the main process over IPC, which no test has.
-jest.mock('../web-server/user-bridge', () => ({
-  verifyWithUserDatabase: jest.fn(async () => null)
+jest.mock('./auth-config', () => ({
+  getAuthConfig: jest.fn(),
+  legacyLoginFingerprint: jest.fn(),
+  verifyPassword: jest.fn()
+}));
+jest.mock('./user-bridge', () => ({ verifyWithUserDatabase: jest.fn() }));
+jest.mock('./auth-middleware', () => ({
+  createSession: jest.fn(),
+  destroySession: jest.fn(),
+  isAuthenticated: jest.fn()
 }));
 
-jest.mock('../web-server/auth-middleware', () => {
-  const actual = jest.requireActual('../web-server/auth-middleware');
-  return {
-    ...actual,
-    ensureAuthInitialized: jest.fn((req: any, res: any, next: any) => next()),
-    createSession: jest.fn(),
-    destroySession: jest.fn(),
-    isAuthenticated: jest.fn(() => false),
-  };
-});
+const mockedGetAuthConfig = jest.mocked(getAuthConfig);
+const mockedVerifyPassword = jest.mocked(verifyPassword);
+const mockedVerifyWithUserDatabase = jest.mocked(verifyWithUserDatabase);
 
-const validationUtils = require('../utils/validation.utils');
-const authConfigModule = require('../web-server/auth-config');
-const authMiddlewareModule = require('../web-server/auth-middleware');
-const { createRequest, createResponse } = require('node-mocks-http');
+const account: AuthenticatedUser = {
+  id: 'u1', username: 'jared', displayName: 'Jared', roleId: 'operator', roleName: 'Operator',
+  permissions: ['servers.view'], active: true, ownerUserId: null, cliLocked: false, createdAt: 1, updatedAt: 1, lastLoginAt: null
+};
 
+let nextIp = 1;
 
-jest.mock('express');
+/** Each test signs in from its own address so the limiter's memory does not leak between tests. */
+function freshIp(): string {
+  return `10.0.0.${nextIp++}`;
+}
 
-const mockExpress = require('express');
+async function login(body: Record<string, unknown>, ip = freshIp()) {
+  const req = httpMocks.createRequest({ method: 'POST', body, ip });
+  const res = httpMocks.createResponse();
+  await loginHandler(req, res);
+  return { req, res };
+}
 
 describe('auth-routes', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.mocked(legacyLoginFingerprint).mockImplementation(login => `${login?.username}:${login?.passwordHash}`);
+    mockedGetAuthConfig.mockReturnValue({ enabled: true, username: 'admin', passwordHash: 'legacy-hash' });
+    mockedVerifyPassword.mockResolvedValue(false);
+    mockedVerifyWithUserDatabase.mockResolvedValue(null);
   });
+
   describe('loginHandler', () => {
-    it('should return 400 if validation fails', async () => {
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: false, error: 'Missing fields' });
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: '', password: '' } });
-      const res = httpMocks.createResponse();
-      await loginHandler(req, res);
+    it('rejects a request without a username or password', async () => {
+      const { res } = await login({ username: '', password: '' });
+
       expect(res.statusCode).toBe(400);
-      expect(res._getJSONData()).toEqual({ success: false, error: 'Missing fields' });
+      expect(res._getJSONData()).toEqual({ success: false, error: 'Username is required' });
     });
 
-    it('should return success if auth is disabled', async () => {
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: false });
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'user', password: 'pass' } });
+    it('rejects a request without a body', async () => {
+      const req = httpMocks.createRequest({ method: 'POST', ip: freshIp() });
+      (req as { body?: unknown }).body = undefined;
       const res = httpMocks.createResponse();
+
       await loginHandler(req, res);
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('says no sign-in is needed while authentication is off', async () => {
+      mockedGetAuthConfig.mockReturnValue({ enabled: false, username: '', passwordHash: '' });
+
+      const { res } = await login({ username: 'user', password: 'pass' });
+
       expect(res._getJSONData()).toEqual({ success: true, message: 'Authentication not required' });
     });
 
-    it('signs in an account when no single login is configured', async () => {
-      // An install that only uses accounts has no legacy username or password hash, which
-      // used to be refused as a configuration error before the account was ever checked.
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
-      (verifyWithUserDatabase as jest.Mock).mockResolvedValue({
-        id: 'u1', username: 'jared', displayName: 'Jared', roleId: 'operator',
-        roleName: 'Operator', permissions: ['servers.view'], active: true
-      });
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'jared', password: 'pass' } });
-      const res = httpMocks.createResponse();
+    it('signs in an account', async () => {
+      mockedVerifyWithUserDatabase.mockResolvedValue(account);
 
-      await loginHandler(req, res);
+      const { req, res } = await login({ username: 'jared', password: 'correct horse' });
 
       expect(res.statusCode).toBe(200);
-      expect(res._getJSONData().success).toBeTruthy();
-      expect(createSession).toHaveBeenCalled();
+      expect(res._getJSONData()).toEqual({ success: true, message: 'Login successful', user: account });
+      expect(createSession).toHaveBeenCalledWith(req, res, 'jared', account);
     });
 
-    it('refuses an unknown account when no single login is configured', async () => {
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
-      (verifyWithUserDatabase as jest.Mock).mockResolvedValue(null);
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'nobody', password: 'pass' } });
-      const res = httpMocks.createResponse();
+    it('passes the password on exactly as typed', async () => {
+      await login({ username: ' jared ', password: '  spaces count  ' });
 
-      await loginHandler(req, res);
-
-      expect(res.statusCode).toBe(401);
-      expect(res._getJSONData()).toEqual({ success: false, error: 'Invalid credentials' });
+      expect(mockedVerifyWithUserDatabase).toHaveBeenCalledWith('jared', '  spaces count  ');
+      expect(mockedVerifyPassword).toHaveBeenCalledWith('  spaces count  ', 'legacy-hash');
     });
 
-    it('should return 401 if credentials are invalid', async () => {
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true, username: 'user', passwordHash: 'hash' });
-      (verifyPassword as jest.Mock).mockResolvedValue(false);
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'user', password: 'wrong' } });
-      const res = httpMocks.createResponse();
-      await loginHandler(req, res);
-      expect(res.statusCode).toBe(401);
-      expect(res._getJSONData()).toEqual({ success: false, error: 'Invalid credentials' });
-    });
+    it('signs in with the single legacy login', async () => {
+      mockedVerifyPassword.mockResolvedValue(true);
 
-    it('should return success and create session if credentials are valid', async () => {
-      (validateAuthInput as jest.Mock).mockReturnValue({ valid: true });
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true, username: 'user', passwordHash: 'hash' });
-      (verifyPassword as jest.Mock).mockResolvedValue(true);
-      const req = httpMocks.createRequest({ method: 'POST', body: { username: 'user', password: 'pass' } });
-      const res = httpMocks.createResponse();
-      await loginHandler(req, res);
-      expect(createSession).toHaveBeenCalledWith(res, 'user');
+      const { req, res } = await login({ username: 'admin', password: 'pass' });
+
       expect(res._getJSONData()).toEqual({ success: true, message: 'Login successful' });
+      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' });
+    });
+
+    it('stamps a legacy session with the login the password was checked against', async () => {
+      // A login changed while the hash was being compared must not vouch for the old password.
+      mockedVerifyPassword.mockImplementation(async () => {
+        mockedGetAuthConfig.mockReturnValue({ enabled: true, username: 'admin', passwordHash: 'changed-hash' });
+        return true;
+      });
+
+      const { req, res } = await login({ username: 'admin', password: 'old password' });
+
+      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' });
+    });
+
+    it('refuses a wrong password', async () => {
+      const { res } = await login({ username: 'admin', password: 'wrong' });
+
+      expect(res.statusCode).toBe(401);
+      expect(res._getJSONData()).toEqual({ success: false, error: 'Invalid credentials' });
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it('checks the password even when the username is not the legacy one', async () => {
+      // Skipping the hash for an unknown name would reveal the legacy username through timing.
+      mockedVerifyPassword.mockResolvedValue(true);
+
+      const { res } = await login({ username: 'someone-else', password: 'pass' });
+
+      expect(mockedVerifyPassword).toHaveBeenCalledWith('pass', 'legacy-hash');
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('still does a full password check when there is no legacy login', async () => {
+      mockedGetAuthConfig.mockReturnValue({ enabled: true, username: '', passwordHash: '' });
+
+      const { res } = await login({ username: 'nobody', password: 'pass' });
+
+      expect(mockedVerifyPassword).toHaveBeenCalledTimes(1);
+      expect(res.statusCode).toBe(401);
+      expect(res._getJSONData()).toEqual({ success: false, error: 'Invalid credentials' });
+    });
+
+    describe('rate limit', () => {
+      async function failTimes(count: number, username: string, ip: string) {
+        for (let i = 0; i < count; i++) {
+          const { res } = await login({ username, password: 'wrong' }, ip);
+          expect(res.statusCode).toBe(401);
+        }
+      }
+
+      it('answers 429 after 10 failures for one address and username, without checking the password', async () => {
+        const ip = freshIp();
+        await failTimes(10, 'admin', ip);
+        mockedVerifyPassword.mockClear();
+        mockedVerifyWithUserDatabase.mockClear();
+
+        const { res } = await login({ username: 'ADMIN', password: 'right' }, ip);
+
+        expect(res.statusCode).toBe(429);
+        expect(res._getJSONData()).toEqual({ success: false, error: 'Too many sign-in attempts. Try again later.' });
+        expect(mockedVerifyPassword).not.toHaveBeenCalled();
+        expect(mockedVerifyWithUserDatabase).not.toHaveBeenCalled();
+      });
+
+      it('counts attempts still in flight, so concurrent guesses cannot race past the limit', async () => {
+        const ip = freshIp();
+        const pending: Array<(account: null) => void> = [];
+        mockedVerifyWithUserDatabase.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+
+        const attempts = Array.from({ length: 15 }, () => login({ username: 'admin', password: 'guess' }, ip));
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(mockedVerifyWithUserDatabase).toHaveBeenCalledTimes(10);
+        pending.forEach(resolve => resolve(null));
+        const statuses = (await Promise.all(attempts)).map(({ res }) => res.statusCode);
+        expect(statuses.filter(status => status === 429)).toHaveLength(5);
+        expect(statuses.filter(status => status === 401)).toHaveLength(10);
+      });
+
+      it('counts each username and address separately', async () => {
+        const ip = freshIp();
+        await failTimes(10, 'admin', ip);
+
+        expect((await login({ username: 'jared', password: 'wrong' }, ip)).res.statusCode).toBe(401);
+        expect((await login({ username: 'admin', password: 'wrong' }, freshIp())).res.statusCode).toBe(401);
+      });
+
+      it('lets the address try again once the 15 minutes are up', async () => {
+        const ip = freshIp();
+        await failTimes(10, 'admin', ip);
+        jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 15 * 60 * 1000 + 1);
+
+        expect((await login({ username: 'admin', password: 'wrong' }, ip)).res.statusCode).toBe(401);
+      });
+
+      it('clears the count after a successful sign-in', async () => {
+        const ip = freshIp();
+        await failTimes(9, 'admin', ip);
+        mockedVerifyPassword.mockResolvedValueOnce(true);
+        expect((await login({ username: 'admin', password: 'right' }, ip)).res.statusCode).toBe(200);
+
+        await failTimes(10, 'admin', ip);
+      });
     });
   });
-});
+
   describe('logoutHandler', () => {
-    it('should destroy session and return success', () => {
+    it('destroys the session', () => {
       const req = httpMocks.createRequest({ method: 'POST' });
       const res = httpMocks.createResponse();
+
       logoutHandler(req, res);
+
       expect(destroySession).toHaveBeenCalledWith(req, res);
       expect(res._getJSONData()).toEqual({ success: true, message: 'Logged out successfully' });
     });
   });
 
   describe('authStatusHandler', () => {
-    it('should return not required if auth is disabled', () => {
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: false });
-      const req = httpMocks.createRequest({ method: 'GET' });
+    function status() {
       const res = httpMocks.createResponse();
-      authStatusHandler(req, res);
-      expect(res._getJSONData()).toEqual({
-        requiresAuth: false,
-        authenticated: true,
-        message: 'Authentication not enabled'
-      });
+      authStatusHandler(httpMocks.createRequest(), res);
+      return res._getJSONData();
+    }
+
+    it('says no sign-in is needed while authentication is off', () => {
+      mockedGetAuthConfig.mockReturnValue({ enabled: false, username: '', passwordHash: '' });
+
+      expect(status()).toEqual({ requiresAuth: false, authenticated: true, message: 'Authentication not enabled' });
     });
 
-    it('should return authenticated status', () => {
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
-      (isAuthenticated as jest.Mock).mockReturnValue(true);
-      const req = httpMocks.createRequest({ method: 'GET' });
-      const res = httpMocks.createResponse();
-      authStatusHandler(req, res);
-      expect(res._getJSONData()).toEqual({
-        requiresAuth: true,
-        authenticated: true,
-        message: 'Authenticated'
-      });
+    it('reports a signed-in client', () => {
+      jest.mocked(isAuthenticated).mockReturnValue(true);
+
+      expect(status()).toEqual({ requiresAuth: true, authenticated: true, message: 'Authenticated' });
     });
 
-    it('should return not authenticated status', () => {
-      (getAuthConfig as jest.Mock).mockReturnValue({ enabled: true });
-      (isAuthenticated as jest.Mock).mockReturnValue(false);
-      const req = httpMocks.createRequest({ method: 'GET' });
-      const res = httpMocks.createResponse();
-      authStatusHandler(req, res);
-      expect(res._getJSONData()).toEqual({
-        requiresAuth: true,
-        authenticated: false,
-        message: 'Not authenticated'
-      });
+    it('reports a client that is not signed in', () => {
+      jest.mocked(isAuthenticated).mockReturnValue(false);
+
+      expect(status()).toEqual({ requiresAuth: true, authenticated: false, message: 'Not authenticated' });
     });
   });
-
+});

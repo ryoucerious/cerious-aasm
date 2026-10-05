@@ -1,237 +1,128 @@
-// Mock the services
-jest.mock('../services/messaging.service');
-jest.mock('../services/ark-update.service');
-jest.mock('../utils/ark/ark-install.utils', () => ({
-  isArkServerInstalled: jest.fn().mockReturnValue(true),
-  getArkServerDir: jest.fn().mockReturnValue('/ark'),
-  getCurrentInstalledVersion: jest.fn().mockResolvedValue('999')
-}));
-
 import { messagingService } from '../services/messaging.service';
-import { ArkUpdateService } from '../services/ark-update.service';
+import type { ArkUpdateService } from '../services/ark-update.service';
 import { setArkUpdateService } from './ark-update-handler';
 
-const mockMessagingService = messagingService as jest.Mocked<typeof messagingService>;
-const mockArkUpdateService = ArkUpdateService as jest.MockedClass<typeof ArkUpdateService>;
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/ark-update.service', () => ({ ArkUpdateService: jest.fn() }));
+jest.mock('../utils/ark/ark-install.utils', () => ({ isArkServerInstalled: jest.fn(() => true) }));
+jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ getArkServerDir: jest.fn(() => '/ark') }));
 
-// Create a mock instance that will be returned by the constructor
-const mockServiceInstance = {
-  checkForUpdate: jest.fn(),
-  refreshInstalledBuild: jest.fn()
-};
+const mockMessaging = jest.mocked(messagingService);
+const service = { checkForUpdate: jest.fn(), refreshInstalledBuild: jest.fn() };
 
-// Store handler functions for testing
-let checkArkUpdateHandler: Function;
-let getArkInstallationHandler: Function;
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
 
-describe('ARK Update Handler', () => {
-  let mockSender: any;
+describe('ark-update-handler', () => {
+  const sender = { send: jest.fn() };
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
-    // Mock the ArkUpdateService constructor to return our mock instance
-    mockArkUpdateService.mockImplementation(() => mockServiceInstance as any);
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
+  });
 
-    // Import handler to register events
-    require('./ark-update-handler');
+  function replies(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
-    // Set the mock service instance so the handler doesn't bail on null check
-    setArkUpdateService(mockServiceInstance as any);
+  describe('before main hands over the update service', () => {
+    it('refuses to check for an update', async () => {
+      await handlers['check-ark-update']({ requestId: 'r1' }, sender);
 
-    // Capture the registered event handler
-    const mockOn = mockMessagingService.on as jest.Mock;
-    mockOn.mock.calls.forEach(([event, handler]) => {
-      if (event === 'check-ark-update') {
-        checkArkUpdateHandler = handler;
-      }
-      if (event === 'get-ark-installation') {
-        getArkInstallationHandler = handler;
-      }
+      expect(replies('check-ark-update')).toEqual([{ success: false, error: 'Update service not initialized', requestId: 'r1' }]);
+    });
+
+    it('reports the installation without build ids', async () => {
+      await handlers['get-ark-installation']({ requestId: 'r1' }, sender);
+
+      expect(replies('get-ark-installation')).toEqual([{
+        success: true, installed: true, installedBuildId: null, latestBuildId: null,
+        updateAvailable: false, lastCheckedAt: null, installPath: '/ark', requestId: 'r1'
+      }]);
     });
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockSender = {};
-  });
-
-  describe('check-ark-update event', () => {
-    it('should handle successful update check with no update available', async () => {
-      const mockResult = {
-        success: true,
-        hasUpdate: false,
-        message: 'No update available'
-      };
-
-      mockServiceInstance.checkForUpdate.mockResolvedValue(mockResult);
-
-      await checkArkUpdateHandler({}, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: true,
-        hasUpdate: false,
-        buildId: undefined,
-        message: 'No update available',
-        error: undefined,
-        requestId: undefined
-      }, mockSender);
+  describe('with the update service', () => {
+    beforeAll(() => {
+      setArkUpdateService(service as unknown as ArkUpdateService);
     });
 
-    it('should handle successful update check with update available', async () => {
-      const mockResult = {
-        success: true,
-        hasUpdate: true,
-        buildId: '123456',
-        message: 'New ARK server build available: 123456'
-      };
+    describe('check-ark-update', () => {
+      it.each([
+        ['no update', { success: true, hasUpdate: false, message: 'No update available' }],
+        ['an update', { success: true, hasUpdate: true, buildId: '123456', message: 'New ARK server build available: 123456' }],
+        ['a failed check', { success: false, hasUpdate: false, error: 'SteamCMD not available', message: 'Failed to check for ARK server updates' }]
+      ])('replies with the result fields for %s', async (_label, result) => {
+        service.checkForUpdate.mockResolvedValue(result);
 
-      mockServiceInstance.checkForUpdate.mockResolvedValue(mockResult);
+        await handlers['check-ark-update']({ requestId: 'r1' }, sender);
 
-      await checkArkUpdateHandler({}, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: true,
-        hasUpdate: true,
-        buildId: '123456',
-        message: 'New ARK server build available: 123456',
-        error: undefined,
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle update check with requestId', async () => {
-      const payload = { requestId: 'test-123' };
-      const mockResult = {
-        success: true,
-        hasUpdate: false,
-        message: 'No update available'
-      };
-
-      mockServiceInstance.checkForUpdate.mockResolvedValue(mockResult);
-
-      await checkArkUpdateHandler(payload, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: true,
-        hasUpdate: false,
-        buildId: undefined,
-        message: 'No update available',
-        error: undefined,
-        requestId: 'test-123'
-      }, mockSender);
-    });
-
-    it('should handle update check failure', async () => {
-      const mockResult = {
-        success: false,
-        hasUpdate: false,
-        error: 'SteamCMD not available',
-        message: 'Failed to check for ARK server updates'
-      };
-
-      mockServiceInstance.checkForUpdate.mockResolvedValue(mockResult);
-
-      await checkArkUpdateHandler({}, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: false,
-        hasUpdate: false,
-        buildId: undefined,
-        message: 'Failed to check for ARK server updates',
-        error: 'SteamCMD not available',
-        requestId: undefined
-      }, mockSender);
-    });
-
-    it('should handle update check exception', async () => {
-      const error = new Error('Network error');
-      mockServiceInstance.checkForUpdate.mockRejectedValue(error);
-
-      // Mock console.error to avoid test output pollution
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await checkArkUpdateHandler({}, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[ark-update-handler] Unexpected error:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: false,
-        error: 'Network error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle non-Error exception', async () => {
-      const error = 'String error';
-      mockServiceInstance.checkForUpdate.mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await checkArkUpdateHandler({}, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[ark-update-handler] Unexpected error:', error);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: false,
-        error: 'String error',
-        requestId: undefined
-      }, mockSender);
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle undefined payload || {})', async () => {
-      const mockResult = {
-        success: true,
-        hasUpdate: false,
-        message: 'No update available'
-      };
-
-      mockServiceInstance.checkForUpdate.mockResolvedValue(mockResult);
-
-      await checkArkUpdateHandler(undefined, mockSender);
-
-      expect(mockServiceInstance.checkForUpdate).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('check-ark-update', {
-        success: true,
-        hasUpdate: false,
-        buildId: undefined,
-        message: 'No update available',
-        error: undefined,
-        requestId: undefined
-      }, mockSender);
-    });
-  });
-
-  describe('get-ark-installation event', () => {
-    // The page must show one consistent picture: the installed build and the update flag
-    // have to come from the same comparison, or a finished update still reads "Update available".
-    it('reports the refreshed build and update flag together', async () => {
-      mockServiceInstance.refreshInstalledBuild.mockResolvedValue({
-        installedBuildId: '25535041',
-        latestBuildId: '25535041',
-        updateAvailable: false,
-        lastCheckedAt: 1790562909000
+        expect(replies('check-ark-update')).toEqual([{
+          success: result.success,
+          hasUpdate: result.hasUpdate,
+          buildId: 'buildId' in result ? result.buildId : undefined,
+          message: result.message,
+          error: 'error' in result ? result.error : undefined,
+          requestId: 'r1'
+        }]);
       });
 
-      await getArkInstallationHandler({ requestId: 'r1' }, mockSender);
+      it.each([
+        ['an Error', new Error('Network error'), 'Network error'],
+        ['a string', 'String error', 'String error']
+      ])('replies a failure when the check throws %s', async (_label, thrown, error) => {
+        service.checkForUpdate.mockRejectedValue(thrown);
 
-      expect(mockServiceInstance.refreshInstalledBuild).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith('get-ark-installation', {
-        success: true,
-        installed: true,
-        installedBuildId: '25535041',
-        latestBuildId: '25535041',
-        updateAvailable: false,
-        lastCheckedAt: 1790562909000,
-        installPath: '/ark',
-        requestId: 'r1'
-      }, mockSender);
+        await handlers['check-ark-update']({ requestId: 'r1' }, sender);
+
+        expect(replies('check-ark-update')).toEqual([{ success: false, error, requestId: 'r1' }]);
+      });
+
+      it('answers a request without a payload', async () => {
+        service.checkForUpdate.mockResolvedValue({ success: true, hasUpdate: false, message: 'No update available' });
+
+        await handlers['check-ark-update'](undefined, sender);
+
+        expect(replies('check-ark-update')).toEqual([{
+          success: true, hasUpdate: false, buildId: undefined, message: 'No update available', error: undefined, requestId: undefined
+        }]);
+      });
+    });
+
+    describe('get-ark-installation', () => {
+      // The page must show one consistent picture: the installed build and the update flag
+      // have to come from the same comparison, or a finished update still reads "Update available".
+      it('reports the refreshed build and update flag together', async () => {
+        service.refreshInstalledBuild.mockResolvedValue({
+          installedBuildId: '25535041', latestBuildId: '25535041', updateAvailable: false, lastCheckedAt: 1790562909000
+        });
+
+        await handlers['get-ark-installation']({ requestId: 'r1' }, sender);
+
+        expect(replies('get-ark-installation')).toEqual([{
+          success: true, installed: true, installedBuildId: '25535041', latestBuildId: '25535041',
+          updateAvailable: false, lastCheckedAt: 1790562909000, installPath: '/ark', requestId: 'r1'
+        }]);
+      });
+
+      it('replies with the reason reading the build fails', async () => {
+        service.refreshInstalledBuild.mockRejectedValue(new Error('steamapps unreadable'));
+
+        await handlers['get-ark-installation']({ requestId: 'r1' }, sender);
+
+        expect(replies('get-ark-installation')).toEqual([{ success: false, error: 'steamapps unreadable', requestId: 'r1' }]);
+      });
+
+      it('answers a request without a payload', async () => {
+        service.refreshInstalledBuild.mockResolvedValue({
+          installedBuildId: null, latestBuildId: null, updateAvailable: false, lastCheckedAt: null
+        });
+
+        await handlers['get-ark-installation'](undefined, sender);
+
+        expect(replies('get-ark-installation')).toEqual([expect.objectContaining({ success: true, requestId: undefined })]);
+      });
     });
   });
 });

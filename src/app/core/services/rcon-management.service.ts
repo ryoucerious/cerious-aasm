@@ -1,12 +1,13 @@
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { MessagingService } from './messaging/messaging.service';
+import { RconStatusEvent } from '../models/server-instance.model';
 
 @Injectable({
   providedIn: 'root'
 })
 export class RconManagementService {
-  
+
   readonly knownRconCommands: string[] = [
     'ListPlayers',
     'SaveWorld',
@@ -18,9 +19,7 @@ export class RconManagementService {
 
   constructor(private messaging: MessagingService) {}
 
-  /**
-   * Send an RCON command to the specified server
-   */
+  /** Throws synchronously when either argument is empty. The reply carries the server's response text. */
   sendRconCommand(serverId: string, command: string): Observable<any> {
     if (!command?.trim() || !serverId) {
       throw new Error('Server ID and command are required');
@@ -32,24 +31,12 @@ export class RconManagementService {
     });
   }
 
-  /**
-   * Get the list of known RCON commands for UI suggestions
-   */
+  /** Suggestions for the console input. */
   getKnownCommands(): string[] {
     return [...this.knownRconCommands];
   }
 
-  /**
-   * Validate if a command is non-empty and properly formatted
-   */
-  isValidCommand(command: string): boolean {
-    return !!(command && command.trim().length > 0);
-  }
-
-  /**
-   * Subscribe to RCON status updates
-   */
-  subscribeToRconStatus(): Observable<any> {
-    return this.messaging.receiveMessage('rcon-status');
+  subscribeToRconStatus(): Observable<RconStatusEvent> {
+    return this.messaging.receiveMessage<RconStatusEvent>('rcon-status');
   }
 }

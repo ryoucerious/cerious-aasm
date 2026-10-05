@@ -81,7 +81,7 @@ export function bucketSamples(
   return buckets;
 }
 
-/** Peak and mean of a series, ignoring nothing — zeros count, because empty hours are real. */
+/** Peak and mean of a series, ignoring nothing: zeros count, because empty hours are real. */
 export function seriesStats(points: SeriesPoint[]): { peak: number; average: number } {
   if (!points.length) return { peak: 0, average: 0 };
   const values = points.map(p => p.value);

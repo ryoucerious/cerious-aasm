@@ -37,7 +37,7 @@ export class TooltipHostComponent implements OnInit, OnDestroy {
   visible = false;
 
   private target: HTMLElement | null = null;
-  private timer: any = null;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private zone: NgZone, private cdr: ChangeDetectorRef) {}
 

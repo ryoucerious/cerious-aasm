@@ -1,11 +1,9 @@
-<!-- Whitelist Tab Content -->
 <div class="tab-content">
   <div class="form-group page-intro">
     <h4>Server Whitelist Management</h4>
     <p class="form-control-label desc">Manage the server's exclusive join list. Only whitelisted players can join when whitelist mode is enabled.</p>
   </div>
 
-  <!-- Enable Whitelist Setting -->
   <div class="settings-section">
     <h5>Whitelist Configuration</h5>
     <p class="section-desc">Configure exclusive join mode for your server.</p>
@@ -24,7 +22,6 @@
       <div class="form-control-label desc">When enabled, only players on the whitelist can join the server. Requires server restart to take effect.</div>
     </div>
 
-    <!-- Whitelist Status -->
     <div class="form-group span-all">
       <div class="whitelist-status" [ngClass]="{ 'enabled': serverInstance?.useExclusiveList, 'disabled': !serverInstance?.useExclusiveList }">
         <span class="status-indicator"></span>
@@ -33,12 +30,10 @@
     </div>
   </div>
 
-  <!-- Player Management Section -->
   <div class="settings-section" *ngIf="serverInstance?.useExclusiveList">
     <h5>Player Management</h5>
     <p class="section-desc">Add individual players or manage existing whitelist entries.</p>
 
-    <!-- Add Player Actions -->
     <div class="form-group span-all">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button class="btn btn-ghost" 
@@ -59,7 +54,6 @@
       </div>
     </div>
 
-    <!-- Whitelist Table -->
     <div class="form-group whitelist-table-container span-all">
       <label class="form-control-label">Whitelisted Players ({{ whitelistedPlayers.length }})</label>
       <div class="whitelist-list">
@@ -95,7 +89,6 @@
     </div>
   </div>
 
-  <!-- Status Message -->
   <div *ngIf="statusMessage" class="form-group span-all">
     <div class="status-message" [ngClass]="'status-' + statusType">
       <i class="material-icons">{{ statusType === 'success' ? 'check_circle' : statusType === 'warning' ? 'warning' : 'error' }}</i>
@@ -104,7 +97,6 @@
   </div>
 </div>
 
-<!-- Add Player Modal -->
 <div class="modal-backdrop" *ngIf="showAddPlayerModal" (click)="closeModal()">
   <div class="modal modal-form" (click)="$event.stopPropagation()">
     <div class="modal-header">
@@ -149,7 +141,6 @@
   </div>
 </div>
 
-<!-- Bulk Add Players Modal -->
 <div class="modal-backdrop" *ngIf="showBulkAddModal" (click)="closeModal()">
   <div class="modal modal-form" (click)="$event.stopPropagation()">
     <div class="modal-header">
@@ -183,7 +174,6 @@
   </div>
 </div>
 
-<!-- Remove Player Confirmation Modal -->
 <div class="modal-backdrop" *ngIf="showRemoveConfirmModal" (click)="closeModal()">
   <div class="modal modal-confirmation" (click)="$event.stopPropagation()">
     <div class="modal-header">

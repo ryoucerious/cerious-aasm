@@ -7,13 +7,32 @@ jest.mock('fs-extra', () => jest.requireActual('fs-extra'));
 import * as os from 'os';
 import * as path from 'path';
 import {
+  linkInstanceSaveDir,
   linkSharedWin64Subdirs,
   linkSharedShooterGameSubdirs,
   INSTANCE_OWNED_WIN64_SUBDIRS,
-  INSTANCE_OWNED_SHOOTERGAME_SUBDIRS
+  INSTANCE_OWNED_SHOOTERGAME_SUBDIRS,
+  isInstanceOwnedWin64File
 } from './ark-server-isolation.utils';
 
 const fs: typeof import('fs') = jest.requireActual('fs');
+const fsExtra: typeof import('fs-extra') = jest.requireActual('fs-extra');
+
+describe('isInstanceOwnedWin64File', () => {
+  // The whitelist ARK reads is written per instance; the binary copy must not bring the shared
+  // install's over, whatever case the filesystem reports.
+  it('names the whitelist files, in any case', () => {
+    expect(isInstanceOwnedWin64File('PlayersJoinNoCheckList.txt')).toBe(true);
+    expect(isInstanceOwnedWin64File('PLAYERSJOINNOCHECKLIST.TXT')).toBe(true);
+    expect(isInstanceOwnedWin64File('PlayersExclusiveJoinList.txt')).toBe(true);
+  });
+
+  it('leaves the binaries alone', () => {
+    expect(isInstanceOwnedWin64File('ArkAscendedServer.exe')).toBe(false);
+    expect(isInstanceOwnedWin64File('AsaApiLoader.exe')).toBe(false);
+    expect(isInstanceOwnedWin64File('steam_api64.dll')).toBe(false);
+  });
+});
 
 describe('linkSharedWin64Subdirs', () => {
   let tmpDir: string;
@@ -174,5 +193,69 @@ describe('linkSharedShooterGameSubdirs', () => {
 
     expect(linked).toEqual(['Plugins']);
     expect(fs.existsSync(path.join(destGame, 'Plugins', 'file.dll'))).toBe(true);
+  });
+});
+
+describe('linkInstanceSaveDir', () => {
+  let tmpDir: string;
+  let instanceDir: string;
+  let canonicalSaveDir: string;
+  let runtimeSaveDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-savedir-'));
+    instanceDir = path.join(tmpDir, 'Servers', 'inst1');
+    canonicalSaveDir = path.join(instanceDir, 'SavedArks');
+    runtimeSaveDir = path.join(instanceDir, 'ShooterGame', 'Saved', 'SavedArks');
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('points the runtime save folder at the canonical one', async () => {
+    await expect(linkInstanceSaveDir(instanceDir, instanceDir)).resolves.toBe(true);
+
+    fs.writeFileSync(path.join(runtimeSaveDir, 'TheIsland_WP.ark'), 'world');
+    expect(fs.existsSync(path.join(canonicalSaveDir, 'TheIsland_WP.ark'))).toBe(true);
+  });
+
+  it('does nothing for an instance that runs from the shared install', async () => {
+    await expect(linkInstanceSaveDir(instanceDir, path.join(tmpDir, 'AASMServer'))).resolves.toBe(false);
+    expect(fs.existsSync(runtimeSaveDir)).toBe(false);
+  });
+
+  // A copied SavedArks is where ARK then writes, while backups and restore read the canonical
+  // folder: backups silently go stale.
+  it('fails the start instead of copying when the link cannot be made', async () => {
+    fs.mkdirSync(canonicalSaveDir, { recursive: true });
+    fs.writeFileSync(path.join(canonicalSaveDir, 'TheIsland_WP.ark'), 'world');
+    (jest.spyOn(fsExtra, 'ensureSymlink') as unknown as jest.Mock).mockRejectedValue(new Error('EPERM: operation not permitted'));
+    const copy = jest.spyOn(fsExtra, 'copy');
+
+    await expect(linkInstanceSaveDir(instanceDir, instanceDir)).rejects.toThrow(/Could not link .*SavedArks/);
+
+    expect(copy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(runtimeSaveDir, 'TheIsland_WP.ark'))).toBe(false);
+  });
+
+  it('warns about, and keeps, a real folder with saves in it at the runtime path', async () => {
+    fs.mkdirSync(runtimeSaveDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeSaveDir, 'TheIsland_WP.ark'), 'world');
+
+    await expect(linkInstanceSaveDir(instanceDir, instanceDir)).resolves.toBe(false);
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(runtimeSaveDir));
+    expect(fs.lstatSync(runtimeSaveDir).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(runtimeSaveDir, 'TheIsland_WP.ark'), 'utf8')).toBe('world');
+  });
+
+  it('replaces an empty real folder at the runtime path with the link', async () => {
+    fs.mkdirSync(runtimeSaveDir, { recursive: true });
+
+    await expect(linkInstanceSaveDir(instanceDir, instanceDir)).resolves.toBe(true);
+
+    expect(fs.lstatSync(runtimeSaveDir).isSymbolicLink()).toBe(true);
   });
 });

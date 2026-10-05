@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.electron.json",
   "compilerOptions": {
+    "rootDir": ".",
     "types": ["jest", "node"],
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
@@ -8,14 +9,11 @@
   },
   "include": [
     "electron/**/*",
-    "test/**/*",
-    "**/*.test.ts",
-    "**/*.spec.ts"
+    "test/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    "dist-electron",
-    "src"
+    "dist-electron"
   ]
 }

@@ -1,17 +1,19 @@
 import {
   Component, EventEmitter, Input, Output, ChangeDetectionStrategy, HostListener, ElementRef,
-  ViewChild, ChangeDetectorRef
+  ViewChild, ChangeDetectorRef, OnDestroy
 } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { SparklineComponent } from '../sparkline/sparkline.component';
 import { getMapVisual, MapVisual } from '../../core/utils/map-visuals';
-import { formatUptime, formatMegabytes, formatBytes, formatPercent } from '../../core/utils/format.utils';
+import { formatUptime, formatMegabytes, formatBytes, formatPercent, joinAddress } from '../../core/utils/format.utils';
 import {
   serverStatusKey, serverStatusLabel, serverStatusClass,
   isOnlineStatus, isBusyStatus, canStartStatus
 } from '../../core/utils/server-status';
 import { fixedOrigin } from '../../core/utils/floating';
+
+const COPIED_FOR_MS = 2000;
 
 /** Display state for the pill on a card; derived from the backend's lowercase state. */
 export interface CardStatus {
@@ -21,7 +23,7 @@ export interface CardStatus {
 
 /**
  * One server on the dashboard: map artwork, status, the four headline stats, a player
- * sparkline and the primary actions. Presentational — every decision is passed in and every
+ * sparkline and the primary actions. Presentational: every decision is passed in and every
  * action is emitted, so the dashboard owns the data and the lifecycle calls.
  */
 @Component({
@@ -31,13 +33,19 @@ export interface CardStatus {
   templateUrl: './server-card.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class ServerCardComponent {
+export class ServerCardComponent implements OnDestroy {
   @Input({ required: true }) server!: ServerInstance;
   @Input() history: number[] = [];
   @Input() now = Date.now();
   @Input() view: 'grid' | 'list' = 'grid';
   @Input() canDelete = true;
+  @Input() canConfigure = true;
+  @Input() canBackups = true;
   @Input() hostMemoryTotalBytes: number | null = null;
+  /** The operator who owns this server. The admin pool and an unknown id stay off the artwork. */
+  @Input() operatorLabel = '';
+  /** Who this server is assigned to, including their role. "Not assigned" stays off the artwork. */
+  @Input() assigneeLabel = '';
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();
@@ -50,11 +58,18 @@ export class ServerCardComponent {
   menuOpen = false;
   /** Where the actions menu sits, in viewport coordinates. */
   menuPosition = { left: 0, top: 0 };
+  /** True for a moment after the join address lands on the clipboard. */
+  copied = false;
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
   @ViewChild('menuAnchor') private menuAnchor?: ElementRef<HTMLElement>;
   @ViewChild('menu') private menu?: ElementRef<HTMLElement>;
 
   constructor(private host: ElementRef<HTMLElement>, private cdr: ChangeDetectorRef) {}
+
+  ngOnDestroy(): void {
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+  }
 
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: Event): void {
@@ -63,14 +78,9 @@ export class ServerCardComponent {
     }
   }
 
-  /**
-   * The name players see in the server browser, shown only when it differs from the name
-   * this app uses — otherwise it is the same word twice.
-   */
+  /** The name players see in the server browser. A new server uses the same words as its name. */
   get sessionName(): string {
-    const session = (this.server?.sessionName || '').trim();
-    if (!session) return '';
-    return session.toLowerCase() === (this.server?.name || '').trim().toLowerCase() ? '' : session;
+    return (this.server?.sessionName || '').trim();
   }
 
   get visual(): MapVisual {
@@ -121,10 +131,6 @@ export class ServerCardComponent {
     return this.hostMemoryTotalBytes ? `/ ${formatBytes(this.hostMemoryTotalBytes, 0)}` : '';
   }
 
-  get playerHistory(): number[] {
-    return this.history?.length ? this.history : [];
-  }
-
   toggleMenu(event: Event): void {
     event.stopPropagation();
     this.menuOpen = !this.menuOpen;
@@ -142,7 +148,7 @@ export class ServerCardComponent {
    * Place the menu against the viewport rather than the card.
    *
    * The card hides its overflow so the map artwork keeps the rounded corners, which also
-   * cut the menu off at the card's edge — the first item was all that showed.
+   * cut the menu off at the card's edge: the first item was all that showed.
    */
   private positionMenu(): void {
     const anchor = this.menuAnchor?.nativeElement;
@@ -185,6 +191,76 @@ export class ServerCardComponent {
   onConsole(event: Event): void {
     event.stopPropagation();
     this.openConsole.emit(this.server);
+  }
+
+  /**
+   * The host this panel was opened on and the game port. The desktop app loads from localhost,
+   * so a MultiHome address replaces that when one is set. The password is never part of it.
+   */
+  get connectAddress(): string {
+    return joinAddress(this.server, this.pageHostname());
+  }
+
+  /** A named operator. The admin pool is not a person, so it is not printed as "Admin". */
+  get showOperator(): boolean {
+    const label = (this.operatorLabel || '').trim();
+    return !!this.server?.operatorUserId && label !== '' && label !== 'Operator';
+  }
+
+  /** A named assignee. An empty assignment is not printed as "Not assigned". */
+  get showAssignee(): boolean {
+    const label = (this.assigneeLabel || '').trim();
+    return !!this.server?.managerUserId && label !== '' && label !== 'Not assigned';
+  }
+
+  async onCopyAddress(event: Event): Promise<void> {
+    event.stopPropagation();
+    const address = this.connectAddress;
+    if (!address) return;
+    this.copied = await this.writeClipboard(address);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    if (this.copied) {
+      this.copiedTimer = setTimeout(() => {
+        this.copied = false;
+        this.copiedTimer = null;
+        this.cdr.markForCheck();
+      }, COPIED_FOR_MS);
+    }
+    this.cdr.markForCheck();
+  }
+
+  /** The host in the address bar; localhost in the desktop app. Separate so tests can set it. */
+  protected pageHostname(): string {
+    return typeof window === 'undefined' ? '' : window.location.hostname;
+  }
+
+  /**
+   * The clipboard API exists only in a secure context, and the web UI is often served over plain
+   * HTTP. The old copy command still works there from a click.
+   */
+  private async writeClipboard(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Refused (permissions, insecure context): try the fallback.
+    }
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(area);
+      return copied;
+    } catch {
+      return false;
+    }
   }
 
   onConfigure(): void {

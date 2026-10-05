@@ -1,35 +1,28 @@
+import * as crypto from 'crypto';
 import { generateRandomPassword } from './crypto.utils';
 
-describe('Crypto Utils', () => {
-  describe('generateRandomPassword', () => {
-    it('should generate a password of the specified length', () => {
-      const length = 16;
-      const password = generateRandomPassword(length);
-      expect(password.length).toBe(length);
-    });
+describe('generateRandomPassword', () => {
+  it('generates a password of the requested length', () => {
+    expect(generateRandomPassword(16)).toHaveLength(16);
+    expect(generateRandomPassword(1)).toHaveLength(1);
+    expect(generateRandomPassword(0)).toBe('');
+  });
 
-    it('should generate different passwords on multiple calls', () => {
-      const password1 = generateRandomPassword(10);
-      const password2 = generateRandomPassword(10);
-      expect(password1).not.toBe(password2);
-    });
+  it('uses only letters and digits', () => {
+    expect(generateRandomPassword(64)).toMatch(/^[A-Za-z0-9]+$/);
+  });
 
-    it('should only contain alphanumeric characters', () => {
-      const password = generateRandomPassword(20);
-      const alphanumericRegex = /^[A-Za-z0-9]+$/;
-      expect(alphanumericRegex.test(password)).toBe(true);
-    });
+  it('draws every character from the crypto RNG, not Math.random', () => {
+    const randomInt = jest.mocked(crypto.randomInt) as unknown as jest.Mock;
+    randomInt.mockReturnValueOnce(0).mockReturnValueOnce(61).mockReturnValueOnce(26);
+    const mathRandom = jest.spyOn(Math, 'random');
 
-    it('should handle length of 1', () => {
-      const password = generateRandomPassword(1);
-      expect(password.length).toBe(1);
-      expect(typeof password).toBe('string');
-    });
+    expect(generateRandomPassword(3)).toBe('A9a');
+    expect(randomInt).toHaveBeenCalledWith(62);
+    expect(mathRandom).not.toHaveBeenCalled();
+  });
 
-    it('should handle length of 0', () => {
-      const password = generateRandomPassword(0);
-      expect(password.length).toBe(0);
-      expect(password).toBe('');
-    });
+  it('generates different passwords on each call', () => {
+    expect(generateRandomPassword(16)).not.toBe(generateRandomPassword(16));
   });
 });

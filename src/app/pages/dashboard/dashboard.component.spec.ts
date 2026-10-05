@@ -1,7 +1,7 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, discardPeriodicTasks, fakeAsync, tick } from '@angular/core/testing';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { Router } from '@angular/router';
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject, Subject, of } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
@@ -10,9 +10,12 @@ import { MessagingService } from '../../core/services/messaging/messaging.servic
 import { ActivityService } from '../../core/services/activity.service';
 import { BackupService } from '../../core/services/backup.service';
 import { NotificationService } from '../../core/services/notification.service';
-import { GlobalConfigService } from '../../core/services/global-config.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
+import { AuthService } from '../../core/services/auth.service';
+import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { ServerCardComponent } from '../../components/server-card/server-card.component';
+import { By } from '@angular/platform-browser';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('DashboardComponent', () => {
@@ -29,6 +32,9 @@ describe('DashboardComponent', () => {
   let backup: any;
   let notification: MockNotificationService;
   let settingsDrawer: jasmine.SpyObj<SettingsDrawerService>;
+  let displayName$: BehaviorSubject<string>;
+  /** Permissions the stubbed identity lacks; empty means an admin. */
+  let denied: Set<string>;
 
   const now = Date.now();
   const alpha = { id: 'a', name: 'Alpha', state: 'running', players: 4, maxPlayers: 10, startedAt: now - 3600_000, sortOrder: 0 };
@@ -47,18 +53,23 @@ describe('DashboardComponent', () => {
       }),
       receiveMessage: () => of(null)
     };
-    lifecycle = jasmine.createSpyObj('ServerLifecycleService', ['startServer', 'stopServer', 'forceStopServer']);
+    lifecycle = jasmine.createSpyObj('ServerLifecycleService', [
+      'startServer', 'stopServer', 'forceStopServer', 'startAllServers', 'stopAllServers', 'runningServers', 'checkDeletable', 'deleteServer'
+    ]);
+    lifecycle.runningServers.and.returnValue([alpha]);
+    lifecycle.checkDeletable.and.callFake(server => server.state === 'stopped');
+    lifecycle.deleteServer.and.resolveTo(true);
     serverInstanceService = {
       getActiveServer: () => of(alpha),
-      setActiveServer: jasmine.createSpy('setActiveServer'),
-      delete: jasmine.createSpy('delete').and.returnValue(of({})),
-      reorderServers: jasmine.createSpy('reorderServers').and.returnValue(of({}))
+      setActiveServer: jasmine.createSpy('setActiveServer')
     };
-    liveServers = { servers$: servers$.asObservable(), applyOrder: jasmine.createSpy('applyOrder') };
+    liveServers = { servers$: servers$.asObservable(), reorder: jasmine.createSpy('reorder') };
     activity = { items$: items$.asObservable(), add: jasmine.createSpy('add'), clear: jasmine.createSpy('clear') };
     backup = { createBackup: jasmine.createSpy('createBackup').and.returnValue(of({ success: true })) };
     notification = new MockNotificationService();
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
+    displayName$ = new BehaviorSubject('Admin');
+    denied = new Set();
     localStorage.removeItem('cerious-aasm.dashboard');
 
     await TestBed.configureTestingModule({
@@ -72,7 +83,8 @@ describe('DashboardComponent', () => {
         { provide: ActivityService, useValue: activity },
         { provide: BackupService, useValue: backup },
         { provide: NotificationService, useValue: notification },
-        { provide: GlobalConfigService, useValue: { loadConfig: () => Promise.resolve({ authenticationEnabled: false }) } },
+        { provide: AuthService, useValue: { displayName$: displayName$.asObservable(), can: (permission: string) => !denied.has(permission) } },
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
         { provide: ServerNavService, useValue: { rememberTab: jasmine.createSpy('rememberTab') } },
         { provide: SettingsDrawerService, useValue: settingsDrawer }
       ],
@@ -93,6 +105,11 @@ describe('DashboardComponent', () => {
     expect(component.summary).toEqual({ total: 2, online: 1, offline: 1, players: 4, maxPlayers: 30 });
     expect(component.statusLine).toBe('1 of 2 servers are online.');
     expect(component.userName).toBe('Admin');
+  });
+
+  it('greets whoever is signed in', () => {
+    displayName$.next('Ann B');
+    expect(component.userName).toBe('Ann B');
   });
 
   it('loads host resources and player history on init', () => {
@@ -135,10 +152,9 @@ describe('DashboardComponent', () => {
     expect(stored).toEqual({ view: 'list', filter: 'offline', sort: 'custom' });
   });
 
-  it('reorders cards and persists the order', () => {
+  it('reorders cards', () => {
     component.onCardDrop({ previousIndex: 0, currentIndex: 1 } as any);
-    expect(liveServers.applyOrder).toHaveBeenCalledWith(['b', 'a']);
-    expect(serverInstanceService.reorderServers).toHaveBeenCalledWith(['b', 'a']);
+    expect(liveServers.reorder).toHaveBeenCalledWith(['b', 'a']);
   });
 
   it('routes card actions to the lifecycle service and server pages', () => {
@@ -158,28 +174,43 @@ describe('DashboardComponent', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/server', 'backup']);
   });
 
-  it('guards deletion and deletes stopped servers after confirmation', () => {
-    spyOn(notification, 'warning');
+  it('asks for confirmation only for a server that may be deleted, then deletes it', async () => {
     component.requestDelete(alpha as any);
-    expect(notification.warning).toHaveBeenCalled();
+    expect(lifecycle.checkDeletable).toHaveBeenCalledWith(alpha as any);
     expect(component.serverToDelete).toBeNull();
 
     component.requestDelete(beta as any);
     expect(component.serverToDelete).toBe(beta as any);
-    component.confirmDelete();
-    expect(serverInstanceService.delete).toHaveBeenCalledWith('b');
-    // The feed is recorded by the backend now, so the page does not write to it.
+    await component.confirmDelete();
+    expect(lifecycle.deleteServer).toHaveBeenCalledWith(beta as any);
+    // The backend records the feed; the page does not write to it.
     expect(activity.add).not.toHaveBeenCalled();
     expect(component.serverToDelete).toBeNull();
   });
 
+  it('closes the confirmation when a delete fails', async () => {
+    lifecycle.deleteServer.and.resolveTo(false);
+    component.requestDelete(beta as any);
+    await component.confirmDelete();
+    expect(component.serverToDelete).toBeNull();
+  });
+
   it('starts and stops all servers from the quick actions', () => {
-    spyOn(notification, 'success');
+    component.showConfirmStartAll = true;
     component.confirmStartAll();
-    expect(messaging.sendMessage).toHaveBeenCalledWith('start-all-instances', {});
+    expect(component.showConfirmStartAll).toBeFalse();
+    expect(lifecycle.startAllServers).toHaveBeenCalled();
+
+    component.showConfirmStopAll = true;
     component.confirmStopAll();
-    expect(messaging.sendMessage).toHaveBeenCalledWith('stop-all-instances', {});
-    expect(notification.success).toHaveBeenCalledTimes(2);
+    expect(component.showConfirmStopAll).toBeFalse();
+    expect(lifecycle.stopAllServers).toHaveBeenCalled();
+  });
+
+  it('offers Stop All while any server is running or starting', () => {
+    expect(component.canStopAll).toBeTrue();
+    lifecycle.runningServers.and.returnValue([]);
+    expect(component.canStopAll).toBeFalse();
   });
 
   it('creates a backup for the chosen server', () => {
@@ -221,9 +252,82 @@ describe('DashboardComponent', () => {
     expect(activity.clear).toHaveBeenCalled();
   });
 
-  it('flags host resources as unavailable on error', () => {
-    messaging.sendMessage.and.returnValue(of({ error: 'nope' }));
-    component.loadHostResources();
-    expect(component.hostResourcesError).toBeTrue();
+  describe('polling', () => {
+    let replies: Record<string, Subject<any>[]>;
+    let polled: ComponentFixture<DashboardComponent>;
+    const requests = (channel: string) => (replies[channel] || []).length;
+
+    beforeEach(() => {
+      fixture.destroy();
+      replies = {};
+      messaging.sendMessage.and.callFake((channel: string) => {
+        const reply = new Subject<any>();
+        replies[channel] = [...(replies[channel] || []), reply];
+        return reply;
+      });
+    });
+
+    function answer(channel: string, value: unknown): void {
+      const reply = replies[channel][replies[channel].length - 1];
+      reply.next(value);
+      reply.complete();
+    }
+
+    it('does not ask again while a request is still out', fakeAsync(() => {
+      polled = TestBed.createComponent(DashboardComponent);
+      polled.detectChanges();
+
+      tick(15_000);
+      expect(requests('get-host-resources')).toBe(1);
+
+      answer('get-host-resources', { cpuPercent: 5, memory: { used: 1, total: 2 } });
+      tick(5_000);
+      expect(requests('get-host-resources')).toBe(2);
+
+      tick(120_000);
+      expect(requests('get-player-history')).toBe(1);
+
+      polled.destroy();
+      discardPeriodicTasks();
+    }));
+
+    it('flags host resources as unavailable on error', fakeAsync(() => {
+      polled = TestBed.createComponent(DashboardComponent);
+      polled.detectChanges();
+      answer('get-host-resources', { error: 'nope' });
+      expect(polled.componentInstance.hostResourcesError).toBeTrue();
+
+      tick(5_000);
+      replies['get-host-resources'][1].error(new Error('timeout'));
+      expect(polled.componentInstance.hostResourcesError).toBeTrue();
+      tick(5_000);
+      expect(requests('get-host-resources')).toBe(3);
+
+      polled.destroy();
+      discardPeriodicTasks();
+    }));
+  });
+  describe('pools and permissions', () => {
+    const card = () => fixture.debugElement.query(By.directive(ServerCardComponent)).componentInstance as ServerCardComponent;
+    const recheck = () => {
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+    };
+
+    it('labels each card with its assignee and pool', () => {
+      expect(card().assigneeLabel).toBe('Not assigned');
+      expect(card().operatorLabel).toBe('Admin');
+      expect(card().canConfigure).toBeTrue();
+      expect(card().canDelete).toBeTrue();
+    });
+
+    it('hides what the role may not do', () => {
+      denied = new Set(['servers.create', 'servers.configure', 'servers.delete']);
+      recheck();
+
+      expect(card().canConfigure).toBeFalse();
+      expect(card().canDelete).toBeFalse();
+      expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Add Server');
+    });
   });
 });

@@ -34,7 +34,7 @@ install_packages() {
             ;;
         fedora|rhel|centos)
             echo "Installing packages for Red Hat/Fedora..."
-            sudo dnf install -y curl wget tar gzip unzip p7zip build-essential \
+            sudo dnf install -y curl wget tar gzip unzip p7zip gcc-c++ make \
                 alsa-lib nss atk at-spi2-atk cups-libs libdrm libxkbcommon \
                 libXcomposite libXdamage libXrandr mesa-libgbm pango \
                 glibc.i686 libstdc++.i686
@@ -92,14 +92,14 @@ chmod 755 "$APP_DIR"
 
 # Check if Steam is installed (optional but helpful)
 if command -v steam >/dev/null 2>&1; then
-    echo "✓ Steam is installed - this may help with compatibility"
+    echo "Steam is installed - this may help with compatibility"
 else
-    echo "ℹ Steam is not installed - not required but may improve compatibility"
+    echo "Steam is not installed - not required but may improve compatibility"
     echo "  Consider installing Steam from your distribution's package manager"
 fi
 
 echo ""
-echo "✓ Linux setup complete!"
+echo "Linux setup complete!"
 echo ""
 echo "Next steps:"
 echo "1. Run 'npm install' to install Node.js dependencies"

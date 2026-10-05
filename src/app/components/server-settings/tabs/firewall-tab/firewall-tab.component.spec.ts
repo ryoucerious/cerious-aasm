@@ -63,6 +63,16 @@ describe('FirewallTabComponent', () => {
     expect(text()).not.toContain('Published by Docker');
   });
 
+  it('opens the peer port beside the game port and keeps RCON off the public firewall', () => {
+    render({ enabled: true, platform: 'linux' }, { gamePort: '7787', queryPort: 27025, rconPort: 27030 });
+    expect(text()).toContain('sudo ufw allow 7788/udp');
+    expect(text()).toContain('--add-port=7788/udp');
+    expect(text()).toContain('--dport 7788');
+    expect(text()).not.toContain('27030/tcp');
+    expect(text()).toContain('Forward Peer Port 7788');
+    expect(text()).not.toContain('Forward RCON Port');
+  });
+
   describe('in Docker with published ports', () => {
     it('lists the published ranges instead of commands that do nothing in a container', () => {
       render(dockerStatus('published'), { gamePort: 7777, queryPort: 27015, rconPort: 27020 });

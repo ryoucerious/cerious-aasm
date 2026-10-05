@@ -1,9 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
-const AdmZip = require('adm-zip');
+import type { IncomingMessage } from 'http';
+import AdmZip from 'adm-zip';
+import { getInstanceDir } from '../utils/ark/instance.utils';
 
 const ASAAPI_RELEASES_URL = 'https://api.github.com/repos/ArkServerApi/AsaApi/releases/latest';
+const USER_AGENT = 'Cerious-AASM';
+const MAX_REDIRECTS = 5;
+// Socket inactivity, not total time: a large download on a slow link is fine while bytes arrive.
+const SOCKET_TIMEOUT_MS = 60_000;
+
+// Separators and characters Windows forbids. A trailing dot or space is dropped by Windows, so
+// "..." or "Plugin." would name the Plugins folder itself or another plugin.
+const UNSAFE_FOLDER_NAME = /[<>:"/\\|?*\x00-\x1f]|[. ]$/;
 
 export interface PluginInfo {
   name: string;
@@ -15,33 +25,35 @@ export interface PluginInfo {
   hasPluginJson: boolean;
 }
 
-export class ArkApiPluginService {
+interface GitHubRelease {
+  tag_name?: string;
+  name?: string;
+  assets?: { name?: string; browser_download_url?: string }[];
+}
 
-  private getPluginDir(instanceId: string): string {
-    const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
-    const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-    return path.join(instanceDir, 'ShooterGame', 'Binaries', 'Win64', 'ArkApi', 'Plugins');
+export class ArkApiPluginService {
+  private getWin64Dir(instanceId: string): string {
+    return path.join(getInstanceDir(instanceId), 'ShooterGame', 'Binaries', 'Win64');
   }
 
-  /**
-   * List all installed plugins for a given server instance.
-   */
+  private getPluginDir(instanceId: string): string {
+    return path.join(this.getWin64Dir(instanceId), 'ArkApi', 'Plugins');
+  }
+
   listPlugins(instanceId: string): PluginInfo[] {
     const pluginDir = this.getPluginDir(instanceId);
     if (!fs.existsSync(pluginDir)) {
       return [];
     }
 
-    const entries = fs.readdirSync(pluginDir, { withFileTypes: true });
     const plugins: PluginInfo[] = [];
-
-    for (const entry of entries) {
+    for (const entry of fs.readdirSync(pluginDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const folderName = entry.name;
       const pluginJsonPath = path.join(pluginDir, folderName, 'plugin.json');
       const altPluginJsonPath = path.join(pluginDir, folderName, 'PluginInfo.json');
 
-      let info: Partial<PluginInfo> = {
+      let info: PluginInfo = {
         name: folderName,
         version: 'Unknown',
         author: 'Unknown',
@@ -64,31 +76,25 @@ export class ArkApiPluginService {
             hasPluginJson: true,
           };
         } catch {
-          // malformed JSON, use defaults
+          // A malformed plugin.json still lists the plugin, under its folder name.
         }
       }
 
-      plugins.push(info as PluginInfo);
+      plugins.push(info);
     }
 
     return plugins;
   }
 
-  /**
-   * Remove (uninstall) a plugin by folder name.
-   */
+  /** Deletes one plugin folder. Throws for anything but the name of a folder directly in Plugins. */
   removePlugin(instanceId: string, folderName: string): void {
-    // Safety: only allow simple folder names (no path traversal)
-    if (!folderName || /[/\\<>:"|?*]/.test(folderName)) {
+    const pluginDir = path.resolve(this.getPluginDir(instanceId));
+    if (typeof folderName !== 'string' || !folderName || UNSAFE_FOLDER_NAME.test(folderName)) {
       throw new Error('Invalid plugin folder name.');
     }
-    const pluginDir = this.getPluginDir(instanceId);
-    const targetDir = path.join(pluginDir, folderName);
-
-    // Ensure resolved path is still inside pluginDir
-    const resolved = path.resolve(targetDir);
-    if (!resolved.startsWith(path.resolve(pluginDir))) {
-      throw new Error('Directory traversal detected.');
+    const targetDir = path.resolve(pluginDir, folderName);
+    if (path.dirname(targetDir) !== pluginDir) {
+      throw new Error('Invalid plugin folder name.');
     }
 
     if (!fs.existsSync(targetDir)) {
@@ -97,116 +103,156 @@ export class ArkApiPluginService {
     fs.rmSync(targetDir, { recursive: true, force: true });
   }
 
-  /**
-   * Fetch the latest AsaApi release info from GitHub.
-   */
-  async getLatestAsaApiRelease(): Promise<{ version: string; downloadUrl: string; name: string }> {
+  getLatestAsaApiRelease(): Promise<{ version: string; downloadUrl: string; name: string }> {
     return new Promise((resolve, reject) => {
-      const req = https.get(
-        ASAAPI_RELEASES_URL,
-        { headers: { 'User-Agent': 'Cerious-AASM' } },
-        (res) => {
-          let data = '';
-          res.on('data', (chunk) => (data += chunk));
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              const asset = (json.assets || []).find(
-                (a: any) =>
-                  a.name.toLowerCase().endsWith('.zip') ||
-                  a.name.toLowerCase().includes('asaapi')
-              );
-              resolve({
-                version: json.tag_name || json.name || 'unknown',
-                downloadUrl: asset?.browser_download_url || '',
-                name: asset?.name || '',
-              });
-            } catch (e) {
-              reject(new Error('Failed to parse GitHub release response.'));
-            }
-          });
+      const request = https.get(new URL(ASAAPI_RELEASES_URL), { headers: { 'User-Agent': USER_AGENT } }, res => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`GitHub API returned ${res.statusCode}`));
+          return;
         }
-      );
-      req.on('error', reject);
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { data += chunk; });
+        res.on('error', reject);
+        res.on('end', () => {
+          try {
+            const release: GitHubRelease = JSON.parse(data);
+            const asset = (release.assets || []).find(a => {
+              const name = (a.name || '').toLowerCase();
+              return name.endsWith('.zip') || name.includes('asaapi');
+            });
+            resolve({
+              version: release.tag_name || release.name || 'unknown',
+              downloadUrl: asset?.browser_download_url || '',
+              name: asset?.name || '',
+            });
+          } catch {
+            reject(new Error('Failed to parse GitHub release response.'));
+          }
+        });
+      });
+      request.setTimeout(SOCKET_TIMEOUT_MS, () => request.destroy(new Error('The GitHub request timed out')));
+      request.on('error', reject);
     });
   }
 
-  /**
-   * Download and extract the AsaApi base into the instance's Win64 folder.
-   */
+  /** Downloads the AsaApi release ZIP and extracts it into the instance's Win64 folder. */
   async downloadAsaApi(instanceId: string, downloadUrl: string): Promise<void> {
-    const { getInstancesBaseDir } = require('../utils/ark/instance.utils');
-    const instanceDir = path.join(getInstancesBaseDir(), instanceId);
-    const win64Dir = path.join(instanceDir, 'ShooterGame', 'Binaries', 'Win64');
-
-    if (!fs.existsSync(win64Dir)) {
-      fs.mkdirSync(win64Dir, { recursive: true });
-    }
-
-    // Download zip to temp file
-    const tempZip = path.join(win64Dir, '_asaapi_download.zip');
-    await this.downloadFile(downloadUrl, tempZip);
-
-    // Extract
-    const zip = new AdmZip(tempZip);
-    zip.extractAllTo(win64Dir, true);
-
-    // Cleanup
-    fs.rmSync(tempZip, { force: true });
+    const win64Dir = this.getWin64Dir(instanceId);
+    fs.mkdirSync(win64Dir, { recursive: true });
+    await this.downloadAndExtract(downloadUrl, path.join(win64Dir, '_asaapi_download.zip'), win64Dir);
   }
 
-  /**
-   * Install a plugin by extracting a local ZIP file path.
-   * The ZIP should contain a single top-level folder (the plugin folder).
-   */
+  /** The ZIP should hold one top-level folder: the plugin. */
   installPluginFromZipPath(instanceId: string, zipPath: string): void {
     const pluginDir = this.getPluginDir(instanceId);
-    if (!fs.existsSync(pluginDir)) {
-      fs.mkdirSync(pluginDir, { recursive: true });
-    }
     if (!fs.existsSync(zipPath)) {
       throw new Error(`ZIP file not found: ${zipPath}`);
     }
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(pluginDir, true);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    new AdmZip(zipPath).extractAllTo(pluginDir, true);
+  }
+
+  async installPluginFromUrl(instanceId: string, url: string): Promise<void> {
+    const pluginDir = this.getPluginDir(instanceId);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    await this.downloadAndExtract(url, path.join(pluginDir, '_plugin_download.zip'), pluginDir);
+  }
+
+  private async downloadAndExtract(url: string, zipPath: string, targetDir: string): Promise<void> {
+    await this.downloadFile(url, zipPath);
+    try {
+      new AdmZip(zipPath).extractAllTo(targetDir, true);
+    } finally {
+      fs.rmSync(zipPath, { force: true });
+    }
   }
 
   /**
-   * Download a plugin ZIP from a URL and extract it into the Plugins directory.
+   * Streams an https URL to `dest`, following up to five redirects. Rejects on any other status,
+   * a hop off https, or a stalled socket, and never leaves a partial file behind.
    */
-  async installPluginFromUrl(instanceId: string, url: string): Promise<void> {
-    const pluginDir = this.getPluginDir(instanceId);
-    if (!fs.existsSync(pluginDir)) {
-      fs.mkdirSync(pluginDir, { recursive: true });
-    }
-    const tempZip = path.join(pluginDir, '_plugin_download.zip');
-    await this.downloadFile(url, tempZip);
-    try {
-      const zip = new AdmZip(tempZip);
-      zip.extractAllTo(pluginDir, true);
-    } finally {
-      fs.rmSync(tempZip, { force: true });
-    }
-  }
-
   private downloadFile(url: string, dest: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const file = fs.createWriteStream(dest);
-      const get = (redirectUrl: string) => {
-        https.get(redirectUrl, { headers: { 'User-Agent': 'Cerious-AASM' } }, (res) => {
-          if (res.statusCode === 301 || res.statusCode === 302) {
-            return get(res.headers.location!);
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`Download failed with status ${res.statusCode}`));
-            return;
-          }
-          res.pipe(file);
-          file.on('finish', () => file.close(() => resolve()));
-          file.on('error', reject);
-        }).on('error', reject);
+      let settled = false;
+      let file: fs.WriteStream | null = null;
+      let failure: Error | null = null;
+
+      const fail = (error: Error) => {
+        if (settled || failure) return;
+        failure = error;
+        if (file) {
+          // Unlinked once the stream has released the file; see its 'close' handler.
+          file.destroy();
+        } else {
+          settled = true;
+          reject(error);
+        }
       };
-      get(url);
+
+      const save = (res: IncomingMessage) => {
+        file = fs.createWriteStream(dest);
+        file.on('error', fail);
+        file.on('close', () => {
+          settled = true;
+          if (failure) {
+            const error = failure;
+            fs.unlink(dest, () => reject(error));
+          } else {
+            resolve();
+          }
+        });
+        res.on('error', fail);
+        res.on('aborted', () => fail(new Error('The download was interrupted')));
+        res.pipe(file);
+      };
+
+      const get = (target: URL, redirectsLeft: number) => {
+        if (target.protocol !== 'https:') {
+          fail(new Error(`Only https downloads are allowed, not ${target.protocol}`));
+          return;
+        }
+        const request = https.get(target, { headers: { 'User-Agent': USER_AGENT } }, res => {
+          // Nothing thrown in here may escape: it would be an uncaught exception in main.
+          try {
+            if (failure) {
+              res.resume();
+              return;
+            }
+            const status = res.statusCode ?? 0;
+            if (status >= 300 && status < 400 && res.headers.location) {
+              res.resume();
+              if (redirectsLeft === 0) {
+                fail(new Error('Download failed: too many redirects'));
+                return;
+              }
+              get(new URL(res.headers.location, target), redirectsLeft - 1);
+              return;
+            }
+            if (status !== 200) {
+              res.resume();
+              fail(new Error(`Download failed with status ${status}`));
+              return;
+            }
+            save(res);
+          } catch (error) {
+            res.resume();
+            fail(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+        request.setTimeout(SOCKET_TIMEOUT_MS, () => request.destroy(new Error('Download timed out')));
+        request.on('error', fail);
+      };
+
+      let start: URL;
+      try {
+        start = new URL(url);
+      } catch {
+        fail(new Error('The download URL is not a valid https URL'));
+        return;
+      }
+      get(start, MAX_REDIRECTS);
     });
   }
 }

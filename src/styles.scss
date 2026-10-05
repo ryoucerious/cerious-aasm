@@ -1,57 +1,8 @@
-// =========================
-// IMPORTS
-// =========================
-// 'theme' emits the :root custom properties every colour below resolves against, so it
-// must come first. 'variables' aliases the historical $names onto those properties.
 @use 'styles/theme';
 @use 'styles/variables' as *;
-// Refreshed shell (top bar, side navigation) and dashboard / server pages.
 @use 'styles/shell';
 @use 'styles/dashboard';
 
-// =========================
-// UTILITY CLASSES
-// =========================
-
-// Utility classes for common patterns
-.flex-column {
-  display: flex;
-  flex-direction: column;
-}
-
-.flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.flex-between {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.flex-gap-sm { gap: $spacing-sm; }
-.flex-gap-md { gap: $spacing-md; }
-.flex-gap-lg { gap: $spacing-lg; }
-
-// Additional layout utilities
-.w-full { width: 100%; }
-.h-full { height: 100%; }
-.min-h-0 { min-height: 0; }
-.overflow-hidden { overflow: hidden; }
-.overflow-y-auto { overflow-y: auto; }
-
-// Color utilities
-.text-primary { color: $text-primary; }
-.text-secondary { color: $text-secondary; }
-.text-white { color: $text-white; }
-.bg-dark { background: $background-dark; }
-.bg-darker { background: $background-darker; }
-.bg-card { background: $background-card; }
-.border-dark { border: 1px solid $border-dark; }
-
-// Login page container - full screen without app layout
 .login-page-container {
   position: fixed;
   top: 0;
@@ -61,7 +12,6 @@
   z-index: 9999;
 }
 
-/* --- LOGIN COMPONENT STYLES --- */
 .login-container {
   display: flex;
   justify-content: center;
@@ -82,7 +32,6 @@
   text-align: center;
 }
 
-// A sign-in that did not work, said plainly rather than in a line of small red label text.
 .login-error {
   display: flex;
   align-items: flex-start;
@@ -117,14 +66,14 @@
     display: block;
     box-shadow: 0 8px 24px var(--shadow-color-soft);
   }
-  
+
   h1 {
     font-size: 28px;
     font-weight: 600;
     color: $primary;
     margin: 0 0 10px 0;
   }
-  
+
   h2 {
     font-size: 16px;
     font-weight: 400;
@@ -135,16 +84,16 @@
 
 .login-form {
   text-align: left;
-  
+
   .form-group {
     margin-bottom: 20px;
-    
+
     &.button-group {
       display: flex;
       justify-content: center;
     }
   }
-  
+
   .form-control-label {
     color: var(--text-primary);
     font-size: 0.95rem;
@@ -152,24 +101,23 @@
     margin-bottom: 0.5rem;
     display: block;
   }
-  
+
   .btn {
     width: fit-content;
-    margin: 0 auto; // Center the button
+    margin: 0 auto;
   }
-  
+
   .desc {
     font-size: 0.9rem;
     font-weight: 400;
   }
 }
 
-// Responsive adjustments for login
 @include below-600px {
   .login-container {
     padding: 10px;
   }
-  
+
   .login-card {
     padding: 20px;
     max-width: 100%;
@@ -180,82 +128,25 @@
   .login-card {
     padding: 15px;
   }
-  
+
   .login-header h1 {
     font-size: 24px !important;
   }
-  
+
   .login-header h2 {
     font-size: 14px !important;
   }
 }
 
-// Stat multipliers: 2-column layout for fields
-// Force grid for stat multiplier fields, override flex
-.stat-multiplier-fields-2col {
-  display: grid !important;
-  grid-template-columns: 1fr 1fr !important;
-  gap: 0rem 2rem !important;
-}
-
-@include below-700px {
-  .stat-multiplier-fields-2col {
-    grid-template-columns: 1fr !important;
-    gap: 0rem !important;
-  }
-}
-
-// Stat multipliers tab layout
 .stat-multiplier-container {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   width: 100%;
 }
-.stat-multiplier-flex {
-  display: flex;
-  flex-direction: row;
-  gap: 2rem;
-  width: 100%;
-}
-.stat-multiplier-tabs {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 140px;
-  max-width: 180px;
-}
-.stat-tab {
-  background: $background-dark;
-  color: $text-primary;
-  border: 1.5px solid $border-dark;
-  border-radius: 6px;
-  padding: $spacing-sm $spacing-md;
-  font-size: 1rem;
-  text-align: left;
-  cursor: pointer;
-  transition: $transition-colors;
-}
-.stat-tab.active, .stat-tab:hover {
-  background: var(--primary-fill);
-  color: var(--text-on-accent);
-  border-color: var(--primary-fill);
-}
-.stat-multiplier-fields {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
 
-  .form-group {
-    margin:0 !important;
-    padding:0 !important;
-  }
-}
-
-// New organized stat multiplier styles
 .stat-selection-header {
-  @extend .flex-between;
+  @include flex-between;
   gap: $spacing-md;
   margin-bottom: $spacing-lg;
   padding-bottom: $spacing-md;
@@ -310,20 +201,23 @@
   }
 }
 
-// General settings section styling for consistent grouping across all tabs
 .settings-section {
-  grid-column: 1 / -1; // Span full width of the grid
+  grid-column: 1 / -1;
   background: $background-card;
   border: 1px solid $border-dark;
   border-radius: 8px;
   padding: $spacing-md;
   margin-bottom: $spacing-md;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  align-items: start;
 
   h4, h5 {
     color: $primary;
     margin: 0;
     font-weight: 600;
-    grid-column: 1 / -1; // Span full width of section grid
+    grid-column: 1 / -1;
   }
 
   h4 {
@@ -339,22 +233,7 @@
     font-size: 0.9rem;
     margin: 0;
     line-height: 1.4;
-    grid-column: 1 / -1; // Span full width of section grid
-  }
-
-  // Maintain responsive grid layout for form fields inside sections
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 1rem;
-  align-items: start;
-
-  // Special handling for title and description to appear as one unit
-  h4, h5 {
-    margin-bottom: 0;
-  }
-
-  .section-desc {
-    margin-top: 0;
+    grid-column: 1 / -1;
   }
 
   @include mobile-only {
@@ -362,7 +241,6 @@
   }
 }
 
-/* Force a vertical (single-column) layout for specific sections when desired */
 .settings-section.vertical-section {
   grid-template-columns: 1fr !important;
 }
@@ -376,70 +254,30 @@
     grid-template-columns: 1fr;
   }
 }
-@include below-900px {
-  .stat-multiplier-flex {
-    flex-direction: column;
-    gap: 1rem;
-  }
-  .stat-multiplier-tabs {
-    flex-direction: row;
-    min-width: 0;
-    max-width: 100vw;
-    overflow-x: auto;
-    gap: 0.5rem;
-  }
-  .stat-tab {
-    min-width: 120px;
-    white-space: nowrap;
-  }
-}
-/* Modal global styles */
-.modal {
-  min-width: 400px;
-  max-width: 90vw;
-}
-
-/* Responsive styles for server/settings pages */
-.settings-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
 
 .tab-content {
   display: grid;
-  /* Preserve 3-column structure on wide screens */
   grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 1.25rem 2rem;
-  /* Matches the row gap above, so a page built from two components has the same rhythm as
-     one built from a single grid. */
+  // Same as the row gap, so a page built from two components keeps the rhythm of one grid.
   margin-bottom: 1.25rem;
 
   &:last-child { margin-bottom: 0; }
 }
-/* Ensure grid items can shrink within the grid area */
+// Lets grid items shrink below their content width.
 .tab-content > * { min-width: 0; }
 
-/* Drop to 2 columns slightly earlier to avoid overflow with sidebar */
+// Two columns a little early so the grid does not overflow beside the sidebar.
 @include below-large-desktop {
   .tab-content {
     grid-template-columns: repeat(2, minmax(220px, 1fr));
   }
 }
 
-/* Single column for narrow screens */
 @include mobile-only {
   .tab-content {
     grid-template-columns: 1fr;
   }
-}
-.settings-tabs {
-  flex-direction: row;
-  overflow-x: visible;
-  border-bottom: 1px solid var(--border-muted);
-  padding-bottom: 0.5rem;
-  margin-bottom: 1.5rem;
 }
 @include below-900px {
   .tabs {
@@ -464,7 +302,6 @@
   }
 }
 
-/* Sidebar Component Styles */
 .import-mode-selector {
   display: flex;
   gap: 0;
@@ -477,16 +314,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  
+
   input[type="text"] {
     flex: 1;
   }
-}
-
-.server-name.editable {
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: $radius-sm;
 }
 
 .editing-server-name {
@@ -496,61 +327,57 @@
 }
 
 .modal-form-content {
-  @extend .flex-column;
-  
+  display: flex;
+  flex-direction: column;
+
   @include mobile-only {
     min-height: 200px;
   }
-  
+
   @include small-mobile-only {
     min-height: 220px;
   }
 }
 
-/* Sidebar Component Responsive Styles */
 @include mobile-only {
   .import-mode-selector {
     flex-direction: column;
     gap: $spacing-sm;
   }
-  
+
   .tab {
     margin-right: 0;
     border-radius: 6px;
     position: static;
   }
-  
+
   .file-input-wrapper {
     flex-direction: column;
     gap: $spacing-sm;
-    
+
     input[type="text"] {
       flex: none;
       align-self: stretch;
       margin-bottom: $spacing-sm;
     }
-    
+
     button {
       align-self: center;
     }
   }
-  
 }
 
 @include small-mobile-only {
   .tab {
     padding: 0.75rem 1rem;
     font-size: 0.9rem;
-    
+
     .material-icons {
       font-size: 1.4rem;
     }
   }
-  
 }
 
-
-/* Toggle Switch Disabled State */
 .toggle-switch:disabled + .toggle-text,
 .toggle-label input[type="checkbox"]:disabled + .toggle-text {
   opacity: 0.5;
@@ -562,7 +389,8 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
-/* --- Layout: Sidebar fixed, main-content scrolls independently --- */
+
+// The sidebar stays put while main-content scrolls on its own.
 .app-root-wrapper {
   display: flex;
   flex-direction: column;
@@ -573,9 +401,10 @@
 
 .app-container {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+  background: var(--surface-base);
   overflow: hidden;
   position: relative;
 }
@@ -586,56 +415,7 @@
   align-items: center;
   width: 100%;
 }
-/* --- UNIFIED BADGE SYSTEM --- */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: $spacing-xs 0.75rem;
-  border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.025em;
-  border: 1px solid transparent;
-  
-  &-success {
-    background: $success;
-    color: var(--text-on-accent);
-    border-color: $success;
-  }
-  
-  &-danger {
-    background: $danger;
-    color: var(--text-on-accent);
-    border-color: $danger;
-  }
-  
-  &-warning {
-    background: $warning;
-    color: var(--text-on-warning);
-    border-color: $warning;
-  }
-  
-  &-info {
-    background: $info;
-    color: var(--text-on-accent);
-    border-color: $info;
-  }
-  
-  &-secondary {
-    background: $secondary;
-    color: var(--text-on-accent);
-    border-color: $secondary;
-  }
-  
-  &-primary {
-    background: $primary;
-    color: var(--text-on-accent);
-    border-color: $primary;
-  }
-}
 
-/* Legacy status badge - DEPRECATED - Use .badge with variants instead */
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -648,40 +428,41 @@
   border: 1px solid transparent;
   margin-left: 0.5em;
   vertical-align: middle;
-  
-  /* Legacy status mappings */
+
   &.status-running {
     background: var(--success-fill);
     color: var(--text-on-accent);
     border-color: var(--success-fill);
   }
-  
+
   &.status-stopped {
     background: var(--danger-fill);
     color: var(--text-on-accent);
     border-color: var(--danger-fill);
   }
-  
+
   &.status-starting {
     background: $info;
     color: var(--text-on-accent);
     border-color: $info;
   }
-  
+
   &.status-stopping {
     background: $warning;
     color: var(--text-on-warning);
     border-color: $warning;
   }
-  
-  &.status-unknown {
-    background: $secondary;
+
+  // The fill that passes contrast with white text; the ring, as on the sidebar's status dot,
+  // tells a crash apart from an ordinary stop.
+  &.status-error {
+    background: var(--danger-fill);
     color: var(--text-on-accent);
-    border-color: $secondary;
+    border-color: var(--danger-fill);
+    box-shadow: 0 0 0 2px var(--danger-soft);
   }
 }
 
-/* Web Server tab header layout */
 .button-header {
   display: flex;
   align-items: center;
@@ -694,16 +475,6 @@
   flex-wrap: nowrap;
 }
 
-.expert-mode-active {
-  color: var(--warning-1) !important;
-  border-color: var(--warning-1) !important;
-  box-shadow: 0 0 0 1px var(--warning-1) !important;
-}
-// =====================
-// CARDS & BADGES
-// =====================
-
-/* Main card style */
 .card {
   width: 100%;
   margin: 0 auto;
@@ -711,8 +482,6 @@
   margin-bottom: 2.5rem;
 }
 
-/* Only remove bottom margin from the last direct child card in the main container */
-ng-container > .card:last-child,
 .main-content > .card:last-child {
   margin-bottom: 0;
 }
@@ -734,7 +503,6 @@ ng-container > .card:last-child,
   border-radius: 0 0 0.3rem 0.3rem;
 }
 
-/* Sub-card style for cards within cards */
 .sub-card {
   box-shadow: 0 4px 24px 0 rgba(0,0,0,0.18);
   border-radius: 10px;
@@ -752,18 +520,6 @@ ng-container > .card:last-child,
   color: $text-primary;
 }
 
-/* Inline status/info rows with icon and text */
-.status-info {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: $text-secondary;
-}
-.status-info .material-icons {
-  font-size: 1.1rem;
-  line-height: 1;
-  vertical-align: middle;
-}
 .sub-card .card-body {
   background: var(--surface-raised-5) !important;
   border-radius: 0 0 0.5rem 0.5rem;
@@ -771,9 +527,8 @@ ng-container > .card:last-child,
   border-top: none;
   color: $text-primary;
 }
-/* Badge for ARK update available */
-/* "Something needs attention here", beside a navigation label. A dot rather than a glyph:
-   as a flex item it was squashed out of round and the character inside it never showed. */
+
+// Attention dot beside a navigation label; flex: 0 0 auto keeps it round in the flex row.
 .update-badge {
   flex: 0 0 auto;
   align-self: center;
@@ -785,24 +540,13 @@ ng-container > .card:last-child,
   box-shadow: 0 0 0 3px var(--warning-soft);
 }
 
-// =====================
-// ABOUT PAGE
-// =====================
-// --- Custom Toastr Styles ---
-.toast-top-right, .toast-bottom-right, .toast-top-left, .toast-bottom-left {
+// app.config.ts positions toasts top-right; that is the only position class in use.
+.toast-top-right {
   z-index: 9999;
 }
-// ngx-toastr renders each toast with its `toastClass` (default `ngx-toastr`) plus the
-// type class below — never a plain `.toast` class. A `.toast` rule therefore matches
-// nothing, and the library's own `.toast-container .ngx-toastr { color: #FFFFFF }` wins
-// by default. That was survivable on the dark theme but left white text on the light
-// theme's toast surface (1.07:1), so toasts were unreadable in light mode. Match the
-// library's selector so the themed colour applies.
-//
-// Only the colour is set here on purpose: the type rules below already own background,
-// border and shadow, and the toast font is left inheriting the app's — the old `.toast`
-// block asked for 15px Roboto but never applied, so adopting it now would resize toasts
-// in the dark theme too.
+// ngx-toastr renders toasts as `.ngx-toastr` plus a type class, never `.toast`. This matches
+// the library's own `.toast-container .ngx-toastr { color: #fff }`, which is unreadable on the
+// light theme. Colour only: the type rules below own the box, and the font stays inherited.
 .toast-container .ngx-toastr {
   color: var(--text-emphasis) !important;
 }
@@ -946,7 +690,6 @@ ng-container > .card:last-child,
 .toast-message label {
   color: var(--text-emphasis) !important;
 }
-/* --- GLOBAL APP LAYOUT & COLORS --- */
 html, body {
   height: 100%;
   margin: 0;
@@ -955,65 +698,33 @@ html, body {
   color: var(--text-primary);
   font-family: 'Roboto', sans-serif;
   font-size: 12px;
-  /* Prevent horizontal scrolling on mobile */
-  overflow-x: hidden;
-}
-
-/* Prevent zoom on double-tap for mobile */
-* {
-  touch-action: manipulation;
-  /* Prevent horizontal scrolling */
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-/* Ensure no elements overflow horizontally */
-html, body {
   max-width: 100vw;
   overflow-x: hidden;
 }
 
-/* Mobile-specific input fixes */
+// No double-tap zoom on touch screens, and nothing wider than its container.
+* {
+  touch-action: manipulation;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 @include below-700px {
-  /* Prevent zoom on input focus */
+  // Under 16px, iOS zooms the page when a field takes focus.
   input, select, textarea {
-    font-size: 16px !important; /* Prevents zoom on iOS */
+    font-size: 16px !important;
   }
-  
-  /* Prevent horizontal scroll on mobile */
+
   .card, .sub-card {
     max-width: calc(100vw - 2rem);
     overflow-x: hidden;
   }
-  
-  /* Improve touch targets - but only for specific interactive elements */
-  .mobile-menu-btn {
-    min-height: 44px;
-    min-width: 44px;
-  }
-  
-  /* Keep all other buttons at normal size, including sidebar buttons */
-  .btn,
-  .add-server-btn,
-  .settings-btn,
-  .logout-btn,
-  .sidebar-footer .btn {
+
+  .btn {
     min-height: auto !important;
     min-width: auto !important;
   }
-  
-  /* Better mobile spacing */
-  .settings-tabs {
-    gap: 0.125rem;
-    flex-wrap: wrap;
-  }
-  
-  .settings-tab {
-    min-height: 44px;
-    font-size: 0.9rem;
-  }
-  
-  /* Make tables more responsive */
+
   .backup-table-container,
   .mod-table-container,
   .whitelist-table-container {
@@ -1022,36 +733,13 @@ html, body {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
   }
-  
-  /* Improve modal responsiveness on mobile */
-  .modal {
-    margin: 0.5rem;
-    max-height: calc(100vh - 1rem);
-    overflow-y: auto;
-  }
-  
-  /* Better form control spacing on mobile */
-  .form-group {
-    margin-bottom: 1rem;
-  }
-  
+
   .form-control {
     padding: 0.5rem 0.75rem !important;
     font-size: 16px !important;
   }
 }
 
-.app-container {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  background: var(--surface-base);
-  overflow: hidden;
-  position: relative;
-}
-
-/* Mobile Overlay */
 .mobile-overlay {
   position: fixed;
   top: 0;
@@ -1064,13 +752,11 @@ html, body {
   cursor: pointer;
 }
 
-/* Sidebar Container */
 .sidebar-container {
   position: relative;
   z-index: 1000;
 }
 
-/* --- UNIFIED BUTTON SYSTEM --- */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1087,13 +773,13 @@ html, body {
   transition: all 0.2s;
   white-space: nowrap;
   text-decoration: none;
-  
+
   &:hover:not(:disabled) {
     background: var(--surface-raised-7);
     color: $text-light;
     border-color: var(--text-muted);
   }
-  
+
   &:disabled,
   &[disabled] {
     opacity: 0.5;
@@ -1102,7 +788,7 @@ html, body {
     color: $text-secondary;
     border-color: var(--border-subtle);
     box-shadow: none;
-    
+
     &:hover {
       opacity: 0.5;
       cursor: not-allowed;
@@ -1112,27 +798,26 @@ html, body {
       box-shadow: none;
     }
   }
-  
+
   .material-icons {
     font-size: 1rem;
     margin-right: 0.25rem;
-    
+
     &:last-child {
       margin-right: 0;
     }
-    
+
     &:only-child {
       margin: 0;
     }
   }
 }
 
-/* Button Variants */
 .btn-primary {
   background: var(--primary-fill);
   color: var(--text-on-accent);
   border-color: var(--primary-fill);
-  
+
   &:hover:not(:disabled) {
     background: var(--primary-hover);
     border-color: var(--primary-hover);
@@ -1143,49 +828,28 @@ html, body {
   background: var(--danger-fill);
   color: var(--text-on-accent);
   border-color: var(--danger-fill);
-  
+
   &:hover:not(:disabled) {
     background: var(--danger-1);
     border-color: var(--danger-1);
   }
 }
 
-.btn-success {
-  background: var(--success-fill);
-  color: var(--text-on-accent);
-  border-color: var(--success-fill);
-  
-  &:hover:not(:disabled) {
-    background: var(--success-2);
-    border-color: var(--success-2);
-  }
-}
-
 .btn-ghost {
   background: transparent;
   border-color: $border-color;
-  
+
   &:hover:not(:disabled) {
     background: var(--surface-raised-8);
   }
 }
 
-/* Button Sizes */
 .btn-sm {
   padding: $spacing-xs $spacing-sm;
   font-size: 0.85rem;
-  
+
   .material-icons {
     font-size: 0.9rem;
-  }
-}
-
-.btn-lg {
-  padding: 0.75rem 1.25rem;
-  font-size: 1.1rem;
-  
-  .material-icons {
-    font-size: 1.2rem;
   }
 }
 
@@ -1193,61 +857,43 @@ html, body {
   padding: $spacing-sm;
   min-width: 2.5rem;
   min-height: 2.5rem;
-  
+
   .material-icons {
     margin: 0;
   }
 }
 
-/* --- UNIFIED ACTION BUTTON SYSTEM --- */
-.action-group {
+.action-group-modal {
   display: flex;
   align-items: center;
-  gap: $spacing-sm;
-  
-  .btn {
-    white-space: nowrap;
-  }
-}
-
-// Specific action group variants
-.action-group-modal {
-  @extend .action-group;
   justify-content: center;
   gap: $spacing-md;
   flex-wrap: nowrap;
-  
+
   @include small-mobile-only {
     flex-direction: column;
     gap: $spacing-sm;
-    
+
     .btn {
       width: 100%;
     }
   }
 }
 
-.action-group-settings {
-  @extend .action-group;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.action-group-inline {
+%action-group-inline {
   text-align: right;
-  
+
   .btn {
     margin-left: $spacing-sm;
     padding: 0.375rem 0.5rem;
     display: inline-block;
-    
+
     &:first-child {
       margin-left: 0;
     }
   }
 }
 
-/* --- UNIFIED TAB SYSTEM --- */
 .tab {
   display: flex;
   align-items: center;
@@ -1266,13 +912,13 @@ html, body {
   margin-right: 2px;
   position: relative;
   top: 1px;
-  
+
   &:hover:not(.active) {
     border-color: var(--border-strong);
     background: $background-hover;
     color: var(--text-emphasis);
   }
-  
+
   &.active {
     color: $primary !important;
     border-color: var(--border-strong);
@@ -1280,13 +926,12 @@ html, body {
     background: $background-hover;
     z-index: 2;
   }
-  
+
   .material-icons {
     font-size: 1.6rem;
   }
 }
 
-/* Tab containers */
 .tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1296,7 +941,6 @@ html, body {
   padding-bottom: 0;
 }
 
-/* --- MAIN CONTENT --- */
 .main-content {
   flex: 1 1 0;
   min-width: 0;
@@ -1307,12 +951,8 @@ html, body {
   overflow-x: hidden;
 }
 
-/* Mobile Responsive Styles: the sidebar slides in under the top bar */
+// On narrow screens the sidebar slides in under the top bar.
 @media (max-width: 860px) {
-  .mobile-overlay.mobile-menu-open {
-    display: block !important;
-  }
-
   .sidebar-container {
     position: fixed;
     top: 64px;
@@ -1337,23 +977,21 @@ html, body {
   }
 
   .main-content.mobile-menu-open {
-    pointer-events: none; /* Prevent interaction when menu is open */
+    pointer-events: none;
   }
 }
 
-/* Very small mobile devices */
 @include below-480px {
   .main-content {
     padding: 0.75rem 0.5rem;
   }
-  
+
   .sidebar-container {
     width: 100vw;
     max-width: 100vw;
   }
 }
 
-/* --- CARDS IN MAIN CONTENT: CENTERED, FULL WIDTH --- */
 .main-content .card {
   margin-left: auto;
   margin-right: auto;
@@ -1361,10 +999,7 @@ html, body {
   box-sizing: border-box;
 }
 
-/* --- SETTINGS BUTTONS --- */
-/* --- INSTALL MODAL --- */
 .install-phase {
-  @extend .modal-progress;
   background: var(--surface-base-4);
   border-radius: 6px;
   border: solid 2px rgba(49, 49, 50, 0.8);
@@ -1376,7 +1011,6 @@ html, body {
 }
 
 .install-phase-header {
-  @extend .progress-title;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1386,19 +1020,12 @@ html, body {
 }
 
 .install-phase-desc {
-  @extend .progress-description;
   margin-top: 5px;
   text-align: center;
   word-wrap: break-word;
   line-height: 1.4;
 }
 
-.install-modal-footer {
-  display: flex;
-  justify-content: center;
-  margin-top: 30px;
-  margin-bottom: 10px;
-}
 .install-progress-bar {
   width: 100%;
   height: 18px;
@@ -1438,29 +1065,26 @@ html, body {
   color: var(--success) !important;
 }
 
-/* Mobile responsiveness for installation progress */
 @include mobile-only {
   .install-phase {
     padding: 15px;
     margin: 0 auto 15px auto;
     border-radius: 4px;
   }
-  
+
   .install-phase-header {
-    font-size: 1rem;
     gap: 8px;
   }
-  
+
   .install-phase-desc {
-    font-size: 0.85rem;
     margin-top: 8px;
   }
-  
+
   .install-progress-bar {
     height: 16px;
     margin-top: 0.75rem;
   }
-  
+
   .install-progress-bar-inner {
     font-size: 0.9rem;
   }
@@ -1471,62 +1095,26 @@ html, body {
     padding: 12px;
     margin: 0 auto 12px auto;
   }
-  
+
   .install-phase-header {
-    font-size: 0.95rem;
     gap: 6px;
     flex-wrap: wrap;
   }
-  
+
   .install-phase-desc {
-    font-size: 0.8rem;
     margin-top: 6px;
   }
-  
+
   .install-progress-bar {
     height: 14px;
     margin-top: 0.5rem;
   }
-  
+
   .install-progress-bar-inner {
     font-size: 0.85rem;
   }
 }
 
-/* --- ABOUT CONTENT --- */
-.about-content h4 {
-  font-size: 1.1rem;
-  font-weight: 400;
-  color: var(--primary);
-  margin: 0 0 0.5rem 0;
-}
-.about-content p {
-  margin: 0 0 1rem 0;
-  color: var(--text-primary);
-}
-.version-info {
-  background: var(--surface);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  margin: 1.5rem 0;
-}
-.version-info p {
-  margin: 0.25rem 0;
-  font-family: 'Courier New', monospace;
-  font-size: 0.9rem;
-  color: var(--text-primary);
-}
-.credits {
-  margin-top: 2rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--surface-raised-7);
-}
-.credits p {
-  font-size: 0.9rem;
-  color: var(--secondary);
-}
-
-/* --- UNIFIED MODAL SYSTEM --- */
 .modal-backdrop {
   position: fixed;
   top: 0;
@@ -1549,8 +1137,8 @@ html, body {
   min-width: 340px;
   max-width: 90vw;
   min-height: 120px;
-  // Never taller than the window: a long form used to push the dialog past both edges of
-  // the screen, leaving Cancel and Save jammed against the bottom.
+  // Never taller than the window, so a long form scrolls inside the body instead of pushing
+  // the actions off screen.
   max-height: calc(100vh - 2rem);
   padding: 0;
   overflow: hidden;
@@ -1559,8 +1147,8 @@ html, body {
   margin: 1rem;
 }
 
-/* The shared app-dropdown floats its list against the viewport, so a modal or drawer that
-   hides its overflow cannot clip the options. Position comes from the component. */
+// Fixed to the viewport so a modal or drawer that hides its overflow cannot clip the options.
+// The component sets the coordinates.
 .app-dropdown .dropdown-menu.floating {
   position: fixed;
   right: auto;
@@ -1568,20 +1156,18 @@ html, body {
   z-index: 1100;
 }
 
-/* Modal Content Variants */
 .modal-form {
   .form-group {
     text-align: left;
-    
+
     &:last-of-type {
       margin-bottom: 0;
     }
   }
-  
+
   .form-control-label.desc {
     color: $text-secondary;
     font-size: 0.9rem;
-
   }
 }
 
@@ -1589,40 +1175,35 @@ html, body {
   text-align: center;
   padding-top: 0;
   padding-bottom: 2rem;
-  
+
   p {
     margin-bottom: 0;
-    
+
     &:last-of-type {
       margin-bottom: 0;
     }
   }
-  
+
   .warning-text {
     color: var(--danger-4);
     font-size: 0.9rem;
   }
-  
+
   .modal-target {
     font-weight: 600;
     color: $text-white;
   }
 }
 
-.modal-progress {
-  .progress-content {
-    padding: $spacing-md;
-    text-align: center;
-  }
-  
-  .progress-title {
+.install-phase {
+  .install-phase-header {
     font-size: 1.1rem;
     font-weight: 600;
     color: $text-white;
     margin-bottom: $spacing-sm;
   }
-  
-  .progress-description {
+
+  .install-phase-desc {
     color: $text-secondary;
     font-size: 0.9rem;
     margin-bottom: $spacing-md;
@@ -1630,7 +1211,6 @@ html, body {
   }
 }
 
-/* Mobile responsiveness for modals */
 @include mobile-only {
   .modal {
     min-width: unset;
@@ -1639,15 +1219,15 @@ html, body {
     max-height: 90vh;
     margin: 0.5rem;
   }
-  
+
   .modal-header {
     margin: 20px auto;
-    
+
     h2 {
       font-size: 1.2rem;
     }
   }
-  
+
   .modal-body {
     padding: 1rem;
     padding-top: 0.25rem;
@@ -1661,15 +1241,15 @@ html, body {
     border-radius: 8px;
     margin: 0.25rem;
   }
-  
+
   .modal-header {
     margin: 15px auto;
-    
+
     h2 {
       font-size: 1.1rem;
     }
   }
-  
+
   .modal-body {
     padding: 0.75rem;
     padding-top: 0;
@@ -1688,20 +1268,10 @@ html, body {
   font-weight: 500;
   color: $text-primary;
 }
-.close-btn {
-  background: none;
-  border: none;
-  color: $text-secondary;
-  font-size: 1.5rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
 .modal-body {
   padding: 1.5rem;
   padding-top: 0;
-  // The bottom padding belongs to the sticky footer below, so the footer can sit flush
-  // against the bottom of the scrolling area rather than floating above a gap.
+  // The sticky footer below owns the bottom padding, so it sits flush with the scroll edge.
   padding-bottom: 0;
   color: $text-secondary;
   overflow-y: auto;
@@ -1709,7 +1279,7 @@ html, body {
   min-height: 0;
 }
 
-/* The action row stays on screen while a long form scrolls behind it. */
+// The action row stays on screen while a long form scrolls behind it.
 .modal-body .action-group-modal {
   position: sticky;
   bottom: 0;
@@ -1725,7 +1295,6 @@ html, body {
   min-width: 0;
 }
 
-/* --- UNIFIED FORM CONTROL SYSTEM --- */
 .form-control {
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -1735,31 +1304,31 @@ html, body {
   color: var(--text-primary);
   font-size: 1rem;
   transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
-  
+
   &:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 0.25rem rgba(14, 165, 233, 0.25);
     background-color: var(--surface-raised);
   }
-  
+
   &::placeholder {
     color: var(--text-secondary-5);
     opacity: 1;
     font-style: italic;
   }
-  
+
   &:focus::placeholder {
     color: var(--text-primary-2);
     opacity: 0.8;
   }
-  
+
   &:disabled {
     opacity: 0.6;
     background: var(--surface);
     color: var(--text-secondary);
     cursor: not-allowed;
-    
+
     &::placeholder {
       color: var(--text-secondary-3);
       opacity: 0.8;
@@ -1767,57 +1336,56 @@ html, body {
   }
 }
 
-/* Normalize time input height to match other form controls */
+// A time input renders taller than a text input; pin it to the same height.
 input[type="time"].form-control {
-  height: 2.25rem; /* Standard form control height */
+  height: 2.25rem;
   line-height: 1.25;
   box-sizing: border-box;
 }
 
-/* Custom dropdown styling to match form-control */
 .custom-dropdown {
   position: relative;
-  
+
   .form-control {
     display: flex !important;
     align-items: center !important;
     justify-content: space-between !important;
     text-align: left !important;
     cursor: pointer !important;
-    
-    /* Override any inline styles to match form-control */
+
+    // !important so these win over the inline styles on the tabs' dropdown markup.
     background: var(--surface-raised) !important;
     border: 1px solid var(--border-strong) !important;
     border-radius: 4px !important;
     color: var(--text-primary) !important;
     padding: 0.5rem 0.75rem !important;
     font-size: 1rem !important;
-    
+
     &:hover {
       border-color: var(--secondary) !important;
     }
-    
+
     &:focus {
       outline: none !important;
       border-color: var(--primary) !important;
       box-shadow: 0 0 0 0.25rem rgba(14, 165, 233, 0.25) !important;
       background-color: var(--surface-raised) !important;
     }
-    
+
     &:disabled {
       opacity: 0.6 !important;
       background: var(--surface) !important;
       color: var(--text-secondary) !important;
       cursor: not-allowed !important;
     }
-    
+
     .material-icons {
       font-size: 1.1em !important;
       color: var(--text-primary) !important;
       margin-left: 0.5rem !important;
     }
   }
-  
+
   .dropdown-menu {
     position: absolute;
     left: 0;
@@ -1830,26 +1398,26 @@ input[type="time"].form-control {
     width: 100%;
     margin-top: 0.25rem;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    
+
     div {
       padding: 0.5rem 0.75rem;
       cursor: pointer;
       color: var(--text-primary);
       font-size: 0.9rem;
       transition: background-color 0.15s ease;
-      
+
       &:hover {
         background: var(--surface-raised-7);
         color: var(--text-strong);
       }
-      
+
       &.selected {
         background: var(--primary-fill);
         color: var(--text-on-accent);
       }
     }
   }
-  
+
   &.disabled {
     .form-control {
       opacity: 0.6 !important;
@@ -1860,7 +1428,6 @@ input[type="time"].form-control {
   }
 }
 
-/* app-dropdown: the shared component that renders the .custom-dropdown pattern */
 app-dropdown {
   display: block;
   min-width: 0;
@@ -1894,17 +1461,6 @@ app-dropdown {
   }
 }
 
-/* Form Control Variants */
-.form-control-sm {
-  padding: 0.375rem 0.5rem;
-  font-size: 0.8rem;
-}
-
-.form-control-lg {
-  padding: 0.75rem 1rem;
-  font-size: 1rem;
-}
-
 .form-control-label {
   display: block;
   color: $text-primary;
@@ -1921,67 +1477,6 @@ app-dropdown {
   }
 }
 
-.form-check.form-switch {
-  .form-check-input {
-    &:checked {
-      background-color: var(--bs-success, var(--success-3));
-      border-color: var(--bs-success, var(--success-3));
-    }
-    
-    &:focus {
-      box-shadow: 0 0 0 0.25rem rgba(40, 167, 69, 0.25);
-    }
-  }
-  
-  .form-check-label {
-    white-space: nowrap;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: var(--text-emphasis-3);
-  }
-  
-  &.form-field-disabled {
-    .form-check-input {
-      opacity: 0.6;
-    }
-    
-    .form-check-label {
-      opacity: 0.6;
-      color: var(--text-muted);
-    }
-  }
-}
-
-.form-select {
-  /* Remove custom chevron to avoid duplicate arrows */
-  background-image: none;
-}
-
-.form-check-input {
-  background-color: var(--surface-raised) !important;
-  border: 1px solid var(--border-strong) !important;
-}
-
-.form-check-input:checked {
-  background-color: var(--primary) !important;
-  border-color: var(--primary) !important;
-}
-
-.form-check.form-switch {
-  display: flex;
-  align-items: center;
-
-  .form-check-input {
-    margin-top: 0 !important;
-    margin-right: 0.5rem !important;
-  }
-
-  .form-check-label {
-    font-weight: normal !important;
-  }
-}
-
-/* --- UNIFIED TABLE SYSTEM --- */
 .data-table {
   width: 100%;
   min-width: 100%;
@@ -1991,7 +1486,7 @@ app-dropdown {
   overflow: hidden;
   border: 1px solid $border-dark;
   table-layout: fixed;
-  
+
   th, td {
     padding: 0.75rem 1rem;
     text-align: left;
@@ -1999,7 +1494,7 @@ app-dropdown {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  
+
   th {
     background: $background-darker;
     color: $text-primary;
@@ -2008,26 +1503,23 @@ app-dropdown {
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
-  
+
   td {
     color: $text-light;
     font-size: 0.95rem;
   }
-  
-  // Common row hover effect
+
   .table-row:hover {
     background: var(--surface-raised-1);
   }
-  
+
   .table-row:last-child td {
     border-bottom: none;
   }
-  
-  // Common "no data" styling
+
   .no-data-row {
     .no-data {
-      // The icon and its message on one line, centred together — as inline content the
-      // glyph sat above the text's baseline.
+      // Flex, not inline: an inline glyph sits above the text baseline.
       display: flex;
       align-items: center;
       justify-content: center;
@@ -2044,24 +1536,21 @@ app-dropdown {
       }
     }
   }
-  
-  // Common action buttons in tables
-  .table-actions {
-    @extend .action-group-inline;
+
+  %table-actions {
+    @extend %action-group-inline;
   }
 }
 
-// Responsive adjustments for data tables
 @include below-700px {
   .data-table {
     font-size: 0.9rem;
-    
+
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
-    .table-actions .btn,
-    .action-group-inline .btn {
+
+    %table-actions .btn {
       padding: 0.25rem 0.375rem;
       font-size: 0.8rem;
     }
@@ -2133,26 +1622,20 @@ p {
   margin-right: 8px;
 }
 
-/* Center text in confirm delete modal for sidebar */
-.confirm-delete-modal .form-group {
-  text-align: center;
-}
-
-/* Sudo Password Modal Specific Styles */
 .sudo-password-content {
   p {
     margin-bottom: 1rem;
   }
-  
+
   .form-group {
     margin-top: 1rem;
     text-align: left;
-    
+
     input {
       margin-top: 0.5rem;
     }
   }
-  
+
   .sudo-disclaimer {
     font-size: 0.9rem;
     color: $text-muted;
@@ -2205,7 +1688,6 @@ p {
   left: 13px;
 }
 
-/* Console log container for server state */
 .console-log-container {
   background: var(--surface-base-1);
   border-radius: 6px;
@@ -2247,59 +1729,20 @@ p {
   pointer-events: none;
 }
 
-.server-state-header-row {
-  display: flex;
-  align-items: center;
-}
-.players-indicator {
-  margin-left: 12px;
-  color: var(--text-primary);
-  font-family: inherit;
-}
-.memory-indicator {
-  margin-left: 12px;
-  color: var(--text-primary);
-  font-family: inherit;
-  font-weight: 500;
-}
-
-.server-radio {
-  display: flex;
-  align-items: center;
-  margin-right: 0.5rem;
-}
-.server-radio-circle {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--text-primary);
-  background: transparent;
-  display: inline-block;
-  margin-right: 0.5rem;
-  transition: border-color 0.2s, background 0.2s;
-  box-sizing: border-box;
-}
-.server-radio-circle.selected {
-  border: 2px solid var(--text-primary);
-  background: var(--surface);
-  box-shadow: 0 0 0 2px var(--surface);
-}
 .server-item.selected, .server-item:hover {
   background: var(--surface) !important;
   color: var(--text-strong) !important;
-}
-.server-item.selected .server-radio-circle {
-  border: 2px solid var(--text-strong);
-  background: var(--surface);
 }
 .server-item .server-name {
   font-weight: 600;
   font-size: 1.08em;
 }
 
-/* Modern macOS-style scrollbars for the entire app */
 * {
-  /* WebKit browsers (Chrome, Safari, Edge) */
+  // Firefox
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+
   &::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -2310,7 +1753,6 @@ p {
     border-radius: 10px;
   }
 
-  // Theme tokens, not a fixed white: a white thumb is invisible on the light theme.
   &::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     border-radius: 10px;
@@ -2332,117 +1774,68 @@ p {
   &::-webkit-scrollbar-corner {
     background: transparent;
   }
-
-  /* Firefox */
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
-/* For light themes or specific elements that need darker scrollbars */
-.light-scrollbar {
-  &::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2) !important;
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.35) !important;
-  }
-
-  &::-webkit-scrollbar-thumb:active {
-    background: rgba(0, 0, 0, 0.5) !important;
-  }
-
-  scrollbar-color: rgba(0, 0, 0, 0.2) transparent !important;
-}
-
-/* Hide on desktop utility */
-.hide-on-desktop {
-  display: inherit;
-}
-@include above-700px {
-  .hide-on-desktop {
-    display: none !important;
-  }
-}
-
-// Backup table styles
-.backup-content {
-  width: 100%;
-  
-  .form-group {
-    width: 100%;
-    max-width: none;
-  }
-}
-
-/* --- UNIFIED TABLE SYSTEM --- */
-
-// Base table container - shared by all data tables
-.data-table-container {
+%data-table-container {
   width: 100% !important;
   max-width: none !important;
   grid-column: 1 / -1 !important;
-  
-  // Adjust margins to fit properly within container
   margin-left: -0.75rem !important;
   margin-right: -0.75rem !important;
   padding-left: 0.75rem !important;
   padding-right: 0.75rem !important;
 }
 
-// Base table list wrapper - shared by all data tables
-.data-table-list {
+%data-table-list {
   width: 100%;
   max-width: none;
   overflow-x: auto;
 }
 
-// Specific table containers extend the base
 .backup-table-container {
-  @extend .data-table-container;
+  @extend %data-table-container;
 }
 
 .backup-list {
-  @extend .data-table-list;
+  @extend %data-table-list;
 }
 
 .backup-table {
   @extend .data-table;
-  
-  // Backup-specific column styles
+
   .backup-name {
     font-weight: 500;
     color: var(--text-strong);
     width: 30%;
   }
-  
+
   .backup-date {
     color: var(--text-muted);
     font-size: 0.9rem;
     width: 35%;
     white-space: nowrap;
   }
-  
+
   .backup-size {
     color: var(--text-primary-1);
     font-family: 'Courier New', monospace;
     font-size: 0.9rem;
     width: 15%;
   }
-  
+
   .backup-actions {
-    @extend .table-actions;
+    @extend %table-actions;
     width: 25%;
     min-width: 120px;
     text-align: right;
-    
+
     .btn {
       margin-left: 0.375rem;
-      
+
       &:first-child {
         margin-left: 0;
       }
-      
+
       &:last-child {
         margin-right: 0;
       }
@@ -2453,28 +1846,27 @@ p {
 @include below-700px {
   .backup-table {
     font-size: 0.9rem;
-    
+
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
+
     .backup-name {
       width: 30%;
     }
-    
+
     .backup-date {
       font-size: 0.8rem;
       width: 35%;
-      // Allow text wrapping on mobile for long timezone names
       white-space: normal;
       word-break: break-word;
     }
-    
+
     .backup-size {
       font-size: 0.8rem;
       width: 15%;
     }
-    
+
     .backup-actions {
       width: 20%;
     }
@@ -2485,49 +1877,46 @@ p {
   .backup-table {
     .backup-date {
       font-size: 0.75rem;
-      // Stack date and time on very small screens
       line-height: 1.3;
     }
   }
 }
 
-// Mod table containers extend the base
 .mod-table-container {
-  @extend .data-table-container;
+  @extend %data-table-container;
 }
 
 .mod-list {
-  @extend .data-table-list;
+  @extend %data-table-list;
 }
 
 .mod-table {
   @extend .data-table;
-  
-  // Mod-specific column styles
+
   .mod-id {
     width: 20%;
     font-family: monospace;
     font-size: 0.9rem;
   }
-  
+
   .mod-name {
     width: 40%;
   }
-  
+
   .mod-status {
     width: 20%;
-    
+
     .toggle-label {
       margin: 0;
-      
+
       .toggle-text {
         font-size: 0.9rem;
       }
     }
   }
-  
+
   .mod-actions {
-    @extend .table-actions;
+    @extend %table-actions;
     width: 20%;
   }
 }
@@ -2537,33 +1926,32 @@ p {
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
+
     .mod-id {
       width: 25%;
       font-size: 0.8rem;
     }
-    
+
     .mod-name {
       width: 35%;
     }
-    
+
     .mod-status {
       width: 25%;
-      
+
       .toggle-label {
         .toggle-text {
           font-size: 0.8rem;
         }
       }
     }
-    
+
     .mod-actions {
       width: 15%;
     }
   }
 }
 
-// CurseForge mod browser - card grid layout
 .cf-browser {
   display: flex;
   flex-direction: column;
@@ -2585,7 +1973,6 @@ p {
   }
 }
 
-// API error banner
 .cf-error-banner {
   display: flex;
   align-items: flex-start;
@@ -2637,7 +2024,6 @@ p {
   }
 }
 
-// Loading / empty states
 .cf-loading,
 .cf-empty {
   display: flex;
@@ -2657,7 +2043,6 @@ p {
 }
 .cf-spin { animation: cf-spin 1s linear infinite; }
 
-// Card grid
 .cf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -2813,40 +2198,38 @@ p {
   i { font-size: 1.2rem; }
 }
 
-// Whitelist table containers extend the base
 .whitelist-table-container {
-  @extend .data-table-container;
+  @extend %data-table-container;
 }
 
 .whitelist-list {
-  @extend .data-table-list;
+  @extend %data-table-list;
 }
 
 .whitelist-table {
   @extend .data-table;
-  
-  // Whitelist-specific column styles
+
   .whitelist-id {
     width: 30%;
     font-family: monospace;
     font-size: 0.9rem;
     color: var(--text-primary-1);
   }
-  
+
   .whitelist-name {
     width: 30%;
     font-weight: 500;
     color: var(--text-strong);
   }
-  
+
   .whitelist-date {
     width: 25%;
     color: var(--text-muted);
     font-size: 0.9rem;
   }
-  
+
   .whitelist-actions {
-    @extend .table-actions;
+    @extend %table-actions;
     width: 15%;
     min-width: 80px;
     text-align: right;
@@ -2856,25 +2239,25 @@ p {
 @include mobile-only {
   .whitelist-table {
     font-size: 0.9rem;
-    
+
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
+
     .whitelist-id {
       width: 35%;
       font-size: 0.8rem;
     }
-    
+
     .whitelist-name {
       width: 35%;
     }
-    
+
     .whitelist-date {
       width: 20%;
       font-size: 0.8rem;
     }
-    
+
     .whitelist-actions {
       width: 10%;
       min-width: 60px;
@@ -2882,34 +2265,32 @@ p {
   }
 }
 
-// Player table containers extend the base
 .player-table-container {
-  @extend .data-table-container;
+  @extend %data-table-container;
 }
 
 .player-list {
-  @extend .data-table-list;
+  @extend %data-table-list;
 }
 
 .player-table {
   @extend .data-table;
-  
-  // Player-specific column styles
+
   .player-name {
     width: 40%;
     font-weight: 500;
     color: var(--text-strong);
   }
-  
+
   .player-id {
     width: 40%;
     font-family: monospace;
     font-size: 0.9rem;
     color: var(--text-primary-1);
   }
-  
+
   .player-actions {
-    @extend .table-actions;
+    @extend %table-actions;
     width: 20%;
     min-width: 80px;
     text-align: right;
@@ -2921,16 +2302,16 @@ p {
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
+
     .player-name {
       width: 45%;
     }
-    
+
     .player-id {
       width: 40%;
       font-size: 0.8rem;
     }
-    
+
     .player-actions {
       width: 15%;
       min-width: 60px;
@@ -2938,34 +2319,32 @@ p {
   }
 }
 
-// Broadcast table containers extend the base
 .broadcast-table-container {
-  @extend .data-table-container;
+  @extend %data-table-container;
 }
 
 .broadcast-list {
-  @extend .data-table-list;
+  @extend %data-table-list;
 }
 
 .broadcast-table {
   @extend .data-table;
-  
-  // Broadcast-specific column styles
+
   .broadcast-status {
     width: 15%;
-    
+
     .toggle-label {
       margin: 0;
-      
+
       .toggle-text {
         font-size: 0.9rem;
       }
     }
   }
-  
+
   .broadcast-message {
     width: 45%;
-    
+
     .broadcast-textarea {
       min-height: 60px;
       resize: vertical;
@@ -2973,14 +2352,14 @@ p {
       font-size: 0.9rem;
     }
   }
-  
+
   .broadcast-interval {
     width: 20%;
     text-align: center;
   }
-  
+
   .broadcast-actions {
-    @extend .table-actions;
+    @extend %table-actions;
     width: 20%;
     text-align: right;
   }
@@ -2991,44 +2370,35 @@ p {
     th, td {
       padding: 0.5rem 0.75rem;
     }
-    
+
     .broadcast-status {
       width: 20%;
-      
+
       .toggle-label {
         .toggle-text {
           font-size: 0.8rem;
         }
       }
     }
-    
+
     .broadcast-message {
       width: 40%;
-      
+
       .broadcast-textarea {
         min-height: 50px;
         font-size: 0.8rem;
       }
     }
-    
+
     .broadcast-interval {
       width: 25%;
     }
-    
+
     .broadcast-actions {
       width: 15%;
       min-width: 60px;
     }
   }
-}
-
-// Automation tab styles
-.automation-status-header {
-  background: var(--surface);
-  border: 1px solid $border-dark;
-  border-radius: 6px;
-  padding: 1rem;
-  margin-bottom: 1rem;
 }
 
 .automation-status-row {
@@ -3037,7 +2407,7 @@ p {
   align-items: center;
   flex-wrap: wrap;
   margin-top: 0.5rem;
-  grid-column: 1 / -1; /* Span full width of grid */
+  grid-column: 1 / -1;
   width: 100%;
 }
 
@@ -3047,7 +2417,7 @@ p {
   gap: 0.5rem;
   white-space: nowrap;
   flex-shrink: 0;
-  
+
   @include mobile-only {
     gap: 0.25rem;
   }
@@ -3069,7 +2439,7 @@ p {
   transform: translateY(-1px);
   transition: background 0.2s, color 0.2s, border 0.2s;
   white-space: nowrap;
-  
+
   &.enabled {
     background: var(--success);
     color: var(--text-on-accent);
@@ -3077,40 +2447,9 @@ p {
   }
 }
 
-.automation-status {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  background: $background-dark;
-  border: 1px solid $border-dark;
-  border-radius: 6px;
-  padding: 1rem;
-}
-
-.status-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--border-muted);
-  
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
 .status-label {
   font-weight: 500;
   color: var(--text-primary);
-}
-
-.status-value {
-  color: var(--danger);
-  font-weight: 500;
-  
-  &.enabled {
-    color: var(--success-1);
-  }
 }
 
 .checkbox-group {
@@ -3120,26 +2459,6 @@ p {
   margin-top: 0.5rem;
 }
 
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  cursor: pointer;
-  
-  input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--primary-1);
-  }
-  
-  &:hover {
-    color: var(--text-strong);
-  }
-}
-
-// Firewall tab styles
 .port-info {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -3151,11 +2470,11 @@ p {
 .port-item {
   margin-bottom: 0.5rem;
   color: var(--text-primary);
-  
+
   &:last-child {
     margin-bottom: 0;
   }
-  
+
   strong {
     color: var(--primary);
   }
@@ -3167,18 +2486,18 @@ p {
   border-radius: 6px;
   padding: 1.5rem;
   margin-top: 1rem;
-  
+
   h5 {
     color: var(--primary);
     margin: 1rem 0 0.5rem 0;
     font-size: 1rem;
     font-weight: 600;
-    
+
     &:first-child {
       margin-top: 0;
     }
   }
-  
+
   p {
     margin-bottom: 1rem;
     color: var(--text-primary);
@@ -3196,7 +2515,7 @@ p {
   white-space: pre-wrap;
   margin: 0.5rem 0 1rem 0;
   border: 1px solid var(--border-muted);
-  
+
   span {
     display: block;
   }
@@ -3208,28 +2527,25 @@ p {
   border-radius: 6px;
   padding: 1rem;
   margin: 0.5rem 0;
-  
+
   li {
     margin-bottom: 0.5rem;
     color: var(--text-primary);
-    
+
     &:last-child {
       margin-bottom: 0;
     }
-    
+
     strong {
       color: var(--primary);
     }
   }
 }
 
-/* About Tab Styles */
 .about-container {
   border-radius: 8px;
   padding: 0;
   margin: 1rem 0;
-  // A column that fills the panel, so the footer below sits at the bottom of the page
-  // rather than halfway up it.
   display: flex;
   flex-direction: column;
   min-height: min(500px, 70vh);
@@ -3282,7 +2598,6 @@ p {
 
 .about-content-grid {
   display: grid;
-  // One column since the feature list went: System Info is all that lives here.
   grid-template-columns: 1fr;
   gap: 0;
 }
@@ -3291,14 +2606,6 @@ p {
   padding: 2rem;
 }
 
-.section-title {
-  font-size: 1.25rem;
-  font-weight: 500;
-  color: var(--text-emphasis-4);
-  margin: 0 0 1.5rem 0;
-}
-
-// Link to the project's Discord, at the foot of the About page.
 .about-discord {
   display: inline-flex;
   align-items: center;
@@ -3312,7 +2619,7 @@ p {
   font-size: 0.9rem;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 
-  svg { color: #5865f2; }  // Discord's own blurple, the one thing here that is not themed
+  svg { color: #5865f2; }  // Discord's brand colour, deliberately not themed
 
   &:hover {
     background: var(--surface-raised);
@@ -3344,23 +2651,6 @@ p {
   font-weight: 400;
 }
 
-.about-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  margin-top: auto;
-  text-align: center;
-  padding: 1.5rem 2rem;
-}
-
-.about-footer p {
-  color: var(--text-muted-1);
-  font-size: 0.875rem;
-  margin: 0;
-}
-
-// Validation styles
 .validation-error {
   color: var(--danger-3);
   font-size: 0.875rem;
@@ -3376,61 +2666,52 @@ p {
 }
 
 @include mobile-only {
-  .about-content-grid {
-    grid-template-columns: 1fr;
-  }
-  
   .about-title {
     font-size: 2rem;
   }
-  
+
   .about-header {
     padding: 1.5rem;
   }
-  
+
   .about-section {
     padding: 1.5rem;
   }
 }
 
-/* Mod Settings Styles */
 .mod-settings-editor {
   margin-top: 0.5rem;
-  
+
   .setting-row {
     display: flex;
     gap: 0.5rem;
     align-items: center;
     margin-bottom: 0.5rem;
-    
+
     .setting-key {
       flex: 1;
       min-width: 0;
     }
-    
+
     .setting-value {
       flex: 2;
       min-width: 0;
     }
-    
+
     button {
       flex-shrink: 0;
     }
   }
 }
 
-// =========================
-// CDK DRAG & DROP
-// =========================
-// The preview is a copy of the row or card being carried, attached to the body — so it sits
-// outside everything that styled the original and has to say how it looks on its own.
+// CDK attaches the drag preview to <body>, outside every rule that styled the original, so it
+// is styled from scratch here.
 .cdk-drag-preview {
   box-sizing: border-box;
   box-shadow: 0 14px 32px var(--shadow-color-strong);
   opacity: 0.95;
 }
 
-// A server being carried in the sidebar: the same row, lifted off the list.
 .cdk-drag-preview.server-item {
   display: flex;
   align-items: center;
@@ -3442,7 +2723,7 @@ p {
   font-size: 0.92rem;
   border: 1px solid var(--primary);
 
-  // Nothing to click while it is in the air, and the players badge keeps its own styling.
+  // Nothing to click mid-drag.
   .delete-server-btn { display: none; }
 
   .server-name {
@@ -3454,7 +2735,7 @@ p {
   }
 }
 
-// A dashboard card keeps its own look; it only needs to lift.
+// A dashboard card keeps its own look; the radius makes the lift shadow follow its corners.
 app-server-card.cdk-drag-preview {
   border-radius: 14px;
 }
@@ -3484,9 +2765,6 @@ app-server-card.cdk-drag-preview {
   transition: transform 250ms cubic-bezier(0, 0, 0.2, 1);
 }
 
-// =========================
-// COPY CONFIG MODAL
-// =========================
 .copy-config-modal {
   .form-group {
     margin-bottom: 16px;
@@ -3495,16 +2773,16 @@ app-server-card.cdk-drag-preview {
       display: block;
       margin-bottom: 6px;
       font-weight: 500;
-      color: var(--text-primary, var(--text-emphasis-1));
+      color: var(--text-primary);
     }
 
     select.form-control {
       width: 100%;
       padding: 8px 12px;
-      border: 1px solid var(--border-color, var(--border));
+      border: 1px solid var(--border);
       border-radius: 4px;
-      background: var(--bg-input, var(--surface-base-5));
-      color: var(--text-primary, var(--text-emphasis-1));
+      background: var(--surface-base-5);
+      color: var(--text-primary);
       font-size: 14px;
     }
   }
@@ -3531,10 +2809,10 @@ app-server-card.cdk-drag-preview {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-secondary, var(--text-muted-2));
+    color: var(--text-secondary);
     margin-bottom: 6px;
     padding-bottom: 4px;
-    border-bottom: 1px solid var(--border-color, var(--border-muted));
+    border-bottom: 1px solid var(--border-muted);
   }
 
   .copy-categories-grid {
@@ -3545,14 +2823,14 @@ app-server-card.cdk-drag-preview {
 
   .copy-category-item {
     padding: 6px 12px;
-    border: 1px solid var(--border-color, var(--border));
+    border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s;
     font-weight: normal;
 
     &:hover {
-      background: var(--bg-hover, rgba(255,255,255,0.05));
+      background: var(--surface-raised);
     }
 
     .toggle-label {
@@ -3561,38 +2839,25 @@ app-server-card.cdk-drag-preview {
 
     .toggle-text {
       font-size: 13.5px;
-      color: var(--text-primary, var(--text-emphasis-1));
+      color: var(--text-primary);
     }
   }
 }
 
-// =========================
-// THEME PICKER (Settings > General > Appearance)
-// =========================
 .theme-options {
   display: flex;
   gap: $spacing-sm;
   flex-wrap: wrap;
 
   .btn {
-    display: inline-flex;
-    align-items: center;
     gap: $spacing-xs;
 
     .material-icons { font-size: 1.1em; }
   }
 }
 
-// =========================
-// LIGHT-THEME PANEL DEFINITION
-// =========================
-// The dark theme separates panels purely by background step, which works because dark
-// surfaces have perceptual room to spare. Near white they do not: matching those steps
-// literally would drag the page down to a mid grey. Light gets an explicit outline
-// instead, the way light UIs normally define a card.
-//
-// Applied as a box-shadow rather than a border so it adds no layout box, and scoped to
-// the light theme so the dark output is untouched.
+// Near-white surfaces are too close to separate panels by background step the way the dark
+// theme does, so light cards get a hairline. A box-shadow adds no layout box.
 :root[data-theme='light'] {
   .card,
   .sub-card {

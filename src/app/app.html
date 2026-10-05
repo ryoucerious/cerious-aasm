@@ -1,27 +1,21 @@
-<!-- Login page - full screen without chrome -->
 <div *ngIf="isLoginPage" class="login-page-container">
   <router-outlet></router-outlet>
 </div>
 
-<!-- Main app layout - top bar, sidebar, content -->
 <ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
   <div class="app-root-wrapper">
     <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
     <div class="app-container">
-      <!-- Mobile Overlay -->
       <div *ngIf="isMobile && isMobileMenuOpen" class="mobile-overlay" (click)="closeMobileMenu()"></div>
 
-      <!-- Sidebar Container -->
       <div class="sidebar-container" [class.mobile-open]="isMobile && isMobileMenuOpen">
         <app-sidebar (selectServer)="onServerSelected($event)" (closeMobileMenu)="closeMobileMenu()"></app-sidebar>
       </div>
 
-      <!-- Main Content -->
       <div class="main-content" [class.mobile-menu-open]="isMobile && isMobileMenuOpen">
         <router-outlet></router-outlet>
 
-        <!-- Exit Confirmation Modal -->
         <app-modal [show]="showExitModal" [title]="'Servers Running'" (close)="onExitModalClose('cancel')">
           <div>
             <p>There are running servers. What would you like to do?</p>
@@ -29,9 +23,11 @@
               <li *ngFor="let server of runningServers">{{ server.name }}</li>
             </ul>
             <div class="action-group-modal">
-              <button class="btn" (click)="onExitModalClose('cancel')">Cancel</button>
-              <button class="btn" (click)="onExitModalClose('exit')">Exit Anyway</button>
-              <button class="btn btn-danger" (click)="onExitModalClose('shutdown')">Shut Down Servers &amp; Exit</button>
+              <button class="btn" [disabled]="shuttingDown" (click)="onExitModalClose('cancel')">Cancel</button>
+              <button class="btn" [disabled]="shuttingDown" (click)="onExitModalClose('exit')">Exit Anyway</button>
+              <button class="btn btn-danger" [disabled]="shuttingDown" (click)="onExitModalClose('shutdown')">
+                {{ shuttingDown ? 'Stopping servers...' : 'Shut Down Servers & Exit' }}
+              </button>
             </div>
           </div>
         </app-modal>

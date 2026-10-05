@@ -1,13 +1,29 @@
-import { messagingService } from '../services/messaging.service';
 import { shell } from 'electron';
 import * as https from 'https';
+import { validateURL } from '../utils/validation.utils';
+import { onRequest } from './handler.utils';
 
 const CURSEFORGE_ARK_URL = 'https://www.curseforge.com/ark-survival-ascended';
 
 const CURSE_BASE = 'api.curseforge.com';
 const ARK_GAME_ID = 83374; // ARK: Survival Ascended
 
-function cfGet(apiKey: string, urlPath: string): Promise<any> {
+interface CurseForgeMod {
+  id: number;
+  name: string;
+  summary: string;
+  downloadCount: number;
+  logo?: { thumbnailUrl?: string };
+  screenshots?: { thumbnailUrl?: string }[];
+  links?: { websiteUrl?: string };
+  authors?: { name: string }[];
+  categories?: { name: string }[];
+  dateModified?: string;
+  dateReleased?: string;
+  latestFiles?: { id: number; displayName: string; modId?: number }[];
+}
+
+function cfGet<T>(apiKey: string, urlPath: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const opts = {
       hostname: CURSE_BASE,
@@ -25,21 +41,21 @@ function cfGet(apiKey: string, urlPath: string): Promise<any> {
       res.on('end', () => {
         const status = res.statusCode ?? 0;
 
-        // Attempt to parse regardless of status so we can surface API error messages
-        let parsed: any = null;
+        // Parsed regardless of status so an API error message can be surfaced.
+        let parsed: unknown = null;
         let parseError: string | null = null;
         try {
           parsed = JSON.parse(data);
         } catch {
-          parseError = data.slice(0, 300); // include raw body snippet in error
+          parseError = data.slice(0, 300);
         }
 
         if (status === 401) {
-          return reject(new Error('CurseForge API key is invalid or expired (401). Check your key in Settings → General.'));
+          return reject(new Error('CurseForge API key is invalid or expired (401). Check your key in Settings > General.'));
         }
         if (status === 403) {
           return reject(new Error(
-            'ARK: Survival Ascended is a restricted game on the CurseForge API — ' +
+            'ARK: Survival Ascended is a restricted game on the CurseForge API - ' +
             'third-party developer keys cannot access it (403). ' +
             'You can browse and copy mod IDs directly from the CurseForge website instead.'
           ));
@@ -48,7 +64,8 @@ function cfGet(apiKey: string, urlPath: string): Promise<any> {
           return reject(new Error('CurseForge rate limit exceeded (429). Please wait a moment and try again.'));
         }
         if (status < 200 || status >= 300) {
-          const detail = parsed?.message || parsed?.error || parseError || `HTTP ${status}`;
+          const body = parsed as { message?: string; error?: string } | null;
+          const detail = body?.message || body?.error || parseError || `HTTP ${status}`;
           return reject(new Error(`CurseForge API error: ${detail}`));
         }
 
@@ -56,125 +73,71 @@ function cfGet(apiKey: string, urlPath: string): Promise<any> {
           return reject(new Error(`Failed to parse CurseForge response (HTTP ${status}): ${parseError}`));
         }
 
-        resolve(parsed);
+        resolve(parsed as T);
       });
     }).on('error', reject);
   });
 }
 
-/**
- * Search for mods on CurseForge.
- * Payload: { query, apiKey, pageSize?, index?, requestId }
- */
-messagingService.on('curseforge-search-mods', async (payload: any, sender: any) => {
-  const { query, apiKey = '', pageSize = 20, index = 0, sortField = 2, categoryId, requestId } = payload || {};
+function toModSummary(mod: CurseForgeMod) {
+  return {
+    id: mod.id,
+    name: mod.name,
+    summary: mod.summary,
+    downloadCount: mod.downloadCount,
+    thumbUrl: mod.logo?.thumbnailUrl || '',
+    screenshotUrl: (mod.screenshots || [])[0]?.thumbnailUrl || mod.logo?.thumbnailUrl || '',
+    websiteUrl: mod.links?.websiteUrl || '',
+    authors: (mod.authors || []).map(author => author.name).join(', '),
+    categories: (mod.categories || []).map(category => category.name).slice(0, 3),
+    dateUpdated: mod.dateModified || mod.dateReleased || '',
+  };
+}
 
+onRequest('curseforge-search-mods', async payload => {
+  const { query, apiKey = '', pageSize = 20, index = 0, sortField = 2, categoryId } = payload;
   if (!apiKey) {
-    messagingService.sendToOriginator('curseforge-search-mods', {
+    return {
       success: false,
       error: 'No CurseForge API key configured. This build may not have been packaged with the required key.',
-      requestId,
-    }, sender);
-    return;
+    };
   }
 
-  try {
-    const encoded = encodeURIComponent(query || '');
-    let urlPath =
-      `/v1/mods/search?gameId=${ARK_GAME_ID}&searchFilter=${encoded}` +
-      `&pageSize=${pageSize}&index=${index}&sortField=${sortField}&sortOrder=desc`;
-    if (categoryId) {
-      urlPath += `&categoryId=${categoryId}`;
-    }
-
-    const json = await cfGet(apiKey, urlPath);
-    const mods = (json.data || []).map((m: any) => ({
-      id: m.id,
-      name: m.name,
-      summary: m.summary,
-      downloadCount: m.downloadCount,
-      thumbUrl: m.logo?.thumbnailUrl || '',
-      screenshotUrl: (m.screenshots || [])[0]?.thumbnailUrl || m.logo?.thumbnailUrl || '',
-      websiteUrl: m.links?.websiteUrl || '',
-      authors: (m.authors || []).map((a: any) => a.name).join(', '),
-      categories: (m.categories || []).map((c: any) => c.name).slice(0, 3),
-      dateUpdated: m.dateModified || m.dateReleased || '',
-      latestFiles: (m.latestFiles || []).slice(0, 1).map((f: any) => ({
-        id: f.id,
-        displayName: f.displayName,
-        modId: String(f.modId || m.id),
-      })),
-    }));
-    messagingService.sendToOriginator('curseforge-search-mods', {
-      success: true,
-      mods,
-      pagination: json.pagination,
-      requestId,
-    }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    console.error('[curseforge-handler] search error:', errorMsg);
-    messagingService.sendToOriginator('curseforge-search-mods', {
-      success: false,
-      error: errorMsg,
-      requestId,
-    }, sender);
+  let urlPath =
+    `/v1/mods/search?gameId=${ARK_GAME_ID}&searchFilter=${encodeURIComponent(query || '')}` +
+    `&pageSize=${pageSize}&index=${index}&sortField=${sortField}&sortOrder=desc`;
+  if (categoryId) {
+    urlPath += `&categoryId=${categoryId}`;
   }
+
+  const json = await cfGet<{ data?: CurseForgeMod[]; pagination: unknown }>(apiKey, urlPath);
+  const mods = (json.data || []).map(mod => ({
+    ...toModSummary(mod),
+    latestFiles: (mod.latestFiles || []).slice(0, 1).map(file => ({
+      id: file.id,
+      displayName: file.displayName,
+      modId: String(file.modId || mod.id),
+    })),
+  }));
+  return { success: true, mods, pagination: json.pagination };
 });
 
-/**
- * Get a single mod's details (including ID for ActiveMods).
- * Payload: { modId, apiKey, requestId }
- */
-/**
- * Open a URL in the OS default browser.
- * Payload: { url? } — falls back to the CurseForge ARK:SA page.
- */
-messagingService.on('curseforge-open-website', async (payload: any, sender: any) => {
-  const url = payload?.url || CURSEFORGE_ARK_URL;
-  try {
-    await shell.openExternal(url);
-    messagingService.sendToOriginator('curseforge-open-website', { success: true }, sender);
-  } catch (err) {
-    messagingService.sendToOriginator('curseforge-open-website', {
-      success: false, error: (err as Error).message,
-    }, sender);
-  }
-});
-
-messagingService.on('curseforge-get-mod', async (payload: any, sender: any) => {
-  const { modId, apiKey, requestId } = payload || {};
-
+onRequest('curseforge-get-mod', async payload => {
+  const { modId, apiKey } = payload;
   if (!apiKey) {
-    messagingService.sendToOriginator('curseforge-get-mod', {
-      success: false, error: 'CurseForge API key not configured.', requestId,
-    }, sender);
-    return;
+    return { success: false, error: 'CurseForge API key not configured.' };
   }
+  const json = await cfGet<{ data: CurseForgeMod }>(apiKey, `/v1/mods/${modId}`);
+  return { success: true, mod: toModSummary(json.data) };
+});
 
-  try {
-    const json = await cfGet(apiKey, `/v1/mods/${modId}`);
-    const m = json.data;
-    messagingService.sendToOriginator('curseforge-get-mod', {
-      success: true,
-      mod: {
-        id: m.id,
-        name: m.name,
-        summary: m.summary,
-        downloadCount: m.downloadCount,
-        thumbUrl: m.logo?.thumbnailUrl || '',
-        screenshotUrl: (m.screenshots || [])[0]?.thumbnailUrl || m.logo?.thumbnailUrl || '',
-        websiteUrl: m.links?.websiteUrl || '',
-        authors: (m.authors || []).map((a: any) => a.name).join(', '),
-        categories: (m.categories || []).map((c: any) => c.name).slice(0, 3),
-        dateUpdated: m.dateModified || m.dateReleased || '',
-      },
-      requestId,
-    }, sender);
-  } catch (error) {
-    const errorMsg = (error as Error).message;
-    messagingService.sendToOriginator('curseforge-get-mod', {
-      success: false, error: errorMsg, requestId,
-    }, sender);
+// Only https: shell.openExternal also runs file:, UNC paths and custom protocol handlers, any of
+// which can start a program.
+onRequest('curseforge-open-website', async payload => {
+  const url = payload.url || CURSEFORGE_ARK_URL;
+  if (typeof url !== 'string' || !validateURL(url) || new URL(url).protocol !== 'https:') {
+    return { success: false, error: 'Only https links can be opened.' };
   }
+  await shell.openExternal(url);
+  return { success: true };
 });

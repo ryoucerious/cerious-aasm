@@ -1,51 +1,33 @@
 import * as fs from 'fs';
-import { promisify } from 'util';
 import { BackupSettings } from '../../types/backup.types';
 import { BackupPathUtils } from '../../utils/backup.utils';
-
-// File system operations
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-const mkdir = promisify(fs.mkdir);
+import { writeJsonAtomic } from '../../utils/fs.utils';
 
 export class BackupSettingsService {
-  /**
-   * Get backup settings (internal implementation)
-   */
-  async getBackupSettingsInternal(instanceId: string, serverPath: string): Promise<BackupSettings | null> {
+  /** The instance's backup-settings.json; null when there is none or it cannot be read. */
+  async getBackupSettingsInternal(serverPath: string): Promise<BackupSettings | null> {
+    const filePath = BackupPathUtils.getSettingsFilePath(serverPath);
+    let content: string;
     try {
-      const settingsFile = BackupPathUtils.getSettingsFilePath(serverPath);
-      if (!fs.existsSync(settingsFile)) {
-        return null;
-      }
-
-      const content = await readFile(settingsFile, 'utf8');
-      const settings = JSON.parse(content) as BackupSettings;
-
-      return settings;
+      content = await fs.promises.readFile(filePath, 'utf8');
     } catch (error) {
-      console.error('[backup-settings] Failed to get backup settings:', error);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('[backup-settings] Failed to read backup settings:', error);
+      }
+      return null;
+    }
+    // A byte order mark (Notepad, PowerShell 5) is not JSON. The parser's message quotes the file,
+    // so it is not logged.
+    try {
+      return JSON.parse(content.replace(/^\uFEFF/, '')) as BackupSettings;
+    } catch {
+      console.error(`[backup-settings] ${filePath} is not valid JSON; ignoring it.`);
       return null;
     }
   }
 
-  /**
-   * Save backup settings (internal implementation)
-   */
+  /** The settings live in the server directory; the backups directory is made by the first backup. */
   async saveBackupSettingsInternal(settings: BackupSettings, serverPath: string): Promise<void> {
-    try {
-      const settingsFile = BackupPathUtils.getSettingsFilePath(serverPath);
-      const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-
-      // Ensure backup directory exists
-      await mkdir(backupDir, { recursive: true });
-
-      await writeFile(settingsFile, JSON.stringify(settings, null, 2));
-    } catch (error) {
-      console.error('[backup-settings] Failed to save backup settings:', error);
-      throw error;
-    }
+    writeJsonAtomic(BackupPathUtils.getSettingsFilePath(serverPath), settings);
   }
 }
-
-export const backupSettingsService = new BackupSettingsService();

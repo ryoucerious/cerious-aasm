@@ -1,13 +1,13 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
 import { TopbarComponent } from './topbar.component';
 import { ThemeService } from '../../core/services/theme.service';
 import { ActivityService } from '../../core/services/activity.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
-import { UtilityService } from '../../core/services/utility.service';
+import { IpcService } from '../../core/services/ipc.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
@@ -23,11 +23,12 @@ describe('TopbarComponent', () => {
   let servers$: BehaviorSubject<any[]>;
   let items$: BehaviorSubject<any[]>;
   let serverInstanceService: any;
-  let utility: any;
   let config: any;
+  let config$: BehaviorSubject<any>;
   let notification: MockNotificationService;
   let settingsDrawer: jasmine.SpyObj<SettingsDrawerService>;
   let identity$: BehaviorSubject<any>;
+  let displayName$: BehaviorSubject<string>;
   let auth: any;
 
   beforeEach(async () => {
@@ -40,13 +41,19 @@ describe('TopbarComponent', () => {
       { id: 'a', name: 'Aberration', mapName: 'Aberration_WP', state: 'running' },
       { id: 'b', name: 'Ragnarok', mapName: 'Ragnarok_WP', state: 'stopped' }
     ]);
-    serverInstanceService = { getActiveServer: () => of(null), setActiveServer: jasmine.createSpy('setActiveServer') };
-    utility = { getPlatform: () => 'Web' };
-    config = { loadConfig: () => Promise.resolve({ authenticationEnabled: true, authenticationUsername: 'jared' }) };
+    serverInstanceService = { setActiveServer: jasmine.createSpy('setActiveServer') };
+    config$ = new BehaviorSubject<any>({ authenticationEnabled: true, authenticationUsername: 'jared' });
+    config = { config$: config$.asObservable() };
+    displayName$ = new BehaviorSubject('jared');
     notification = new MockNotificationService();
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
     identity$ = new BehaviorSubject<any>({ user: null, isLocalDesktop: false, isAdmin: true, permissions: [], accountsInUse: false });
-    auth = { identity$: identity$.asObservable(), get currentUser() { return identity$.value.user; }, refresh: jasmine.createSpy('refresh') };
+    auth = {
+      identity$: identity$.asObservable(),
+      displayName$: displayName$.asObservable(),
+      get currentUser() { return identity$.value.user; },
+      logout: jasmine.createSpy('logout').and.resolveTo(true)
+    };
 
     await TestBed.configureTestingModule({
       imports: [TopbarComponent],
@@ -57,7 +64,7 @@ describe('TopbarComponent', () => {
         { provide: LiveServersService, useValue: { servers$: servers$.asObservable() } },
         { provide: ServerInstanceService, useValue: serverInstanceService },
         { provide: GlobalConfigService, useValue: config },
-        { provide: UtilityService, useValue: utility },
+        { provide: IpcService, useValue: { isElectron: false } },
         { provide: NotificationService, useValue: notification },
         { provide: ServerNavService, useValue: { lastTab: 'console', visibleTabs: () => [{ id: 'mods', label: 'Mods', icon: 'extension', group: 'features' }] } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
@@ -74,10 +81,30 @@ describe('TopbarComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('shows the configured username when authentication is enabled', async () => {
+  it('shows the name the auth service gives, with the role for a web session', async () => {
     await fixture.whenStable();
     expect(component.userName).toBe('jared');
     expect(component.userInitial).toBe('J');
+    expect(component.authenticationEnabled).toBeTrue();
+    expect(component.userRole).toBe('Administrator');
+
+    displayName$.next('Ann B');
+    expect(component.userName).toBe('Ann B');
+  });
+
+  it('follows the authentication setting as GlobalConfigService learns it', () => {
+    expect(component.canSignOut).toBeTrue();
+
+    config$.next({ authenticationEnabled: false });
+
+    expect(component.authenticationEnabled).toBeFalse();
+    expect(component.userRole).toBe('Web Console');
+    expect(component.canSignOut).toBeFalse();
+  });
+
+  it('stops following the settings once destroyed', () => {
+    fixture.destroy();
+    config$.next({ authenticationEnabled: false });
     expect(component.authenticationEnabled).toBeTrue();
   });
 
@@ -177,24 +204,25 @@ describe('TopbarComponent', () => {
     expect(component.showAllActivity).toBeFalse();
   });
 
-  it('shows the signed-in account in place of the configured username', () => {
+  it('shows the role of the signed-in account', () => {
     identity$.next({
       user: { username: 'jared', displayName: 'Jared K', roleName: 'Server Manager' },
       isLocalDesktop: false, isAdmin: false, permissions: ['servers.view'], accountsInUse: true
     });
-    expect(component.userName).toBe('Jared K');
     expect(component.userRole).toBe('Server Manager');
     expect(component.canSignOut).toBeTrue();
   });
 
-  it('logs out through the api in web mode', async () => {
-    spyOn(window, 'fetch').and.returnValue(Promise.resolve({ ok: true } as Response));
+  it('signs out through the auth service in web mode', async () => {
     await component.logout();
+    expect(auth.logout).toHaveBeenCalled();
     expect(router.navigate).toHaveBeenCalledWith(['/login']);
 
-    (window.fetch as jasmine.Spy).and.returnValue(Promise.resolve({ ok: false, status: 500 } as Response));
+    router.navigate.calls.reset();
+    auth.logout.and.resolveTo(false);
     spyOn(notification, 'error');
     await component.logout();
     expect(notification.error).toHaveBeenCalled();
+    expect(router.navigate).not.toHaveBeenCalled();
   });
 });

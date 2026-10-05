@@ -4,13 +4,13 @@ import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { AuthService } from '../../../core/services/auth.service';
 import { NotificationService } from '../../../core/services/notification.service';
-import { UtilityService } from '../../../core/services/utility.service';
-import { CurrentIdentity } from '../../../core/models/auth.model';
+import { IpcService } from '../../../core/services/ipc.service';
+import { CurrentIdentity, MIN_PASSWORD_LENGTH } from '../../../core/models/auth.model';
 
 /**
  * The signed-in account: who you are, what you may do, and your own password.
  *
- * The desktop app has no account — whoever is at the machine owns it — so this explains that
+ * The desktop app has no account (whoever is at the machine owns it), so this explains that
  * rather than offering a password form that would have nothing to change.
  */
 @Component({
@@ -21,6 +21,7 @@ import { CurrentIdentity } from '../../../core/models/auth.model';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ProfileSettingsComponent implements OnInit, OnDestroy {
+  readonly minPasswordLength = MIN_PASSWORD_LENGTH;
   identity: CurrentIdentity | null = null;
   saving = false;
   form = { current: '', next: '', confirm: '' };
@@ -29,7 +30,7 @@ export class ProfileSettingsComponent implements OnInit, OnDestroy {
   constructor(
     private auth: AuthService,
     private notification: NotificationService,
-    private utility: UtilityService,
+    private ipc: IpcService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -56,7 +57,7 @@ export class ProfileSettingsComponent implements OnInit, OnDestroy {
    * not of where it is running.
    */
   get isDesktop(): boolean {
-    return this.utility.getPlatform() !== 'Web';
+    return this.ipc.isElectron;
   }
 
   /** Shown in place of the account name when no account backs this session. */
@@ -83,7 +84,7 @@ export class ProfileSettingsComponent implements OnInit, OnDestroy {
   get canSave(): boolean {
     return !this.saving
       && !!this.form.current
-      && this.form.next.length >= 8
+      && this.form.next.length >= MIN_PASSWORD_LENGTH
       && this.form.next === this.form.confirm;
   }
 

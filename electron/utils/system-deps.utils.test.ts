@@ -1,60 +1,90 @@
-import { jest } from '@jest/globals';
-
-// Mock dependencies
-jest.mock('fs');
-jest.mock('path');
-jest.mock('child_process');
-jest.mock('./platform.utils');
-
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
-import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { getPlatform } from './platform.utils';
-
-const mockedFs = fs as jest.Mocked<typeof fs>;
-const mockedPath = path as jest.Mocked<typeof path>;
-const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
-const mockedGetPlatform = getPlatform as jest.MockedFunction<typeof getPlatform>;
-
-// Import the module under test
 import {
   LINUX_DEPENDENCIES,
-  checkDependency,
   checkAllDependencies,
-  getPackageNameForDistribution,
+  checkDependency,
+  findDependencies,
   generateInstallInstructions,
   getPackageManagerInfo,
+  getPackageNameForDistribution,
   installMissingDependencies,
   validateSudoPassword,
-  type LinuxDependency,
-  type DependencyCheckResult,
-  type LinuxDepsInstallProgress
+  type LinuxDependency
 } from './system-deps.utils';
+
+jest.mock('fs', () => ({ existsSync: jest.fn(), mkdirSync: jest.fn(), appendFileSync: jest.fn() }));
+jest.mock('child_process', () => ({ spawn: jest.fn() }));
+jest.mock('./platform.utils', () => ({ getPlatform: jest.fn() }));
+
+const mockFs = jest.mocked(fs);
+const mockSpawn = jest.mocked(spawn);
+// sudo's env_reset drops variables set on sudo itself, so the command runs under env.
+const SUDO = ['-S', '-k', '-p', '', '--', 'env', 'DEBIAN_FRONTEND=noninteractive'];
+const LOG_FILE = '/mock/path/logs/linux-deps-install.log';
+
+type FakeChild = EventEmitter & {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  stdin: { write: jest.Mock; end: jest.Mock; on: jest.Mock };
+  kill: jest.Mock;
+};
+
+function fakeChild(): FakeChild {
+  return Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    stdin: { write: jest.fn(), end: jest.fn(), on: jest.fn() },
+    kill: jest.fn()
+  });
+}
+
+/** Every spawned command exits with the next code in turn (then 0), printing `stderr` when it fails. */
+function commandsExit(...codes: number[]): FakeChild[] {
+  const children: FakeChild[] = [];
+  mockSpawn.mockImplementation(() => {
+    const child = fakeChild();
+    const code = codes.length > 0 ? codes.shift()! : 0;
+    children.push(child);
+    process.nextTick(() => {
+      if (code !== 0) child.stderr.emit('data', Buffer.from('E: Unable to locate package'));
+      child.emit('close', code);
+    });
+    return child as unknown as ChildProcess;
+  });
+  return children;
+}
+
+function sudoCommands(): string[][] {
+  return mockSpawn.mock.calls.filter(([command]) => command === 'sudo').map(([, args]) => [...(args as string[])]);
+}
+
+function usePackageManager(manager: 'apt' | 'dnf' | 'pacman' | null): void {
+  mockFs.existsSync.mockImplementation(file => manager !== null && String(file).includes(manager));
+}
 
 describe('system-deps.utils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    // Reset platform to linux for most tests
-    mockedGetPlatform.mockReturnValue('linux');
+    jest.mocked(getPlatform).mockReturnValue('linux');
+    mockSpawn.mockReset();
+    mockFs.existsSync.mockReset();
+    mockFs.appendFileSync.mockReset();
   });
 
   describe('LINUX_DEPENDENCIES', () => {
-    it('should contain all required dependencies', () => {
-      expect(LINUX_DEPENDENCIES.length).toBe(7);
-      expect(LINUX_DEPENDENCIES[0].name).toBe('cURL');
-      expect(LINUX_DEPENDENCIES[1].name).toBe('Unzip');
-      expect(LINUX_DEPENDENCIES[2].name).toBe('Tar');
-      expect(LINUX_DEPENDENCIES[3].name).toBe('Xvfb');
-      expect(LINUX_DEPENDENCIES[4].name).toBe('SteamCMD Dependencies (32-bit libraries)');
-      expect(LINUX_DEPENDENCIES[5].name).toBe('ALSA Audio Library');
-      expect(LINUX_DEPENDENCIES[6].name).toBe('Font Configuration');
+    it('lists what the server needs', () => {
+      expect(LINUX_DEPENDENCIES.map(dep => dep.name)).toEqual([
+        'cURL', 'Unzip', 'Tar', 'Xvfb', 'SteamCMD Dependencies (32-bit libraries)', 'ALSA Audio Library', 'Font Configuration'
+      ]);
     });
 
     it('should accept libasound2t64, accept real libasound2 when t64 is not packaged, and reject the Ubuntu 24.04 stub', () => {
       const cmd = LINUX_DEPENDENCIES[5].checkCommand;
 
       // Ubuntu 24.04: installed libasound2t64 passes before any other branch.
-      expect(cmd).toContain("dpkg -l libasound2t64");
+      expect(cmd).toContain('dpkg -l libasound2t64');
       expect(cmd).toContain('exit 0');
 
       // t64 is in the apt cache but not installed: the transitional stub fails.
@@ -73,459 +103,407 @@ describe('system-deps.utils', () => {
       expect(t64InCache).toBeLessThan(realLibasound2);
     });
 
-    it('should have correct structure for each dependency', () => {
-      LINUX_DEPENDENCIES.forEach(dep => {
-        expect(typeof dep.name).toBe('string');
-        expect(dep.packageName).toBeDefined();
-        expect(typeof dep.checkCommand).toBe('string');
-        expect(typeof dep.description).toBe('string');
-        expect(typeof dep.required).toBe('boolean');
-      });
+    it('only names packages the install validation accepts', () => {
+      const names = LINUX_DEPENDENCIES.flatMap(dep => [
+        ...(typeof dep.packageName === 'string' ? [dep.packageName] : Object.values(dep.packageName)),
+        ...(dep.aptAlternatives ?? [])
+      ]);
+      for (const name of names) {
+        expect(name).toMatch(/^[a-z0-9][a-z0-9.+:_-]*$/i);
+      }
     });
   });
 
   describe('checkDependency', () => {
-    let mockProc: any;
+    it('is always installed off Linux', async () => {
+      jest.mocked(getPlatform).mockReturnValue('windows');
 
-    beforeEach(() => {
-      mockProc = {
-        stdout: { on: jest.fn() },
-        stderr: { on: jest.fn() },
-        on: jest.fn(),
-        kill: jest.fn()
-      };
-      mockedSpawn.mockReturnValue(mockProc as any);
+      await expect(checkDependency(LINUX_DEPENDENCIES[0])).resolves.toEqual(
+        expect.objectContaining({ installed: true, version: 'N/A (not Linux)' })
+      );
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it('should return installed true for non-linux platforms', async () => {
-      mockedGetPlatform.mockReturnValue('windows');
+    it('runs the check command and reads the version', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as unknown as ChildProcess);
 
-      const result = await checkDependency(LINUX_DEPENDENCIES[0]);
+      const pending = checkDependency(LINUX_DEPENDENCIES[2]);
+      child.stdout.emit('data', Buffer.from('tar (GNU tar) 1.30\nCopyright (C) 2017 Free Software Foundation, Inc.'));
+      child.emit('close', 0);
 
-      expect(result.installed).toBe(true);
-      expect(result.version).toBe('N/A (not Linux)');
-      expect(mockedSpawn).not.toHaveBeenCalled();
+      await expect(pending).resolves.toEqual(expect.objectContaining({ installed: true, version: '1.30' }));
+      expect(mockSpawn).toHaveBeenCalledWith('bash', ['-c', 'tar --version'], { stdio: ['ignore', 'pipe', 'pipe'] });
     });
 
-    it('should return installed true when command succeeds', async () => {
-      mockProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(0); // Success code
-        }
-      });
-      mockProc.stdout.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'data') {
-          callback('curl 7.68.0');
-        }
-      });
+    it('reports a failing check as missing', async () => {
+      commandsExit(1);
 
-      const result = await checkDependency(LINUX_DEPENDENCIES[0]);
-
-      expect(result.installed).toBe(true);
-      expect(result.version).toBe('7.68.0');
-      expect(mockedSpawn).toHaveBeenCalledWith('bash', ['-c', 'curl --version'], {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
+      await expect(checkDependency(LINUX_DEPENDENCIES[0])).resolves.toEqual(
+        expect.objectContaining({ installed: false, version: undefined })
+      );
     });
 
-    it('should return installed false when command fails', async () => {
-      mockProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(1); // Failure code
-        }
-      });
+    it('reports a check that cannot be started as missing', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as unknown as ChildProcess);
 
-      const result = await checkDependency(LINUX_DEPENDENCIES[0]);
+      const pending = checkDependency(LINUX_DEPENDENCIES[0]);
+      child.emit('error', Object.assign(new Error('spawn bash ENOENT'), { code: 'ENOENT' }));
 
-      expect(result.installed).toBe(false);
-      expect(result.version).toBeUndefined();
+      await expect(pending).resolves.toEqual(expect.objectContaining({ installed: false }));
     });
 
-    it('should handle timeout correctly', async () => {
-      // Mock setTimeout to execute immediately
+    it('gives up on a check that hangs', async () => {
       jest.useFakeTimers();
-      mockProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          // Don't call callback to simulate hanging process
-        }
-      });
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as unknown as ChildProcess);
 
-      const promise = checkDependency(LINUX_DEPENDENCIES[0]);
-
-      // Fast-forward time past the timeout
+      const pending = checkDependency(LINUX_DEPENDENCIES[0]);
       jest.advanceTimersByTime(5000);
 
-      const result = await promise;
-
-      expect(result.installed).toBe(false);
-      expect(mockProc.kill).toHaveBeenCalled();
-
+      await expect(pending).resolves.toEqual(expect.objectContaining({ installed: false }));
+      expect(child.kill).toHaveBeenCalled();
       jest.useRealTimers();
     });
 
-    it('should extract version from first line when available', async () => {
-      mockProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(0);
-        }
-      });
-      mockProc.stdout.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'data') {
-          callback('tar (GNU tar) 1.30\nCopyright (C) 2017 Free Software Foundation, Inc.');
-        }
-      });
-
-      const result = await checkDependency(LINUX_DEPENDENCIES[2]); // Tar dependency
-
-      expect(result.installed).toBe(true);
-      expect(result.version).toBe('1.30');
-    });
-  });
-
-  describe('checkAllDependencies', () => {
-    it('should check all dependencies and return results', async () => {
-      mockedGetPlatform.mockReturnValue('windows'); // Skip actual checks
+    it('checks every dependency', async () => {
+      jest.mocked(getPlatform).mockReturnValue('windows');
 
       const results = await checkAllDependencies();
 
-      expect(results.length).toBe(LINUX_DEPENDENCIES.length);
-      results.forEach(result => {
-        expect(result.dependency).toBeDefined();
-        expect(result.installed).toBeDefined();
-        expect(result.installed).toBe(true); // Non-linux returns true
-      });
+      expect(results.map(result => result.dependency)).toEqual(LINUX_DEPENDENCIES);
     });
   });
 
-  describe('getPackageNameForDistribution', () => {
-    beforeEach(() => {
-      // Mock fs.existsSync for package manager detection
-      mockedFs.existsSync.mockReturnValue(true);
+  describe('package managers', () => {
+    it.each([
+      ['apt', { manager: 'apt', install: ['apt-get', 'install', '-y'], update: ['apt-get', 'update'] }],
+      ['dnf', { manager: 'dnf', install: ['dnf', 'install', '-y'], update: ['dnf', 'makecache'] }],
+      ['pacman', { manager: 'pacman', install: ['pacman', '-S', '--noconfirm'], update: ['pacman', '-Sy'] }]
+    ] as const)('detects %s', (manager, expected) => {
+      usePackageManager(manager);
+
+      expect(getPackageManagerInfo()).toEqual(expected);
     });
 
-    it('should return string packageName directly', () => {
-      const dep: LinuxDependency = {
-        name: 'Test',
-        packageName: 'test-package',
-        checkCommand: 'test --version',
-        description: 'Test package',
-        required: true
-      };
+    it('finds none off Linux or when nothing is known', () => {
+      usePackageManager(null);
+      expect(getPackageManagerInfo()).toBeNull();
 
-      const result = getPackageNameForDistribution(dep);
-      expect(result).toBe('test-package');
+      jest.mocked(getPlatform).mockReturnValue('windows');
+      usePackageManager('apt');
+      expect(getPackageManagerInfo()).toBeNull();
     });
 
-    it('should return apt package name when using apt', () => {
-      const dep = LINUX_DEPENDENCIES[3]; // Xvfb with per-distro names
-      const result = getPackageNameForDistribution(dep);
-      expect(result).toBe('xvfb');
+    it('names the package for the detected manager', () => {
+      usePackageManager('dnf');
+
+      expect(getPackageNameForDistribution(LINUX_DEPENDENCIES[3])).toBe('xorg-x11-server-Xvfb');
+      expect(getPackageNameForDistribution(LINUX_DEPENDENCIES[0])).toBe('curl');
     });
 
-    it('should return dnf package name when using dnf', () => {
-      // Mock dnf as available, apt as not
-      mockedFs.existsSync.mockImplementation((path) => String(path).includes('dnf'));
+    it('falls back to the first package name without a known manager', () => {
+      usePackageManager(null);
 
-      const dep = LINUX_DEPENDENCIES[3]; // Xvfb
-      const result = getPackageNameForDistribution(dep);
-      expect(result).toBe('xorg-x11-server-Xvfb');
+      expect(getPackageNameForDistribution(LINUX_DEPENDENCIES[3])).toBe('xvfb');
     });
 
-    it('should fallback to first available package name when package manager not detected', () => {
-      mockedFs.existsSync.mockReturnValue(false);
+    it.each([
+      ['apt', 'sudo apt-get update && sudo apt-get install curl unzip'],
+      ['dnf', 'sudo dnf install curl unzip'],
+      ['pacman', 'sudo pacman -S curl unzip']
+    ] as const)('writes %s instructions', (manager, command) => {
+      usePackageManager(manager);
 
-      const dep = LINUX_DEPENDENCIES[3]; // Xvfb
-      const result = getPackageNameForDistribution(dep);
-      expect(result).toBe('xvfb'); // First in the object
-    });
-  });
-
-  describe('generateInstallInstructions', () => {
-    beforeEach(() => {
-      mockedFs.existsSync.mockReturnValue(true);
+      expect(generateInstallInstructions([LINUX_DEPENDENCIES[0], LINUX_DEPENDENCIES[1]])).toContain(command);
     });
 
-    it('should generate apt instructions', () => {
-      const missingDeps = [LINUX_DEPENDENCIES[0], LINUX_DEPENDENCIES[1]];
+    it('explains when the package manager is unknown', () => {
+      usePackageManager(null);
 
-      const instructions = generateInstallInstructions(missingDeps);
-
-      expect(instructions).toContain('sudo apt-get update && sudo apt-get install curl unzip');
-    });
-
-    it('should generate dnf instructions', () => {
-      mockedFs.existsSync.mockImplementation((path) => String(path).includes('dnf'));
-
-      const missingDeps = [LINUX_DEPENDENCIES[0]];
-
-      const instructions = generateInstallInstructions(missingDeps);
-
-      expect(instructions).toContain('sudo dnf install curl');
-      expect(instructions).toContain('RPM Fusion repositories');
-    });
-
-    it('should generate pacman instructions', () => {
-      mockedFs.existsSync.mockImplementation((path) => String(path).includes('pacman'));
-
-      const missingDeps = [LINUX_DEPENDENCIES[0]];
-
-      const instructions = generateInstallInstructions(missingDeps);
-
-      expect(instructions).toContain('sudo pacman -S curl');
-    });
-
-    it('should handle unknown package manager', () => {
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const missingDeps = [LINUX_DEPENDENCIES[0]];
-
-      const instructions = generateInstallInstructions(missingDeps);
-
-      expect(instructions).toContain('Could not detect package manager');
+      expect(generateInstallInstructions([LINUX_DEPENDENCIES[0]])).toContain('Could not detect package manager');
     });
   });
 
-  describe('getPackageManagerInfo', () => {
-    it('should return null for non-linux platforms', () => {
-      mockedGetPlatform.mockReturnValue('windows');
-
-      const result = getPackageManagerInfo();
-
-      expect(result).toBeNull();
+  describe('findDependencies', () => {
+    it('looks names up in the known list', () => {
+      expect(findDependencies(['Xvfb', 'cURL'])).toEqual([LINUX_DEPENDENCIES[3], LINUX_DEPENDENCIES[0]]);
     });
 
-    it('should detect apt package manager', () => {
-      mockedFs.existsSync.mockImplementation((path) => (path as string).includes('apt'));
-
-      const result = getPackageManagerInfo();
-
-      expect(result).toEqual({
-        manager: 'apt',
-        installCmd: 'apt-get install -y',
-        updateCmd: 'apt-get update'
-      });
-    });
-
-    it('should detect dnf package manager', () => {
-      mockedFs.existsSync.mockImplementation((path) => (path as string).includes('dnf'));
-
-      const result = getPackageManagerInfo();
-
-      expect(result).toEqual({
-        manager: 'dnf',
-        installCmd: 'dnf install -y',
-        updateCmd: 'dnf makecache',
-        installExtra: ''
-      });
-    });
-
-    it('should detect pacman package manager', () => {
-      mockedFs.existsSync.mockImplementation((path) => (path as string).includes('pacman'));
-
-      const result = getPackageManagerInfo();
-
-      expect(result).toEqual({
-        manager: 'pacman',
-        installCmd: 'pacman -S --noconfirm',
-        updateCmd: 'pacman -Sy'
-      });
-    });
-
-    it('should return null when no package manager detected', () => {
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const result = getPackageManagerInfo();
-
-      expect(result).toBeNull();
+    it.each([
+      [['Xvfb', 'curl; rm -rf /']],
+      [[{ name: 'Xvfb', packageName: 'curl; rm -rf /' }]],
+      [[42]]
+    ])('refuses anything that is not a known name: %p', names => {
+      expect(findDependencies(names)).toBeUndefined();
     });
   });
 
   describe('installMissingDependencies', () => {
-    let mockSudoProc: any;
-    let mockProc: any;
+    beforeEach(() => usePackageManager('apt'));
 
-    beforeEach(() => {
-      mockProc = {
-        stdout: { on: jest.fn() },
-        stderr: { on: jest.fn() },
-        on: jest.fn(),
-        kill: jest.fn()
-      };
-      mockSudoProc = {
-        stdout: { on: jest.fn() },
-        stderr: { on: jest.fn() },
-        stdin: { write: jest.fn(), end: jest.fn() },
-        on: jest.fn(),
-        kill: jest.fn()
-      };
-      // Mock spawn for both regular commands and sudo commands
-      mockedSpawn.mockImplementation((...args: any[]) => {
-        const command = args[0];
-        if (command === 'sudo') {
-          return mockSudoProc as any;
-        }
-        return mockProc as any;
-      });
-      mockedFs.existsSync.mockReturnValue(true);
+    it('has nothing to do off Linux', async () => {
+      jest.mocked(getPlatform).mockReturnValue('windows');
+
+      await expect(installMissingDependencies(['cURL'], 'pw', jest.fn())).resolves.toEqual(
+        expect.objectContaining({ success: true, message: 'Not running on Linux, dependencies not required' })
+      );
     });
 
-    it('should return success for non-linux platforms', async () => {
-      mockedGetPlatform.mockReturnValue('windows');
-
-      const result = await installMissingDependencies([], 'password', jest.fn());
-
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('Not running on Linux');
+    it('has nothing to do for an empty list', async () => {
+      await expect(installMissingDependencies([], 'pw', jest.fn())).resolves.toEqual(
+        expect.objectContaining({ success: true, message: 'All dependencies already installed' })
+      );
     });
 
-    it('should return success when no dependencies to install', async () => {
-      const result = await installMissingDependencies([], 'password', jest.fn());
-
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('All dependencies already installed');
-    });
-
-    it('should return failure when package manager not detected', async () => {
-      mockedFs.existsSync.mockReturnValue(false);
-
-      const result = await installMissingDependencies([LINUX_DEPENDENCIES[0]], 'password', jest.fn());
+    it('refuses a name it does not know, without running anything', async () => {
+      const result = await installMissingDependencies(['cURL', 'curl; reboot'], 'pw', jest.fn());
 
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Could not detect package manager');
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it('should install dependencies successfully with apt', async () => {
-      // Mock successful sudo commands
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(0); // Success
-        }
-      });
+    it('fails without a known package manager', async () => {
+      usePackageManager(null);
 
+      await expect(installMissingDependencies(['cURL'], 'pw', jest.fn())).resolves.toEqual(
+        expect.objectContaining({ success: false, message: expect.stringContaining('Could not detect package manager') })
+      );
+    });
+
+    it('runs each step through sudo as an argument list, never through a shell', async () => {
+      commandsExit();
       const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[0]]; // curl
 
-      const result = await installMissingDependencies(missingDeps, 'password', onProgress);
+      const result = await installMissingDependencies(['cURL'], 'hunter2', onProgress);
 
       expect(result.success).toBe(true);
-      expect(result.message).toContain('All dependencies installed successfully');
-      expect(onProgress).toHaveBeenCalled();
-      expect(mockedSpawn.mock.calls.length).toBeGreaterThan(1); // Should have called sudo at least once
+      expect(sudoCommands()).toEqual([
+        [...SUDO, 'dpkg', '--configure', '-a'],
+        [...SUDO, 'apt-get', 'update'],
+        [...SUDO, 'apt-get', 'install', '-y', 'curl']
+      ]);
+      expect(mockSpawn.mock.calls.every(([command]) => command === 'sudo')).toBe(true);
+      expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ step: 'complete', percent: 100 }));
     });
 
-    it('should handle installation failure for required dependency', async () => {
-      // Mock failed sudo command
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(1); // Failure
+    it('gives the password to sudo on stdin, closes it, and keeps apt from prompting', async () => {
+      const children = commandsExit();
+
+      await installMissingDependencies(['cURL'], 'hunter2', jest.fn());
+
+      expect(mockSpawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['env', 'DEBIAN_FRONTEND=noninteractive']));
+      expect(mockSpawn.mock.calls[0][2]).toEqual({ stdio: ['pipe', 'pipe', 'pipe'] });
+      for (const child of children) {
+        expect(child.stdin.write).toHaveBeenCalledWith('hunter2\n');
+        expect(child.stdin.end).toHaveBeenCalled();
+        expect(child.stdin.write.mock.invocationCallOrder[0]).toBeLessThan(child.stdin.end.mock.invocationCallOrder[0]);
+      }
+      expect(JSON.stringify(mockSpawn.mock.calls)).not.toContain('hunter2');
+    });
+
+    it('sends no password when the app already runs as root', async () => {
+      const getuid = Object.getOwnPropertyDescriptor(process, 'getuid');
+      Object.defineProperty(process, 'getuid', { value: () => 0, configurable: true });
+      try {
+        const children = commandsExit();
+
+        await installMissingDependencies(['cURL'], 'hunter2', jest.fn());
+
+        for (const child of children) {
+          expect(child.stdin.write).not.toHaveBeenCalled();
+          expect(child.stdin.end).toHaveBeenCalled();
         }
+      } finally {
+        if (getuid) Object.defineProperty(process, 'getuid', getuid);
+        else delete (process as { getuid?: unknown }).getuid;
+      }
+    });
+
+    // Killing apt or dpkg half way through can leave the package database broken.
+    it('stops between packages on cancel, never in the middle of one', async () => {
+      const controller = new AbortController();
+      const children = commandsExit();
+      const onProgress = jest.fn((progress: { step: string; dependency?: string }) => {
+        if (progress.step === 'install' && progress.dependency === 'cURL') controller.abort();
       });
 
-      const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[0]]; // curl (required)
+      const result = await installMissingDependencies(['cURL', 'Unzip'], 'pw', onProgress, controller.signal);
 
-      const result = await installMissingDependencies(missingDeps, 'password', onProgress);
+      expect(result).toEqual(expect.objectContaining({ success: false, message: 'Install cancelled.' }));
+      expect(sudoCommands()).toEqual([
+        [...SUDO, 'dpkg', '--configure', '-a'],
+        [...SUDO, 'apt-get', 'update'],
+        [...SUDO, 'apt-get', 'install', '-y', 'curl']
+      ]);
+      expect(children.every(child => !child.kill.mock.calls.length)).toBe(true);
+    });
+
+    it('runs nothing when cancelled before it starts', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await installMissingDependencies(['cURL'], 'pw', jest.fn(), controller.signal);
+
+      expect(result).toEqual(expect.objectContaining({ success: false, message: 'Install cancelled.' }));
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('enables i386 before installing a 32-bit package', async () => {
+      commandsExit();
+
+      await installMissingDependencies(['SteamCMD Dependencies (32-bit libraries)'], 'pw', jest.fn());
+
+      expect(sudoCommands()).toEqual([
+        [...SUDO, 'dpkg', '--configure', '-a'],
+        [...SUDO, 'dpkg', '--add-architecture', 'i386'],
+        [...SUDO, 'apt-get', 'update'],
+        [...SUDO, 'apt-get', 'install', '-y', 'libc6:i386']
+      ]);
+    });
+
+    it('tries the apt alternatives in order', async () => {
+      commandsExit(0, 0, 100);
+
+      const result = await installMissingDependencies(['ALSA Audio Library'], 'pw', jest.fn());
+
+      expect(result.success).toBe(true);
+      expect(sudoCommands().slice(2)).toEqual([
+        [...SUDO, 'apt-get', 'install', '-y', 'libasound2t64'],
+        [...SUDO, 'apt-get', 'install', '-y', 'libasound2']
+      ]);
+    });
+
+    it('retries a failed dnf install with --allowerasing', async () => {
+      usePackageManager('dnf');
+      commandsExit(0, 1, 0);
+
+      const result = await installMissingDependencies(['cURL'], 'pw', jest.fn());
+
+      expect(result.success).toBe(true);
+      expect(sudoCommands()).toEqual([
+        [...SUDO, 'dnf', 'makecache'],
+        [...SUDO, 'dnf', 'install', '-y', 'curl'],
+        [...SUDO, 'dnf', 'install', '-y', '--allowerasing', 'curl']
+      ]);
+    });
+
+    it('carries on past an optional package that fails', async () => {
+      commandsExit(0, 0, 100);
+
+      const result = await installMissingDependencies(['Font Configuration'], 'pw', jest.fn());
+
+      expect(result.success).toBe(true);
+      expect(result.details).toContainEqual(expect.stringContaining('Failed to install Font Configuration'));
+    });
+
+    it('fails on a required package, pointing at a log in the app log folder', async () => {
+      commandsExit(0, 0, 100);
+
+      const result = await installMissingDependencies(['cURL'], 'hunter2', jest.fn());
+
+      expect(result.success).toBe(false);
+      expect(result.message).toBe(`Failed to install required dependency: cURL. See ${LOG_FILE} for details.`);
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/mock/path/logs', { recursive: true });
+      expect(mockFs.appendFileSync).toHaveBeenCalledWith(LOG_FILE, expect.stringContaining('apt-get install -y curl'));
+      expect(JSON.stringify(mockFs.appendFileSync.mock.calls)).not.toContain('hunter2');
+    });
+
+    it('fails when the package list cannot be updated', async () => {
+      commandsExit(0, 100);
+
+      const result = await installMissingDependencies(['cURL'], 'pw', jest.fn());
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('Dependency installation failed');
     });
 
-    it('should continue with optional dependency failure', async () => {
-      // Mock successful dpkg, update but failed install
-      mockedFs.existsSync.mockReturnValue(true); // Enables apt (existsSync('/usr/bin/apt') = true)
-      let callCount = 0;
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callCount++;
-          if (callCount <= 2) {
-            callback(0); // dpkg and update succeed
-          } else {
-            callback(1); // Install fails
-          }
-        }
+    it('fails, rather than throwing, when sudo cannot be started', async () => {
+      mockSpawn.mockImplementation(() => {
+        const child = fakeChild();
+        process.nextTick(() => child.emit('error', Object.assign(new Error('spawn sudo ENOENT'), { code: 'ENOENT' })));
+        return child as unknown as ChildProcess;
       });
 
-      const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[6]]; // Font Configuration (not required)
+      const result = await installMissingDependencies(['cURL'], 'pw', jest.fn());
 
-      const result = await installMissingDependencies(missingDeps, 'password', onProgress);
-
-      expect(result.success).toBe(true); // Should succeed because Font Configuration is not required
-      expect(result.details.some(detail => detail.includes('Failed to install'))).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('spawn sudo ENOENT');
     });
 
-    it('should retry dnf installation with --allowerasing on failure', async () => {
-      mockedFs.existsSync.mockImplementation((path) => String(path).includes('dnf'));
-      
-      // Mock successful update, failed first install, successful retry
-      let callCount = 0;
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callCount++;
-          if (callCount === 1) {
-            callback(0); // Update succeeds
-          } else if (callCount === 2) {
-            callback(1); // First install fails
-          } else {
-            callback(0); // Retry succeeds
-          }
-        }
+    describe('with a package name that is not safe to pass on', () => {
+      const unsafe: LinuxDependency[] = [
+        { name: 'Unsafe (shell)', packageName: 'curl; reboot', checkCommand: 'true', description: '', required: true },
+        { name: 'Unsafe (option)', packageName: '--allow-remove-essential', checkCommand: 'true', description: '', required: true }
+      ];
+
+      beforeEach(() => LINUX_DEPENDENCIES.push(...unsafe));
+      afterEach(() => LINUX_DEPENDENCIES.splice(LINUX_DEPENDENCIES.length - unsafe.length));
+
+      it.each(unsafe.map(dep => dep.name))('never hands %s to the package manager', async name => {
+        commandsExit();
+
+        const result = await installMissingDependencies([name], 'pw', jest.fn());
+
+        expect(result.success).toBe(false);
+        expect(sudoCommands().some(args => args.includes('install'))).toBe(false);
+      });
+    });
+
+    describe('when a command hangs', () => {
+      beforeEach(() => jest.useFakeTimers());
+      afterEach(() => jest.useRealTimers());
+
+      // A big apt download on a slow mirror can take several minutes, and killing apt part way
+      // through can leave dpkg needing repair.
+      it('gives it fifteen minutes, then stops it and says how to repair dpkg', async () => {
+        const child = fakeChild();
+        mockSpawn.mockReturnValue(child as unknown as ChildProcess);
+
+        const pending = installMissingDependencies(['cURL'], 'pw', jest.fn());
+        await jest.advanceTimersByTimeAsync(15 * 60 * 1000 - 1);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        await jest.advanceTimersByTimeAsync(1);
+        expect(child.kill).toHaveBeenCalled();
+        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('sudo dpkg --configure -a'));
+        await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+        await expect(pending).resolves.toEqual(expect.objectContaining({ success: false }));
       });
 
-      const onProgress = jest.fn();
-      const missingDeps = [LINUX_DEPENDENCIES[0]]; // curl
+      it('gives no dpkg advice for another package manager', async () => {
+        usePackageManager('dnf');
+        const child = fakeChild();
+        mockSpawn.mockReturnValue(child as unknown as ChildProcess);
 
-      const result = await installMissingDependencies(missingDeps, 'password', onProgress);
+        const pending = installMissingDependencies(['cURL'], 'pw', jest.fn());
+        await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
 
-      expect(result.success).toBe(true);
-      expect(mockedSpawn.mock.calls.length).toBeGreaterThan(2); // Should have called update, install, and retry
+        expect(child.kill).toHaveBeenCalled();
+        expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[system-deps\] dnf .*still running after 15 minutes/));
+        expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('dpkg'));
+        await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+        await expect(pending).resolves.toEqual(expect.objectContaining({ success: false }));
+      });
     });
   });
 
   describe('validateSudoPassword', () => {
-    let mockSudoProc: any;
+    it('accepts a password sudo takes', async () => {
+      const children = commandsExit();
 
-    beforeEach(() => {
-      mockSudoProc = {
-        stdout: { on: jest.fn() },
-        stderr: { on: jest.fn() },
-        stdin: { write: jest.fn(), end: jest.fn() },
-        on: jest.fn(),
-        kill: jest.fn()
-      };
-      // Mock spawn for sudo commands
-      mockedSpawn.mockImplementation((...args: any[]) => {
-        const command = args[0];
-        if (command === 'sudo') {
-          return mockSudoProc as any;
-        }
-        return {} as any;
-      });
+      await expect(validateSudoPassword('hunter2')).resolves.toBe(true);
+
+      expect(sudoCommands()).toEqual([[...SUDO, 'true']]);
+      expect(children[0].stdin.write).toHaveBeenCalledWith('hunter2\n');
+      expect(children[0].stdin.end).toHaveBeenCalled();
     });
 
-    it('should return true for valid sudo password', async () => {
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(0); // Success
-        }
-      });
+    it('refuses a password sudo rejects', async () => {
+      commandsExit(1);
 
-      const result = await validateSudoPassword('correct-password');
-
-      expect(result).toBe(true);
-      expect(mockedSpawn.mock.calls.length).toBeGreaterThan(0);
-    });
-
-    it('should return false for invalid sudo password', async () => {
-      mockSudoProc.on.mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(1); // Failure
-        }
-      });
-
-      const result = await validateSudoPassword('wrong-password');
-
-      expect(result).toBe(false);
+      await expect(validateSudoPassword('wrong')).resolves.toBe(false);
     });
   });
 });

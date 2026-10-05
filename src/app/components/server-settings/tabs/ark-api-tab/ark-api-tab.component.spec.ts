@@ -1,21 +1,22 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
-import { ArkApiTabComponent } from './ark-api-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
+import { ArkApiTabComponent, PluginInfo } from './ark-api-tab.component';
+import { FILE_TRANSFER_TIMEOUT_MS, MessagingService } from '../../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../../core/services/notification.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 
 describe('ArkApiTabComponent', () => {
   let component: ArkApiTabComponent;
   let fixture: ComponentFixture<ArkApiTabComponent>;
-  let mockMessaging: MockMessagingService;
+  let sendMessage: jasmine.Spy;
   let mockNotification: MockNotificationService;
 
+  const plugin = (folderName: string): PluginInfo =>
+    ({ name: folderName, version: '1.0', author: 'Me', description: '', folderName, hasPluginJson: true });
+
   beforeEach(async () => {
-    mockMessaging = new MockMessagingService();
-    mockMessaging.sendMessage = jasmine.createSpy('sendMessage').and.returnValue(of({ plugins: [] }));
+    sendMessage = jasmine.createSpy('sendMessage').and.returnValue(of({ plugins: [] }));
     mockNotification = new MockNotificationService();
     spyOn(mockNotification, 'success');
     spyOn(mockNotification, 'error');
@@ -24,14 +25,14 @@ describe('ArkApiTabComponent', () => {
     await TestBed.configureTestingModule({
       imports: [ArkApiTabComponent],
       providers: [
-        { provide: MessagingService, useValue: mockMessaging },
+        { provide: MessagingService, useValue: { sendMessage } },
         { provide: NotificationService, useValue: mockNotification }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
     fixture = TestBed.createComponent(ArkApiTabComponent);
     component = fixture.componentInstance;
-    component.serverInstance = { id: 'test-server-1' };
+    fixture.componentRef.setInput('serverInstance', { id: 'test-server-1' });
     fixture.detectChanges();
   });
 
@@ -39,35 +40,98 @@ describe('ArkApiTabComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load plugins on init', () => {
-    (expect(mockMessaging.sendMessage) as any).toHaveBeenCalledWith('list-ark-api-plugins', { instanceId: 'test-server-1' });
+  it('loads the plugins and the AsaApi status for the server', () => {
+    expect(sendMessage).toHaveBeenCalledWith('list-ark-api-plugins', { instanceId: 'test-server-1' });
+    expect(sendMessage).toHaveBeenCalledWith('get-asaapi-status', { instanceId: 'test-server-1' });
   });
 
   it('should set plugins from response', () => {
-    const plugins = [{ name: 'TestPlugin', version: '1.0', author: 'Me', description: '', folderName: 'test', hasPluginJson: true }];
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ plugins }));
+    sendMessage.and.returnValue(of({ plugins: [plugin('test')] }));
     component.loadPlugins();
     expect(component.plugins.length).toBe(1);
-    expect(component.plugins[0].name).toBe('TestPlugin');
+    expect(component.plugins[0].name).toBe('test');
     expect(component.loading).toBeFalse();
   });
 
   it('should handle loadPlugins error', () => {
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(throwError(() => new Error('fail')));
+    sendMessage.and.returnValue(throwError(() => new Error('fail')));
     component.loadPlugins();
     expect(component.loading).toBeFalse();
     expect(mockNotification.error).toHaveBeenCalled();
   });
 
   it('should not load plugins when serverInstance has no id', () => {
-    component.serverInstance = {};
-    (mockMessaging.sendMessage as jasmine.Spy).calls.reset();
+    fixture.componentRef.setInput('serverInstance', {});
+    sendMessage.calls.reset();
     component.loadPlugins();
-    expect(mockMessaging.sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  describe('when the user switches servers', () => {
+    let replies: Record<string, Subject<unknown>>;
+
+    beforeEach(() => {
+      replies = {};
+      sendMessage.and.callFake((channel: string, payload: { instanceId?: string }) =>
+        replies[`${channel}:${payload.instanceId}`] = new Subject<unknown>());
+      fixture.componentRef.setInput('serverInstance', { id: 'A' });
+      fixture.detectChanges();
+    });
+
+    it('loads the new server\'s plugins and drops the old server\'s late reply', () => {
+      component.confirmRemove(plugin('old'));
+      fixture.componentRef.setInput('serverInstance', { id: 'B' });
+      fixture.detectChanges();
+
+      replies['list-ark-api-plugins:A'].next({ plugins: [plugin('old')] });
+      replies['get-asaapi-status:A'].next({ installed: true });
+
+      expect(component.plugins).toEqual([]);
+      expect(component.asaApiInstalled).toBeNull();
+      expect(component.showConfirmRemove).toBeFalse();
+      expect(sendMessage).toHaveBeenCalledWith('list-ark-api-plugins', { instanceId: 'B' });
+      expect(component.loading).toBeTrue();
+
+      replies['list-ark-api-plugins:B'].next({ plugins: [plugin('new')] });
+      replies['list-ark-api-plugins:B'].complete();
+      expect(component.plugins.map(p => p.folderName)).toEqual(['new']);
+      expect(component.loading).toBeFalse();
+    });
+
+    it('keeps its list when the same server arrives as a new object', () => {
+      replies['list-ark-api-plugins:A'].next({ plugins: [plugin('kept')] });
+      sendMessage.calls.reset();
+      fixture.componentRef.setInput('serverInstance', { id: 'A' });
+      fixture.detectChanges();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(component.plugins.map(p => p.folderName)).toEqual(['kept']);
+    });
+
+    it('leaves installs started on the previous server out of the new one', () => {
+      component.latestDownloadUrl = 'http://dl';
+      component.pluginInstallUrl = 'http://plugin.zip';
+      component.installAsaApi();
+      component.installPluginFromUrl();
+      expect(component.installing).toBeTrue();
+      expect(component.installingFromUrl).toBeTrue();
+
+      fixture.componentRef.setInput('serverInstance', { id: 'B' });
+      fixture.detectChanges();
+      expect(component.installing).toBeFalse();
+      expect(component.installingFromUrl).toBeFalse();
+      expect(component.installingFromZip).toBeFalse();
+
+      sendMessage.calls.reset();
+      replies['download-asaapi:A'].next({ success: true });
+      replies['install-plugin-from-url:A'].next({ success: false, error: 'Bad zip' });
+      expect(mockNotification.success).not.toHaveBeenCalled();
+      expect(mockNotification.error).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
   });
 
   it('should check latest AsaApi version', () => {
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ success: true, version: '2.0', downloadUrl: 'http://dl' }));
+    sendMessage.and.returnValue(of({ success: true, version: '2.0', downloadUrl: 'http://dl' }));
     component.checkLatestAsaApi();
     expect(component.latestVersion).toBe('2.0');
     expect(component.latestDownloadUrl).toBe('http://dl');
@@ -76,14 +140,14 @@ describe('ArkApiTabComponent', () => {
   });
 
   it('should handle checkLatestAsaApi failure response', () => {
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ success: false, error: 'not found' }));
+    sendMessage.and.returnValue(of({ success: false, error: 'not found' }));
     component.checkLatestAsaApi();
     expect(mockNotification.error).toHaveBeenCalled();
     expect(component.checkingLatest).toBeFalse();
   });
 
   it('should handle checkLatestAsaApi network error', () => {
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(throwError(() => new Error('network')));
+    sendMessage.and.returnValue(throwError(() => new Error('network')));
     component.checkLatestAsaApi();
     expect(component.checkingLatest).toBeFalse();
     expect(mockNotification.error).toHaveBeenCalled();
@@ -91,23 +155,27 @@ describe('ArkApiTabComponent', () => {
 
   it('should install AsaApi and reload plugins on success', () => {
     component.latestDownloadUrl = 'http://dl';
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ success: true }));
+    sendMessage.and.returnValue(of({ success: true }));
     component.installAsaApi();
     expect(component.installing).toBeFalse();
     expect(mockNotification.success).toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      'download-asaapi', { instanceId: 'test-server-1', downloadUrl: 'http://dl' }, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
   });
 
   it('should not install AsaApi without download URL', () => {
     component.latestDownloadUrl = '';
-    (mockMessaging.sendMessage as jasmine.Spy).calls.reset();
+    sendMessage.calls.reset();
     component.installAsaApi();
-    expect(mockMessaging.sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('should install plugin from URL', () => {
     component.pluginInstallUrl = 'http://plugin.zip';
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ success: true }));
+    sendMessage.and.returnValue(of({ success: true }));
     component.installPluginFromUrl();
+    expect(sendMessage).toHaveBeenCalledWith(
+      'install-plugin-from-url', { instanceId: 'test-server-1', url: 'http://plugin.zip' }, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
     expect(component.installingFromUrl).toBeFalse();
     expect(mockNotification.success).toHaveBeenCalled();
     expect(component.pluginInstallUrl).toBe('');
@@ -115,27 +183,39 @@ describe('ArkApiTabComponent', () => {
 
   it('should not install plugin from empty URL', () => {
     component.pluginInstallUrl = '   ';
-    (mockMessaging.sendMessage as jasmine.Spy).calls.reset();
+    sendMessage.calls.reset();
     component.installPluginFromUrl();
-    expect(mockMessaging.sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('should confirm remove and do remove', () => {
-    const plugin = { name: 'P', version: '1', author: 'A', description: '', folderName: 'pfolder', hasPluginJson: true };
-    component.confirmRemove(plugin);
+    sendMessage.and.returnValue(of({ plugins: [plugin('pfolder')] }));
+    component.loadPlugins();
+    component.confirmRemove(component.plugins[0]);
     expect(component.showConfirmRemove).toBeTrue();
-    expect(component.pluginToRemove).toBe(plugin);
+    expect(component.pluginToRemove?.folderName).toBe('pfolder');
 
-    (mockMessaging.sendMessage as jasmine.Spy).and.returnValue(of({ success: true }));
+    sendMessage.and.returnValue(of({ success: true }));
     component.doRemove();
     expect(component.showConfirmRemove).toBeFalse();
+    expect(sendMessage).toHaveBeenCalledWith('remove-ark-api-plugin', { instanceId: 'test-server-1', folderName: 'pfolder' });
     expect(mockNotification.success).toHaveBeenCalled();
+  });
+
+  it('removes only a plugin the current server lists', () => {
+    sendMessage.and.returnValue(of({ plugins: [plugin('kept')] }));
+    component.loadPlugins();
+    component.confirmRemove(plugin('gone'));
+    sendMessage.calls.reset();
+    component.doRemove();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(component.showConfirmRemove).toBeFalse();
   });
 
   it('should not doRemove when pluginToRemove is null', () => {
     component.pluginToRemove = null;
-    (mockMessaging.sendMessage as jasmine.Spy).calls.reset();
+    sendMessage.calls.reset();
     component.doRemove();
-    expect(mockMessaging.sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

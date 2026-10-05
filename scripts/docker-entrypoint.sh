@@ -83,9 +83,12 @@ if [ "${AASM_AUTH_ENABLED:-false}" = "true" ]; then
   args+=(
     --auth-enabled
     --username="${AASM_USERNAME:-admin}"
-    --password="${AASM_PASSWORD}"
   )
 fi
+
+# The password is deliberately not passed on argv, which every process in the
+# container (ARK and Proton included) can read from /proc/*/cmdline. The app
+# picks it up from AASM_PASSWORD in its inherited environment.
 
 # Docker Desktop on Apple Silicon runs this amd64 image under Rosetta, and 32-bit x86
 # through qemu, where SteamCMD's 32-bit build segfaults loading the Steam API.
@@ -114,7 +117,10 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-npx electron electron/main.js "${args[@]}" "$@" &
+# One app per container, so a single-instance lock in the saved userData is stale.
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/cerious-aasm/Singleton"*
+
+node_modules/.bin/electron electron/main.js "${args[@]}" "$@" &
 APP_PID=$!
 
 shutdown() {

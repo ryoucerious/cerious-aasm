@@ -1,59 +1,61 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
+import { Observable, ReplaySubject, Subscription, firstValueFrom } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { GlobalConfig } from '../interfaces/global-config.interface';
 import { MessagingService } from './messaging/messaging.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
+/** get-global-config answers with the settings themselves, or with an error. */
+type LoadReply = (GlobalConfig & { requestId?: string }) | { error: string; requestId?: string };
 
+interface SaveReply {
+  success?: boolean;
+  error?: string;
+}
 
 @Injectable({ providedIn: 'root' })
-export class GlobalConfigService {
+export class GlobalConfigService implements OnDestroy {
+  /** Null until the settings are first known; the setters change nothing before then. */
   private config: GlobalConfig | null = null;
+  private readonly received = new ReplaySubject<GlobalConfig>(1);
+  private readonly subs: Subscription[] = [];
 
-  constructor(private messaging: MessagingService) {
-    // Subscribe to global-config messages for real-time updates
-    this.messaging.receiveMessage<GlobalConfig>('global-config').subscribe(cfg => {
-      this.config = cfg;
-    });
+  constructor(private messaging: MessagingService, webSocket: WebSocketService, ipc: IpcService) {
+    // The backend sends every client the settings whenever anyone reads or saves them.
+    this.subs.push(this.messaging.receiveMessage<GlobalConfig>('global-config').subscribe(cfg => {
+      if (cfg) this.receive(cfg);
+    }));
+
+    // The web UI asks whenever its socket comes up: a request made before that, or after the
+    // session was refused, is dropped and only times out. The desktop app has no socket and
+    // asks once.
+    this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
+    if (ipc.isElectron) this.refresh();
   }
 
-  /** Loads config from backend (returns a promise) */
-  loadConfig(): Promise<GlobalConfig> {
-    return new Promise((resolve, reject) => {
-      let sub: any;
-      const timeout = setTimeout(() => {
-        if (sub) sub.unsubscribe();
-        reject(new Error('Timed out waiting for global-config response'));
-      }, 10000);
-      sub = this.messaging.receiveMessage<GlobalConfig>('global-config').subscribe({
-        next: (cfg: GlobalConfig) => {
-          clearTimeout(timeout);
-          this.config = cfg;
-          resolve(cfg);
-          if (sub) sub.unsubscribe();
-        },
-        error: (err: any) => {
-          clearTimeout(timeout);
-          reject(err);
-        }
-      });
-      this.messaging.sendMessage('get-global-config', {}).subscribe();
-    });
+  ngOnDestroy(): void {
+    this.subs.forEach(sub => sub.unsubscribe());
   }
 
-  /** Saves config to backend (returns a promise, uses requestId) */
-  saveConfig(cfg: GlobalConfig): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.messaging.sendMessage('set-global-config', { config: cfg }).subscribe({
-        next: (res: any) => {
-          if (res.success) {
-            this.config = cfg;
-            resolve();
-          } else {
-            reject(res.error || 'Failed to save config');
-          }
-        },
-        error: reject
-      });
-    });
+  /** The settings once they are known, then again whenever the backend reports them. A late listener gets the latest. */
+  get config$(): Observable<GlobalConfig> {
+    return this.received.asObservable();
+  }
+
+  /** Rejects if the request fails, times out, or the backend could not read the settings. */
+  async loadConfig(): Promise<GlobalConfig> {
+    const reply = await firstValueFrom(this.messaging.sendMessage<LoadReply | null>('get-global-config', {}));
+    if (!reply || 'error' in reply) throw new Error(reply?.error || 'Could not load the settings');
+    const { requestId: _requestId, ...config } = reply;
+    this.receive(config);
+    return config;
+  }
+
+  async saveConfig(cfg: GlobalConfig): Promise<void> {
+    const reply = await firstValueFrom(this.messaging.sendMessage<SaveReply | null>('set-global-config', { config: cfg }));
+    if (!reply?.success) throw new Error(reply?.error || 'Failed to save config');
+    this.config = cfg;
   }
 
   get startWebServerOnLoad() {
@@ -62,7 +64,7 @@ export class GlobalConfigService {
   set startWebServerOnLoad(val: boolean) {
     if (!this.config) return;
     this.config.startWebServerOnLoad = val;
-    this.saveConfig(this.config);
+    this.persist();
   }
 
   get webServerPort() {
@@ -71,7 +73,7 @@ export class GlobalConfigService {
   set webServerPort(val: number) {
     if (!this.config) return;
     this.config.webServerPort = val;
-    this.saveConfig(this.config);
+    this.persist();
   }
 
   get authenticationEnabled() {
@@ -80,25 +82,7 @@ export class GlobalConfigService {
   set authenticationEnabled(val: boolean) {
     if (!this.config) return;
     this.config.authenticationEnabled = val;
-    this.saveConfig(this.config);
-  }
-
-  get authenticationUsername() {
-    return this.config?.authenticationUsername ?? '';
-  }
-  set authenticationUsername(val: string) {
-    if (!this.config) return;
-    this.config.authenticationUsername = val;
-    this.saveConfig(this.config);
-  }
-
-  get authenticationPassword() {
-    return this.config?.authenticationPassword ?? '';
-  }
-  set authenticationPassword(val: string) {
-    if (!this.config) return;
-    this.config.authenticationPassword = val;
-    this.saveConfig(this.config);
+    this.persist();
   }
 
   get maxBackupDownloadSizeMB() {
@@ -107,7 +91,7 @@ export class GlobalConfigService {
   set maxBackupDownloadSizeMB(val: number) {
     if (!this.config) return;
     this.config.maxBackupDownloadSizeMB = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
+    this.persist();
   }
 
   get serverDataDir() {
@@ -116,7 +100,7 @@ export class GlobalConfigService {
   set serverDataDir(val: string) {
     if (!this.config) return;
     this.config.serverDataDir = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
+    this.persist();
   }
 
   get autoUpdateArkServer() {
@@ -125,7 +109,7 @@ export class GlobalConfigService {
   set autoUpdateArkServer(val: boolean) {
     if (!this.config) return;
     this.config.autoUpdateArkServer = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
+    this.persist();
   }
 
   get updateWarningMinutes() {
@@ -134,7 +118,7 @@ export class GlobalConfigService {
   set updateWarningMinutes(val: number) {
     if (!this.config) return;
     this.config.updateWarningMinutes = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
+    this.persist();
   }
 
   get serverStartDelaySeconds() {
@@ -143,6 +127,20 @@ export class GlobalConfigService {
   set serverStartDelaySeconds(val: number) {
     if (!this.config) return;
     this.config.serverStartDelaySeconds = val;
-    this.saveConfig(this.config).catch(err => console.error(err));
+    this.persist();
+  }
+
+  private receive(config: GlobalConfig): void {
+    this.config = config;
+    this.received.next(config);
+  }
+
+  private refresh(): void {
+    this.loadConfig().catch(error => console.error('[global-config] Could not load the settings:', error));
+  }
+
+  private persist(): void {
+    if (!this.config) return;
+    this.saveConfig(this.config).catch(error => console.error('[global-config] Could not save the settings:', error));
   }
 }

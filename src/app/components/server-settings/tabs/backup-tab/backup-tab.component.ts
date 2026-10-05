@@ -1,47 +1,54 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
+import { formatBytes, formatLocalDateTime } from '../../../../core/utils/format.utils';
+import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
+
+export type BackupFrequency = 'hourly' | 'daily' | 'weekly';
+
+/** The field's range, enforced on save: a retention of 0 would have the cleanup delete every backup. */
+const MIN_BACKUPS_TO_KEEP = 1;
+const MAX_BACKUPS_TO_KEEP = 50;
 
 @Component({
   selector: 'app-backup-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FieldMessagesComponent],
   templateUrl: './backup-tab.component.html'
 })
 export class BackupTabComponent {
   @Input() backupScheduleEnabled = false;
-  @Input() backupFrequency: 'hourly' | 'daily' | 'weekly' = 'daily';
+  @Input() backupFrequency: BackupFrequency = 'daily';
   @Input() backupTime = '02:00';
   @Input() backupDayOfWeek = 0;
   @Input() maxBackupsToKeep = 10;
-  @Input() backupList: any[] = [];
-  @Input() isBackupLocked = false;
+  @Input() backupList: BackupMetadata[] = [];
   @Input() backupFrequencyDropdownOpen = false;
   @Input() backupDayDropdownOpen = false;
+  @Input() fieldErrors: FieldMessages = {};
+  @Input() fieldWarnings: FieldMessages = {};
 
   @Output() createManualBackup = new EventEmitter<void>();
   @Output() backupScheduleToggle = new EventEmitter<void>();
-  @Output() backupFrequencySelect = new EventEmitter<string>();
-  @Output() backupTimeChange = new EventEmitter<Event>();
+  @Output() backupFrequencySelect = new EventEmitter<BackupFrequency>();
+  @Output() backupTimeChange = new EventEmitter<string>();
   @Output() backupDaySelect = new EventEmitter<number>();
-  @Output() maxBackupsToKeepChange = new EventEmitter<Event>();
-  @Output() restoreBackup = new EventEmitter<any>();
-  @Output() downloadBackup = new EventEmitter<any>();
-  @Output() deleteBackup = new EventEmitter<any>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
+  @Output() maxBackupsToKeepChange = new EventEmitter<number>();
+  @Output() restoreBackup = new EventEmitter<BackupMetadata>();
+  @Output() downloadBackup = new EventEmitter<BackupMetadata>();
+  @Output() deleteBackup = new EventEmitter<BackupMetadata>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
   @Output() toggleBackupFrequencyDropdown = new EventEmitter<void>();
   @Output() toggleBackupDayDropdown = new EventEmitter<void>();
 
+  readonly formatSize = formatBytes;
+  readonly formatDate = formatLocalDateTime;
+
   getBackupFrequencyDisplayName(frequency: string): string {
-    const frequencyMap: { [key: string]: string } = {
-      'hourly': 'Every Hour',
-      'daily': 'Daily',
-      'weekly': 'Weekly'
-    };
-    return frequencyMap[frequency] || frequency;
+    return this.getBackupFrequencyOptions().find(option => option.value === frequency)?.display ?? frequency;
   }
 
-  getBackupFrequencyOptions(): Array<{value: string, display: string}> {
+  getBackupFrequencyOptions(): Array<{value: BackupFrequency, display: string}> {
     return [
       { value: 'hourly', display: 'Every Hour' },
       { value: 'daily', display: 'Daily' },
@@ -50,16 +57,7 @@ export class BackupTabComponent {
   }
 
   getBackupDayDisplayName(day: number): string {
-    const dayMap: { [key: number]: string } = {
-      0: 'Sunday',
-      1: 'Monday',
-      2: 'Tuesday',
-      3: 'Wednesday',
-      4: 'Thursday',
-      5: 'Friday',
-      6: 'Saturday'
-    };
-    return dayMap[day] || `Day ${day}`;
+    return this.getBackupDayOptions().find(option => option.value === day)?.display ?? `Day ${day}`;
   }
 
   getBackupDayOptions(): Array<{value: number, display: string}> {
@@ -74,39 +72,8 @@ export class BackupTabComponent {
     ];
   }
 
-  formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
-  getFormattedDate(dateValue: any): string {
-    if (!dateValue) return 'Unknown';
-    const date = new Date(dateValue);
-    return date.toLocaleString();
-  }
-
-  trackByBackupId(index: number, backup: any): any {
-    return backup ? backup.id : index;
-  }
-
-  hasFieldError(fieldName: string): boolean {
-    // This would be implemented based on your validation logic
-    return false;
-  }
-
-  getFieldError(fieldName: string): string {
-    return '';
-  }
-
-  hasFieldWarning(fieldName: string): boolean {
-    return false;
-  }
-
-  getFieldWarning(fieldName: string): string {
-    return '';
+  trackByBackupId(_index: number, backup: BackupMetadata): string {
+    return backup.id;
   }
 
   onCreateManualBackup(): void {
@@ -117,35 +84,44 @@ export class BackupTabComponent {
     this.backupScheduleToggle.emit();
   }
 
-  onBackupFrequencySelect(value: string): void {
+  onBackupFrequencySelect(value: BackupFrequency): void {
     this.backupFrequencySelect.emit(value);
   }
 
   onBackupTimeChange(event: Event): void {
-    this.backupTimeChange.emit(event);
+    this.backupTimeChange.emit((event.target as HTMLInputElement).value);
   }
 
   onBackupDaySelect(value: number): void {
     this.backupDaySelect.emit(value);
   }
 
+  /** Sends a whole number in range; an empty field puts the saved value back instead. */
   onMaxBackupsToKeepChange(event: Event): void {
-    this.maxBackupsToKeepChange.emit(event);
+    const input = event.target as HTMLInputElement;
+    const typed = input.value.trim() === '' ? NaN : Number(input.value);
+    if (!Number.isFinite(typed)) {
+      input.value = String(this.maxBackupsToKeep);
+      return;
+    }
+    const value = Math.min(MAX_BACKUPS_TO_KEEP, Math.max(MIN_BACKUPS_TO_KEEP, Math.round(typed)));
+    input.value = String(value);
+    this.maxBackupsToKeepChange.emit(value);
   }
 
-  onRestoreBackup(backup: any): void {
+  onRestoreBackup(backup: BackupMetadata): void {
     this.restoreBackup.emit(backup);
   }
 
-  onDownloadBackup(backup: any): void {
+  onDownloadBackup(backup: BackupMetadata): void {
     this.downloadBackup.emit(backup);
   }
 
-  onDeleteBackup(backup: any): void {
+  onDeleteBackup(backup: BackupMetadata): void {
     this.deleteBackup.emit(backup);
   }
 
-  onValidateField(key: string, value: any): void {
+  onValidateField(key: string, value: unknown): void {
     this.validateField.emit({key, value});
   }
 

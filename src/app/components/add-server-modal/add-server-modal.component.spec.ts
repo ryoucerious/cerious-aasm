@@ -1,9 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { NEVER, of, throwError } from 'rxjs';
 import { AddServerModalComponent } from './add-server-modal.component';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { IpcService } from '../../core/services/ipc.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('AddServerModalComponent', () => {
@@ -12,8 +13,10 @@ describe('AddServerModalComponent', () => {
   let router: jasmine.SpyObj<Router>;
   let serverInstanceService: any;
   let notification: MockNotificationService;
+  let ipc: { isElectron: boolean };
 
   beforeEach(async () => {
+    ipc = { isElectron: false };
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
     serverInstanceService = {
@@ -29,7 +32,8 @@ describe('AddServerModalComponent', () => {
       providers: [
         { provide: Router, useValue: router },
         { provide: ServerInstanceService, useValue: serverInstanceService },
-        { provide: NotificationService, useValue: notification }
+        { provide: NotificationService, useValue: notification },
+        { provide: IpcService, useValue: ipc }
       ]
     }).compileComponents();
 
@@ -84,6 +88,54 @@ describe('AddServerModalComponent', () => {
     expect(saved).toEqual(jasmine.objectContaining({ name: 'Copy', sessionName: 'Copy', maxPlayers: 20 }));
   });
 
+  it('clones only the settings, not what the source server is doing', () => {
+    component.setImportMode('clone');
+    component.serverName = 'Copy';
+    component.selectedServerToClone = {
+      id: 'src', name: 'Source', maxPlayers: 20, state: 'running', status: 'online', players: 5, cpu: 30, memory: 8000, startedAt: 1
+    } as any;
+    component.onAddServer();
+    const saved = serverInstanceService.save.calls.mostRecent().args[0];
+    expect(saved).toEqual({ name: 'Copy', sessionName: 'Copy', maxPlayers: 20 });
+  });
+
+  it('frees the dialog when the defaults cannot be loaded', () => {
+    spyOn(notification, 'error');
+    serverInstanceService.getDefaultInstanceFromMeta.and.returnValue(throwError(() => new Error('404')));
+    component.serverName = 'Fresh';
+    component.onAddServer();
+    expect(notification.error).toHaveBeenCalled();
+    expect(component.busy).toBeFalse();
+  });
+
+  it('reports a refusal that gives no reason and stays open', () => {
+    spyOn(notification, 'warning');
+    spyOn(component.closed, 'emit');
+    serverInstanceService.save.and.returnValue(of({ success: false }));
+    component.serverName = 'Dup';
+    component.onAddServer();
+    expect(notification.warning).toHaveBeenCalled();
+    expect(component.closed.emit).not.toHaveBeenCalled();
+    expect(component.busy).toBeFalse();
+  });
+
+  it('is not left busy by an empty reply', () => {
+    serverInstanceService.save.and.returnValue(of(null));
+    component.serverName = 'Fresh';
+    component.onAddServer();
+    expect(component.busy).toBeFalse();
+  });
+
+  it('stays open while a server is being added, as its Cancel button does', () => {
+    spyOn(component.closed, 'emit');
+    serverInstanceService.save.and.returnValue(NEVER);
+    component.serverName = 'Fresh';
+    component.onAddServer();
+    component.onCancel();
+    expect(component.closed.emit).not.toHaveBeenCalled();
+    expect(component.busy).toBeTrue();
+  });
+
   it('surfaces a backend validation error and stays open', () => {
     spyOn(notification, 'warning');
     spyOn(component.closed, 'emit');
@@ -106,6 +158,7 @@ describe('AddServerModalComponent', () => {
   });
 
   it('reports import failures', async () => {
+    spyOn(console, 'error');
     spyOn(notification, 'error');
     serverInstanceService.importServerFromBackup.and.returnValue(throwError(() => new Error('bad zip')));
     component.setImportMode('import');
@@ -113,6 +166,7 @@ describe('AddServerModalComponent', () => {
     component.selectedBackupFile = new File(['x'], 'b.zip');
     await component['importFromBackup']();
     expect(notification.error).toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith('[add-server-modal] Failed to import backup:', jasmine.any(Error));
     expect(component.busy).toBeFalse();
   });
 
@@ -130,12 +184,44 @@ describe('AddServerModalComponent', () => {
     expect(component.closed.emit).toHaveBeenCalled();
   });
 
+  function chooseFile(file: File): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    Object.defineProperty(input, 'files', { value: [file] });
+    component.onBackupFileSelect({ target: input } as unknown as Event);
+  }
+
   it('records a selected zip file', () => {
     const file = new File(['x'], 'save.zip');
-    component.onBackupFileSelect({ target: { files: [file] } });
+    chooseFile(file);
     expect(component.selectedBackupFile).toBe(file);
     expect(component.selectedBackupFilePath).toBe('save.zip');
-    component.onBackupFileSelect({ target: { files: [new File(['x'], 'notes.txt')] } });
+    chooseFile(new File(['x'], 'notes.txt'));
     expect(component.selectedBackupFile).toBe(file);
+  });
+
+  it('imports by path in the desktop app, where a chosen file has one', () => {
+    ipc.isElectron = true;
+    const file = Object.assign(new File(['x'], 'save.zip'), { path: 'C:\\Backups\\save.zip' });
+    chooseFile(file);
+    expect(component.selectedBackupFilePath).toBe('C:\\Backups\\save.zip');
+
+    component.setImportMode('import');
+    component.serverName = 'Imported';
+    chooseFile(file);
+    component.onAddServer();
+    expect(serverInstanceService.importServerFromBackup).toHaveBeenCalledWith('Imported', 'C:\\Backups\\save.zip');
+  });
+
+  it('opens the file picker for Browse', () => {
+    fixture.componentRef.setInput('show', true);
+    fixture.detectChanges();
+    const tabs = Array.from(fixture.nativeElement.querySelectorAll('.import-mode-selector button')) as HTMLButtonElement[];
+    tabs.find(tab => tab.textContent?.includes('Import from Backup'))!.click();
+    fixture.detectChanges();
+    const picker = fixture.nativeElement.querySelector('input[type=file]') as HTMLInputElement;
+    spyOn(picker, 'click');
+    component.selectBackupFile();
+    expect(picker.click).toHaveBeenCalled();
   });
 });

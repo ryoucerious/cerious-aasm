@@ -1,4 +1,3 @@
-<!-- Mods Tab Content -->
 <div class="tab-content">
   <div class="form-group page-intro">
     <h4>Server Mod Management</h4>
@@ -9,19 +8,17 @@
     <h5>Mod Management</h5>
     <p class="section-desc">Add new mods and manage your current mod list.</p>
 
-    <!-- Add Mod Section -->
     <div class="form-group span-all">
       <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button class="btn btn-ghost" (click)="openAddModModal()" [disabled]="isLocked" style="white-space: nowrap;">
           <i class="material-icons">add</i> Add Mod
         </button>
-        <button class="btn btn-ghost" (click)="openBrowseModal()" style="white-space: nowrap;">
+        <button class="btn btn-ghost" (click)="openBrowseModal()" [disabled]="isLocked" style="white-space: nowrap;">
           <i class="material-icons">travel_explore</i> Browse CurseForge
         </button>
       </div>
     </div>
 
-    <!-- Mod List Section -->
     <div class="form-group mod-table-container span-all">
       <label class="form-control-label">Installed Mods</label>
       <div class="mod-list">
@@ -63,7 +60,6 @@
   </div>
   </div>
 
-  <!-- Add Mod Modal -->
   <app-modal [title]="'Add New Mod'" [show]="showAddModModal" (close)="closeModal()">
     <div class="modal-form">
       <div class="form-group">
@@ -85,18 +81,15 @@
     </div>
   </app-modal>
 
-  <!-- CurseForge Browse Modal -->
   <app-modal [title]="'Browse CurseForge Mods'" [show]="showBrowseModal" (close)="closeBrowseModal()" [maxWidth]="'1000px'">
     <div class="cf-browser">
 
-      <!-- Search & Sort Bar -->
       <div class="cf-browser-header">
         <div class="cf-search-bar">
           <input class="form-control input" type="text"
             [(ngModel)]="cfSearchQuery"
             (keydown.enter)="searchCurseForge()"
             placeholder="Search mods (e.g. Structures Plus)…" />
-          <!-- Sort custom dropdown matching map selector style -->
           <div class="custom-dropdown" style="position: relative; flex-shrink: 0;">
             <button type="button" class="form-control input" (click)="cfSortDropdownOpen = !cfSortDropdownOpen"
               style="width: 160px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); padding: 0.5rem 1rem; font-size: 0.97em; display: flex; align-items: center; justify-content: space-between; white-space: nowrap;">
@@ -117,7 +110,6 @@
         <div class="form-control-label desc" style="margin-top: 0.4rem;">Results filtered to ARK: Survival Ascended.</div>
       </div>
 
-      <!-- API Access Error Banner -->
       <div *ngIf="cfError" class="cf-error-banner" [class.cf-error-banner--access]="cfIsAccessError">
         <i class="material-icons">{{ cfIsAccessError ? 'lock' : 'error_outline' }}</i>
         <div class="cf-error-text">
@@ -129,23 +121,19 @@
         </div>
       </div>
 
-      <!-- Loading spinner -->
       <div *ngIf="cfSearching && cfSearchResults.length === 0" class="cf-loading">
         <i class="material-icons cf-spin">autorenew</i>
         <span>Loading mods…</span>
       </div>
 
-      <!-- Empty state -->
       <div *ngIf="!cfSearching && cfSearchResults.length === 0 && cfSearchQuery" class="cf-empty">
         <i class="material-icons">search_off</i>
         <span>No mods found for "{{ cfSearchQuery }}"</span>
       </div>
 
-      <!-- Card Grid -->
       <div *ngIf="cfSearchResults.length > 0" class="cf-grid">
         <div *ngFor="let mod of cfSearchResults" class="cf-card" [class.cf-card--installed]="isModInstalled(mod.id)">
 
-          <!-- Thumbnail / Screenshot -->
           <div class="cf-card-img-wrap">
             <img *ngIf="mod.screenshotUrl || mod.thumbUrl" [src]="mod.screenshotUrl || mod.thumbUrl" class="cf-card-img" alt="" loading="lazy" />
             <div *ngIf="!mod.screenshotUrl && !mod.thumbUrl" class="cf-card-img cf-card-img--placeholder">
@@ -156,7 +144,6 @@
             </span>
           </div>
 
-          <!-- Body -->
           <div class="cf-card-body">
             <div class="cf-card-name" [title]="mod.name">{{ mod.name }}</div>
             <div class="cf-card-cats">
@@ -165,7 +152,6 @@
             <div class="cf-card-summary">{{ mod.summary | slice:0:100 }}{{ (mod.summary?.length ?? 0) > 100 ? '…' : '' }}</div>
           </div>
 
-          <!-- Footer -->
           <div class="cf-card-footer">
             <span class="cf-card-downloads">
               <i class="material-icons">download</i>
@@ -176,7 +162,7 @@
               <button *ngIf="mod.websiteUrl" class="btn btn-sm btn-ghost" (click)="openUrl(mod.websiteUrl)" title="View on CurseForge">
                 <i class="material-icons">open_in_new</i>
               </button>
-              <button *ngIf="!isModInstalled(mod.id)" class="btn btn-sm btn-ghost" (click)="addModFromCurseForge(mod)" title="Add to server">
+              <button *ngIf="!isModInstalled(mod.id)" class="btn btn-sm btn-ghost" (click)="addModFromCurseForge(mod)" [disabled]="isLocked" title="Add to server">
                 <i class="material-icons">add</i>
               </button>
               <span *ngIf="isModInstalled(mod.id)" class="cf-added-check" title="Already added">
@@ -188,7 +174,6 @@
         </div>
       </div>
 
-      <!-- Footer actions -->
       <div class="action-group-modal" style="margin-top: 1rem;">
         <button *ngIf="cfHasMore" class="btn btn-ghost" (click)="cfLoadMore()" [disabled]="cfSearching">
           {{ cfSearching ? 'Loading\u2026' : 'Load More' }}
@@ -198,7 +183,6 @@
     </div>
   </app-modal>
 
-  <!-- Mod Settings Modal -->
   <app-modal [title]="'Mod Settings - ' + (selectedMod?.name || 'Unknown Mod')" [show]="showSettingsModal" (close)="closeModal()">
     <div class="modal-form">
       <div class="form-group">

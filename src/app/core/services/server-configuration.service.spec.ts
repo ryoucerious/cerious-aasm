@@ -1,5 +1,4 @@
 import { ServerConfigurationService } from './server-configuration.service';
-import { MessagingService } from './messaging/messaging.service';
 import { ServerInstanceService } from './server-instance.service';
 import { StatMultiplierService } from './stat-multiplier.service';
 import { ArkServerValidationService } from './ark-server-validation.service';
@@ -7,64 +6,52 @@ import { of } from 'rxjs';
 
 describe('ServerConfigurationService', () => {
   let service: ServerConfigurationService;
-  let messagingMock: jasmine.SpyObj<MessagingService>;
   let instanceMock: jasmine.SpyObj<ServerInstanceService>;
   let statMultiplierMock: jasmine.SpyObj<StatMultiplierService>;
   let validationMock: jasmine.SpyObj<ArkServerValidationService>;
 
   beforeEach(() => {
-    messagingMock = jasmine.createSpyObj('MessagingService', ['sendMessage']);
     instanceMock = jasmine.createSpyObj('ServerInstanceService', ['save']);
     statMultiplierMock = jasmine.createSpyObj('StatMultiplierService', ['initializeStatMultipliers']);
-    validationMock = jasmine.createSpyObj('ArkServerValidationService', ['validateServerConfiguration', 'validateField']);
-    messagingMock.sendMessage.and.returnValue(of({}));
-    instanceMock.save.and.returnValue(of({}));
+    validationMock = jasmine.createSpyObj('ArkServerValidationService', ['validateServerConfiguration']);
+    instanceMock.save.and.returnValue(of({ success: true }));
     validationMock.validateServerConfiguration.and.returnValue({ isValid: true, errors: [], warnings: [] });
-  validationMock.validateField.and.returnValue({ isValid: true, error: '', field: 'field' });
-    service = new ServerConfigurationService(messagingMock, instanceMock, statMultiplierMock, validationMock);
-  });
-
-  it('should be created', () => {
-    expect(service).toBeTruthy();
+    service = new ServerConfigurationService(instanceMock, statMultiplierMock, validationMock);
   });
 
   it('should initialize server instance with defaults', () => {
-    spyOn(ServerInstanceService, 'getDefaultInstance').and.returnValue({ foo: 'bar', crossplay: [], mods: [] });
-    const result = service.initializeServerInstance({ foo: 'baz' });
-    expect(result.foo).toBe('baz');
+    spyOn(ServerInstanceService, 'getDefaultInstance').and.returnValue({ name: 'Default', crossplay: [], mods: [] });
+    const result = service.initializeServerInstance({ name: 'Mine' });
+    expect(result.name).toBe('Mine');
     expect(result.crossplay).toEqual([]);
     expect(result.mods).toEqual([]);
-    expect(result.mapName).toBeDefined();
+    expect(result.mapName).toBe('TheIsland_WP');
     expect(statMultiplierMock.initializeStatMultipliers).toHaveBeenCalledWith(result);
   });
 
-  it('should request server state', () => {
-    service.requestServerState('id1').subscribe();
-    expect(messagingMock.sendMessage).toHaveBeenCalledWith('get-server-instance-state', { id: 'id1' });
+  it('turns the old boolean crossplay setting into the list of platforms', () => {
+    const result = service.initializeServerInstance({ name: 'Mine', crossplay: true as unknown as string[] });
+    expect(result.crossplay).toEqual(service.crossplayPlatforms);
+    expect(service.initializeServerInstance({ name: 'Mine', crossplay: false as unknown as string[] }).crossplay).toEqual([]);
   });
 
-  it('should request server logs', () => {
-    service.requestServerLogs('id2', 123).subscribe();
-    expect(messagingMock.sendMessage).toHaveBeenCalledWith('get-server-instance-logs', { id: 'id2', maxLines: 123 });
-  });
-
-  it('should request player count', () => {
-    service.requestPlayerCount('id3').subscribe();
-    expect(messagingMock.sendMessage).toHaveBeenCalledWith('get-server-instance-players', { id: 'id3' });
+  it('gives an empty page for no server', () => {
+    const result = service.initializeServerInstance(null);
+    expect(result.id).toBeUndefined();
+    expect(result.mods).toEqual([]);
   });
 
   it('should save server settings if changed', () => {
     spyOn(service, 'hasServerChanged').and.returnValue(true);
-    const active = { id: 'id4' };
-    const original = { id: 'id4' };
-    const result = service.saveServerSettings(active, original);
+    const active = { id: 'id4', name: 'A' };
+    const result = service.saveServerSettings(active, { id: 'id4', name: 'B' });
     expect(instanceMock.save).toHaveBeenCalledWith(active);
     expect(result).toBeTruthy();
   });
 
   it('should not save server settings if not changed', () => {
     spyOn(service, 'hasServerChanged').and.returnValue(false);
-    const result = service.saveServerSettings({ id: 'id5' }, { id: 'id5' });
+    const result = service.saveServerSettings({ id: 'id5', name: 'A' }, { id: 'id5', name: 'A' });
     expect(result).toBeNull();
   });
 
@@ -74,61 +61,19 @@ describe('ServerConfigurationService', () => {
     expect(service.hasServerChanged(null, { a: 1 })).toBeFalse();
   });
 
-  it('should process mods input', () => {
-    expect(service.processModsInput('mod1, mod2')).toEqual(['mod1', 'mod2']);
-    expect(service.processModsInput('')).toEqual([]);
-  });
-
   it('should validate server configuration', () => {
-    service.validateServerConfiguration({}).isValid;
-    expect(validationMock.validateServerConfiguration).toHaveBeenCalled();
-  });
-
-  it('should validate field', () => {
-    service.validateField('field', 'value', {}).valid;
-    expect(validationMock.validateField).toHaveBeenCalledWith('field', 'value', {});
-  });
-
-  it('should save server settings with validation', () => {
-    spyOn(service, 'saveServerSettings').and.returnValue(of({}));
-    validationMock.validateServerConfiguration.and.returnValue({ isValid: true, errors: [], warnings: [] });
-    const result = service.saveServerSettingsWithValidation({ id: 'id6' }, { id: 'id6' });
-    expect(result.valid).toBeTrue();
-    expect(result.observable).toBeTruthy();
-  });
-
-  it('should not save server settings with validation if invalid', () => {
-    validationMock.validateServerConfiguration.and.returnValue({ isValid: false, errors: ['err'], warnings: [] });
-    const result = service.saveServerSettingsWithValidation({ id: 'id7' }, { id: 'id7' });
-    expect(result.valid).toBeFalse();
-    expect(result.errors).toEqual(['err']);
-    expect(result.observable).toBeUndefined();
-  });
-
-  it('should convert mods array to string', () => {
-    expect(service.modsArrayToString(['a', 'b'])).toBe('a,b');
-    expect(service.modsArrayToString([])).toBe('');
+    const server = { id: 'x', name: 'A' };
+    expect(service.validateServerConfiguration(server).isValid).toBeTrue();
+    expect(validationMock.validateServerConfiguration).toHaveBeenCalledWith(server);
   });
 
   it('should toggle multi option', () => {
-    const instance: any = { arr: [] };
+    const instance: Record<string, unknown> = {};
     service.toggleMultiOption(instance, 'arr', 'opt', true);
-    expect(instance.arr).toContain('opt');
+    service.toggleMultiOption(instance, 'arr', 'opt', true);
+    expect(instance['arr']).toEqual(['opt']);
     service.toggleMultiOption(instance, 'arr', 'opt', false);
-    expect(instance.arr).not.toContain('opt');
-  });
-
-  it('should handle crossplay change', () => {
-    const instance: any = { crossplay: [] };
-    service.handleCrossplayChange(instance, 'Steam (PC)', true);
-    expect(instance.crossplay).toContain('Steam (PC)');
-    service.handleCrossplayChange(instance, 'Steam (PC)', false);
-    expect(instance.crossplay).not.toContain('Steam (PC)');
-  });
-
-  it('should validate server config', () => {
-    expect(service.validateServerConfig({ sessionName: '', maxPlayers: 101, serverPassword: '123' }).valid).toBeFalse();
-    expect(service.validateServerConfig({ sessionName: 'foo', maxPlayers: 10, serverPassword: '1234' }).valid).toBeTrue();
+    expect(instance['arr']).toEqual([]);
   });
 
   it('should create deep copy', () => {

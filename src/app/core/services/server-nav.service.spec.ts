@@ -1,19 +1,25 @@
-import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { BehaviorSubject, of, throwError } from 'rxjs';
 import { ServerNavService, SERVER_TABS } from './server-nav.service';
 import { FirewallService } from './firewall.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
 describe('ServerNavService', () => {
   let service: ServerNavService;
   let firewall: jasmine.SpyObj<FirewallService>;
+  let connected$: BehaviorSubject<boolean>;
+
+  const create = (isElectron = true) => new ServerNavService(
+    firewall,
+    { connected$ } as unknown as WebSocketService,
+    { isElectron } as IpcService
+  );
 
   beforeEach(() => {
+    connected$ = new BehaviorSubject(false);
     firewall = jasmine.createSpyObj('FirewallService', ['checkFirewallStatus']);
     firewall.checkFirewallStatus.and.returnValue(of({ enabled: true, platform: 'linux' } as any));
-    TestBed.configureTestingModule({
-      providers: [ServerNavService, { provide: FirewallService, useValue: firewall }]
-    });
-    service = TestBed.inject(ServerNavService);
+    service = create();
   });
 
   it('starts with expert mode off and the console remembered', () => {
@@ -37,9 +43,6 @@ describe('ServerNavService', () => {
     expect(service.isValidTab('nope')).toBeFalse();
     expect(service.isValidTab(null)).toBeFalse();
     expect(service.find('rates')?.label).toBe('Rates');
-    expect(service.isConfigTab('general')).toBeTrue();
-    expect(service.isConfigTab('ini-Game')).toBeTrue();
-    expect(service.isConfigTab('mods')).toBeFalse();
   });
 
   it('swaps configuration pages for INI pages in expert mode', () => {
@@ -68,6 +71,79 @@ describe('ServerNavService', () => {
   it('treats a failed platform check as not linux', () => {
     firewall.checkFirewallStatus.and.returnValue(throwError(() => new Error('no')));
     expect(service.isLinux).toBeFalse();
+  });
+
+  describe('in the web UI', () => {
+    beforeEach(() => {
+      service = create(false);
+    });
+
+    it('asks nothing before the socket is up, since a refused session drops the request', () => {
+      service.isLinux$.subscribe();
+      expect(service.isLinux).toBeFalse();
+      expect(firewall.checkFirewallStatus).not.toHaveBeenCalled();
+    });
+
+    it('asks once when the socket comes up, and again on each reconnect', () => {
+      service.isLinux$.subscribe();
+
+      connected$.next(true);
+      expect(firewall.checkFirewallStatus).toHaveBeenCalledTimes(1);
+      expect(service.isLinux).toBeTrue();
+
+      connected$.next(false);
+      connected$.next(true);
+      expect(firewall.checkFirewallStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks at once when the socket is already up', () => {
+      connected$.next(true);
+      service.isLinux$.subscribe();
+      expect(firewall.checkFirewallStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not start asking until the platform is first wanted', () => {
+      connected$.next(true);
+      expect(firewall.checkFirewallStatus).not.toHaveBeenCalled();
+    });
+
+    it('learns the platform on a later connection after a failed check', () => {
+      firewall.checkFirewallStatus.and.returnValues(
+        throwError(() => new Error('Timeout has occurred')),
+        of({ enabled: true, platform: 'linux' } as any)
+      );
+      service.isLinux$.subscribe();
+
+      connected$.next(true);
+      expect(service.isLinux).toBeFalse();
+
+      connected$.next(false);
+      connected$.next(true);
+      expect(service.isLinux).toBeTrue();
+    });
+
+    it('keeps a platform it knows when a later check fails', () => {
+      firewall.checkFirewallStatus.and.returnValues(
+        of({ enabled: true, platform: 'linux' } as any),
+        throwError(() => new Error('Timeout has occurred'))
+      );
+      service.isLinux$.subscribe();
+
+      connected$.next(true);
+      connected$.next(false);
+      connected$.next(true);
+
+      expect(service.isLinux).toBeTrue();
+    });
+
+    it('stops asking once destroyed', () => {
+      service.isLinux$.subscribe();
+      service.ngOnDestroy();
+
+      connected$.next(true);
+
+      expect(firewall.checkFirewallStatus).not.toHaveBeenCalled();
+    });
   });
 
   it('lists every tab exactly once', () => {

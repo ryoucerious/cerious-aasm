@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDefaultInstallDir } from './platform.utils';
+import { readJsonOrQuarantine, writeJsonAtomic } from './fs.utils';
 
 export interface GlobalConfig {
   startWebServerOnLoad: boolean;
@@ -9,11 +10,14 @@ export interface GlobalConfig {
   authenticationUsername: string;
   authenticationPassword: string;
   maxBackupDownloadSizeMB: number;
-  serverDataDir?: string; // Optional custom directory for server files
-  autoUpdateArkServer?: boolean; // Automatically update ARK server when new version detected
-  updateWarningMinutes?: number; // Minutes to warn players before update
-  serverStartDelaySeconds?: number; // Seconds to wait between starting each server (default: 60)
-  curseForgeApiKey?: string; // CurseForge API key for mod browser
+  /** Where the servers live; empty means the default install dir. */
+  serverDataDir?: string;
+  autoUpdateArkServer?: boolean;
+  /** Minutes of warning players get before an update restarts their server. */
+  updateWarningMinutes?: number;
+  /** Seconds between servers when several start together. */
+  serverStartDelaySeconds?: number;
+  curseForgeApiKey?: string;
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {
@@ -23,12 +27,15 @@ const DEFAULT_CONFIG: GlobalConfig = {
   authenticationUsername: '',
   authenticationPassword: '',
   maxBackupDownloadSizeMB: 100,
-  serverDataDir: '', // Empty string means use default
+  serverDataDir: '',
   autoUpdateArkServer: false,
   updateWarningMinutes: 15,
   serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
 };
+
+// loadGlobalConfig runs on almost every request, so a persistent failure is logged once.
+let lastReportedLoadFailure: string | undefined;
 
 function getConfigFilePath(): string {
   return path.join(getDefaultInstallDir(), 'global-config.json');
@@ -37,28 +44,38 @@ function getConfigFilePath(): string {
 export function loadGlobalConfig(): GlobalConfig {
   try {
     const configFile = getConfigFilePath();
-    if (fs.existsSync(configFile)) {
-      const raw = fs.readFileSync(configFile, 'utf-8');
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
-    } else {
-      // Create config file with default values if it doesn't exist
-      fs.mkdirSync(path.dirname(configFile), { recursive: true });
-      fs.writeFileSync(configFile, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
-      return { ...DEFAULT_CONFIG };
+    const stored = readJsonOrQuarantine<Partial<GlobalConfig>>(configFile);
+    if (stored !== undefined) {
+      lastReportedLoadFailure = undefined;
+      return { ...DEFAULT_CONFIG, ...stored };
     }
-  } catch (e) {
-    // ignore
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    writeJsonAtomic(configFile, DEFAULT_CONFIG);
+    lastReportedLoadFailure = undefined;
+  } catch (error) {
+    // Defaults without writing them: an unreadable file may still hold the user's settings.
+    const failure = describeFailure(error);
+    if (failure !== lastReportedLoadFailure) {
+      lastReportedLoadFailure = failure;
+      console.error('[global-config] Failed to load the global config; using defaults:', error);
+    }
   }
   return { ...DEFAULT_CONFIG };
+}
+
+function describeFailure(error: unknown): string {
+  const { code, path: filePath } = (error ?? {}) as NodeJS.ErrnoException;
+  return `${filePath ?? ''}:${code ?? String(error)}`;
 }
 
 export function saveGlobalConfig(config: GlobalConfig): boolean {
   try {
     const configFile = getConfigFilePath();
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf-8');
+    writeJsonAtomic(configFile, config);
     return true;
-  } catch (e) {
+  } catch (error) {
+    console.error('[global-config] Failed to save the global config:', error);
     return false;
   }
 }

@@ -1,206 +1,125 @@
-import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { MessagingService } from './messaging/messaging.service';
-import { ReplaySubject, Observable, tap, filter, take, Subscription, BehaviorSubject, of, firstValueFrom } from 'rxjs';
-import { map, shareReplay, filter as rxFilter, take as rxTake } from 'rxjs/operators';
-import { ServerInstance } from '../models/server-instance.model';
+import { Injectable, OnDestroy } from '@angular/core';
+import { BehaviorSubject, Observable, ReplaySubject, Subscription, of } from 'rxjs';
+import { filter, map, switchMap } from 'rxjs/operators';
+import { BACKUP_TIMEOUT_MS, MessagingService } from './messaging/messaging.service';
+import { FieldDefinition, FieldDefinitionsService } from './field-definitions.service';
 import { WebSocketService } from './web-socket.service';
-import { UtilityService } from './utility.service';
+import { IpcService } from './ipc.service';
+import { SaveInstanceResult, ServerInstance, ServerInstanceDraft } from '../models/server-instance.model';
+
+/** Reply to delete-server-instance. */
+export interface DeleteInstanceResult {
+  success: boolean;
+  id?: string;
+  error?: string;
+}
+
+/** Reply to import-server-from-backup. */
+export interface ImportServerResult {
+  success?: boolean;
+  instance?: ServerInstance;
+  message?: string;
+  error?: string;
+}
+
+/** Fields the backend reports about a running process; they are not settings and are never saved. */
+const RUNTIME_FIELDS = ['state', 'status', 'players', 'cpu', 'memory', 'startedAt'] as const;
+
+/** A copy of `instance` holding only its settings, for saving it or basing a new server on it. */
+export function withoutRuntimeFields<T extends ServerInstanceDraft>(instance: T): Omit<T, typeof RUNTIME_FIELDS[number]> {
+  const settings: Partial<T> = { ...instance };
+  for (const field of RUNTIME_FIELDS) delete settings[field];
+  return settings as Omit<T, typeof RUNTIME_FIELDS[number]>;
+}
+
+/** True when any field of `instance` differs from `saved`; arrays compare by value. */
+function differsFrom(instance: ServerInstanceDraft, saved: ServerInstance): boolean {
+  return (Object.keys(instance) as (keyof ServerInstance)[]).some(key => {
+    const a: unknown = instance[key];
+    const b: unknown = saved[key];
+    if (Array.isArray(a) && Array.isArray(b)) {
+      return a.length !== b.length || a.some((value, index) => value !== b[index]);
+    }
+    return a !== b;
+  });
+}
+
+function defaultsFromMeta(definitions: FieldDefinition[]): ServerInstanceDraft {
+  const defaults: Record<string, unknown> = {};
+  for (const entry of definitions) {
+    if (entry.key && 'default' in entry) {
+      // Cloned: the definitions are cached and shared, and callers edit what they get.
+      defaults[entry.key] = structuredClone(entry.default);
+    }
+  }
+  return {
+    ...defaults,
+    name: 'My Server',
+    sessionName: typeof defaults['sessionName'] === 'string' && defaults['sessionName'] ? defaults['sessionName'] : 'ARK Server',
+    gamePort: 7777,
+    rconPort: 27020,
+    queryPort: 27015,
+    multiHome: '',
+    rconPassword: '',
+    battleEye: false,
+    noTransferFromFiltering: false,
+    useExclusiveList: false,
+    installed: false,
+    currentVersion: null,
+    autoUpdateEnabled: true
+  } as ServerInstanceDraft;
+}
 
 @Injectable({ providedIn: 'root' })
-export class ServerInstanceService {
+export class ServerInstanceService implements OnDestroy {
   private instances$ = new ReplaySubject<ServerInstance[]>(1);
   private activeServer$ = new BehaviorSubject<ServerInstance | null>(null);
-  private _shouldCreateDefault = false;
+  private shouldCreateDefault = true;
   private subs: Subscription[] = [];
   private latestInstances: ServerInstance[] = [];
 
-  private metaDefaults$: Observable<any> | null = null;
-
   constructor(
-    public messaging: MessagingService,
-    private http: HttpClient,
-    private ws: WebSocketService,
-    private util: UtilityService
+    private messaging: MessagingService,
+    private fieldDefinitionsService: FieldDefinitionsService,
+    webSocket: WebSocketService,
+    ipc: IpcService
   ) {
-    // The list is asked for once as the app starts. In the web UI that request can be made
-    // before the socket carrying it is open — the moment just after signing in, or while a
-    // dropped connection is coming back — and it simply goes nowhere, leaving the app empty
-    // until a reload. Ask again each time the connection comes up.
-    this.subs.push(
-      this.ws.connected$.pipe(filter((connected: boolean) => connected)).subscribe(() => this.refresh())
-    );
+    // The web UI asks each time its socket comes up, which also covers a backend restart;
+    // the desktop app has no socket and asks once.
+    this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
+    if (ipc.isElectron) this.refresh();
 
-    // Listen for backend push updates (if any)
     this.subs.push(this.messaging.receiveMessage<ServerInstance[]>('server-instances').subscribe(instances => {
       const list = Array.isArray(instances) ? instances : [];
       this.latestInstances = list;
       this.instances$.next(list);
-      // If no servers exist, create a default (only on first load)
-      if (list.length > 0) {
-        this._shouldCreateDefault = false;
-      }
-      if (this._shouldCreateDefault && list.length === 0) {
-        this._shouldCreateDefault = false;
-        this.getDefaultInstanceFromMeta().subscribe(instance => {
-          // Keep name and sessionName in sync
-          instance.sessionName = instance.name;
-          this.save(instance).subscribe((res: any) => {
-            // Select the new server as active
-            if (res && res.instance && res.instance.id) {
-              this.setActiveServer(res.instance);
-            }
-          });
-        });
+      // A first run with no servers gets one to start from.
+      if (this.shouldCreateDefault) {
+        this.shouldCreateDefault = false;
+        if (list.length === 0) this.createDefaultServer();
       }
     }));
 
-    // Listen for real-time updates to a single instance
-    this.subs.push(this.messaging.receiveMessage<any>('server-instance-updated').subscribe(updated => {
-      if (updated && updated.id) {
-        // If the updated instance is the active one, update activeServer$
-        const current = this.activeServer$.getValue();
-        if (current && current.id === updated.id) {
-          // Don't update state from server-instance-updated messages unless it has a valid state
-          const { state, ...updatedWithoutState } = updated;
-          
-          const merged = { ...current, ...updatedWithoutState };
-          if (state != null) {
-            merged.state = state;
-          }
-          this.activeServer$.next(merged);
-        }
-      }
+    this.subs.push(this.messaging.receiveMessage<Partial<ServerInstance>>('server-instance-updated').subscribe(updated => {
+      const current = this.activeServer$.getValue();
+      if (!updated?.id || current?.id !== updated.id) return;
+      // Only a real state replaces the current one; config edits arrive without it.
+      const { state, ...settings } = updated;
+      this.activeServer$.next({ ...current, ...settings, ...(state != null ? { state } : {}) });
     }));
-
-    // Initial load: only call refresh after WebSocket is connected in web mode
-    this._shouldCreateDefault = true;
-    if (this.util.getPlatform() === 'Web') {
-      this.ws.connected$.pipe(
-        rxFilter(connected => connected),
-        rxTake(1)
-      ).subscribe(() => {
-        this.refresh();
-      });
-    } else {
-      this.refresh();
-    }
   }
 
-  /**
-   * Returns a Promise that resolves to the list of running server instances.
-   * Used for shutdown confirmation on app close.
-   */
-
-  getInstancesOnce(): Promise<ServerInstance[]> {
-    return new Promise(resolve => {
-      this.instances$.pipe(take(1)).subscribe((instances: ServerInstance[]) => {
-        resolve(instances.filter(i => {
-          const state = (i.state || i.status || '').toLowerCase();
-          return state === 'running' || state === 'starting';
-        }));
-      });
-    });
+  ngOnDestroy(): void {
+    this.subs.forEach(sub => sub.unsubscribe());
   }
 
-  /**
-   * Shuts down all running servers. Returns a Promise that resolves when done.
-   */
-  shutdownAllServers(): Promise<void> {
-    return new Promise(resolve => {
-      this.instances$.pipe(take(1)).subscribe((instances: ServerInstance[]) => {
-        const toShutdown = instances.filter(i => {
-          const state = (i.state || i.status || '').toLowerCase();
-          return state === 'running' || state === 'starting';
-        });
-        if (toShutdown.length === 0) {
-          resolve();
-          return;
-        }
-        let completed = 0;
-        toShutdown.forEach(instance => {
-          this.stopInstance(instance).then(() => {
-            completed++;
-            if (completed === toShutdown.length) {
-              resolve();
-            }
-          });
-        });
-      });
-    });
+  /** A new server's settings, from advanced-settings-meta.json. Each subscriber gets its own copy. */
+  getDefaultInstanceFromMeta(): Observable<ServerInstanceDraft> {
+    return this.fieldDefinitionsService.getFieldDefinitions().pipe(map(defaultsFromMeta));
   }
 
-  /**
-   * Stop a server instance. This should be implemented to actually stop the server.
-   */
-  public stopInstance(instance: ServerInstance): Promise<void> {
-    // Gracefully stop the server using the same logic as stopServer in ServerComponent
-    return new Promise((resolve) => {
-      if (!instance || !instance.id) return resolve();
-      // First, broadcast a shutdown message to the server using ServerChat
-      this.messaging.sendMessage('rcon-command', {
-        id: instance.id,
-        command: 'ServerChat Server is shutting down in 5 seconds!',
-        requestId: 'shutdown-broadcast-' + Date.now()
-      }).subscribe(() => {
-        // Wait 5 seconds, then send DoExit
-        setTimeout(() => {
-          this.messaging.sendMessage('rcon-command', {
-            id: instance.id,
-            command: 'DoExit',
-            requestId: 'stop-' + Date.now()
-          }).subscribe(() => {
-            this.messaging.sendMessage('stop-server-instance', { id: instance.id }).subscribe(() => {
-              resolve();
-            });
-          });
-        }, 5000);
-      });
-    });
-  }
-
-  /**
-   * Returns a new ServerInstance object with all default values from advanced-settings-meta.json
-   * This is async and returns an Observable.
-   */
-  getDefaultInstanceFromMeta(): Observable<any> {
-    if (!this.metaDefaults$) {
-      this.metaDefaults$ = this.http.get<any[]>('assets/advanced-settings-meta.json').pipe(
-        map((metaArr: any[]) => {
-          const defaults: any = {};
-          for (const entry of metaArr) {
-            if (entry.key && entry.hasOwnProperty('default')) {
-              defaults[entry.key] = entry.default;
-            }
-          }
-          // Add required fields not in meta
-          defaults.name = 'My Server';
-          defaults.sessionName = defaults.sessionName || 'ARK Server';
-          
-          // Add essential server configuration not in meta file
-          defaults.gamePort = 7777;
-          defaults.rconPort = 27020;
-          defaults.queryPort = 27015;
-          defaults.multiHome = ''; // empty = bind all interfaces (0.0.0.0)
-          defaults.rconPassword = '';
-          defaults.battleEye = false; // Default to disabled for easier setup
-          defaults.noTransferFromFiltering = false;
-          defaults.installed = false;
-          defaults.currentVersion = null;
-          defaults.autoUpdateEnabled = true;
-          
-          return defaults;
-        }),
-        shareReplay(1)
-      );
-    }
-    return this.metaDefaults$;
-  }
-
-  /**
-   * @deprecated Use getDefaultInstanceFromMeta() instead for meta-driven defaults
-   */
-  static getDefaultInstance(): any {
+  /** Values for the fields the server page expects on every instance. */
+  static getDefaultInstance(): ServerInstanceDraft {
     const defaultStatArray = Array(12).fill(1);
     return {
       name: 'My Server',
@@ -229,78 +148,62 @@ export class ServerInstanceService {
     };
   }
 
-  ngOnDestroy() {
-    this.subs.forEach(sub => sub?.unsubscribe());
-  }
-
-  /** Observable for components to subscribe to */
-  getInstances(): Observable<any[]> {
+  /** The last list the backend sent, as it sent it. LiveServersService adds the live fields. */
+  getInstances(): Observable<ServerInstance[]> {
     return this.instances$.asObservable();
   }
 
-  /** Set the active server instance */
-  setActiveServer(server: any) {
+  setActiveServer(server: ServerInstance | null): void {
     this.activeServer$.next(server);
   }
 
-  /** Observable for the active server instance */
-  getActiveServer(): Observable<any | null> {
+  getActiveServer(): Observable<ServerInstance | null> {
     return this.activeServer$.asObservable();
   }
 
-  /** Request latest from backend */
-  refresh() {
-    this.messaging.sendMessage('get-server-instances', {}).subscribe();
+  /** Asks for the list; it arrives as a server-instances broadcast. */
+  refresh(): void {
+    this.messaging.sendMessage('get-server-instances', {}).subscribe({
+      error: () => { /* asked again on the next connect */ }
+    });
   }
 
-  /**
-   * Save the instance only if its settings have actually changed compared to the current one in the list.
-   */
-  save(instance: any): Observable<any> {
-    let shouldSave = true;
-    const existing = this.latestInstances.find((i: any) => i.id === instance.id);
-    if (existing) {
-      // Shallow compare all keys
-      const iAny = instance as any;
-      const eAny = existing as any;
-      shouldSave = Object.keys(instance).some(key => {
-        // Compare arrays by value
-        if (Array.isArray(iAny[key]) && Array.isArray(eAny[key])) {
-          return iAny[key].length !== eAny[key].length || iAny[key].some((v: any, idx: number) => v !== eAny[key][idx]);
-        }
-        return iAny[key] !== eAny[key];
-      });
+  /** Saves the instance, or answers `unchanged` without a round trip when it matches the last saved copy. */
+  save(instance: ServerInstanceDraft): Observable<SaveInstanceResult> {
+    const existing = instance.id ? this.latestInstances.find(i => i.id === instance.id) : undefined;
+    if (existing && !differsFrom(instance, existing)) {
+      return of({ success: true, unchanged: true });
     }
-    if (!shouldSave) {
-      // Return an observable that completes immediately (no save needed)
-      return new Observable(observer => { observer.complete(); });
-    }
-    // Use sendMessage which handles requestId automatically
-    return this.messaging.sendMessage('save-server-instance', { instance });
+    return this.messaging.sendMessage<SaveInstanceResult>('save-server-instance', { instance });
   }
 
-  delete(id: string): Observable<any> {
-    // Use sendMessage which handles requestId automatically
-    return this.messaging.sendMessage('delete-server-instance', { id });
+  delete(id: string): Observable<DeleteInstanceResult> {
+    return this.messaging.sendMessage<DeleteInstanceResult>('delete-server-instance', { id });
   }
 
-  /**
-   * Reorder servers by saving their sortOrder properties.
-   * @param orderedIds - Array of server IDs in new display order
-   */
-  reorderServers(orderedIds: string[]): Observable<any> {
+  /** Persists a new sidebar order; `orderedIds` is every server id in display order. */
+  reorderServers(orderedIds: string[]): Observable<{ success?: boolean; error?: string }> {
     return this.messaging.sendMessage('reorder-server-instances', { orderedIds });
   }
 
-  /**
-   * Import a server from backup file
-   */
-  importServerFromBackup(serverName: string, backupFilePath?: string, fileData?: string, fileName?: string): Observable<any> {
-    return this.messaging.sendMessage('import-server-from-backup', { 
-      serverName, 
+  /** Creates a server from a backup zip: a path on the desktop, or the file's contents in the web UI. */
+  importServerFromBackup(serverName: string, backupFilePath?: string, fileData?: string, fileName?: string): Observable<ImportServerResult> {
+    return this.messaging.sendMessage<ImportServerResult>('import-server-from-backup', {
+      serverName,
       backupFilePath,
       fileData,
       fileName
+    }, { timeoutMs: BACKUP_TIMEOUT_MS });
+  }
+
+  private createDefaultServer(): void {
+    this.getDefaultInstanceFromMeta().pipe(
+      switchMap(defaults => this.save({ ...defaults, sessionName: defaults.name }))
+    ).subscribe({
+      next: res => {
+        if (res.instance?.id) this.setActiveServer(res.instance);
+      },
+      error: error => console.error('[server-instance] Failed to create the default server:', error)
     });
   }
 }

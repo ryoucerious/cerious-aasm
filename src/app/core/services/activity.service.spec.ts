@@ -1,18 +1,24 @@
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
-import { Subject, of } from 'rxjs';
+import { BehaviorSubject, Subject, of } from 'rxjs';
 import { ActivityService, ACTIVITY_SEEN_KEY } from './activity.service';
 import { MessagingService } from './messaging/messaging.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
 
 describe('ActivityService', () => {
   let service: ActivityService;
-  let channels: Record<string, Subject<any>>;
+  let channels: Record<string, Subject<unknown>>;
   let sendMessage: jasmine.Spy;
+  let connected$: BehaviorSubject<boolean>;
 
   const entry = (id: number, message: string, createdAt: number, kind = 'info') =>
     ({ id, kind, message, createdAt, instanceId: null, username: null });
 
-  const configure = (entries: any[] = []) => {
+  const feedRequests = () => sendMessage.calls.allArgs().filter(([channel]) => channel === 'get-activity').length;
+
+  const configure = (entries: object[] = [], { isElectron = true } = {}) => {
     channels = {};
+    connected$ = new BehaviorSubject<boolean>(false);
     sendMessage = jasmine.createSpy('sendMessage').and.callFake((channel: string) => {
       if (channel === 'get-activity') return of({ success: true, entries });
       return of({ success: true });
@@ -26,11 +32,13 @@ describe('ActivityService', () => {
           useValue: {
             sendMessage,
             receiveMessage: (channel: string) => {
-              channels[channel] = channels[channel] || new Subject<any>();
+              channels[channel] = channels[channel] || new Subject<unknown>();
               return channels[channel].asObservable();
             }
           }
-        }
+        },
+        { provide: WebSocketService, useValue: { connected$: connected$.asObservable() } },
+        { provide: IpcService, useValue: { isElectron } }
       ]
     });
     service = TestBed.inject(ActivityService);
@@ -49,6 +57,28 @@ describe('ActivityService', () => {
     expect(sendMessage).toHaveBeenCalledWith('get-activity', { limit: 100 });
     expect(service.items.length).toBe(2);
     expect(service.items[0]).toEqual(jasmine.objectContaining({ id: '2', kind: 'start', message: 'Ragnarok started', timestamp: 2000 }));
+  });
+
+  it('asks once in the desktop app, which has no socket', () => {
+    configure([], { isElectron: true });
+    expect(feedRequests()).toBe(1);
+  });
+
+  it('asks once when the web UI first connects, not also before', () => {
+    configure([], { isElectron: false });
+    expect(feedRequests()).toBe(0);
+
+    connected$.next(true);
+
+    expect(feedRequests()).toBe(1);
+  });
+
+  it('asks again each time the web UI reconnects', () => {
+    configure([], { isElectron: false });
+    connected$.next(true);
+    connected$.next(false);
+    connected$.next(true);
+    expect(feedRequests()).toBe(2);
   });
 
   it('keeps the previous list when a refresh fails', () => {
@@ -105,11 +135,14 @@ describe('ActivityService', () => {
     expect(service.items[0].timestamp).toBeGreaterThan(0);
   });
 
-  it('unsubscribes on destroy', () => {
-    configure();
-    const sub = { unsubscribe: jasmine.createSpy('unsubscribe') };
-    (service as any).subs = [sub];
+  it('stops following live events and reconnects once destroyed', fakeAsync(() => {
+    configure([], { isElectron: false });
     service.ngOnDestroy();
-    expect(sub.unsubscribe).toHaveBeenCalled();
-  });
+
+    channels['activity-changed'].next({});
+    connected$.next(true);
+    tick(400);
+
+    expect(feedRequests()).toBe(0);
+  }));
 });

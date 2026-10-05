@@ -1,34 +1,31 @@
 import { messagingService } from '../services/messaging.service';
 import { activityLogService } from '../services/activity-log.service';
+import { identifySender } from '../services/auth/permission-gate';
+import { visibleInstanceIds } from '../services/auth/pool-access';
+import { getAllInstances } from '../utils/ark/instance.utils';
+import { onRequest } from './handler.utils';
 
-/**
- * The Recent Activity feed. Reading is open to any signed-in user; clearing needs the
- * settings permission, since the history is shared by everyone.
- */
+const DEFAULT_LIMIT = 100;
 
-messagingService.on('get-activity', (payload: any, sender: any) => {
-  const { requestId, limit } = payload || {};
-  try {
-    const entries = activityLogService.list(typeof limit === 'number' ? limit : 100);
-    messagingService.sendToOriginator('get-activity', { success: true, entries, requestId }, sender);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[activity-handler] Failed to read activity:', message);
-    messagingService.sendToOriginator('get-activity', { success: false, error: message, entries: [], requestId }, sender);
-  }
-});
+onRequest('get-activity', async (payload, { sender }) => {
+  const limit = typeof payload.limit === 'number' ? payload.limit : DEFAULT_LIMIT;
+  const entries = activityLogService.list(limit);
+  const identity = identifySender(sender);
+  if (identity.isAdmin) return { success: true, entries };
 
-messagingService.on('clear-activity', (payload: any, sender: any) => {
-  const { requestId } = payload || {};
-  try {
-    // Clearing the feed leaves it empty: an entry saying it was cleared is the one thing
-    // nobody asked to keep.
-    activityLogService.clear();
-    messagingService.sendToOriginator('clear-activity', { success: true, requestId }, sender);
-    messagingService.sendToAll('activity-changed', {});
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[activity-handler] Failed to clear activity:', message);
-    messagingService.sendToOriginator('clear-activity', { success: false, error: message, requestId }, sender);
-  }
+  // A pool member sees what happened to their servers. Entries about no server in particular
+  // (the web server starting, the feed being cleared) are the admin's business.
+  const visible = visibleInstanceIds(identity.user, await getAllInstances());
+  return {
+    success: true,
+    entries: entries.filter(entry => !!entry.instanceId && (visible === null || visible.has(entry.instanceId)))
+  };
+}, { onError: error => ({ success: false, error, entries: [] }) });
+
+onRequest('clear-activity', (_payload, { afterReply }) => {
+  // Clearing the feed leaves it empty: an entry saying it was cleared is the one thing
+  // nobody asked to keep.
+  activityLogService.clear();
+  afterReply(() => messagingService.sendToAll('activity-changed', {}));
+  return { success: true };
 });

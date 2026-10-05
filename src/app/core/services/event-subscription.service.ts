@@ -1,17 +1,31 @@
 import { Injectable, ChangeDetectorRef } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Subscription, take } from 'rxjs';
+import { Subscription, distinctUntilChanged } from 'rxjs';
 import { MessagingService } from './messaging/messaging.service';
 import { ServerInstanceService } from './server-instance.service';
 import { ServerStateService } from './server-state.service';
 import { ServerConfigurationService } from './server-configuration.service';
 import { RconManagementService } from './rcon-management.service';
-import { NotificationService } from './notification.service';
+import { FieldDefinition, FieldDefinitionsService } from './field-definitions.service';
+import {
+  InstanceMemoryEvent, InstancePlayersEvent, InstanceStateEvent, RconStatusEvent, ServerInstance, ServerInstanceDraft
+} from '../models/server-instance.model';
 
-/**
- * Service responsible for managing event subscriptions and messaging
- * Centralizes all the subscription logic from the server component
- */
+/** The parts of the server page this service keeps up to date. */
+export interface ServerPageState {
+  advancedSettingsMeta: FieldDefinition[];
+  activeServerInstance: ServerInstanceDraft | null;
+  /** The settings as the backend last confirmed them. Where the page differs, the user has unsaved edits. */
+  originalServerInstance: ServerInstanceDraft | null;
+  rconConnected: boolean;
+  loadBackupSettings: () => void;
+  loadBackupList: () => void;
+  loadModList: () => void;
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -19,220 +33,185 @@ export class EventSubscriptionService {
   private subscriptions: Subscription[] = [];
 
   constructor(
-    private http: HttpClient,
     private messaging: MessagingService,
     private serverInstanceService: ServerInstanceService,
     private serverStateService: ServerStateService,
     private serverConfigurationService: ServerConfigurationService,
     private rconManagementService: RconManagementService,
-    private notificationService: NotificationService
+    private fieldDefinitionsService: FieldDefinitionsService
   ) {}
 
   /**
-   * Initialize all event subscriptions for the server component
+   * Wires the server page to the backend's broadcasts and loads the selected server.
+   * Returns the active-server subscription; the rest end with destroySubscriptions().
    */
-  initializeSubscriptions(
-    component: {
-      advancedSettingsMeta: any[];
-      activeServerInstance: any;
-      originalServerInstance: any;
-      modsInput: string;
-      rconConnected: boolean;
-      crossplayPlatforms: string[];
-      loadBackupSettings: () => void;
-      loadBackupList: () => void;
-      loadModList: () => void;
-      scrollLogsToBottom: () => void;
-    },
-    cdr: ChangeDetectorRef
-  ): Subscription {
-    // Load advanced settings metadata
-    this.subscriptions.push(
-      this.http.get<any[]>('assets/advanced-settings-meta.json').subscribe(meta => {
-        component.advancedSettingsMeta = meta;
-        cdr.markForCheck();
-      })
-    );
+  initializeSubscriptions(component: ServerPageState, cdr: ChangeDetectorRef): Subscription {
+    /** The page's server, but only while it is still the one with this id. */
+    const activeServer = (id: unknown): ServerInstanceDraft | null =>
+      id && component.activeServerInstance?.id === id ? component.activeServerInstance : null;
 
-    // Listen for error notifications (e.g., port in use) only once
     this.subscriptions.push(
-      this.messaging.receiveMessage('notification').subscribe((msg: any) => {
-        if (msg && msg.type === 'error' && msg.message) {
-          this.notificationService.error(msg.message, 'Server Start Error');
-        }
-      })
-    );
+      this.fieldDefinitionsService.getFieldDefinitions().subscribe({
+        next: meta => {
+          component.advancedSettingsMeta = meta;
+          cdr.markForCheck();
+        },
+        error: () => { /* the settings tabs stay empty; nothing else depends on them */ }
+      }),
 
-    // Listen for clear logs event from backend and delegate to service
-    this.subscriptions.push(
-      this.messaging.receiveMessage('clear-server-instance-logs').subscribe((msg: any) => {
-        if (msg && msg.instanceId) {
+      this.messaging.receiveMessage<{ instanceId?: string }>('clear-server-instance-logs').subscribe(msg => {
+        if (msg?.instanceId) {
           this.serverStateService.clearLogsForInstance(msg.instanceId);
           cdr.markForCheck();
         }
-      })
-    );
+      }),
 
-    // Subscribe to ServerStateService logs for UI updates
-    this.subscriptions.push(
-      this.serverStateService.logs$.subscribe(() => {
-        cdr.markForCheck();
-        component.scrollLogsToBottom();
-      })
-    );
+      this.serverStateService.logsChanged$.subscribe(() => cdr.markForCheck()),
 
-    // Listen for RCON status
-    this.subscriptions.push(
-      this.rconManagementService.subscribeToRconStatus().subscribe((msg: any) => {
-        if (msg && msg.instanceId === component.activeServerInstance?.id) {
+      this.rconManagementService.subscribeToRconStatus().subscribe((msg: RconStatusEvent) => {
+        if (activeServer(msg?.instanceId)) {
           component.rconConnected = !!msg.connected;
           cdr.markForCheck();
         }
-      })
-    );
+      }),
 
-    // Listen for backend player count updates
-    this.subscriptions.push(
-      this.messaging.receiveMessage('server-instance-players').subscribe((msg: any) => {
-        if (msg && msg.instanceId === component.activeServerInstance?.id && typeof msg.players === 'number') {
-          component.activeServerInstance.players = msg.players;
+      this.messaging.receiveMessage<InstancePlayersEvent>('server-instance-players').subscribe(msg => {
+        const server = activeServer(msg?.instanceId);
+        if (server && typeof msg.players === 'number') {
+          server.players = msg.players;
+          cdr.markForCheck();
+        }
+      }),
+
+      this.messaging.receiveMessage<InstanceStateEvent>('server-instance-state').subscribe(msg => {
+        const server = activeServer(msg?.instanceId);
+        if (server && msg.state) {
+          server.state = this.serverStateService.mapServerState(msg.state);
+          cdr.markForCheck();
+        }
+      }),
+
+      this.messaging.receiveMessage<Partial<ServerInstance>>('server-instance-updated').subscribe(msg => {
+        const server = activeServer(msg?.id);
+        if (server && this.applyUpdate(component, server, msg)) cdr.markForCheck();
+      }),
+
+      this.messaging.receiveMessage<ServerInstance[]>('server-instances').subscribe(instances => {
+        const id = component.activeServerInstance?.id;
+        const updated = Array.isArray(instances) && id ? instances.find(inst => inst.id === id) : undefined;
+        const server = activeServer(id);
+        if (server && updated?.memory !== undefined) {
+          server.memory = updated.memory;
+          cdr.markForCheck();
+        }
+      }),
+
+      this.messaging.receiveMessage<InstanceMemoryEvent>('server-instance-memory').subscribe(msg => {
+        const server = activeServer(msg?.instanceId);
+        if (server && typeof msg.memory === 'number') {
+          server.memory = msg.memory;
           cdr.markForCheck();
         }
       })
     );
 
-    // Listen for server state updates
-    this.subscriptions.push(
-      this.messaging.receiveMessage('server-instance-state').subscribe((msg: any) => {
-        if (
-          msg && msg.state &&
-          component.activeServerInstance &&
-          (msg.instanceId === component.activeServerInstance.id)
-        ) {
-          const mappedState = this.serverStateService.mapServerState(msg.state);
-          component.activeServerInstance.state = mappedState;
-          
-          cdr.markForCheck();
-        }
-      })
-    );
-
-    // Listen for server instance updates from other clients
-    this.subscriptions.push(
-      this.messaging.receiveMessage('server-instance-updated').subscribe((msg: any) => {
-        if (
-          msg && 
-          component.activeServerInstance &&
-          msg.id === component.activeServerInstance.id
-        ) {
-          // Don't update state from server-instance-updated messages, only from server-instance-state
-          const { state, ...msgWithoutState } = msg;
-          
-          // Merge the updated server data with defaults (excluding state)
-          const defaults = ServerInstanceService.getDefaultInstance();
-          const merged = { ...defaults, ...component.activeServerInstance, ...msgWithoutState };
-          
-          component.activeServerInstance = merged;
-          
-          // Handle crossplay array conversion
-          if (typeof component.activeServerInstance.crossplay === 'boolean') {
-            component.activeServerInstance.crossplay = component.activeServerInstance.crossplay ? [...component.crossplayPlatforms] : [];
-          } else if (!Array.isArray(component.activeServerInstance.crossplay)) {
-            component.activeServerInstance.crossplay = [];
-          }
-          
-          // Ensure mods is always an array
-          if (!Array.isArray(component.activeServerInstance.mods)) {
-            component.activeServerInstance.mods = [];
-          }
-          component.modsInput = component.activeServerInstance.mods?.join(',') || '';
-          
-          // Update the original instance to reflect the new state from other clients
-          component.originalServerInstance = JSON.parse(JSON.stringify(component.activeServerInstance));
-          
-          cdr.markForCheck();
-        }
-      })
-    );
-
-    // Listen for server instances list updates (includes memory data)
-    this.subscriptions.push(
-      this.messaging.receiveMessage('server-instances').subscribe((instances: any[]) => {
-        if (instances && component.activeServerInstance) {
-          const updatedInstance = instances.find(inst => inst.id === component.activeServerInstance.id);
-          if (updatedInstance && updatedInstance.memory !== undefined) {
-            component.activeServerInstance.memory = updatedInstance.memory;
-            cdr.markForCheck();
-          }
-        }
-      })
-    );
-
-    // Listen for continuous memory updates while server is running
-    this.subscriptions.push(
-      this.messaging.receiveMessage('server-instance-memory').subscribe((msg: any) => {
-        if (msg && msg.instanceId === component.activeServerInstance?.id && typeof msg.memory === 'number') {
-          component.activeServerInstance.memory = msg.memory;
-          cdr.markForCheck();
-        }
-      })
-    );
-
-    // Initialize server instance with proper defaults and normalization
-    return this.serverInstanceService.getActiveServer().subscribe(server => {
-      component.activeServerInstance = this.serverConfigurationService.initializeServerInstance(server);
-      // Store a deep copy of the original for change detection
-      component.originalServerInstance = this.serverConfigurationService.createDeepCopy(component.activeServerInstance);
-      
-      // Convert mods array to input string
-      component.modsInput = this.serverConfigurationService.modsArrayToString(component.activeServerInstance.mods);
-      
-      // Initialize mod list for the new UI
-      if (component.loadModList) {
+    // Only a different server resets the page. The same one is announced again after every
+    // save; its edits arrive through server-instance-updated, which keeps unsaved ones.
+    return this.serverInstanceService.getActiveServer().pipe(
+      distinctUntilChanged((previous, next) => previous?.id === next?.id)
+    ).subscribe(selected => {
+      if (!selected) {
+        component.activeServerInstance = null;
+        component.originalServerInstance = null;
         component.loadModList();
+        return;
       }
-      
-      // Update the original after any initialization changes
-      component.originalServerInstance = this.serverConfigurationService.createDeepCopy(component.activeServerInstance);
 
-      // Request current state, logs, and player count for this instance
-      if (component.activeServerInstance && component.activeServerInstance.id) {
-        this.messaging.sendMessage('get-server-instance-state', { id: component.activeServerInstance.id }).pipe(take(1)).subscribe((msg: any) => {
-          if (msg && msg.state) {
-            component.activeServerInstance.state = this.serverStateService.mapServerState(msg.state);
-            cdr.markForCheck();
-          }
-        });
-        this.messaging.sendMessage('get-server-instance-logs', { id: component.activeServerInstance.id, maxLines: 200 }).pipe(take(1)).subscribe(() => {
-          // Log fetching is now handled by ServerStateService
-          component.scrollLogsToBottom();
-        });
-        // Request current player count
-        this.messaging.sendMessage('get-server-instance-players', { id: component.activeServerInstance.id }).pipe(take(1)).subscribe((msg: any) => {
-          if (msg && typeof msg.players === 'number') {
-            component.activeServerInstance.players = msg.players;
-            cdr.markForCheck();
-          }
-        });
-        // Request current RCON status for this specific instance
-        this.messaging.sendMessage('get-rcon-status', { id: component.activeServerInstance.id }).pipe(take(1)).subscribe((msg: any) => {
-          if (msg && msg.instanceId === component.activeServerInstance?.id) {
-            component.rconConnected = !!msg.connected;
-            cdr.markForCheck();
-          }
-        });
-        // Load backup settings and list for this instance
+      // A copy: the selected object is shared with the sidebar and the service's cache.
+      const server = this.serverConfigurationService.initializeServerInstance(
+        this.serverConfigurationService.createDeepCopy(selected)
+      );
+      component.activeServerInstance = server;
+      component.loadModList();
+      // After loadModList, which fills in fields of its own.
+      component.originalServerInstance = this.serverConfigurationService.createDeepCopy(server);
+
+      if (server.id) {
+        this.requestLiveState(server.id, activeServer, component, cdr);
         component.loadBackupSettings();
         component.loadBackupList();
       }
     });
   }
 
-  /**
-   * Clean up all subscriptions
-   */
   destroySubscriptions(): void {
     this.subscriptions.forEach(sub => sub.unsubscribe());
     this.subscriptions = [];
+  }
+
+  /**
+   * Takes the backend's copy of the page's server: a save echoing back, or another client's edit.
+   * A field the user has changed since the last save keeps the user's value; it goes out with the
+   * next save. State is left to server-instance-state. Returns whether anything changed.
+   */
+  private applyUpdate(component: ServerPageState, server: ServerInstanceDraft, update: Partial<ServerInstance>): boolean {
+    const { state, ...incoming } = update;
+    const current = server as Record<string, unknown>;
+    const saved = component.originalServerInstance as Record<string, unknown> | null;
+    const editedHere = (key: string) => saved !== null && !sameValue(current[key], saved[key]);
+    const taken = Object.entries(incoming).filter(([key, value]) => !editedHere(key) && !sameValue(current[key], value));
+    if (taken.length === 0) return false;
+
+    const merged = this.serverConfigurationService.initializeServerInstance({ ...server, ...Object.fromEntries(taken) });
+    const confirmed = Object.fromEntries(taken.map(([key]) => [key, (merged as Record<string, unknown>)[key]]));
+    component.activeServerInstance = merged;
+    component.originalServerInstance = this.serverConfigurationService.createDeepCopy({ ...(saved ?? merged), ...confirmed } as ServerInstanceDraft);
+    component.loadModList();
+    return true;
+  }
+
+  /** Asks for the server's current state; replies for a server no longer shown are dropped. */
+  private requestLiveState(
+    id: string,
+    activeServer: (id: unknown) => ServerInstanceDraft | null,
+    component: ServerPageState,
+    cdr: ChangeDetectorRef
+  ): void {
+    const ignoreFailure = () => { /* the next broadcast brings the same data */ };
+
+    this.messaging.sendMessage<InstanceStateEvent>('get-server-instance-state', { id }).subscribe({
+      next: msg => {
+        const server = activeServer(id);
+        if (server && msg?.state) {
+          server.state = this.serverStateService.mapServerState(msg.state);
+          cdr.markForCheck();
+        }
+      },
+      error: ignoreFailure
+    });
+
+    // The reply itself is picked up by ServerStateService.
+    this.messaging.sendMessage('get-server-instance-logs', { id, maxLines: 200 }).subscribe({ error: ignoreFailure });
+
+    this.messaging.sendMessage<InstancePlayersEvent>('get-server-instance-players', { id }).subscribe({
+      next: msg => {
+        const server = activeServer(id);
+        if (server && typeof msg?.players === 'number') {
+          server.players = msg.players;
+          cdr.markForCheck();
+        }
+      },
+      error: ignoreFailure
+    });
+
+    this.messaging.sendMessage<RconStatusEvent>('get-rcon-status', { id }).subscribe({
+      next: msg => {
+        if (activeServer(id) && msg?.instanceId === id) {
+          component.rconConnected = !!msg.connected;
+          cdr.markForCheck();
+        }
+      },
+      error: ignoreFailure
+    });
   }
 }

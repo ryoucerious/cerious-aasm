@@ -1,457 +1,359 @@
-// ark-server-logging.utils.ts
-// Utility functions for ARK server logging and log tailing
-
-import * as path from 'path';
 import * as fs from 'fs';
-import { getArkServerDir } from './ark-server-install.utils';
-import { getDefaultInstancesBaseDir, getInstancesBaseDir } from '../../ark/instance.utils';
+import * as path from 'path';
+import { StringDecoder } from 'string_decoder';
+import { getArkServerDir, getInstanceLogsDir } from './ark-server-paths.utils';
 import { getInstanceState, setInstanceState } from './ark-server-state.utils';
 
-// ---- Per-instance log file registry ----
-// Tracks which log file belongs to which server instance to prevent cross-contamination
-// when multiple servers run from the same ARK installation (shared Logs directory).
-const instanceLogFileMap: Record<string, string> = {};
-
-// ---- Per-instance pre-start snapshots ----
-// Stores path→mtime at the moment just before server start so we can detect
-// which log file (new OR overwritten) belongs to this instance.
-const instanceSnapshotMap: Record<string, Map<string, number>> = {};
-
-/**
- * Get the shared ARK server Logs directory path.
- */
-function getSharedLogsDir(): string {
-  return path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
+interface LogFileInfo {
+  file: string;
+  path: string;
+  mtime: number;
 }
 
-/**
- * Log directories to consider for an instance, most specific first.
- *
- * ARK writes Saved/Logs relative to the tree that owns the executable it launched. An
- * instance with isolated binaries therefore logs into its own folder, while an instance
- * that falls back to the shared executable logs into the shared install. Both are scanned
- * so detection works either way (and keeps working if isolation is added or removed).
- */
-function getLogsDirs(instanceId?: string): string[] {
-  const dirs: string[] = [];
+interface Tailer {
+  /** `drain` reads what the server wrote since the last poll before stopping. */
+  close(drain: boolean): void;
+}
 
-  if (instanceId) {
-    try {
-      const { getInstanceLogsDir } = require('./ark-server-paths.utils');
-      dirs.push(getInstanceLogsDir(instanceId));
-    } catch {
-      // Instance not resolvable (not installed yet) — fall back to the shared dir only
-    }
+const LOG_FILE_PATTERN = /^ShooterGame(_\d+)?\.log$/;
+const DETECTION_DELAY_MS = 2000;
+const RETRY_INTERVAL_MS = 1000;
+const TAIL_ATTACH_ATTEMPTS = 60;
+const POLL_INTERVAL_MS = 3000;
+// ARK logs grow to several GB; reading one whole on every request ballooned Electron past 10 GB.
+const TAIL_BYTES = 64 * 1024;
+
+type LogEncoding = 'utf8' | 'utf16le';
+
+// Only these lines mean the server takes players AND has bound its RCON port. 'Full Startup:',
+// 'Listening on port', 'StartPlay RPC completed' and 'Initializing Game Engine Completed' come
+// 30-60 s earlier, and connecting RCON on them wastes the retry window on a closed port.
+const STARTUP_LINES = [
+  'Server has completed startup and is now advertising for join.',
+  'Server is now advertising for join',
+  'has completed startup and is now advertising'
+];
+// The whole message of a line, after ARK's "[2026.09.11-22.33.00:824][837]" time and frame: chat is
+// logged too, and a player typing the words must not turn a later crash into a stop.
+const SHUTDOWN_LINE = /(^|\])(Closing by request|Server shutting down)\s*$/;
+
+// Several servers can share one install's Logs directory, so each instance records which file
+// is its own, and the log files as they were just before it started.
+const registeredLogFiles: Record<string, string> = {};
+const preStartSnapshots: Record<string, Map<string, number>> = {};
+const detectionTimers: Record<string, NodeJS.Timeout> = {};
+const tailers: Record<string, Tailer> = {};
+
+/**
+ * ARK writes Saved/Logs under the tree that owns the executable it launched: an instance with its
+ * own binaries logs into its own folder, one on the shared executable into the shared install. Both
+ * are scanned so detection keeps working if isolation is added or removed.
+ */
+function getLogsDirs(instanceId: string): string[] {
+  const shared = path.join(getArkServerDir(), 'ShooterGame', 'Saved', 'Logs');
+  let own: string | undefined;
+  try {
+    own = getInstanceLogsDir(instanceId);
+  } catch {
+    // Not resolvable before the server is installed
   }
-
-  const shared = getSharedLogsDir();
-  if (!dirs.includes(shared)) dirs.push(shared);
-  return dirs;
+  return own && own !== shared ? [own, shared] : [shared];
 }
 
-/**
- * List all ShooterGame*.log files (excluding BACKUP) across the given directories,
- * sorted most-recent first.
- */
-function listLogFiles(logsDirs: string[]): { file: string; path: string; mtime: number }[] {
-  const found: { file: string; path: string; mtime: number }[] = [];
-  for (const logsDir of logsDirs) {
-    if (!fs.existsSync(logsDir)) continue;
-    for (const f of fs.readdirSync(logsDir)) {
-      if (!/^ShooterGame(\_\d+)?\.log$/.test(f) || f.includes('BACKUP')) continue;
-      const filePath = path.join(logsDir, f);
+/** ShooterGame logs in `dirs`, newest first. */
+function listLogFiles(dirs: string[]): LogFileInfo[] {
+  const found: LogFileInfo[] = [];
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const file of fs.readdirSync(dir)) {
+      if (!LOG_FILE_PATTERN.test(file)) continue;
+      const filePath = path.join(dir, file);
       try {
-        found.push({ file: f, path: filePath, mtime: fs.statSync(filePath).mtimeMs });
+        found.push({ file, path: filePath, mtime: fs.statSync(filePath).mtimeMs });
       } catch {
-        // File vanished between readdir and stat
+        // Vanished between readdir and stat
       }
     }
   }
   return found.sort((a, b) => b.mtime - a.mtime);
 }
 
-/**
- * Snapshot the current log files (path → mtime) BEFORE starting a server process.
- * Capturing mtime lets us detect files that are overwritten rather than newly created.
- */
-export function snapshotLogFiles(instanceId?: string): Map<string, number> {
-  const files = listLogFiles(getLogsDirs(instanceId));
-  const snapshot = new Map<string, number>();
-  for (const f of files) snapshot.set(f.path, f.mtime);
-  return snapshot;
+/** Log file path -> mtime, taken before a start so the instance's own file can be told apart. */
+export function snapshotLogFiles(instanceId: string): Map<string, number> {
+  return new Map(listLogFiles(getLogsDirs(instanceId)).map(file => [file.path, file.mtime]));
 }
 
 /**
- * After a server starts, detect which NEW log file appeared (or which existing file
- * now contains the session name). Register it for the given instanceId.
- * 
- * @param instanceId - The server instance ID
- * @param sessionName - The server's session name to match in log content
- * @param preStartSnapshot - The set of log file paths from before server start
- * @param maxAttempts - Max retries (1 second apart) to find the log file
+ * Registers the newest log that appeared, or changed, since the instance's pre-start snapshot and
+ * that no other instance has claimed. Windows ARK starts a new numbered file; Proton rewrites
+ * ShooterGame.log in place, which only the mtime shows.
  */
-export function detectAndRegisterLogFile(
-  instanceId: string,
-  sessionName: string,
-  preStartSnapshot: Map<string, number>,
-  maxAttempts = 30
-): void {
-  // Store snapshot so setupLogTailing can use the same detection strategy
-  instanceSnapshotMap[instanceId] = preStartSnapshot;
+function registerChangedLogFile(instanceId: string): string | null {
+  const snapshot = preStartSnapshots[instanceId];
+  if (!snapshot) return null;
 
-  const logsDirs = getLogsDirs(instanceId);
+  const claimed = new Set(
+    Object.entries(registeredLogFiles).filter(([id]) => id !== instanceId).map(([, file]) => file)
+  );
+  const found = listLogFiles(getLogsDirs(instanceId)).find(file => {
+    const before = snapshot.get(file.path);
+    return (before === undefined || file.mtime > before) && !claimed.has(file.path);
+  });
+  if (!found) return null;
+
+  registeredLogFiles[instanceId] = found.path;
+  console.log(`[ark-logging] Registered log file for ${instanceId}: ${found.file}`);
+  return found.path;
+}
+
+/** Looks for the log file a just-started server creates, retrying once a second. */
+export function detectAndRegisterLogFile(instanceId: string, preStartSnapshot: Map<string, number>, maxAttempts = 30): void {
+  clearTimeout(detectionTimers[instanceId]);
+  preStartSnapshots[instanceId] = preStartSnapshot;
   let attempts = 0;
 
-  function tryDetect() {
-    attempts++;
-    const currentFiles = listLogFiles(logsDirs);
-    const claimedPaths = new Set(
-      Object.entries(instanceLogFileMap)
-        .filter(([id]) => id !== instanceId)
-        .map(([, p]) => p)
-    );
-
-    // Strategy 1: find a file that is either brand-new OR was overwritten since the
-    // snapshot (same path but mtime is newer). On Windows ARK usually creates a new
-    // numbered file; on Linux/Proton it typically overwrites ShooterGame.log in place.
-    const changedFiles = currentFiles.filter(f => {
-      const snapshotMtime = preStartSnapshot.get(f.path);
-      return snapshotMtime === undefined   // brand-new path
-          || f.mtime > snapshotMtime;      // overwritten in place
-    }).filter(f => !claimedPaths.has(f.path));
-
-    if (changedFiles.length === 1) {
-      instanceLogFileMap[instanceId] = changedFiles[0].path;
-      console.log(`[ark-logging] Registered log file for ${instanceId}: ${changedFiles[0].file}`);
+  const detect = () => {
+    delete detectionTimers[instanceId];
+    if (registeredLogFiles[instanceId] || registerChangedLogFile(instanceId)) return;
+    if (++attempts < maxAttempts) {
+      detectionTimers[instanceId] = setTimeout(detect, RETRY_INTERVAL_MS);
       return;
     }
-
-    if (changedFiles.length > 1) {
-      // Multiple candidates — prefer the most recently modified one
-      const best = changedFiles[0]; // already sorted newest-first by listLogFiles
-      instanceLogFileMap[instanceId] = best.path;
-      console.log(`[ark-logging] Registered log file for ${instanceId}: ${best.file} (most recent of ${changedFiles.length} candidates)`);
-      return;
-    }
-
-    // Retry if we haven't found it yet
-    if (attempts < maxAttempts) {
-      setTimeout(tryDetect, 1000);
-    } else {
-      console.warn(`[ark-logging] Could not detect log file for ${instanceId} after ${maxAttempts} attempts`);
-    }
-  }
-
-  // Start detection after a small delay to let the process create its log file
-  setTimeout(tryDetect, 2000);
+    console.warn(`[ark-logging] Could not detect the log file for ${instanceId} after ${maxAttempts} attempts`);
+  };
+  detectionTimers[instanceId] = setTimeout(detect, DETECTION_DELAY_MS);
 }
 
-/**
- * Get the registered log file path for an instance, or null if not tracked.
- */
 export function getRegisteredLogFile(instanceId: string): string | null {
-  return instanceLogFileMap[instanceId] || null;
+  return registeredLogFiles[instanceId] || null;
 }
 
-/**
- * Unregister a log file when a server stops.
- */
+/** For a server that stopped: cancels detection, and emits the log's last lines before closing it. */
 export function unregisterLogFile(instanceId: string): void {
-  delete instanceLogFileMap[instanceId];
-  delete instanceSnapshotMap[instanceId];
+  clearTimeout(detectionTimers[instanceId]);
+  delete detectionTimers[instanceId];
+  closeTailer(instanceId, true);
+  delete registeredLogFiles[instanceId];
+  delete preStartSnapshots[instanceId];
 }
 
-/**
- * Returns the last N lines of the log file for a given instance.
- * Uses the registered log file if available to avoid cross-contamination.
- */
+/** The last `maxLines` lines of the instance's own log while it runs. */
 export function getInstanceLogs(instanceId: string, maxLines = 200): string[] {
-  const state = getInstanceState(instanceId)?.toLowerCase();
+  const state = getInstanceState(instanceId);
   if (state !== 'running' && state !== 'starting' && state !== 'stopping') return [];
-  const logsDirs = getLogsDirs(instanceId);
-  if (!logsDirs.some(dir => fs.existsSync(dir))) return [];
 
-  // Priority 1: Use the registered log file for this instance
-  let foundLogFile: string | null = getRegisteredLogFile(instanceId);
-
-  // Priority 2: Search by session name (only if not registered)
-  if (!foundLogFile) {
-    let config: any = {};
-    try {
-      const baseDir = getDefaultInstancesBaseDir?.() || getInstancesBaseDir?.();
-      if (baseDir) {
-        const configPath = path.join(baseDir, instanceId, 'config.json');
-        if (fs.existsSync(configPath)) {
-          config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        }
-      }
-    } catch {}
-    const sessionName = config.sessionName || '';
-    if (sessionName) {
-      const logFiles = listLogFiles(logsDirs);
-      const claimedPaths = new Set(Object.values(instanceLogFileMap));
-      for (const logInfo of logFiles) {
-        try {
-          const content = fs.readFileSync(logInfo.path, 'utf8');
-          if (content.includes(`SessionName=${sessionName}`) || content.includes(sessionName)) {
-            // Only use if not claimed by a different instance
-            if (!claimedPaths.has(logInfo.path)) {
-              foundLogFile = logInfo.path;
-              // Register it now for future calls
-              instanceLogFileMap[instanceId] = logInfo.path;
-              break;
-            }
-            // Also accept if it IS claimed by this same instance
-            const claimer = Object.entries(instanceLogFileMap).find(([, p]) => p === logInfo.path);
-            if (claimer && claimer[0] === instanceId) {
-              foundLogFile = logInfo.path;
-              break;
-            }
-          }
-        } catch {}
-      }
-    }
-  }
-
-  // Do NOT fall back to "most recent file" — that causes cross-contamination
-  if (!foundLogFile) return [];
-
-  if (!fs.existsSync(foundLogFile)) return [];
-  // Read only the last 64 KB instead of the entire file.
-  // ARK log files can grow to several GB; loading the full file into the Node.js heap
-  // on every call causes the Electron process to balloon to 10+ GB RSS on Linux.
-  // Per-instance isolation is unchanged — which file to read is decided above.
-  const TAIL_BYTES = 64 * 1024;
-  const fileStat = fs.statSync(foundLogFile);
-  const offset = Math.max(0, fileStat.size - TAIL_BYTES);
-  const fd = fs.openSync(foundLogFile, 'r');
-  const buf = Buffer.alloc(Math.min(TAIL_BYTES, fileStat.size));
-  fs.readSync(fd, buf, 0, buf.length, offset);
-  fs.closeSync(fd);
-  const lines = buf.toString('utf8').split(/\r?\n/).filter(line => line.trim().length > 0);
-  return lines.slice(-maxLines);
+  // Never "the newest file": with several servers on one install that is often another server's.
+  const file = registeredLogFiles[instanceId] || registerChangedLogFile(instanceId);
+  return file ? readLogTail(file, maxLines) : [];
 }
 
 /**
- * Watches the Ark server log file for new lines and streams them to the callback.
- * Uses position-based reading and a polling fallback alongside fs.watch for reliability.
- * Returns a watcher object with a close() method.
+ * How a log is encoded. ARK writes UTF-8 with a byte order mark; a log the engine is told to write
+ * elsewhere (-AbsLog) can be UTF-16 LE, which read as UTF-8 puts a NUL after every character so no
+ * startup line ever matches.
  */
-export function startArkLogTailing(instanceDir: string, onLog?: (data: string) => void, forceLogFile?: string | null, instanceId?: string) {
-  // Log directory: the instance's own Saved/Logs when it has isolated binaries,
-  // otherwise the shared <arkInstall>/ShooterGame/Saved/Logs
-  const logsDirs = getLogsDirs(instanceId);
-  let logFile: string | null = null;
-  let logFileWatcher: fs.FSWatcher | null = null;
-  let logFilePosition = 0;
-  let pollInterval: NodeJS.Timeout | null = null;
-  let attempts = 0;
-  const maxAttempts = 60;
-  let closed = false;
-
-  function findLogFileForSession(): string | null {
-    if (forceLogFile && fs.existsSync(forceLogFile)) return forceLogFile;
-    const logFiles = listLogFiles(logsDirs);
-    return logFiles.length > 0 ? logFiles[0].path : null;
-  }
-
-  /**
-   * Read new content from the log file starting from the last known position.
-   * Uses byte-level position tracking to avoid deduplication issues.
-   */
-  function readNewContent() {
-    if (!logFile || !onLog || closed) return;
-    try {
-      if (!fs.existsSync(logFile)) return;
-      const stats = fs.statSync(logFile);
-      const currentSize = stats.size;
-
-      // If file was truncated/rotated, reset position
-      if (currentSize < logFilePosition) {
-        logFilePosition = 0;
-      }
-
-      // If no new content, skip
-      if (currentSize <= logFilePosition) return;
-
-      // Read only the new bytes
-      const fd = fs.openSync(logFile, 'r');
-      const buffer = Buffer.alloc(currentSize - logFilePosition);
-      fs.readSync(fd, buffer, 0, buffer.length, logFilePosition);
-      fs.closeSync(fd);
-
-      logFilePosition = currentSize;
-
-      // Parse and emit new lines
-      const newContent = buffer.toString('utf8');
-      const lines = newContent.split(/\r?\n/).filter(line => line.trim().length > 0);
-      for (const line of lines) {
-        onLog(line);
-      }
-    } catch (error) {
-      // Silently handle read errors (file may be locked momentarily)
-      console.debug('[ark-logging] Error reading log file:', error);
-    }
-  }
-
-  function tryAttachWatcher() {
-    if (closed) return;
-    attempts++;
-    if (!logsDirs.some(dir => fs.existsSync(dir))) {
-      if (attempts < maxAttempts) setTimeout(tryAttachWatcher, 1000);
-      return;
-    }
-    logFile = findLogFileForSession();
-    if (!logFile) {
-      if (attempts < maxAttempts) setTimeout(tryAttachWatcher, 1000);
-      return;
-    }
-    if (onLog) {
-      // Start reading from current end of file (only tail new content)
-      const stats = fs.statSync(logFile);
-      logFilePosition = stats.size;
-
-      // Use fs.watch for immediate notification (when it works)
-      try {
-        logFileWatcher = fs.watch(logFile, (eventType) => {
-          if (eventType === 'change') {
-            readNewContent();
-          }
-        });
-        logFileWatcher.on('error', () => {
-          // fs.watch failed — polling will still work as fallback
-          console.debug('[ark-logging] fs.watch error, relying on polling fallback');
-        });
-      } catch {
-        console.debug('[ark-logging] fs.watch unavailable, relying on polling fallback');
-      }
-
-      // Polling fallback: check for new content every 3 seconds
-      // This ensures we catch changes even if fs.watch is unreliable
-      pollInterval = setInterval(readNewContent, 3000);
-    }
-  }
-  tryAttachWatcher();
-  return {
-    close: () => {
-      closed = true;
-      if (logFileWatcher) logFileWatcher.close();
-      if (pollInterval) clearInterval(pollInterval);
-    }
-  };
-}
-
-/**
- * Cleans up old log files for the current session
- */
-export function cleanupOldLogFiles(config: any, onLog?: (data: string) => void, instanceId?: string): void {
+function detectLogEncoding(filePath: string): LogEncoding {
   try {
-    const sessionName = config.sessionName || 'My Server';
-    const logFiles = listLogFiles(getLogsDirs(instanceId));
+    const head = readRange(filePath, 0, 4);
+    if (head.length >= 2 && head[0] === 0xff && head[1] === 0xfe) return 'utf16le';
+    if (head.length >= 4 && head[1] === 0 && head[3] === 0) return 'utf16le';
+  } catch {
+    // Missing or unreadable: the caller handles that.
+  }
+  return 'utf8';
+}
 
-    for (const { file, path: filePath } of logFiles) {
-      try {
-        const content = fs.readFileSync(filePath, 'utf8');
-        // Only delete if it contains our specific session name
-        if (content.includes(`SessionName=${sessionName}`) ||
-            (content.includes(sessionName) && content.includes('Server has completed startup'))) {
-          fs.unlinkSync(filePath);
-          if (onLog) onLog(`[INFO] Cleaned up old log file: ${file}`);
-        }
-      } catch {}
-    }
-  } catch (e) {
-    console.error('[ark-server-utils] Failed to clean up log files:', e);
+/** A byte order mark decodes to U+FEFF, which would otherwise start the first line. */
+function stripBom(line: string): string {
+  return line.replace(/^\uFEFF/, '');
+}
+
+/** The last `maxLines` non-empty lines within the final 64 KB of a file; [] when it is unreadable. */
+export function readLogTail(filePath: string, maxLines: number): string[] {
+  let fd: number | undefined;
+  try {
+    const { size } = fs.statSync(filePath);
+    const encoding = detectLogEncoding(filePath);
+    let length = Math.min(TAIL_BYTES, size);
+    // A UTF-16 window has to start on a character boundary.
+    if (encoding === 'utf16le' && length % 2 !== 0) length--;
+    const buffer = Buffer.alloc(length);
+    fd = fs.openSync(filePath, 'r');
+    const bytesRead = fs.readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.subarray(0, bytesRead).toString(encoding).split(/\r?\n/).map(stripBom);
+    // The read starts mid-line when the file is larger than the window.
+    if (size > length) lines.shift();
+    return lines.filter(line => line.trim().length > 0).slice(-maxLines);
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeQuietly(fd);
   }
 }
 
 /**
- * Sets up log tailing for the server process.
- * Uses the registered log file if available; otherwise searches by session name
- * with retry logic. Does NOT fall back to "most recent file" to prevent
- * cross-contamination between cluster servers.
+ * Tails the instance's log once it is known, reporting 'running' on the advertising line and
+ * 'stopping' on a shutdown line. Replaces any tailer the instance already has.
  */
-export function setupLogTailing(instanceId: string, instanceDir: string, config: any, onLog?: (data: string) => void, onState?: (state: string) => void): any {
-  let logTail: any = null;
-  let hasAdvertised = false;
+export function setupLogTailing(instanceId: string, onLog?: (line: string) => void, onState?: (state: string) => void): void {
+  closeTailer(instanceId, false);
 
-  // Startup detection strings — only lines that indicate the server is truly ready
-  // for player connections AND has bound its RCON port.
-  // NOTE: 'Full Startup:', 'Listening on port', 'StartPlay RPC completed', and
-  // 'Initializing Game Engine Completed' all fire 30-60s BEFORE RCON is ready;
-  // triggering RCON on those lines wastes the entire retry window on a port that
-  // isn't open yet.  Use only the definitive advertising-for-join messages.
-  const startupIndicators = [
-    'Server has completed startup and is now advertising for join.',
-    'Server is now advertising for join',
-    'has completed startup and is now advertising'
-  ];
+  let closing = false;
+  let advertised = false;
+  let stopping = false;
+  let tail: Tailer | null = null;
+  let retryTimer: NodeJS.Timeout | undefined;
+  let attempts = 0;
 
-  // Wrap the onLog callback to detect state transitions
-  const wrappedOnLog = (line: string) => {
-    if (!hasAdvertised) {
-      const isStartupLine = startupIndicators.some(indicator => line.includes(indicator));
-      if (isStartupLine) {
-        hasAdvertised = true;
+  const handleLine = (line: string) => {
+    if (!advertised && STARTUP_LINES.some(marker => line.includes(marker))) {
+      advertised = true;
+      // Only a server still starting comes up: one already being stopped, or already gone (the
+      // lines drained after an exit), must not be reported as running.
+      if (!closing && getInstanceState(instanceId) === 'starting') {
         setInstanceState(instanceId, 'running');
-        if (onState) onState('running');
+        onState?.('running');
       }
     }
-    if (line.includes('Closing by request') || line.includes('Server shutting down')) {
+    if (!stopping && SHUTDOWN_LINE.test(line)) {
+      stopping = true;
       setInstanceState(instanceId, 'stopping');
-      if (onState) onState('stopping');
+      onState?.('stopping');
     }
-    if (onLog) onLog(line);
+    onLog?.(line);
   };
 
-  let attempts = 0;
-  const maxAttempts = 60;
+  const attach = () => {
+    retryTimer = undefined;
+    const file = registeredLogFiles[instanceId] || registerChangedLogFile(instanceId);
+    if (file) {
+      onLog?.(`[INFO] Tailing log file: ${path.basename(file)}`);
+      tail = tailFile(file, handleLine);
+      return;
+    }
+    if (++attempts < TAIL_ATTACH_ATTEMPTS) {
+      retryTimer = setTimeout(attach, RETRY_INTERVAL_MS);
+      return;
+    }
+    console.warn(`[ark-logging] Could not find the log file for ${instanceId} after ${TAIL_ATTACH_ATTEMPTS} s; not tailing`);
+    onLog?.('[WARN] Could not detect log file for this server instance');
+  };
 
-  function trySetupTailing() {
-    attempts++;
-    const logsDirs = getLogsDirs(instanceId);
+  tailers[instanceId] = {
+    close: drain => {
+      if (closing) return;
+      closing = true;
+      clearTimeout(retryTimer);
+      tail?.close(drain);
+    }
+  };
+  retryTimer = setTimeout(attach, RETRY_INTERVAL_MS);
+}
 
-    // Priority 1: Use the log file already registered by detectAndRegisterLogFile
-    let foundLogFile: string | null = getRegisteredLogFile(instanceId);
+function closeTailer(instanceId: string, drain: boolean): void {
+  const tailer = tailers[instanceId];
+  if (!tailer) return;
+  delete tailers[instanceId];
+  tailer.close(drain);
+}
 
-    // Priority 2: Use the pre-start snapshot (same logic as detectAndRegisterLogFile)
-    // This handles the case where setupLogTailing runs before detectAndRegisterLogFile
-    // finishes, and also covers Linux/Proton which overwrites the existing log in-place.
-    if (!foundLogFile && logsDirs.some(dir => fs.existsSync(dir))) {
-      const snapshot = instanceSnapshotMap[instanceId];
-      if (snapshot) {
-        const currentFiles = listLogFiles(logsDirs);
-        const claimedPaths = new Set(
-          Object.entries(instanceLogFileMap)
-            .filter(([id]) => id !== instanceId)
-            .map(([, p]) => p)
-        );
-        const changedFiles = currentFiles.filter(f => {
-          const snapshotMtime = snapshot.get(f.path);
-          return (snapshotMtime === undefined || f.mtime > snapshotMtime)
-              && !claimedPaths.has(f.path);
-        });
-        if (changedFiles.length >= 1) {
-          foundLogFile = changedFiles[0].path;
-          instanceLogFileMap[instanceId] = foundLogFile;
-          console.log(`[ark-logging] setupLogTailing registered ${changedFiles[0].file} for ${instanceId} (snapshot delta)`);
+/** Streams lines appended to `file` from now on, through fs.watch and a polling fallback. */
+function tailFile(file: string, onLine: (line: string) => void): Tailer {
+  let position = sizeOf(file) ?? 0;
+  let decoder = new StringDecoder(detectLogEncoding(file));
+  // Text after the last newline: a line ARK has not finished writing.
+  let partial = '';
+  let stopped = false;
+
+  const emit = (text: string) => {
+    const lines = (partial + text).split(/\r?\n/).map(stripBom);
+    partial = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.trim()) onLine(line);
+    }
+  };
+
+  const read = () => {
+    const size = sizeOf(file);
+    if (size === null) return;
+    if (size < position) {
+      // Rewritten in place (Proton reuses ShooterGame.log): start again from the top.
+      position = 0;
+      partial = '';
+      decoder = new StringDecoder(detectLogEncoding(file));
+    }
+    if (size === position) return;
+    const chunk = readRange(file, position, size - position);
+    position += chunk.length;
+    emit(decoder.write(chunk));
+  };
+
+  const poll = () => {
+    if (stopped) return;
+    try {
+      read();
+    } catch (error) {
+      // Locked for a moment (Windows) or gone; the next poll tries again.
+      console.debug(`[ark-logging] Could not read ${file}:`, error);
+    }
+  };
+
+  let watcher: fs.FSWatcher | null = null;
+  try {
+    watcher = fs.watch(file, event => {
+      if (event === 'change') poll();
+    });
+    watcher.on('error', () => console.debug('[ark-logging] fs.watch failed; relying on polling'));
+  } catch {
+    console.debug('[ark-logging] fs.watch unavailable; relying on polling');
+  }
+  // fs.watch misses changes on some filesystems.
+  const pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+
+  return {
+    close: drain => {
+      if (stopped) return;
+      if (drain) {
+        poll();
+        // Nothing will finish the last line once the server has exited.
+        const rest = partial + decoder.end();
+        partial = '';
+        try {
+          if (rest.trim()) onLine(rest);
+        } catch (error) {
+          console.debug('[ark-logging] Could not emit the last log line:', error);
         }
       }
+      stopped = true;
+      clearInterval(pollTimer);
+      watcher?.close();
     }
+  };
+}
 
-    if (foundLogFile) {
-      if (onLog) onLog(`[INFO] Tailing log file: ${path.basename(foundLogFile)}`);
-      logTail = startArkLogTailing(instanceDir, wrappedOnLog, foundLogFile, instanceId);
-    } else if (attempts < maxAttempts) {
-      // Retry — the log file may not have been created or written to yet
-      setTimeout(trySetupTailing, 1000);
-    } else {
-      console.warn(`[ark-logging] Could not find log file for ${instanceId} after ${maxAttempts}s — no tailing`);
-      if (onLog) onLog(`[WARN] Could not detect log file for this server instance`);
-    }
+function sizeOf(file: string): number | null {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return null;
   }
+}
 
-  // Start after a brief delay to let the process create its log file
-  setTimeout(trySetupTailing, 1000);
-  return { close: () => { if (logTail) logTail.close(); } };
+function readRange(file: string, position: number, length: number): Buffer {
+  const buffer = Buffer.alloc(length);
+  const fd = fs.openSync(file, 'r');
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, length, position);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    closeQuietly(fd);
+  }
+}
+
+function closeQuietly(fd: number): void {
+  try {
+    fs.closeSync(fd);
+  } catch {
+    // Already closed
+  }
 }

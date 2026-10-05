@@ -15,6 +15,23 @@ describe('AutomationConfigService', () => {
     automations = new Map();
     service = new AutomationConfigService(automations);
     jest.clearAllMocks();
+    (saveInstance as jest.Mock).mockImplementation(async (instance: object) => instance);
+  });
+
+  it('stores the settings in the instance config', async () => {
+    (getInstance as jest.Mock).mockReturnValue({ id: 'id', name: 'Alpha' });
+
+    await expect(service.configureCrashDetection('id', true, 90, 4)).resolves.toEqual({ success: true });
+
+    expect(saveInstance).toHaveBeenCalledWith({ id: 'id', name: 'Alpha', crashDetectionEnabled: true, crashDetectionInterval: 90, maxRestartAttempts: 4 });
+  });
+
+  it('reports a save the instance store refused', async () => {
+    (getInstance as jest.Mock).mockReturnValue({ id: 'id', name: 'Alpha' });
+    (saveInstance as jest.Mock).mockResolvedValue({ error: 'A server with this name already exists.' });
+
+    await expect(service.configureAutostart('id', true, false))
+      .resolves.toEqual({ success: false, error: 'A server with this name already exists.' });
   });
 
   it('should create automation if not present', async () => {
@@ -22,6 +39,17 @@ describe('AutomationConfigService', () => {
     await service.configureAutostart('id', true, false);
     expect(automations.size).toBe(1);
     expect(automations.get('id')).toBeDefined();
+  });
+
+  // Crash detection reads the interval as seconds, like the UI and the stored config.
+  it('defaults a new automation to checking for crashes every 60 seconds', async () => {
+    await service.configureAutostart('id', true, false);
+    expect(automations.get('id')!.settings.crashDetectionInterval).toBe(60);
+  });
+
+  it('defaults a new automation to the restart settings the UI uses', async () => {
+    await service.configureCrashDetection('id', true, 60, 3);
+    expect(automations.get('id')!.settings).toMatchObject({ restartTime: '02:00', restartDays: [1], restartWarningMinutes: 5 });
   });
 
   it('should configure autostart and update instance', async () => {

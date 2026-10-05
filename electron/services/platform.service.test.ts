@@ -1,30 +1,27 @@
 import { PlatformService } from './platform.service';
-import * as os from 'os';
-import * as path from 'path';
+import * as platformUtils from '../utils/platform.utils';
 
 jest.mock('os', () => ({
   homedir: jest.fn(() => '/home/user')
 }));
 
-jest.mock('path', () => ({
-  join: jest.fn((...args: string[]) => args.join('/'))
-}));
-
 describe('PlatformService', () => {
+  const originalPlatform = process.platform;
+  const originalAppData = process.env.APPDATA;
   let service: PlatformService;
 
   beforeEach(() => {
     service = new PlatformService();
-    (path.join as jest.Mock).mockImplementation((...args: string[]) => args.join('/'));
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    if (originalAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = originalAppData;
   });
 
   it('getNodeVersion returns node version', () => {
-    const version = service.getNodeVersion();
-    expect(typeof version).toBe('string');
+    expect(typeof service.getNodeVersion()).toBe('string');
   });
 
   it('getElectronVersion returns electron version', () => {
@@ -44,7 +41,6 @@ describe('PlatformService', () => {
 
   it('getPlatform returns Linux', () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
-    delete process.env.AASM_DOCKER;
     jest.spyOn(service, 'isRunningInDocker').mockReturnValue(false);
     expect(service.getPlatform()).toBe('Linux');
   });
@@ -60,27 +56,31 @@ describe('PlatformService', () => {
     expect(service.getPlatform()).toBe('other');
   });
 
-  it('getConfigPath returns Electron app path if available', () => {
-    // The 'app' variable is captured at module load from require('electron').app
-    // which is undefined in test. We verify the non-Electron fallback paths instead.
-    // When app is undefined, it falls through to platform-specific paths.
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    expect(service.getConfigPath()).toContain('Cerious AASM');
+  it('isRunningInDocker asks the platform utils', () => {
+    jest.spyOn(platformUtils, 'isRunningInDocker').mockReturnValue(true);
+    expect(service.isRunningInDocker()).toBe(true);
   });
 
-  it('getConfigPath returns Windows path', () => {
-  Object.defineProperty(process, 'platform', { value: 'win32' });
-  expect(service.getConfigPath()).toContain('Cerious AASM');
-  });
+  describe('getConfigPath', () => {
+    it('is the app data folder on Windows', () => {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      process.env.APPDATA = 'C:/Users/user/AppData/Roaming';
 
-  it('getConfigPath returns Linux path', () => {
-  Object.defineProperty(process, 'platform', { value: 'linux' });
-  expect(service.getConfigPath()).toContain('Cerious AASM');
-  });
+      expect(service.getConfigPath()).toBe('C:/Users/user/AppData/Roaming/Cerious AASM');
+    });
 
-  it('getConfigPath returns macOS path', () => {
-  Object.defineProperty(process, 'platform', { value: 'darwin' });
-  expect(service.getConfigPath()).toContain('Cerious AASM');
-  });
+    // It named ~/.config/Cerious AASM, which the app never creates on Linux, so the dashboard's
+    // disk reading of that path always failed.
+    it('is the folder the app really uses on Linux', () => {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
 
+      expect(service.getConfigPath()).toBe('/home/user/.local/share/cerious-aasm');
+    });
+
+    it('is Unknown on a platform the app does not support', () => {
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+
+      expect(service.getConfigPath()).toBe('Unknown');
+    });
+  });
 });

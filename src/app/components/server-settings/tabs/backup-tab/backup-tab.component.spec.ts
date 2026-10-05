@@ -1,27 +1,19 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BackupTabComponent } from './backup-tab.component';
-import { MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { ServerInstanceService } from '../../../../core/services/server-instance.service';
-import { GlobalConfigService } from '../../../../core/services/global-config.service';
-import { MockMessagingService } from '../../../../../../test/mocks/mock-messaging.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
-import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
-import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
+import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
 
 describe('BackupTabComponent', () => {
   let component: BackupTabComponent;
   let fixture: ComponentFixture<BackupTabComponent>;
 
+  const backup: BackupMetadata = {
+    id: 'b1', instanceId: 'srv1', name: 'nightly', createdAt: new Date('2026-01-02T03:04:05Z'),
+    size: 1048576, type: 'scheduled', filePath: 'C:/backups/b1.zip'
+  };
+
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [BackupTabComponent],
-      providers: [
-        { provide: MessagingService, useClass: MockMessagingService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: ServerInstanceService, useClass: MockServerInstanceService },
-        { provide: GlobalConfigService, useClass: MockGlobalConfigService }
-      ]
+      imports: [BackupTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(BackupTabComponent);
     component = fixture.componentInstance;
@@ -50,11 +42,14 @@ describe('BackupTabComponent', () => {
     expect(component.backupFrequencySelect.emit).toHaveBeenCalledWith('daily');
   });
 
-  it('should emit backupTimeChange', () => {
+  it('emits the chosen time', () => {
     spyOn(component.backupTimeChange, 'emit');
-    const event = new Event('change');
-    component.onBackupTimeChange(event);
-    expect(component.backupTimeChange.emit).toHaveBeenCalledWith(event);
+    component.backupScheduleEnabled = true;
+    fixture.detectChanges();
+    const input = (fixture.nativeElement as HTMLElement).querySelector('input[type=time]') as HTMLInputElement;
+    input.value = '04:30';
+    input.dispatchEvent(new Event('change'));
+    expect(component.backupTimeChange.emit).toHaveBeenCalledWith('04:30');
   });
 
   it('should emit backupDaySelect', () => {
@@ -63,30 +58,74 @@ describe('BackupTabComponent', () => {
     expect(component.backupDaySelect.emit).toHaveBeenCalledWith(2);
   });
 
-  it('should emit maxBackupsToKeepChange', () => {
-    spyOn(component.maxBackupsToKeepChange, 'emit');
-    const event = new Event('change');
-    component.onMaxBackupsToKeepChange(event);
-    expect(component.maxBackupsToKeepChange.emit).toHaveBeenCalledWith(event);
+  describe('max backups to keep', () => {
+    const commit = (value: string): HTMLInputElement => {
+      component.backupScheduleEnabled = true;
+      fixture.detectChanges();
+      const input = (fixture.nativeElement as HTMLElement).querySelector('input[type=number]') as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('change'));
+      return input;
+    };
+
+    it('keeps the value a whole number from 1 to 50', () => {
+      const emitted: number[] = [];
+      component.maxBackupsToKeepChange.subscribe(value => emitted.push(value));
+
+      commit('0');
+      commit('75');
+      commit('7.6');
+      commit('12');
+
+      expect(emitted).toEqual([1, 50, 8, 12]);
+    });
+
+    it('shows the value that will be saved', () => {
+      expect(commit('75').value).toBe('50');
+    });
+
+    it('ignores a cleared field and shows the saved value again', () => {
+      component.maxBackupsToKeep = 10;
+      spyOn(component.maxBackupsToKeepChange, 'emit');
+
+      const input = commit('');
+
+      expect(component.maxBackupsToKeepChange.emit).not.toHaveBeenCalled();
+      expect(input.value).toBe('10');
+    });
+  });
+
+  it('shows validation messages for its fields', () => {
+    component.backupScheduleEnabled = true;
+    component.fieldErrors = { maxBackupsToKeep: 'Max backups to keep must be between 1 and 1000' };
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.validation-error')?.textContent)
+      .toContain('Max backups to keep must be between 1 and 1000');
+  });
+
+  it('lists each backup with its size and date', () => {
+    component.backupList = [backup];
+    fixture.detectChanges();
+    const row = (fixture.nativeElement as HTMLElement).querySelector('.table-row') as HTMLElement;
+    expect(row.querySelector('.backup-name')?.textContent).toContain('nightly');
+    expect(row.querySelector('.backup-size')?.textContent).toContain('1 MB');
+    expect(row.querySelector('.backup-date')?.textContent?.trim()).toBe(backup.createdAt.toLocaleString());
   });
 
   it('should emit restoreBackup', () => {
     spyOn(component.restoreBackup, 'emit');
-    const backup = { id: 1 };
     component.onRestoreBackup(backup);
     expect(component.restoreBackup.emit).toHaveBeenCalledWith(backup);
   });
 
   it('should emit downloadBackup', () => {
     spyOn(component.downloadBackup, 'emit');
-    const backup = { id: 2 };
     component.onDownloadBackup(backup);
     expect(component.downloadBackup.emit).toHaveBeenCalledWith(backup);
   });
 
   it('should emit deleteBackup', () => {
     spyOn(component.deleteBackup, 'emit');
-    const backup = { id: 3 };
     component.onDeleteBackup(backup);
     expect(component.deleteBackup.emit).toHaveBeenCalledWith(backup);
   });
@@ -132,30 +171,7 @@ describe('BackupTabComponent', () => {
     expect(options.length).toBe(7);
   });
 
-  it('should format file size', () => {
-    expect(component.formatFileSize(0)).toBe('0 Bytes');
-    expect(component.formatFileSize(1024)).toBe('1 KB');
-    expect(component.formatFileSize(1048576)).toBe('1 MB');
-  });
-
-  it('should format date', () => {
-    expect(component.getFormattedDate(null)).toBe('Unknown');
-    expect(typeof component.getFormattedDate(Date.now())).toBe('string');
-  });
-
   it('should track by backup id', () => {
-    const backup = { id: 42 };
-    expect(component.trackByBackupId(0, backup)).toBe(42);
-    expect(component.trackByBackupId(1, null)).toBe(1);
-  });
-
-  it('should return false for hasFieldError and hasFieldWarning', () => {
-    expect(component.hasFieldError('backupSetting')).toBeFalse();
-    expect(component.hasFieldWarning('backupSetting')).toBeFalse();
-  });
-
-  it('should return empty string for getFieldError and getFieldWarning', () => {
-    expect(component.getFieldError('backupSetting')).toBe('');
-    expect(component.getFieldWarning('backupSetting')).toBe('');
+    expect(component.trackByBackupId(0, backup)).toBe('b1');
   });
 });

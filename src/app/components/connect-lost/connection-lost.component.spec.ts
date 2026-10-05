@@ -7,10 +7,7 @@ describe('ConnectionLostComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [ConnectionLostComponent],
-      providers: [
-        { provide: Function, useValue: () => {} }
-      ]
+      imports: [ConnectionLostComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(ConnectionLostComponent);
     component = fixture.componentInstance;

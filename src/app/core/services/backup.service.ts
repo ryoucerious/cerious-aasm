@@ -1,15 +1,14 @@
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { MessagingService } from './messaging/messaging.service';
-import { UtilityService } from './utility.service';
-import { 
-  BackupSettings, 
-  BackupMetadata, 
-  BackupCreateRequest, 
-  BackupRestoreRequest, 
+import { BACKUP_TIMEOUT_MS, MessagingService } from './messaging/messaging.service';
+import { IpcService } from './ipc.service';
+import {
+  BackupSettings,
+  BackupCreateRequest,
+  BackupRestoreRequest,
   BackupDeleteRequest,
   BackupListResponse,
-  BackupOperationResponse 
+  BackupOperationResponse
 } from '../interfaces/backup.interface';
 
 @Injectable({
@@ -19,85 +18,50 @@ export class BackupService {
 
   constructor(
     private messaging: MessagingService,
-    private utilityService: UtilityService
+    private ipc: IpcService
   ) {}
 
-  /**
-   * Create a backup for the specified server instance
-   */
+  /** Replies once the archive is written, which can take many minutes for a large save. */
   createBackup(request: BackupCreateRequest): Observable<BackupOperationResponse> {
-    return this.messaging.sendMessage('create-backup', request);
+    return this.messaging.sendMessage('create-backup', request, { timeoutMs: BACKUP_TIMEOUT_MS });
   }
 
-  /**
-   * Get list of backups for a server instance
-   */
   getBackupList(instanceId: string): Observable<BackupListResponse> {
     return this.messaging.sendMessage('get-backup-list', { instanceId });
   }
 
-  /**
-   * Restore a backup
-   */
+  /** Replies once the archive is unpacked over the server's files. */
   restoreBackup(request: BackupRestoreRequest): Observable<BackupOperationResponse> {
-    return this.messaging.sendMessage('restore-backup', request);
+    return this.messaging.sendMessage('restore-backup', request, { timeoutMs: BACKUP_TIMEOUT_MS });
   }
 
-  /**
-   * Delete a backup
-   */
   deleteBackup(request: BackupDeleteRequest): Observable<BackupOperationResponse> {
     return this.messaging.sendMessage('delete-backup', request);
   }
 
-  /**
-   * Get backup settings for a server instance
-   */
   getBackupSettings(instanceId: string): Observable<{ success: boolean; settings?: BackupSettings; error?: string }> {
     return this.messaging.sendMessage('get-backup-settings', { instanceId });
   }
 
-  /**
-   * Save backup settings for a server instance
-   */
   saveBackupSettings(settings: BackupSettings): Observable<BackupOperationResponse> {
-    return this.messaging.sendMessage('save-backup-settings', { 
-      instanceId: settings.instanceId, 
-      settings 
+    return this.messaging.sendMessage('save-backup-settings', {
+      instanceId: settings.instanceId,
+      settings
     });
   }
 
-  /**
-   * Start backup scheduler for a server instance
-   */
   startBackupScheduler(instanceId: string): Observable<BackupOperationResponse> {
     return this.messaging.sendMessage('start-backup-scheduler', { instanceId });
   }
 
-  /**
-   * Stop backup scheduler for a server instance
-   */
   stopBackupScheduler(instanceId: string): Observable<BackupOperationResponse> {
     return this.messaging.sendMessage('stop-backup-scheduler', { instanceId });
   }
 
-  /**
-   * Get backup scheduler status
-   */
-  getSchedulerStatus(instanceId: string): Observable<{ success: boolean; running?: boolean; nextRun?: Date; error?: string }> {
-    return this.messaging.sendMessage('get-scheduler-status', { instanceId });
-  }
-
-  /**
-   * Download/show backup file in file manager
-   */
   downloadBackup(request: { instanceId: string; backupId: string }): Observable<BackupOperationResponse> {
-    // Use utility service to detect platform
-    const platform = this.utilityService.getPlatform();
-    
     return this.messaging.sendMessage('download-backup', {
       ...request,
-      frontendEnvironment: platform.toLowerCase() // 'electron' or 'web'
-    });
+      frontendEnvironment: this.ipc.isElectron ? 'electron' : 'web'
+    }, { timeoutMs: BACKUP_TIMEOUT_MS });
   }
 }

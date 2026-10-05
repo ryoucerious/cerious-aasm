@@ -1,5 +1,5 @@
 /**
- * Helpers for panels that float over the page — a dropdown list, a card's action menu.
+ * Helpers for panels that float over the page, such as a dropdown list or a card's action menu.
  *
  * They are positioned `fixed` so no scrolling or clipping ancestor can cut them off, but
  * "fixed" is only relative to the viewport while nothing above them establishes its own

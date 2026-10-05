@@ -8,7 +8,6 @@
         <h5>Firewall Status & Port Information</h5>
         <p class="section-desc">Current firewall status and required port configuration.</p>
 
-        <!-- Firewall Status -->
         <div class="form-group page-intro">
           <h4>Firewall Status</h4>
           <div class="automation-status-row">
@@ -90,24 +89,26 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
           </div>
         </ng-container>
 
-        <!-- Port Information -->
         <div class="form-group page-intro" *ngIf="!dockerPublished">
           <h4>Server Port Configuration</h4>
           <div class="port-info">
             <div class="port-item">
-              <strong>Game Port:</strong> {{ serverInstance?.gamePort || 7777 }} (UDP) - Main port for player connections
+              <strong>Game Port:</strong> {{ gamePort }} (UDP) - Main port for player connections
             </div>
-            <div class="port-item" *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
+            <div class="port-item">
+              <strong>Peer Port:</strong> {{ peerPort }} (UDP) - Always the game port + 1
+            </div>
+            <div class="port-item" *ngIf="serverInstance.queryPort && serverInstance.queryPort !== serverInstance.gamePort">
               <strong>Query Port:</strong> {{ serverInstance.queryPort }} (UDP) - Steam server discovery
             </div>
-            <div class="port-item" *ngIf="serverInstance?.rconPort">
-              <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Remote console access
+            <div class="port-item" *ngIf="serverInstance.rconPort">
+              <strong>RCON Port:</strong> {{ serverInstance.rconPort }} (TCP) - Used by this panel on this machine; not opened to the internet
             </div>
           </div>
-          <div class="form-control-label desc">These ports need to be accessible through your firewall for players to connect and for server management.</div>
+          <div class="form-control-label desc">The game, peer and query ports need to be reachable for players to connect. RCON stays local.</div>
         </div>
 
-        <!-- Linux Firewall Configuration (native Linux, or Docker sharing the host network) -->
+        <!-- Native Linux, or Docker sharing the host network. -->
         <div class="form-group page-intro" *ngIf="!dockerPublished">
           <h4>{{ dockerHost ? 'Host Firewall Configuration' : 'Linux Firewall Configuration' }}</h4>
           <div class="linux-firewall-instructions">
@@ -118,20 +119,20 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
             <p><strong>Manual firewall configuration is required on Linux.</strong> Use one of the following methods:</p>
 
             <h5>UFW (Ubuntu/Debian):</h5>
-            <pre class="firewall-commands">sudo ufw allow {{ serverInstance?.gamePort || 7777 }}/udp  # Game port
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port (Steam discovery)</span>
-<span *ngIf="serverInstance?.rconPort">sudo ufw allow {{ serverInstance.rconPort }}/tcp  # RCON port</span></pre>
+            <pre class="firewall-commands">sudo ufw allow {{ gamePort }}/udp  # Game port
+sudo ufw allow {{ peerPort }}/udp  # Peer port
+<span *ngIf="serverInstance.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo ufw allow {{ serverInstance.queryPort }}/udp  # Query port (Steam discovery)</span></pre>
 
             <h5>Firewalld (CentOS/RHEL/Fedora):</h5>
-            <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ serverInstance?.gamePort || 7777 }}/udp
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo firewall-cmd --permanent --add-port={{ serverInstance.queryPort }}/udp</span>
-<span *ngIf="serverInstance?.rconPort">sudo firewall-cmd --permanent --add-port={{ serverInstance.rconPort }}/tcp</span>
+            <pre class="firewall-commands">sudo firewall-cmd --permanent --add-port={{ gamePort }}/udp
+sudo firewall-cmd --permanent --add-port={{ peerPort }}/udp
+<span *ngIf="serverInstance.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo firewall-cmd --permanent --add-port={{ serverInstance.queryPort }}/udp</span>
 sudo firewall-cmd --reload</pre>
 
             <h5>Iptables (Advanced users):</h5>
-            <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ serverInstance?.gamePort || 7777 }} -j ACCEPT
-<span *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span>
-<span *ngIf="serverInstance?.rconPort">sudo iptables -A INPUT -p tcp --dport {{ serverInstance.rconPort }} -j ACCEPT</span></pre>
+            <pre class="firewall-commands">sudo iptables -A INPUT -p udp --dport {{ gamePort }} -j ACCEPT
+sudo iptables -A INPUT -p udp --dport {{ peerPort }} -j ACCEPT
+<span *ngIf="serverInstance.queryPort && serverInstance.queryPort !== serverInstance.gamePort">sudo iptables -A INPUT -p udp --dport {{ serverInstance.queryPort }} -j ACCEPT</span></pre>
           </div>
           <div class="form-control-label desc">Remember to save your iptables rules if using the iptables method.</div>
         </div>
@@ -141,16 +142,16 @@ sudo firewall-cmd --reload</pre>
         <h5>Router & Network Configuration</h5>
         <p class="section-desc">Additional network setup for external access.</p>
 
-        <!-- Router/NAT Information -->
         <div class="form-group page-intro">
           <h4>Router & NAT Configuration</h4>
           <p class="form-control-label desc">
             <strong>Important:</strong> If your server is behind a router/NAT, you'll also need to configure port forwarding:
           </p>
           <ul class="firewall-notes">
-            <li>Forward Game Port {{ serverInstance?.gamePort || 7777 }} (UDP) to your server's internal IP</li>
-            <li *ngIf="serverInstance?.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
-            <li *ngIf="serverInstance?.rconPort">Forward RCON Port {{ serverInstance.rconPort }} (TCP) to your server's internal IP (if remote access needed)</li>
+            <li>Forward Game Port {{ gamePort }} (UDP) to your server's internal IP</li>
+            <li>Forward Peer Port {{ peerPort }} (UDP) to your server's internal IP</li>
+            <li *ngIf="serverInstance.queryPort && serverInstance.queryPort !== serverInstance.gamePort">Forward Query Port {{ serverInstance.queryPort }} (UDP) to your server's internal IP</li>
+            <li>Do not forward the RCON port: the panel reaches it on this machine</li>
             <li>Set your server's IP to static or use DHCP reservation</li>
             <li>Configure UPnP if supported by your router for automatic port forwarding</li>
           </ul>
@@ -165,7 +166,7 @@ sudo firewall-cmd --reload</pre>
           <li *ngIf="dockerPublished"><strong>Players can't connect (Docker):</strong> Check every port above is inside its published range</li>
           <li><strong>Players can't connect:</strong> Check firewall rules and router port forwarding</li>
           <li><strong>Server not visible in browser:</strong> Ensure Query Port is properly forwarded</li>
-          <li><strong>RCON not working:</strong> Check RCON port firewall rule and forwarding</li>
+          <li><strong>RCON not working:</strong> The panel connects locally, so check that no other program holds the RCON port</li>
           <li *ngIf="!dockerPublished"><strong>Commands not working:</strong> Ensure you have sudo privileges for firewall commands</li>
           <li *ngIf="!dockerPublished"><strong>Rules not persisting:</strong> Some distributions require saving firewall rules manually</li>
         </ul>

@@ -53,13 +53,51 @@ describe('AutomationInstancesService', () => {
     expect(automations.get('id2')!.settings.restartFrequency).toBe('daily');
   });
 
-  it('should skip instances without id or autoStartOnAppLaunch', async () => {
-    (getAllInstances as jest.Mock).mockResolvedValue([
-      { id: undefined, autoStartOnAppLaunch: true },
-      { id: 'id3', autoStartOnAppLaunch: undefined }
-    ]);
+  it('skips entries without an id', async () => {
+    (getAllInstances as jest.Mock).mockResolvedValue([{ id: undefined, autoStartOnAppLaunch: true }, null]);
     await service.loadAutomationFromInstances();
     expect(automations.size).toBe(0);
+  });
+
+  // Only instances that had touched auto-start used to be loaded, so crash detection or a
+  // scheduled restart configured on its own was not re-armed after the app restarted.
+  it('loads an instance that never set auto-start', async () => {
+    (getAllInstances as jest.Mock).mockResolvedValue([
+      { id: 'crash', crashDetectionEnabled: true, crashDetectionInterval: 45 },
+      { id: 'restart', scheduledRestartEnabled: true, restartFrequency: 'weekly', restartTime: '05:30', restartDays: [2] }
+    ]);
+
+    await service.loadAutomationFromInstances();
+
+    expect(automations.get('crash')!.settings).toMatchObject({ autoStartOnAppLaunch: false, crashDetectionEnabled: true, crashDetectionInterval: 45 });
+    expect(automations.get('restart')!.settings).toMatchObject({
+      scheduledRestartEnabled: true, restartFrequency: 'weekly', restartTime: '05:30', restartDays: [2]
+    });
+  });
+
+  it('fills in the settings an instance never saved with the defaults the UI uses', async () => {
+    (getAllInstances as jest.Mock).mockResolvedValue([{ id: 'bare' }]);
+
+    await service.loadAutomationFromInstances();
+
+    expect(automations.get('bare')).toEqual({
+      serverId: 'bare',
+      settings: {
+        autoStartOnAppLaunch: false,
+        autoStartOnBoot: false,
+        crashDetectionEnabled: false,
+        crashDetectionInterval: 60,
+        maxRestartAttempts: 3,
+        scheduledRestartEnabled: false,
+        restartFrequency: 'daily',
+        restartTime: '02:00',
+        restartDays: [1],
+        restartWarningMinutes: 5
+      },
+      restartAttempts: 0,
+      manuallyStopped: false,
+      status: { isMonitoring: false, isScheduled: false }
+    });
   });
 
   it('should handle empty instance list', async () => {

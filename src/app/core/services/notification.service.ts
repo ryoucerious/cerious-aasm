@@ -1,28 +1,31 @@
-import { Injectable } from '@angular/core';
-import { MessagingService } from './messaging/messaging.service';
-import { ToastService } from './toast.service';
+import { Injectable, OnDestroy } from '@angular/core';
 import { Subscription } from 'rxjs';
+import { ToastrService } from 'ngx-toastr';
+import { MessagingService } from './messaging/messaging.service';
 
+interface BackendNotification {
+  /** success, error or warning; anything else shows as info. */
+  type?: string;
+  message?: string;
+}
+
+/** Toasts, including every notification the backend broadcasts. */
 @Injectable({ providedIn: 'root' })
-export class NotificationService {
+export class NotificationService implements OnDestroy {
   private subs: Subscription[] = [];
 
   constructor(
     private messaging: MessagingService,
-    private toast: ToastService
+    private toastr: ToastrService
   ) {
-    // Listen for info messages from backend and show as toast
-    this.subs.push(this.messaging.receiveMessage<any>('notification').subscribe(notification => {
-      if (!notification || !notification.type || !notification.message) return;
+    this.subs.push(this.messaging.receiveMessage<BackendNotification>('notification').subscribe(notification => {
+      if (!notification?.type || !notification.message) return;
       switch (notification.type) {
         case 'success':
           this.success(notification.message);
           break;
         case 'error':
           this.error(notification.message);
-          break;
-        case 'info':
-          this.info(notification.message);
           break;
         case 'warning':
           this.warning(notification.message);
@@ -33,20 +36,23 @@ export class NotificationService {
     }));
   }
 
-  ngOnDestroy() {
+  ngOnDestroy(): void {
     this.subs.forEach(sub => sub.unsubscribe());
   }
 
-  success(message: string, title?: string, timeOut: number = 3000) {
-    this.toast.success(message, title, timeOut);
+  success(message: string, title?: string, timeOut: number = 3000): void {
+    this.toastr.success(message, title, { timeOut });
   }
-  error(message: string, title?: string, timeOut: number = 3000) {
-    this.toast.error(message, title, timeOut);
+
+  error(message: string, title?: string, timeOut: number = 3000): void {
+    this.toastr.error(message, title, { timeOut });
   }
-  info(message: string, title?: string, timeOut: number = 3000) {
-    this.toast.info(message, title, timeOut);
+
+  info(message: string, title?: string, timeOut: number = 3000): void {
+    this.toastr.info(message, title, { timeOut });
   }
-  warning(message: string, title?: string, timeOut: number = 3000) {
-    this.toast.warning(message, title, timeOut);
+
+  warning(message: string, title?: string, timeOut: number = 3000): void {
+    this.toastr.warning(message, title, { timeOut });
   }
 }

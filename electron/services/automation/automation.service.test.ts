@@ -7,14 +7,16 @@ jest.mock('./crash-detection.service');
 jest.mock('./scheduled-restart.service');
 jest.mock('./automation-instances.service');
 jest.mock('../../utils/ark/instance.utils', () => ({
-  getAllInstances: jest.fn()
+  getAllInstances: jest.fn(),
+  getInstance: jest.fn()
 }));
 jest.mock('../server-instance/server-instance.service', () => ({
-  serverInstanceService: {
-    getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() })),
-    startServerInstance: jest.fn()
-  }
+  serverInstanceService: { startServerInstance: jest.fn() }
 }));
+jest.mock('../server-instance/instance-events', () => ({
+  getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() }))
+}));
+jest.mock('../../utils/global-config.utils', () => ({ loadGlobalConfig: jest.fn(() => ({ serverStartDelaySeconds: 60 })) }));
 jest.mock('../scheduler.service', () => ({
   schedulerService: {
     initAllSchedules: jest.fn(() => Promise.resolve()),
@@ -22,9 +24,10 @@ jest.mock('../scheduler.service', () => ({
   }
 }));
 
-const { getAllInstances } = require('../../utils/ark/instance.utils');
+const { getAllInstances, getInstance } = require('../../utils/ark/instance.utils');
 
 const { serverInstanceService } = require('../server-instance/server-instance.service');
+const { getStandardEventCallbacks } = require('../server-instance/instance-events');
 const { schedulerService } = require('../scheduler.service');
 
 function makeAutomation(overrides: Partial<ServerAutomation['settings']> = {}) {
@@ -34,7 +37,7 @@ function makeAutomation(overrides: Partial<ServerAutomation['settings']> = {}) {
       autoStartOnAppLaunch: false,
       autoStartOnBoot: false,
       crashDetectionEnabled: false,
-      crashDetectionInterval: 60000,
+      crashDetectionInterval: 60,
       maxRestartAttempts: 3,
       scheduledRestartEnabled: false,
       restartFrequency: (overrides.restartFrequency ?? 'daily') as 'daily' | 'weekly' | 'custom',
@@ -124,7 +127,7 @@ describe('AutomationService', () => {
   await service.handleAutoStartOnAppLaunch();
   jest.advanceTimersByTime(4000);
   jest.runAllTimers();
-  expect(serverInstanceService.getStandardEventCallbacks).toHaveBeenCalledWith('id');
+  expect(getStandardEventCallbacks).toHaveBeenCalledWith('id');
   expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
   });
 
@@ -136,6 +139,51 @@ describe('AutomationService', () => {
     expect(spyCrash).toHaveBeenCalledWith('id');
     expect(spyRestart).toHaveBeenCalledWith('id');
     expect(schedulerService.initAllSchedules).toHaveBeenCalled();
+  });
+
+  // A deleted instance's timers used to keep running, and restarting it failed on every run.
+  it('forgets a deleted instance, stopping its crash detection and scheduled restart', () => {
+    const spyCrash = service['crashDetectionService'].stopCrashDetection = jest.fn();
+    const spyRestart = service['scheduledRestartService'].unscheduleRestart = jest.fn();
+    service['automations'].set('id', makeAutomation({ crashDetectionEnabled: true, scheduledRestartEnabled: true }));
+
+    service.forgetInstance('id');
+
+    expect(spyCrash).toHaveBeenCalledWith('id');
+    expect(spyRestart).toHaveBeenCalledWith('id');
+    expect(service['automations'].has('id')).toBe(false);
+  });
+
+  describe('restoreInstance', () => {
+    it('re-creates a forgotten record from config.json and re-arms what it enables', () => {
+      const spyCrash = service['crashDetectionService'].startCrashDetection = jest.fn();
+      const spyRestart = service['scheduledRestartService'].scheduleRestart = jest.fn();
+      getInstance.mockReturnValue({ id: 'id', crashDetectionEnabled: true, scheduledRestartEnabled: true, restartTime: '05:00' });
+
+      service.restoreInstance('id');
+
+      expect(service['automations'].get('id')!.settings).toMatchObject({ crashDetectionEnabled: true, restartTime: '05:00' });
+      expect(spyCrash).toHaveBeenCalledWith('id');
+      expect(spyRestart).toHaveBeenCalledWith('id');
+    });
+
+    it('does nothing for an instance that is gone', () => {
+      getInstance.mockReturnValue(null);
+
+      service.restoreInstance('id');
+
+      expect(service['automations'].has('id')).toBe(false);
+    });
+
+    // The id comes from a client. getInstance throws on a bad one, which was logged with a stack
+    // and the raw id.
+    it.each(['../x', '', 'a b'])('quietly ignores the invalid id %p', serverId => {
+      service.restoreInstance(serverId);
+
+      expect(getInstance).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
+      expect(service['automations'].has(serverId)).toBe(false);
+    });
   });
 
   it('should cleanup and stop crash/restart', () => {

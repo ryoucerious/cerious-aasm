@@ -1,5 +1,4 @@
 <app-modal [title]="'Add Server'" [show]="show" (close)="onCancel()">
-  <!-- Mode Selection -->
   <div class="form-group">
     <div class="tabs import-mode-selector">
       <button type="button" class="btn tab" [class.active]="importMode === 'create'" (click)="setImportMode('create')">
@@ -18,7 +17,6 @@
   </div>
 
   <div class="modal-form-content">
-    <!-- Create New Server Form -->
     <div *ngIf="importMode === 'create'" class="form-group">
       <label class="form-control-label">Server Name</label>
       <input #serverNameInput
@@ -30,7 +28,6 @@
              (keyup.enter)="onAddServer()" />
     </div>
 
-    <!-- Import from Backup Form -->
     <div *ngIf="importMode === 'import'">
       <div class="form-group">
         <label class="form-control-label">Server Name</label>
@@ -48,7 +45,6 @@
       </div>
     </div>
 
-    <!-- Clone Existing Server Form -->
     <div *ngIf="importMode === 'clone'">
       <div class="form-group">
         <label class="form-control-label">New Server Name</label>

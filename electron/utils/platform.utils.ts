@@ -1,4 +1,3 @@
-import type { App } from 'electron';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -11,14 +10,9 @@ import { execSync, execFile } from 'child_process';
 const METRICS_EXEC_OPTIONS = { encoding: 'utf8' as const, windowsHide: true, timeout: 5000 };
 
 /**
- * Promise wrapper around execFile that resolves to stdout.
- *
- * Every metrics command below is async on purpose. They used to run through execSync, which
- * froze the Electron main process for the duration — tolerable at a few milliseconds, but the
- * PowerShell calls this replaced cost ~400ms on an SSD and multiple seconds on a mechanical
- * drive under server load, which is what made the UI lock up.
- *
- * Hand-rolled rather than util.promisify so the callback shape is explicit and easy to mock.
+ * execFile as a promise of stdout. The metrics commands are async on purpose: through execSync, the
+ * PowerShell calls they replaced blocked the main process for ~400 ms on an SSD and for seconds on
+ * a busy mechanical drive, freezing the UI. Hand-rolled so the callback shape is easy to mock.
  */
 function execFileAsync(file: string, args: string[], options: object = METRICS_EXEC_OPTIONS): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -29,94 +23,38 @@ function execFileAsync(file: string, args: string[], options: object = METRICS_E
   });
 }
 
-/**
- * Platform Detection and Path Utilities
- * Consolidated from os-utils.ts and lean-os-utils.ts
- */
-
-/**
- * Get the current platform
- * @returns 'windows' | 'linux'
- */
+/** Throws on anything but Windows and Linux, the only platforms ARK servers run on here. */
 export function getPlatform(): 'windows' | 'linux' {
   const platform = process.platform;
   if (platform === 'win32') return 'windows';
   if (platform === 'linux') return 'linux';
-  // Only Windows and Linux are supported
   throw new Error(`Only Windows and Linux are supported. Current platform: ${platform}`);
 }
 
-/**
- * Check if running on Windows
- */
-export function isWindows(): boolean {
-  return getPlatform() === 'windows';
+/** True inside the Docker image, which sets AASM_DOCKER; /.dockerenv covers a container started without it. */
+export function isRunningInDocker(): boolean {
+  if (process.env.AASM_DOCKER === '1') return true;
+  try {
+    return fs.existsSync('/.dockerenv');
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Check if running on Linux
- */
-export function isLinux(): boolean {
-  return getPlatform() === 'linux';
-}
-
-/**
- * Get the default installation directory based on platform
- */
+/** Where the app keeps its config and, unless a Server Data Directory is set, the servers. */
 export function getDefaultInstallDir(): string {
-  const platform = getPlatform();
-  if (platform === 'windows') {
+  if (getPlatform() === 'windows') {
     return path.join(process.env.APPDATA || os.homedir(), 'Cerious AASM');
-  } else if (platform === 'linux') {
-    return path.join(os.homedir(), '.local', 'share', 'cerious-aasm');
   }
-  throw new Error(`Unsupported platform: ${platform}`);
+  return path.join(os.homedir(), '.local', 'share', 'cerious-aasm');
 }
 
-/**
- * Get the user data path for Electron app
- */
-export function getUserDataPath(app: App): string {
-  const platform = getPlatform();
-  if (platform === 'windows') {
-    return path.join(app.getPath('appData'), 'Cerious AASM');
-  } else if (platform === 'linux') {
-    return path.join(os.homedir(), '.local', 'share', 'cerious-aasm');
-  }
-  throw new Error(`Unsupported platform: ${platform}`);
-}
-
-/**
- * Get the home directory path
- */
-export function getHomeDir(): string {
-  return os.homedir();
-}
-
-/**
- * Get the temporary directory path
- */
-export function getTempDir(): string {
-  return os.tmpdir();
-}
-
-/**
- * Get system architecture
- */
-export function getArchitecture(): string {
-  return os.arch();
-}
-
-/**
- * Get total system memory in bytes
- */
+/** Bytes. */
 export function getTotalMemory(): number {
   return os.totalmem();
 }
 
-/**
- * Get free system memory in bytes
- */
+/** Bytes. */
 export function getFreeMemory(): number {
   return os.freemem();
 }
@@ -134,15 +72,14 @@ const processStatsCache = new Map<number, { at: number; value: Promise<ProcessSt
 /**
  * Memory and cumulative CPU time for a PID.
  *
- * On Windows both come from a single `tasklist /V` call: the /V flag adds the CPU Time column,
- * so one cheap native spawn answers both the memory poll and the CPU poll instead of one each —
- * and neither needs PowerShell. On Linux memory is left null (unreliable for Proton/Wine
- * process trees) and CPU comes from /proc, with no subprocess at all.
+ * On Windows both come from one `tasklist /V` call (/V adds the CPU Time column), so one cheap
+ * native spawn serves the memory poll and the CPU poll, and neither needs PowerShell. On Linux
+ * memory is null (unreliable for Proton/Wine process trees) and CPU comes from /proc for the
+ * whole process group, with no subprocess.
  *
- * Results are memoised briefly because the memory poll (60s) and CPU poll (10s) run on separate
- * timers and regularly land on the same tick.
+ * Memoised briefly: the memory poll (60 s) and CPU poll (10 s) often land on the same tick.
  */
-export function getProcessStats(pid: number): Promise<ProcessStats | null> {
+function getProcessStats(pid: number): Promise<ProcessStats | null> {
   const cached = processStatsCache.get(pid);
   if (cached && Date.now() - cached.at < PROCESS_STATS_TTL_MS) return cached.value;
 
@@ -153,15 +90,6 @@ export function getProcessStats(pid: number): Promise<ProcessStats | null> {
   processStatsCache.set(pid, { at: Date.now(), value });
   pruneProcessStatsCache();
   return value;
-}
-
-/**
- * Drop memoised readings so the next call re-reads. Useful when a process has just started or
- * stopped and a stale sample would be misleading.
- */
-export function clearProcessStatsCache(pid?: number): void {
-  if (pid === undefined) processStatsCache.clear();
-  else processStatsCache.delete(pid);
 }
 
 /** Drop expired entries so the map does not grow with every PID the app has ever polled. */
@@ -177,7 +105,7 @@ function pruneProcessStatsCache(): void {
 
 async function readProcessStats(pid: number): Promise<ProcessStats | null> {
   if (getPlatform() !== 'windows') {
-    return { memoryMb: null, cpuSeconds: readLinuxCpuSeconds(pid) };
+    return { memoryMb: null, cpuSeconds: readLinuxGroupCpuSeconds(pid) };
   }
   const output = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH', '/V']);
   return parseTasklistVerbose(output);
@@ -188,7 +116,7 @@ async function readProcessStats(pid: number): Promise<ProcessStats | null> {
  *
  * Columns: Image Name, PID, Session Name, Session#, Mem Usage, Status, User Name, CPU Time,
  * Window Title. Splitting on `","` is safe because that separator only ever appears between
- * fields — the thousands separator inside a value like "227,312 K" is never adjacent to a quote.
+ * fields; the thousands separator inside a value like "227,312 K" is never adjacent to a quote.
  */
 export function parseTasklistVerbose(output: string): ProcessStats | null {
   // A missing PID yields "INFO: No tasks are running which match..." with no quoted row.
@@ -227,68 +155,48 @@ function getLinuxTicksPerSecond(): number {
   return linuxTicksPerSecond;
 }
 
-/** Fields 14 (utime) and 15 (stime) of /proc/<pid>/stat, in clock ticks. */
-function readLinuxCpuSeconds(pid: number): number | null {
+/**
+ * CPU seconds used by every process in the group `pgid` leads. The tracked pid is xvfb-run or
+ * Proton, while Wine's processes do the work; the server is spawned detached, so they all share
+ * the pid as their process group.
+ */
+function readLinuxGroupCpuSeconds(pgid: number): number | null {
+  let entries: string[];
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    // The command name is in parentheses and may contain spaces; split after the last ')'.
-    const afterComm = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    const utime = Number(afterComm[11]);
-    const stime = Number(afterComm[12]);
-    if (!Number.isFinite(utime) || !Number.isFinite(stime)) return null;
-    return (utime + stime) / getLinuxTicksPerSecond();
+    entries = fs.readdirSync('/proc');
   } catch (error) {
-    console.debug(`[platform-utils] Failed to read /proc CPU time for PID ${pid}:`, error);
+    console.debug('[platform-utils] Failed to list /proc:', error);
     return null;
   }
+
+  let ticks = 0;
+  let found = false;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat: string;
+    try {
+      stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+    } catch {
+      continue; // Exited since the listing
+    }
+    // The command name is in parentheses and may contain spaces, so split after the last ')'.
+    // What follows starts at field 3: pgrp is field 5, utime 14 and stime 15 (in clock ticks).
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    if (Number(fields[2]) !== pgid) continue;
+    const utime = Number(fields[11]);
+    const stime = Number(fields[12]);
+    if (!Number.isFinite(utime) || !Number.isFinite(stime)) continue;
+    ticks += utime + stime;
+    found = true;
+  }
+  return found ? ticks / getLinuxTicksPerSecond() : null;
 }
 
-/**
- * Get process memory usage in MB
- * @param pid - Process ID
- * @returns Memory usage in MB, or null if unable to determine
- */
+/** Resident memory in MB, or null when it cannot be determined (always on Linux). */
 export async function getProcessMemoryUsage(pid: number): Promise<number | null> {
   const stats = await getProcessStats(pid);
   return stats ? stats.memoryMb : null;
 }
-
-/**
- * Get CPU information
- */
-export function getCpuInfo(): os.CpuInfo[] {
-  return os.cpus();
-}
-
-/**
- * Get system uptime in seconds
- */
-export function getUptime(): number {
-  return os.uptime();
-}
-
-/**
- * Get network interfaces
- */
-export function getNetworkInterfaces(): NodeJS.Dict<os.NetworkInterfaceInfo[]> {
-  return os.networkInterfaces();
-}
-
-/**
- * Get environment-specific paths
- */
-export function getEnvironmentPaths() {
-  return {
-    home: getHomeDir(),
-    temp: getTempDir(),
-    installDir: getDefaultInstallDir(),
-    platform: getPlatform(),
-    arch: getArchitecture()
-  };
-}
-// =========================
-// Host resource sampling (dashboard)
-// =========================
 
 /** A snapshot of aggregate CPU time across all cores, used to derive a usage percentage. */
 export interface CpuTimeSample {
@@ -324,11 +232,6 @@ export function cpuPercentFromSamples(first: CpuTimeSample, second: CpuTimeSampl
   return Math.max(0, Math.min(100, Math.round(busy * 1000) / 10));
 }
 
-/**
- * Disk usage of the volume containing `targetPath`, in bytes. Returns null when the platform
- * tooling is unavailable, so the dashboard can show a placeholder instead of a wrong number.
- * Electron 21 ships Node 16, which has no fs.statfs, hence the shell fallbacks.
- */
 const DISK_CACHE_TTL_MS = 60000;
 
 let diskReading: { key: string; at: number; value: DiskUsage | null } | null = null;
@@ -342,6 +245,11 @@ export interface DiskUsage {
   free: number;
 }
 
+/**
+ * Disk usage of the volume containing `targetPath`, in bytes. Returns null when the platform
+ * tooling is unavailable, so the dashboard can show a placeholder instead of a wrong number.
+ * Electron 21 ships Node 16, which has no fs.statfs, hence the shell fallbacks.
+ */
 export function getDiskUsage(targetPath: string): Promise<DiskUsage | null> {
   const key = targetPath || '';
 
@@ -368,13 +276,6 @@ export function getDiskUsage(targetPath: string): Promise<DiskUsage | null> {
 
   diskInFlight = { key, promise };
   return promise;
-}
-
-/** Drop the cached reading and any resolved capacities so the next call re-reads from scratch. */
-export function clearDiskUsageCache(): void {
-  diskReading = null;
-  diskInFlight = null;
-  driveCapacityCache.clear();
 }
 
 async function readDiskUsage(targetPath: string): Promise<DiskUsage | null> {
@@ -413,9 +314,28 @@ async function readDiskUsage(targetPath: string): Promise<DiskUsage | null> {
   return { total, free };
 }
 
+/**
+ * `df` refuses a path that does not exist, and the data directory the dashboard asks about may not
+ * have been created yet. The nearest existing parent is on the same volume, and the home directory
+ * is the last resort.
+ */
+function existingPathForDisk(targetPath: string): string {
+  let current = path.resolve(targetPath || os.homedir());
+  for (;;) {
+    try {
+      if (fs.existsSync(current)) return current;
+    } catch {
+      // Unreadable; its parent may still name the volume.
+    }
+    const parent = path.dirname(current);
+    if (!parent || parent === current) return os.homedir();
+    current = parent;
+  }
+}
+
 /** Linux: POSIX df output in 1K blocks. */
 async function readDiskUsageLinux(targetPath: string): Promise<DiskUsage | null> {
-  const output = await execFileAsync('df', ['-kP', targetPath || os.homedir()], { encoding: 'utf8', timeout: 5000 });
+  const output = await execFileAsync('df', ['-kP', existingPathForDisk(targetPath)], { encoding: 'utf8', timeout: 5000 });
   const lines = output.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
   const cols = lines[lines.length - 1].trim().split(/\s+/);
@@ -518,9 +438,8 @@ async function readFreePercentViaTypeperf(drive: string): Promise<number | null>
 }
 
 /**
- * Cumulative CPU seconds consumed by a process. Sampling twice and dividing the delta by the
- * elapsed wall time and core count gives a percentage — see ServerMonitoringService.
- * Returns null when it cannot be determined (process gone, tooling missing).
+ * Cumulative CPU seconds used by a process (on Linux, by the process group it leads), or null when
+ * it cannot be determined. Two samples give a percentage through processCpuPercent.
  */
 export async function getProcessCpuSeconds(pid: number): Promise<number | null> {
   const stats = await getProcessStats(pid);

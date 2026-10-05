@@ -1,46 +1,42 @@
-// ark-server-state.utils.test.ts
-// Unit tests for ARK server state management
-
-const stateUtils = require('./ark-server-state.utils');
+import {
+  areServerFilesUpdating,
+  getInstanceState,
+  getNormalizedInstanceState,
+  setInstanceState,
+  whileServerFilesUpdate
+} from './ark-server-state.utils';
 
 describe('ark-server-state.utils', () => {
-  beforeEach(() => {
-    // Clear instanceStates and arkServerProcesses before each test
-    Object.keys(stateUtils.arkServerProcesses).forEach(k => delete stateUtils.arkServerProcesses[k]);
-    // Clear instanceStates by setting known keys to undefined
-    stateUtils.setInstanceState('id1', undefined);
-    stateUtils.setInstanceState('id2', undefined);
+  it('sets and gets instance state', () => {
+    setInstanceState('id1', 'running');
+    expect(getInstanceState('id1')).toBe('running');
   });
 
-  describe('setInstanceState & getInstanceState', () => {
-    it('sets and gets instance state', () => {
-      stateUtils.setInstanceState('id1', 'running');
-      expect(stateUtils.getInstanceState('id1')).toBe('running');
-    });
-    it('returns null for unknown instance', () => {
-      expect(stateUtils.getInstanceState('unknown')).toBeNull();
-    });
+  it('returns null for an unknown instance', () => {
+    expect(getInstanceState('unknown')).toBeNull();
   });
 
-  describe('getNormalizedInstanceState', () => {
-    it('returns actual state if set', () => {
-      stateUtils.setInstanceState('id2', 'starting');
-      expect(stateUtils.getNormalizedInstanceState('id2')).toBe('starting');
-    });
-    it('returns "stopped" for unknown or null state', () => {
-      expect(stateUtils.getNormalizedInstanceState('unknown')).toBe('stopped');
-      stateUtils.setInstanceState('id2', null);
-      expect(stateUtils.getNormalizedInstanceState('id2')).toBe('stopped');
-    });
+  it('normalizes a state that was never set to stopped', () => {
+    setInstanceState('id2', 'starting');
+    expect(getNormalizedInstanceState('id2')).toBe('starting');
+    expect(getNormalizedInstanceState('unknown')).toBe('stopped');
   });
 
-  describe('arkServerProcesses', () => {
-    it('can store and clear process objects', () => {
-      const fakeProc = { pid: 123, kill: jest.fn() };
-      stateUtils.arkServerProcesses['id3'] = fakeProc;
-      expect(stateUtils.arkServerProcesses['id3']).toBe(fakeProc);
-      delete stateUtils.arkServerProcesses['id3'];
-      expect(stateUtils.arkServerProcesses['id3']).toBeUndefined();
-    });
+  it('marks the server files as being updated for exactly as long as the work runs', async () => {
+    let during = false;
+
+    await expect(whileServerFilesUpdate(async () => {
+      during = areServerFilesUpdating();
+      return 'done';
+    })).resolves.toBe('done');
+
+    expect(during).toBe(true);
+    expect(areServerFilesUpdating()).toBe(false);
+  });
+
+  it('clears the mark when the work fails', async () => {
+    await expect(whileServerFilesUpdate(async () => { throw new Error('SteamCMD failed'); })).rejects.toThrow('SteamCMD failed');
+
+    expect(areServerFilesUpdating()).toBe(false);
   });
 });

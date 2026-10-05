@@ -1,0 +1,23 @@
+<div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1rem;">
+  <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;">
+    <button class="btn btn-sm" (click)="reload()" [disabled]="loading" title="Reload from disk">
+      <i class="material-icons" style="font-size:16px;">refresh</i> Reload
+    </button>
+    <button class="btn btn-sm" (click)="save()" [disabled]="saving || loading || !loaded" title="Save to disk">
+      <i class="material-icons" style="font-size:16px;">save</i> {{ saving ? 'Saving...' : 'Save' }}
+    </button>
+  </div>
+  <div *ngIf="loading" style="color:var(--text-primary);padding:2rem;text-align:center;">
+    <i class="material-icons" style="font-size:32px;">hourglass_empty</i><br>Loading...
+  </div>
+  <textarea *ngIf="!loading"
+            class="form-control input"
+            style="width:100%;min-height:480px;font-family:monospace;font-size:1rem;resize:vertical;box-sizing:border-box;"
+            [(ngModel)]="content"
+            spellcheck="false"
+            placeholder="No content loaded. Select a file and click Reload."></textarea>
+  <p class="form-control-label desc" style="margin:0;color:var(--danger);">
+    <i class="material-icons" style="font-size:14px;vertical-align:middle;">warning</i>
+    Expert Mode - edits directly modify the raw INI file on disk. Managed settings fields above are not synced when using this view.
+  </p>
+</div>

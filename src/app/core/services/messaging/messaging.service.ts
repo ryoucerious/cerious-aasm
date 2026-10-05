@@ -1,49 +1,58 @@
-
-
 import { Injectable, Inject } from '@angular/core';
-import { Observable } from 'rxjs';
+import { AsyncSubject, Observable, merge } from 'rxjs';
 import { filter, take, timeout } from 'rxjs/operators';
-import { MessageTransport } from './message-transport.interface';
+import { MESSAGE_TRANSPORT, MessageTransport } from './message-transport.interface';
+
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** Backup create, restore and import reply only once the archive is written or unpacked. */
+export const BACKUP_TIMEOUT_MS = 30 * 60_000;
+/** Installing or updating the ARK server downloads several gigabytes through SteamCMD. */
+export const INSTALL_TIMEOUT_MS = 60 * 60_000;
+/** Fetching a plugin from the internet, or packing files into the reply for the browser to save. */
+export const FILE_TRANSFER_TIMEOUT_MS = 10 * 60_000;
+
+export interface RequestOptions {
+  /** How long to wait for the reply before erroring with a TimeoutError. Defaults to 30 s. */
+  timeoutMs?: number;
+}
 
 @Injectable({ providedIn: 'root' })
 export class MessagingService {
-  constructor(@Inject('MessageTransport') private transport: MessageTransport) {}
+  constructor(@Inject(MESSAGE_TRANSPORT) private transport: MessageTransport) {}
 
   /**
-   * Send a message and expect a direct response on the same channel
-   * This automatically handles request/response pattern with requestId matching
+   * Sends a request immediately, subscribed or not, and returns its reply: the first message on
+   * `channel` carrying the request's id. Errors if the transport fails or the reply is late.
    */
-  sendMessage<T = any>(channel: string, payload: any): Observable<T> {
+  sendMessage<T = any>(channel: string, payload: object = {}, options: RequestOptions = {}): Observable<T> {
     const requestId = this.generateRequestId();
-    const requestPayload = { ...payload, requestId };
-    
-    // Start listening for the response before sending the request
-    const response$ = this.receiveMessage<T>(channel).pipe(
-      filter((res: any) => res && res.requestId === requestId),
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const deliveryFailure = new AsyncSubject<never>();
+    this.transport.sendMessage(channel, { ...payload, requestId }, { timeoutMs }).subscribe({
+      error: error => deliveryFailure.error(error)
+    });
+
+    return merge(
+      this.receiveMessage<T>(channel).pipe(filter(reply => (reply as { requestId?: unknown } | null)?.requestId === requestId)),
+      deliveryFailure
+    ).pipe(
       take(1),
-      timeout(30000) // 30 second timeout
+      timeout(timeoutMs)
     );
-    
-    // Send the request
-    this.transport.sendMessage(channel, requestPayload).subscribe();
-    
-    return response$;
   }
 
-  /**
-   * Listen for messages on a channel (for notifications and responses)
-   */
   receiveMessage<T = any>(channel: string): Observable<T> {
     return this.transport.receiveMessage<T>(channel);
   }
 
-  /**
-   * Send a one-way message (fire and forget, no response expected)
-   */
-  sendNotification(channel: string, payload: any): void {
-    this.transport.sendMessage(channel, payload).subscribe();
+  /** Fire and forget: no requestId, no reply expected. */
+  sendNotification(channel: string, payload: object): void {
+    this.transport.sendMessage(channel, payload).subscribe({
+      error: error => console.error(`[messaging] Could not send ${channel}:`, error)
+    });
   }
 
+  // Not crypto.randomUUID: it is missing on plain-HTTP origins, which is how the LAN web UI is served.
   private generateRequestId(): string {
     return Math.random().toString(36).substring(2) + Date.now().toString(36);
   }

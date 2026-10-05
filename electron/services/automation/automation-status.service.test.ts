@@ -17,6 +17,17 @@ describe('AutomationStatusService', () => {
     expect(automations.get('id')).toBeDefined();
   });
 
+  it('defaults a new automation to checking for crashes every 60 seconds', async () => {
+    await service.getAutomationStatus('id');
+    expect(automations.get('id')!.settings.crashDetectionInterval).toBe(60);
+  });
+
+  // The three places that created a record used to disagree on the restart defaults.
+  it('defaults a new automation to the restart settings the UI uses', async () => {
+    await service.getAutomationStatus('id');
+    expect(automations.get('id')!.settings).toMatchObject({ restartTime: '02:00', restartDays: [1], restartWarningMinutes: 5 });
+  });
+
   it('should get autostart instance ids', () => {
     automations.set('id1', {
       serverId: 'id1',
@@ -42,15 +53,19 @@ describe('AutomationStatusService', () => {
       restartAttempts: 2,
       manuallyStopped: true,
       status: { isMonitoring: true, isScheduled: false },
-  lastCrashTime: new Date(12345)
+      lastCrashTime: new Date(12345)
     });
     const result = await service.getAutomationStatus('id');
-    expect(result.success).toBe(true);
-    expect(result.status.settings.autoStartOnAppLaunch).toBe(true);
-    expect(result.status.restartAttempts).toBe(2);
-    expect(result.status.manuallyStopped).toBe(true);
-    expect(result.status.status.isMonitoring).toBe(true);
-  expect(result.status.lastCrashTime.getTime()).toBe(12345);
+    expect(result).toEqual({
+      success: true,
+      status: {
+        settings: { autoStartOnAppLaunch: true },
+        status: { isMonitoring: true, isScheduled: false },
+        restartAttempts: 2,
+        lastCrashTime: new Date(12345),
+        manuallyStopped: true
+      }
+    });
   });
 
   it('should handle errors in getAutomationStatus', async () => {

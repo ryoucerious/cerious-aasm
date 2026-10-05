@@ -1,35 +1,25 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BroadcastsTabComponent } from './broadcasts-tab.component';
-import { IpcService } from '../../../../core/services/ipc.service';
-import { NotificationService } from '../../../../core/services/notification.service';
-import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
 
 describe('BroadcastsTabComponent', () => {
   let component: BroadcastsTabComponent;
   let fixture: ComponentFixture<BroadcastsTabComponent>;
-  let mockIpcService: jasmine.SpyObj<IpcService>;
 
   beforeEach(async () => {
-    mockIpcService = jasmine.createSpyObj('IpcService', ['send', 'invoke', 'on']);
-    mockIpcService.invoke.and.returnValue(Promise.resolve(null));
-
     await TestBed.configureTestingModule({
-      imports: [BroadcastsTabComponent],
-      providers: [
-        { provide: IpcService, useValue: mockIpcService },
-        { provide: NotificationService, useClass: MockNotificationService }
-      ]
+      imports: [BroadcastsTabComponent]
     }).compileComponents();
     fixture = TestBed.createComponent(BroadcastsTabComponent);
     component = fixture.componentInstance;
-    component.serverInstance = {
+    fixture.componentRef.setInput('serverInstance', {
+      id: 'A',
       broadcastConfig: {
         enabled: true,
         messages: [
           { id: 'msg1', message: 'Hello', interval: 30, enabled: true }
         ]
       }
-    };
+    });
     fixture.detectChanges();
   });
 
@@ -44,14 +34,20 @@ describe('BroadcastsTabComponent', () => {
     expect(component.messages[0].interval).toBe(30);
   });
 
-  it('should initialize with defaults when no broadcastConfig exists', async () => {
-    // Create a fresh component with no broadcastConfig
+  it('should initialize with defaults when no broadcastConfig exists', () => {
     const freshFixture = TestBed.createComponent(BroadcastsTabComponent);
     const freshComponent = freshFixture.componentInstance;
-    freshComponent.serverInstance = {};
+    freshFixture.componentRef.setInput('serverInstance', {});
     freshFixture.detectChanges();
     expect(freshComponent.enabled).toBeFalse();
     expect(freshComponent.messages.length).toBe(0);
+  });
+
+  it('shows the next server\'s messages after a switch', () => {
+    fixture.componentRef.setInput('serverInstance', { id: 'B' });
+    fixture.detectChanges();
+    expect(component.enabled).toBeFalse();
+    expect(component.messages).toEqual([]);
   });
 
   it('should add a message and emit saveSettings', () => {
@@ -77,14 +73,8 @@ describe('BroadcastsTabComponent', () => {
     component.enabled = false;
     component.onSaveSettings();
     expect(component.saveSettings.emit).toHaveBeenCalled();
-    expect(component.serverInstance.broadcastConfig.enabled).toBeFalse();
-    expect(component.serverInstance.broadcastConfig.messages).toBe(component.messages);
-  });
-
-  it('should respect isLocked input', () => {
-    expect(component.isLocked).toBeFalse();
-    component.isLocked = true;
-    expect(component.isLocked).toBeTrue();
+    expect(component.serverInstance?.broadcastConfig?.enabled).toBeFalse();
+    expect(component.serverInstance?.broadcastConfig?.messages).toBe(component.messages);
   });
 
   it('should generate unique ids for new messages', () => {

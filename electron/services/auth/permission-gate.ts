@@ -1,5 +1,9 @@
 import { AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
-import { isChannelAllowed, permissionForChannel } from './channel-permissions';
+import type { WebContents } from 'electron';
+import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
+import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
+import { instanceVisibleTo } from './pool-access';
+import { getInstance } from '../../utils/ark/instance.utils';
 
 /** What a message sender is allowed to do. */
 export interface SenderIdentity {
@@ -20,23 +24,20 @@ const ANONYMOUS: SenderIdentity = { user: null, permissions: [], isAdmin: false,
 /**
  * Work out who is behind a message.
  *
- * Two kinds of sender reach the bus. An Electron `WebContents` is the app's own window on
- * this machine — whoever is at the keyboard already owns the install, so it is treated as an
- * administrator and never asked to sign in, which is how the desktop app behaved before
- * accounts existed. Anything from the web server child carries the account resolved from the
- * session cookie at the WebSocket handshake.
+ * An Electron `WebContents` is the app's own window on this machine. Whoever is at the keyboard
+ * already owns the install, so it is treated as an administrator and never asked to sign in.
+ * Anything from the web server child carries the account main resolved from the user database.
  */
-export function identifySender(sender: any): SenderIdentity {
+export function identifySender(sender: MessageSender): SenderIdentity {
   if (!sender) return ANONYMOUS;
 
-  // The api-process wrapper is a plain object tagged by web-server.service.
-  if (sender.type === 'api-process') {
-    const user: AuthenticatedUser | null = sender.user || null;
+  if ((sender as ApiProcessSender).type === 'api-process') {
+    const { user, authEnabled } = sender as ApiProcessSender;
     if (!user) {
-      // Auth turned off in the web UI: the server is open to anyone who can reach it, which
-      // is the pre-existing behaviour, so treat it as the local owner rather than locking
-      // the UI out of itself.
-      return sender.authEnabled === false ? LOCAL_DESKTOP : ANONYMOUS;
+      // Auth turned off in the web UI: the server is open to anyone who can reach it, which is
+      // the pre-existing behaviour, so treat it as the local owner rather than locking the UI
+      // out of itself.
+      return authEnabled === false ? LOCAL_DESKTOP : ANONYMOUS;
     }
     return {
       user,
@@ -46,24 +47,21 @@ export function identifySender(sender: any): SenderIdentity {
     };
   }
 
-  // A WebSocket handled in-process (no web-server child). attachWebSocketServer stamps the
-  // resolved account onto the socket at handshake time.
-  if (sender._cid !== undefined || sender._user !== undefined) {
-    const user: AuthenticatedUser | null = sender._user || null;
-    if (!user) {
-      return sender._authEnabled === false ? LOCAL_DESKTOP : ANONYMOUS;
-    }
-    return {
-      user,
-      permissions: user.permissions || [],
-      isAdmin: user.roleId === ROLE_IDS.ADMIN,
-      isLocalDesktop: false
-    };
+  // A raw socket never reaches the bus today. If one did, its session snapshot is not
+  // authoritative, and it must not fall through to the desktop's rights below.
+  if ('readyState' in sender) {
+    return (sender as WebSocketClient)._authEnabled === false ? LOCAL_DESKTOP : ANONYMOUS;
   }
 
-  // Anything else is in-process: the Electron window's WebContents, or an internal caller.
-  // Whoever is at the keyboard already owns the install, so it acts as an administrator.
   return LOCAL_DESKTOP;
+}
+
+/**
+ * True only for the Electron window on this machine. Unlike identifySender, a web client never
+ * counts, even with authentication off: for requests that name files on the host.
+ */
+export function isDesktopWindow(sender: MessageSender): sender is WebContents {
+  return !!sender && (sender as ApiProcessSender).type !== 'api-process' && !('readyState' in sender);
 }
 
 export interface AuthorizationResult {
@@ -73,12 +71,15 @@ export interface AuthorizationResult {
 }
 
 /**
- * Decide whether a sender may use a channel.
+ * Decide whether a sender may use a channel, and, for a call about one server, whether that
+ * server is in the sender's pool.
  *
  * Deny-by-default: a channel with no entry in the permission map is refused for everyone but
- * an administrator, so shipping a handler without classifying it fails closed.
+ * an administrator, so shipping a handler without classifying it fails closed. The pool check
+ * reads only the payload key the channel declares; an id that names no server is left to the
+ * handler, which already answers "not found".
  */
-export function authorizeChannel(channel: string, sender: any): AuthorizationResult {
+export function authorizeChannel(channel: string, sender: MessageSender, payload?: unknown): AuthorizationResult {
   const identity = identifySender(sender);
 
   if (identity.isAdmin) return { allowed: true };
@@ -87,15 +88,36 @@ export function authorizeChannel(channel: string, sender: any): AuthorizationRes
     return { allowed: false, error: 'You must sign in to do that.' };
   }
 
-  if (isChannelAllowed(channel, identity.permissions, identity.isAdmin)) {
-    return { allowed: true };
+  if (!isChannelAllowed(channel, identity.permissions, identity.isAdmin)) {
+    const required = permissionForChannel(channel);
+    return {
+      allowed: false,
+      error: required
+        ? `Your role does not allow this (${required} required).`
+        : 'Your role does not allow this.'
+    };
   }
 
-  const required = permissionForChannel(channel);
-  return {
-    allowed: false,
-    error: required
-      ? `Your role does not allow this (${required} required).`
-      : 'Your role does not allow this.'
-  };
+  const key = instanceKeyForChannel(channel);
+  if (key) {
+    for (const id of instanceIdsFromPayload(payload, key)) {
+      const instance = getInstance(id);
+      if (instance && !instanceVisibleTo(identity.user, instance)) {
+        return { allowed: false, error: 'That server is not in your pool.' };
+      }
+    }
+  }
+
+  return { allowed: true };
+}
+
+/** The server ids a payload carries under the channel's declared key; [] when it names none. */
+function instanceIdsFromPayload(payload: unknown, key: InstanceKey): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const value = key === 'instance.id'
+    ? (record.instance as Record<string, unknown> | undefined)?.id
+    : record[key];
+  if (Array.isArray(value)) return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  return typeof value === 'string' && value ? [value] : [];
 }

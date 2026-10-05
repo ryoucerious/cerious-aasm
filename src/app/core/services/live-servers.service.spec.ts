@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { Subject } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { LiveServersService } from './live-servers.service';
 import { ServerInstanceService } from './server-instance.service';
 import { MessagingService } from './messaging/messaging.service';
@@ -8,10 +8,16 @@ describe('LiveServersService', () => {
   let service: LiveServersService;
   let instances$: Subject<any[]>;
   let channels: Record<string, Subject<any>>;
+  let instanceService: { getInstances: () => Observable<any[]>; reorderServers: jasmine.Spy; refresh: jasmine.Spy };
 
   beforeEach(() => {
     instances$ = new Subject<any[]>();
     channels = {};
+    instanceService = {
+      getInstances: () => instances$.asObservable(),
+      reorderServers: jasmine.createSpy('reorderServers').and.returnValue(of({ success: true })),
+      refresh: jasmine.createSpy('refresh')
+    };
     const messaging = {
       receiveMessage: (channel: string) => {
         channels[channel] = channels[channel] || new Subject<any>();
@@ -22,7 +28,7 @@ describe('LiveServersService', () => {
     TestBed.configureTestingModule({
       providers: [
         LiveServersService,
-        { provide: ServerInstanceService, useValue: { getInstances: () => instances$.asObservable() } },
+        { provide: ServerInstanceService, useValue: instanceService },
         { provide: MessagingService, useValue: messaging }
       ]
     });
@@ -89,19 +95,37 @@ describe('LiveServersService', () => {
     expect(summary).toEqual({ total: 2, online: 1, offline: 1, players: 3, maxPlayers: 30 });
   });
 
-  it('applies a local reorder immediately', () => {
+  it('applies a reorder immediately and saves it', () => {
     instances$.next([{ id: 'a', name: 'A', sortOrder: 0 }, { id: 'b', name: 'B', sortOrder: 1 }, { id: 'c', name: 'C', sortOrder: 2 }]);
-    service.applyOrder(['c', 'a']);
+    service.reorder(['c', 'a']);
     expect(service.servers.map(s => s.id)).toEqual(['c', 'a', 'b']);
     expect(service.servers[0].sortOrder).toBe(0);
+    expect(instanceService.reorderServers).toHaveBeenCalledWith(['c', 'a']);
+    expect(instanceService.refresh).not.toHaveBeenCalled();
+  });
+
+  it('reloads the list when the backend refuses a reorder', () => {
+    spyOn(console, 'error');
+    instanceService.reorderServers.and.returnValue(of({ success: false, error: 'You do not have permission to do that.' }));
+    instances$.next([{ id: 'a', name: 'A', sortOrder: 0 }, { id: 'b', name: 'B', sortOrder: 1 }]);
+    service.reorder(['b', 'a']);
+    expect(console.error).toHaveBeenCalledWith('[live-servers] The server order was not saved:', 'You do not have permission to do that.');
+    expect(instanceService.refresh).toHaveBeenCalled();
+  });
+
+  it('reloads the list when a reorder could not be saved', () => {
+    spyOn(console, 'error');
+    instanceService.reorderServers.and.returnValue(throwError(() => new Error('timeout')));
+    instances$.next([{ id: 'a', name: 'A', sortOrder: 0 }, { id: 'b', name: 'B', sortOrder: 1 }]);
+    service.reorder(['b', 'a']);
+    expect(console.error).toHaveBeenCalledWith('[live-servers] Could not save the server order:', jasmine.any(Error));
+    expect(instanceService.refresh).toHaveBeenCalled();
   });
 
   it('exposes state helpers', () => {
     expect(LiveServersService.isOnline({ state: 'RUNNING' } as any)).toBeTrue();
-    expect(LiveServersService.isBusy({ state: 'starting' } as any)).toBeTrue();
-    expect(LiveServersService.isBusy({ state: 'stopped' } as any)).toBeFalse();
-    expect(LiveServersService.canStart({ state: 'crashed' } as any)).toBeTrue();
-    expect(LiveServersService.canStart({ state: 'stopping' } as any)).toBeFalse();
+    expect(LiveServersService.isOnline({ state: 'starting' } as any)).toBeFalse();
+    expect(LiveServersService.isOnline(null)).toBeFalse();
     expect(LiveServersService.normalizeState('unknown')).toBe('stopped');
   });
 });

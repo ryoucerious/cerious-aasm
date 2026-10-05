@@ -29,6 +29,7 @@ export interface BackupRestoreRequest {
 }
 
 export interface BackupDeleteRequest {
+  instanceId: string;
   backupId: string;
 }
 

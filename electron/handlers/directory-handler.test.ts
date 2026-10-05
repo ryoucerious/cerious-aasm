@@ -1,311 +1,229 @@
-import { jest } from '@jest/globals';
-
-jest.mock('electron', () => ({
-  dialog: { showOpenDialog: jest.fn() },
-  BrowserWindow: { fromWebContents: jest.fn() },
-  shell: { openPath: jest.fn() },
-}));
-
-// Mock the services
-const mockMessagingService = {
-  on: jest.fn() as any,
-  sendToOriginator: jest.fn() as any,
-};
-
-const mockDirectoryService = {
-  openConfigDirectory: jest.fn() as any,
-  openInstanceDirectory: jest.fn() as any,
-  testDirectoryAccess: jest.fn() as any,
-};
-
-jest.mock('../services/messaging.service', () => ({
-  messagingService: mockMessagingService,
-}));
-
-jest.mock('../services/directory.service', () => ({
-  directoryService: mockDirectoryService,
-}));
-
+import { BrowserWindow, dialog } from 'electron';
 import { messagingService } from '../services/messaging.service';
 import { directoryService } from '../services/directory.service';
 
+jest.mock('electron', () => ({
+  dialog: { showOpenDialog: jest.fn() },
+  BrowserWindow: { fromWebContents: jest.fn() }
+}));
+jest.mock('../services/messaging.service', () => ({
+  messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/directory.service', () => ({
+  directoryService: { openConfigDirectory: jest.fn(), openInstanceDirectory: jest.fn(), testDirectoryAccess: jest.fn() }
+}));
+
+const mockMessaging = jest.mocked(messagingService);
+const mockDirectory = jest.mocked(directoryService);
+const mockFromWebContents = jest.mocked(BrowserWindow.fromWebContents);
+const mockShowOpenDialog = jest.mocked(dialog.showOpenDialog);
+
+type Listener = (payload: unknown, sender: unknown) => Promise<void>;
+
 describe('directory-handler', () => {
-  let openConfigHandler: (...args: any[]) => Promise<void>;
-  let openDirectoryHandler: (...args: any[]) => Promise<void>;
-  let testDirectoryAccessHandler: (...args: any[]) => Promise<void>;
-  let mockSender: any;
+  const desktop = { send: jest.fn() };
+  const win = {} as BrowserWindow;
+  let handlers: Record<string, Listener>;
 
   beforeAll(() => {
-    // Import the handler to register the event listeners
     require('./directory-handler');
-
-    // Store the handlers for testing
-    openConfigHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'open-config-directory'
-    )?.[1] as (...args: any[]) => Promise<void>;
-
-    openDirectoryHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'open-directory'
-    )?.[1] as (...args: any[]) => Promise<void>;
-
-    testDirectoryAccessHandler = (mockMessagingService.on as jest.Mock).mock.calls.find(
-      call => call[0] === 'test-directory-access'
-    )?.[1] as (...args: any[]) => Promise<void>;
+    handlers = Object.fromEntries(mockMessaging.on.mock.calls.map(([channel, listener]) => [channel, listener as Listener]));
   });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
+  function repliesOn(channel: string): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
+  }
 
-    // Mock console.error to suppress expected errors from error handling tests
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+  function channelsReplied(): unknown[] {
+    return mockMessaging.sendToOriginator.mock.calls.map(([channel]) => channel);
+  }
 
-    mockSender = { id: 'test-sender' };
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  describe('open-config-directory handler', () => {
-    it('should handle open-config-directory successfully', async () => {
-      const payload = { requestId: 'test-request-123' };
-      const mockResult = { success: true, configDir: '/path/to/config' };
-
-      mockDirectoryService.openConfigDirectory.mockResolvedValue(mockResult);
-
-      expect(openConfigHandler).toBeDefined();
-
-      await openConfigHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openConfigDirectory).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-config-directory',
-        { configDir: '/path/to/config', requestId: 'test-request-123' },
-        mockSender
-      );
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledTimes(1);
+  describe('select-directory', () => {
+    beforeEach(() => {
+      mockFromWebContents.mockReturnValue(win);
     });
 
-    it('should handle open-config-directory with undefined payload', async () => {
-      const mockResult = { success: true, configDir: '/path/to/config' };
+    it('opens a folder picker over the window and replies with the chosen path', async () => {
+      mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['D:\\ARK Servers'] });
 
-      mockDirectoryService.openConfigDirectory.mockResolvedValue(mockResult);
+      await handlers['select-directory']({ title: 'Select Server Data Directory', requestId: 'r1' }, desktop);
 
-      await openConfigHandler(undefined, mockSender);
-
-      expect(mockDirectoryService.openConfigDirectory).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-config-directory',
-        { configDir: '/path/to/config', requestId: undefined },
-        mockSender
-      );
+      expect(mockFromWebContents).toHaveBeenCalledWith(desktop);
+      expect(mockShowOpenDialog).toHaveBeenCalledWith(win, {
+        title: 'Select Server Data Directory', properties: ['openDirectory', 'createDirectory']
+      });
+      expect(repliesOn('select-directory')).toEqual([{ path: 'D:\\ARK Servers', requestId: 'r1' }]);
     });
 
-    it('should handle open-config-directory failure', async () => {
-      const payload = { requestId: 'test-request-456' };
-      const mockResult = { success: false, configDir: '', error: 'Permission denied' };
+    it.each([
+      [{ canceled: true, filePaths: [] }],
+      [{ canceled: false, filePaths: [] }]
+    ])('replies canceled when nothing was picked (%p)', async result => {
+      mockShowOpenDialog.mockResolvedValue(result);
 
-      mockDirectoryService.openConfigDirectory.mockResolvedValue(mockResult);
+      await handlers['select-directory']({ requestId: 'r1' }, desktop);
 
-      await openConfigHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openConfigDirectory).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-config-directory-error',
-        { error: 'Permission denied', requestId: 'test-request-456' },
-        mockSender
-      );
+      expect(repliesOn('select-directory')).toEqual([{ canceled: true, requestId: 'r1' }]);
     });
 
-    it('should handle open-config-directory error', async () => {
-      const payload = { requestId: 'test-request-789' };
-      const errorMessage = 'Shell operation failed';
+    it('replies the failure on its own channel when the sender has no window', async () => {
+      mockFromWebContents.mockReturnValue(null);
 
-      mockDirectoryService.openConfigDirectory.mockRejectedValue(new Error(errorMessage));
+      await handlers['select-directory']({ requestId: 'r1' }, desktop);
 
-      await openConfigHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openConfigDirectory).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-config-directory-error',
-        { error: errorMessage, requestId: 'test-request-789' },
-        mockSender
-      );
+      expect(mockShowOpenDialog).not.toHaveBeenCalled();
+      expect(channelsReplied()).toEqual(['select-directory']);
+      expect(repliesOn('select-directory')).toEqual([{ success: false, error: 'Could not determine window', requestId: 'r1' }]);
     });
 
-    it('should handle open-config-directory with non-Error exception', async () => {
-      const payload = { requestId: 'test-request-000' };
+    it('refuses a web client, which has no window to open the dialog over', async () => {
+      const webClient = { type: 'api-process', cid: 'c1', user: null, authEnabled: false, send: jest.fn() };
 
-      mockDirectoryService.openConfigDirectory.mockRejectedValue('String error');
+      await handlers['select-directory']({ requestId: 'r1' }, webClient);
 
-      await openConfigHandler(payload, mockSender);
+      expect(mockFromWebContents).not.toHaveBeenCalled();
+      expect(repliesOn('select-directory')).toEqual([{ success: false, error: 'Could not determine window', requestId: 'r1' }]);
+    });
 
-      expect(mockDirectoryService.openConfigDirectory).toHaveBeenCalled();
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-config-directory-error',
-        { error: 'String error', requestId: 'test-request-000' },
-        mockSender
-      );
+    it('replies { error } without success when the dialog fails', async () => {
+      mockShowOpenDialog.mockRejectedValue(new Error('Dialog failed'));
+
+      await handlers['select-directory']({ requestId: 'r1' }, desktop);
+
+      expect(repliesOn('select-directory')).toEqual([{ error: 'Dialog failed', requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload with the default title', async () => {
+      mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+
+      await handlers['select-directory'](undefined, desktop);
+
+      expect(mockShowOpenDialog).toHaveBeenCalledWith(win, expect.objectContaining({ title: 'Select Directory' }));
+      expect(repliesOn('select-directory')).toEqual([{ canceled: true, requestId: undefined }]);
     });
   });
 
-  describe('open-directory handler', () => {
-    it('should handle open-directory successfully', async () => {
-      const payload = { id: 'instance-123', requestId: 'test-request-456' };
-      const mockResult = { success: true, instanceId: 'instance-123' };
+  describe('open-config-directory', () => {
+    it('opens the config directory and replies with its path', async () => {
+      mockDirectory.openConfigDirectory.mockResolvedValue({ success: true, configDir: '/config' });
 
-      mockDirectoryService.openInstanceDirectory.mockResolvedValue(mockResult);
+      await handlers['open-config-directory']({ requestId: 'r1' }, desktop);
 
-      expect(openDirectoryHandler).toBeDefined();
-
-      await openDirectoryHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openInstanceDirectory).toHaveBeenCalledWith('instance-123');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-directory',
-        { id: 'instance-123', requestId: 'test-request-456' },
-        mockSender
-      );
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledTimes(1);
+      expect(repliesOn('open-config-directory')).toEqual([{ configDir: '/config', requestId: 'r1' }]);
     });
 
-    it('should handle open-directory with undefined payload', async () => {
-      const mockResult = { success: true, instanceId: 'default-instance' };
+    it('replies the failure on its own channel', async () => {
+      mockDirectory.openConfigDirectory.mockResolvedValue({ success: false, configDir: '', error: 'Directory not found' });
 
-      mockDirectoryService.openInstanceDirectory.mockResolvedValue(mockResult);
+      await handlers['open-config-directory']({ requestId: 'r1' }, desktop);
 
-      await openDirectoryHandler(undefined, mockSender);
-
-      expect(mockDirectoryService.openInstanceDirectory).toHaveBeenCalledWith(undefined as any);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-directory',
-        { id: 'default-instance', requestId: undefined },
-        mockSender
-      );
+      expect(channelsReplied()).toEqual(['open-config-directory']);
+      expect(repliesOn('open-config-directory')).toEqual([{ success: false, error: 'Directory not found', requestId: 'r1' }]);
     });
 
-    it('should handle open-directory failure', async () => {
-      const payload = { id: 'invalid-instance', requestId: 'test-request-789' };
-      const mockResult = { success: false, error: 'Instance not found' };
+    it.each([
+      ['an Error', new Error('Permission denied'), 'Permission denied'],
+      ['a string', 'String error', 'String error']
+    ])('replies the failure on its own channel when opening throws %s', async (_label, thrown, error) => {
+      mockDirectory.openConfigDirectory.mockRejectedValue(thrown);
 
-      mockDirectoryService.openInstanceDirectory.mockResolvedValue(mockResult);
+      await handlers['open-config-directory']({ requestId: 'r1' }, desktop);
 
-      await openDirectoryHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openInstanceDirectory).toHaveBeenCalledWith('invalid-instance');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-directory-error',
-        { error: 'Instance not found', requestId: 'test-request-789' },
-        mockSender
-      );
+      expect(channelsReplied()).toEqual(['open-config-directory']);
+      expect(repliesOn('open-config-directory')).toEqual([{ success: false, error, requestId: 'r1' }]);
     });
 
-    it('should handle open-directory error', async () => {
-      const payload = { id: 'instance-123', requestId: 'test-request-999' };
-      const errorMessage = 'File system error';
+    it('answers a request without a payload', async () => {
+      mockDirectory.openConfigDirectory.mockResolvedValue({ success: true, configDir: '/config' });
 
-      mockDirectoryService.openInstanceDirectory.mockRejectedValue(new Error(errorMessage));
+      await handlers['open-config-directory'](undefined, desktop);
 
-      await openDirectoryHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openInstanceDirectory).toHaveBeenCalledWith('instance-123');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-directory-error',
-        { error: errorMessage, requestId: 'test-request-999' },
-        mockSender
-      );
-    });
-
-    it('should handle open-directory with non-Error exception', async () => {
-      const payload = { id: 'instance-123', requestId: 'test-request-111' };
-
-      mockDirectoryService.openInstanceDirectory.mockRejectedValue('String error');
-
-      await openDirectoryHandler(payload, mockSender);
-
-      expect(mockDirectoryService.openInstanceDirectory).toHaveBeenCalledWith('instance-123');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'open-directory-error',
-        { error: 'String error', requestId: 'test-request-111' },
-        mockSender
-      );
+      expect(repliesOn('open-config-directory')).toEqual([{ configDir: '/config', requestId: undefined }]);
     });
   });
 
-  describe('test-directory-access handler', () => {
-    it('should handle test-directory-access successfully', async () => {
-      const payload = { directoryPath: '/path/to/cluster', requestId: 'test-request-123' };
-      const mockResult = { accessible: true };
+  describe('open-directory', () => {
+    it('opens the server directory and replies with its id', async () => {
+      mockDirectory.openInstanceDirectory.mockResolvedValue({ success: true, instanceId: 'a1' });
 
-      mockDirectoryService.testDirectoryAccess.mockResolvedValue(mockResult);
+      await handlers['open-directory']({ id: 'a1', requestId: 'r1' }, desktop);
 
-      expect(testDirectoryAccessHandler).toBeDefined();
-
-      await testDirectoryAccessHandler(payload, mockSender);
-
-      expect(mockDirectoryService.testDirectoryAccess).toHaveBeenCalledWith('/path/to/cluster');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'test-directory-access',
-        { accessible: true, requestId: 'test-request-123' },
-        mockSender
-      );
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledTimes(1);
+      expect(mockDirectory.openInstanceDirectory).toHaveBeenCalledWith('a1');
+      expect(repliesOn('open-directory')).toEqual([{ id: 'a1', requestId: 'r1' }]);
     });
 
-    it('should handle test-directory-access failure', async () => {
-      const payload = { directoryPath: '/invalid/path', requestId: 'test-request-456' };
-      const mockResult = { accessible: false, error: 'Directory not found' };
+    it('replies the failure on its own channel', async () => {
+      mockDirectory.openInstanceDirectory.mockResolvedValue({ success: false, error: 'Invalid instance ID' });
 
-      mockDirectoryService.testDirectoryAccess.mockResolvedValue(mockResult);
+      await handlers['open-directory']({ id: '../x', requestId: 'r1' }, desktop);
 
-      await testDirectoryAccessHandler(payload, mockSender);
-
-      expect(mockDirectoryService.testDirectoryAccess).toHaveBeenCalledWith('/invalid/path');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'test-directory-access',
-        { accessible: false, error: 'Directory not found', requestId: 'test-request-456' },
-        mockSender
-      );
+      expect(channelsReplied()).toEqual(['open-directory']);
+      expect(repliesOn('open-directory')).toEqual([{ success: false, error: 'Invalid instance ID', requestId: 'r1' }]);
     });
 
-    it('should handle test-directory-access error', async () => {
-      const payload = { directoryPath: '/path/to/cluster', requestId: 'test-request-789' };
-      const errorMessage = 'Permission denied';
+    it('replies the failure on its own channel when opening throws', async () => {
+      mockDirectory.openInstanceDirectory.mockRejectedValue(new Error('Directory access failed'));
 
-      mockDirectoryService.testDirectoryAccess.mockRejectedValue(new Error(errorMessage));
+      await handlers['open-directory']({ id: 'a1', requestId: 'r1' }, desktop);
 
-      await testDirectoryAccessHandler(payload, mockSender);
-
-      expect(mockDirectoryService.testDirectoryAccess).toHaveBeenCalledWith('/path/to/cluster');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'test-directory-access',
-        { accessible: false, error: errorMessage, requestId: 'test-request-789' },
-        mockSender
-      );
+      expect(channelsReplied()).toEqual(['open-directory']);
+      expect(repliesOn('open-directory')).toEqual([{ success: false, error: 'Directory access failed', requestId: 'r1' }]);
     });
 
-    it('should handle test-directory-access with undefined payload (cover || {} branch)', async () => {
-      const mockResult = { accessible: true };
-      mockDirectoryService.testDirectoryAccess.mockResolvedValue(mockResult);
-      await testDirectoryAccessHandler(undefined, mockSender);
-      expect(mockDirectoryService.testDirectoryAccess).toHaveBeenCalledWith(undefined);
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'test-directory-access',
-        { accessible: true, requestId: undefined },
-        mockSender
-      );
+    it('answers a request without a payload', async () => {
+      mockDirectory.openInstanceDirectory.mockResolvedValue({ success: false, error: 'Invalid instance ID' });
+
+      await handlers['open-directory'](undefined, desktop);
+
+      expect(mockDirectory.openInstanceDirectory).toHaveBeenCalledWith(undefined);
+      expect(repliesOn('open-directory')).toEqual([{ success: false, error: 'Invalid instance ID', requestId: undefined }]);
+    });
+  });
+
+  describe('test-directory-access', () => {
+    it.each([
+      [{ accessible: true }, { accessible: true, error: undefined }],
+      [{ accessible: false, error: 'Permission denied' }, { accessible: false, error: 'Permission denied' }]
+    ])('replies whether the directory can be used (%p)', async (result, reply) => {
+      mockDirectory.testDirectoryAccess.mockResolvedValue(result);
+
+      await handlers['test-directory-access']({ directoryPath: '/cluster', requestId: 'r1' }, desktop);
+
+      expect(mockDirectory.testDirectoryAccess).toHaveBeenCalledWith('/cluster');
+      expect(repliesOn('test-directory-access')).toEqual([{ ...reply, requestId: 'r1' }]);
     });
 
-    it('should handle test-directory-access with non-Error exception (cover String(error) branch)', async () => {
-      const payload = { directoryPath: '/path/to/cluster', requestId: 'test-request-999' };
-      mockDirectoryService.testDirectoryAccess.mockRejectedValue('String error');
-      await testDirectoryAccessHandler(payload, mockSender);
-      expect(mockDirectoryService.testDirectoryAccess).toHaveBeenCalledWith('/path/to/cluster');
-      expect(mockMessagingService.sendToOriginator).toHaveBeenCalledWith(
-        'test-directory-access',
-        { accessible: false, error: 'String error', requestId: 'test-request-999' },
-        mockSender
-      );
+    it.each([
+      ['an Error', new Error('File system error'), 'File system error'],
+      ['a string', 'String error', 'String error']
+    ])('replies not accessible when the check throws %s', async (_label, thrown, error) => {
+      mockDirectory.testDirectoryAccess.mockRejectedValue(thrown);
+
+      await handlers['test-directory-access']({ directoryPath: '/cluster', requestId: 'r1' }, desktop);
+
+      expect(repliesOn('test-directory-access')).toEqual([{ accessible: false, error, requestId: 'r1' }]);
+    });
+
+    it('answers a request without a payload', async () => {
+      mockDirectory.testDirectoryAccess.mockResolvedValue({ accessible: false, error: 'No directory given' });
+
+      await handlers['test-directory-access'](undefined, desktop);
+
+      expect(mockDirectory.testDirectoryAccess).toHaveBeenCalledWith(undefined);
+      expect(repliesOn('test-directory-access')).toEqual([{ accessible: false, error: 'No directory given', requestId: undefined }]);
+    });
+
+    it.each([
+      ['a web client', { type: 'api-process', cid: 'c1', user: null, authEnabled: false, send: jest.fn() }],
+      ['a raw socket', { readyState: 1, send: jest.fn() }],
+      ['no sender', undefined]
+    ])('refuses %s without looking at the path', async (_label, sender) => {
+      await handlers['test-directory-access']({ directoryPath: 'C:\\Windows', requestId: 'r1' }, sender);
+
+      expect(mockDirectory.testDirectoryAccess).not.toHaveBeenCalled();
+      expect(repliesOn('test-directory-access')).toEqual([
+        { success: false, accessible: false, error: 'Directory checks are only available in the desktop app', requestId: 'r1' }
+      ]);
     });
   });
 });

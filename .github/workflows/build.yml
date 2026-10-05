@@ -5,17 +5,18 @@ on:
     tags:
       - 'v*.*.*'
 
-permissions:
-  contents: write
-
 jobs:
   # Gate: the packaging jobs below only run if the full test suite passes, so a tagged
   # release can never be built from a red suite.
   test:
+    permissions:
+      contents: read
     uses: ./.github/workflows/test.yml
 
   build-windows:
     needs: test
+    permissions:
+      contents: read
     # Pinned (not windows-latest): GitHub's rolling windows-latest image moved to a newer
     # Visual Studio that node-gyp@9.x (used by @electron/rebuild for bcrypt/node-pty) fails
     # to detect ("Could not find any Visual Studio installation"). windows-2022 matches the
@@ -24,12 +25,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -46,12 +46,12 @@ jobs:
         # runners use Node 20 (the environment every prior release built on). npm@11
         # is the latest major compatible with Node 20.
         run: npm install -g npm@11
-      - name: Clear npm cache
-        run: npm cache clean --force
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Inject CurseForge API Key
-        run: (Get-Content src/environments/environment.prod.ts) -replace 'CURSEFORGE_KEY_PLACEHOLDER', '${{ secrets.CURSEFORGE_API_KEY }}' | Set-Content src/environments/environment.prod.ts
+        env:
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: (Get-Content src/environments/environment.prod.ts) -replace 'CURSEFORGE_KEY_PLACEHOLDER', $env:CURSEFORGE_API_KEY | Set-Content src/environments/environment.prod.ts
       - name: Build for Windows
         run: npm run electron:package:windows
       - name: Upload Windows Installer
@@ -65,6 +65,8 @@ jobs:
 
   build-linux:
     needs: test
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -73,6 +75,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -84,12 +87,12 @@ jobs:
         # runners use Node 20 (the environment every prior release built on). npm@11
         # is the latest major compatible with Node 20.
         run: npm install -g npm@11
-      - name: Clear npm cache
-        run: npm cache clean --force
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Inject CurseForge API Key
-        run: sed -i "s|CURSEFORGE_KEY_PLACEHOLDER|${{ secrets.CURSEFORGE_API_KEY }}|g" src/environments/environment.prod.ts
+        env:
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: sed -i "s|CURSEFORGE_KEY_PLACEHOLDER|${CURSEFORGE_API_KEY}|g" src/environments/environment.prod.ts
       - name: Build for Linux
         run: npm run electron:package:linux
       - name: Upload Linux AppImage
@@ -111,7 +114,9 @@ jobs:
           path: dist-electron/*.rpm
 
   build-docker:
-    needs: test
+    # Also needs the desktop builds, not just test, so a failed Windows/Linux package
+    # can't leave a passing :latest image behind.
+    needs: [test, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -136,12 +141,14 @@ jobs:
           tags: |
             ghcr.io/ryoucerious/cerious-aasm:${{ github.ref_name }}
             ghcr.io/ryoucerious/cerious-aasm:latest
-          build-args: |
-            CURSEFORGE_API_KEY=${{ secrets.CURSEFORGE_API_KEY }}
+          secrets: |
+            curseforge_api_key=${{ secrets.CURSEFORGE_API_KEY }}
 
   create-release:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download Windows Installer
         uses: actions/download-artifact@v4
@@ -164,7 +171,7 @@ jobs:
           name: electron-linux-rpm
           path: ./release-files/
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           files: ./release-files/*

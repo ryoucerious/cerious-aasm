@@ -2,38 +2,44 @@
 
 ## System Requirements
 
-### Minimum Requirements
-- **Operating System**: Windows 10 (64-bit) or Linux (Ubuntu 20.04+ / equivalent)
-- **RAM**: 4GB minimum, 8GB recommended
-- **Storage**: 50GB free space (for ARK server files)
-- **CPU**: Dual-core processor, 2.5GHz or higher
-- **Network**: Broadband internet connection for downloads
-- **Graphics**: Any graphics card supporting hardware acceleration
+### Supported platforms
 
-### Recommended Requirements
-- **Operating System**: Windows 11 or Ubuntu 22.04+ LTS
-- **RAM**: 16GB or more
-- **Storage**: 100GB+ SSD storage
-- **CPU**: Quad-core processor, 3.0GHz or higher
-- **Network**: High-speed broadband (100+ Mbps)
+- **Windows**: 10 or 11, 64-bit
+- **Linux, x64**: the `.deb` targets Debian/Ubuntu, the `.rpm` targets Fedora/RHEL-family
+  distributions, and the AppImage runs on most x64 distributions with glibc and FUSE. CI
+  builds the Linux packages on Ubuntu and runs the main-process tests on Ubuntu and Windows.
+- macOS is not supported (ARK: Survival Ascended does not ship a macOS dedicated server).
 
-### Additional Requirements
-- **Steam Account**: Required for downloading ARK server files
-- **Firewall Access**: Ability to configure firewall rules for server ports
-- **Administrator Privileges**: Required for installation and server management
+### Hardware
+
+- **RAM**: each running ARK server uses around 10 GB of memory, so 16 GB runs one server
+  comfortably and two or three need 32 GB or more.
+- **Storage**: plan for about 20 GB before you create any servers, most of it the ARK
+  server files (installed once and shared by all your servers), plus room for saves,
+  mods, and backups.
+- **Network**: a broadband connection for downloads, plus the game, query, and RCON ports
+  for each server reachable through your firewall/router (the in-app Firewall page lists
+  the exact ports per server).
+
+### Other
+
+- **Steam account**: not required. SteamCMD logs in anonymously to download the ARK server
+  files.
+- **Node.js** (build from source only): `^20.19 || ^22.12 || >=24`, matching Angular 20's
+  requirement.
 
 ## Windows Installation
 
 ### Method 1: Download from Releases (Recommended)
 
 1. **Download the Installer**
-   - Go to the [latest release page](https://github.com/cerious/cerious-aasm/releases/latest)
-   - Download `Cerious AASM Setup X.X.X.exe`
+   - Go to the [latest release page](https://github.com/ryoucerious/cerious-aasm/releases/latest)
+   - Download `Cerious-AASM-Setup-X.X.X.exe`
 
 2. **Run the Installer**
-   - Right-click the downloaded file and select "Run as administrator"
-   - Follow the installation wizard
-   - Choose your installation directory (default: `C:\Program Files\Cerious AASM`)
+   - Run the downloaded file; it does not need administrator rights
+   - In the wizard, choose whether to install for just your account or for all users, and
+     the installation folder
    - The installer will create desktop and start menu shortcuts
 
 3. **First Launch**
@@ -45,13 +51,13 @@
 
 1. **Prerequisites**
    ```bash
-   # Install Node.js 18+ from https://nodejs.org
+   # Install Node.js (see System Requirements above) from https://nodejs.org
    # Install Git from https://git-scm.com
    ```
 
 2. **Clone and Build**
    ```bash
-   git clone https://github.com/cerious/cerious-aasm.git
+   git clone https://github.com/ryoucerious/cerious-aasm.git
    cd cerious-aasm
    npm install
    npm run electron:package:windows
@@ -66,7 +72,7 @@
 ### Method 1: AppImage (Universal)
 
 1. **Download AppImage**
-   - Go to the [latest release page](https://github.com/cerious/cerious-aasm/releases/latest)
+   - Go to the [latest release page](https://github.com/ryoucerious/cerious-aasm/releases/latest)
    - Download `Cerious-AASM-X.X.X.AppImage`
 
 2. **Make Executable and Run**
@@ -105,10 +111,10 @@
 1. **Download and Install**
    ```bash
    # Download the .deb file from releases
-   wget https://github.com/cerious/cerious-aasm/releases/latest/download/cerious-aasm_X.X.X_amd64.deb
+   wget https://github.com/ryoucerious/cerious-aasm/releases/latest/download/Cerious-AASM-X.X.X.deb
    
    # Install
-   sudo dpkg -i cerious-aasm_*.deb
+   sudo dpkg -i Cerious-AASM-*.deb
    sudo apt-get install -f  # Fix any dependency issues
    ```
 
@@ -123,13 +129,13 @@
 1. **Download and Install**
    ```bash
    # Download the .rpm file from releases
-   wget https://github.com/cerious/cerious-aasm/releases/latest/download/cerious-aasm-X.X.X.x86_64.rpm
+   wget https://github.com/ryoucerious/cerious-aasm/releases/latest/download/Cerious-AASM-X.X.X.rpm
    
    # Install (Fedora/RHEL)
-   sudo dnf install cerious-aasm-*.rpm
+   sudo dnf install Cerious-AASM-*.rpm
    
    # Or for older systems
-   sudo rpm -i cerious-aasm-*.rpm
+   sudo rpm -i Cerious-AASM-*.rpm
    ```
 
 ### Method 4: Build from Source
@@ -149,7 +155,7 @@
 
 2. **Clone and Build**
    ```bash
-   git clone https://github.com/cerious/cerious-aasm.git
+   git clone https://github.com/ryoucerious/cerious-aasm.git
    cd cerious-aasm
    npm install
    npm run electron:package:linux
@@ -172,19 +178,21 @@ Then open `http://localhost:3000`. On an Apple Silicon Mac, add `docker-compose.
 
 1. **Launch the Application**
 
-2. **Configure Firewall**
-   - The application will guide you through firewall configuration
-   - Default ARK server ports: 7777, 7778, 27015
-   - Web interface port: 3000 (configurable)
+2. **Create Your First Server**
+   - Click "Add Server" (on the Dashboard, or the + next to the server list in the sidebar)
+   - Choose "Create New Server", enter a name, and click "Add"
 
-3. **Create Your First Server**
-   - Click "Create New Server Instance"
-   - Choose your server name and basic settings
+3. **Open the Ports**
+   - Default ARK server ports: 7777 and 7778 (UDP, game and peer), 27015 (UDP, query) and
+     27020 (TCP, RCON)
+   - Web interface port: 3000 (configurable)
+   - Forward or allow these on your firewall and router; the Firewall page for each server
+     lists exactly which ports it needs
 
 ### Command Line Usage (Headless Mode)
 
-Cerious AASM can run as a headless background service, exposing a web REST API
-instead of launching a GUI window.  **On Linux, Electron still loads GTK at the
+Cerious AASM can run as a headless background service that serves the web UI
+(which talks to the app over a WebSocket) instead of launching a GUI window.  **On Linux, Electron still loads GTK at the
 native level even with `--headless`, so a display connection is required.**
 Current `.deb` / `.rpm` / AppImage packages install a launcher that automatically
 uses `xvfb-run` when you pass `--headless` and no `DISPLAY`/`WAYLAND_DISPLAY`
@@ -212,11 +220,12 @@ cerious-aasm --no-sandbox --headless --port=8080
 
 # With authentication. --password is the admin login: it is applied on every
 # start and cannot be changed in the app. Add other users under Settings → Users & Roles.
-cerious-aasm --no-sandbox --headless --auth-enabled --username=admin --password=yourpassword
-
-# Full example
-cerious-aasm --no-sandbox --headless --port=5000 --auth-enabled --username=admin --password=secret123
+cerious-aasm --no-sandbox --headless --auth-enabled --username=<name> --password=<password>
 ```
+
+Authentication can also be set with `AASM_AUTH_ENABLED=true`, `AASM_USERNAME`, and
+`AASM_PASSWORD` environment variables instead of flags; the app reads them when the
+matching flag isn't given.
 
 Manual `xvfb-run -a …` still works and is useful for older builds (≤1.0.11) or
 when invoking the raw Electron `.bin` directly. The helper script
@@ -231,8 +240,9 @@ Description=Cerious AASM headless service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --password=yourpassword --port=3000
+ExecStart=/usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --username=<name> --port=3000
 Restart=on-failure
+Environment=AASM_PASSWORD=<password>
 Environment=ELECTRON_DISABLE_SANDBOX=1
 
 [Install]
@@ -263,4 +273,5 @@ rm ~/.local/share/applications/cerious-aasm.desktop
 
 ## Next Steps
 
-After installation, see the [User Manual](USER_MANUAL.md) for detailed usage instructions and the [Troubleshooting Guide](TROUBLESHOOTING.md) if you encounter any issues.
+After installation, see the [Troubleshooting Guide](TROUBLESHOOTING.md) if you run into
+problems, or [DOCKER.md](DOCKER.md) if you'd rather run it in a container.

@@ -1,207 +1,258 @@
 import { ScheduledRestartService } from './scheduled-restart.service';
-import { ServerAutomation } from '../../types/automation.types';
+import { AutomationSettings, ServerAutomation } from '../../types/automation.types';
 
 jest.mock('../server-instance/server-instance.service', () => ({
-  serverInstanceService: {
-    getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() })),
-    startServerInstance: jest.fn()
-  }
+  serverInstanceService: { startServerInstance: jest.fn() }
 }));
-jest.mock('../server-instance/server-lifecycle.service');
-jest.mock('../../utils/ark/instance.utils', () => ({
-  getInstance: jest.fn(),
-  saveInstance: jest.fn()
+jest.mock('../server-instance/instance-events', () => ({
+  getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() }))
 }));
-jest.mock('../../utils/rcon.utils', () => ({
-  disconnectRcon: jest.fn(),
-  sendRconCommand: jest.fn(),
-  isRconConnected: jest.fn(),
-  connectRcon: jest.fn()
+jest.mock('../server-instance/server-lifecycle.service', () => ({
+  serverLifecycleService: { stopServerInstance: jest.fn() }
 }));
 jest.mock('../server-instance/server-process.service', () => ({
-  serverProcessService: {
-    getInstanceState: jest.fn(),
-    getServerProcess: jest.fn(),
-    setInstanceState: jest.fn()
-  }
+  serverProcessService: { getInstanceState: jest.fn(), getNormalizedInstanceState: jest.fn(), getServerProcess: jest.fn() }
 }));
+jest.mock('../rcon.service', () => ({ rconService: { executeRconCommand: jest.fn() } }));
+jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn() } }));
 
-const { serverInstanceService } = require('../server-instance/server-instance.service');
-const { serverProcessService } = require('../server-instance/server-process.service');
-const { getInstance, saveInstance } = require('../../utils/ark/instance.utils');
-const { sendRconCommand, isRconConnected } = require('../../utils/rcon.utils');
+const { serverInstanceService } = jest.requireMock('../server-instance/server-instance.service');
+const { serverLifecycleService } = jest.requireMock('../server-instance/server-lifecycle.service');
+const { serverProcessService } = jest.requireMock('../server-instance/server-process.service');
+const { rconService } = jest.requireMock('../rcon.service');
+const { messagingService } = jest.requireMock('../messaging.service');
 
-// Removed duplicate function declaration
-function makeAutomation(
-  overrides: Partial<ServerAutomation['settings']> = {},
-  nextRestart?: Date
-) {
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+function makeAutomation(overrides: Partial<AutomationSettings> = {}): ServerAutomation {
   return {
-    serverId: 'id',
+    serverId: 'a1',
     settings: {
       autoStartOnAppLaunch: false,
       autoStartOnBoot: false,
       crashDetectionEnabled: false,
-      crashDetectionInterval: 10,
-      maxRestartAttempts: 2,
+      crashDetectionInterval: 60,
+      maxRestartAttempts: 3,
       scheduledRestartEnabled: true,
-      restartFrequency: (overrides.restartFrequency ?? 'daily') as 'daily' | 'weekly' | 'custom',
+      restartFrequency: 'daily',
       restartTime: '04:00',
-      restartDays: [0],
-      restartWarningMinutes: 15,
+      restartDays: [1],
+      restartWarningMinutes: 5,
       ...overrides
     },
     restartAttempts: 0,
     manuallyStopped: false,
-    scheduledRestartTimer: undefined,
-    status: { isMonitoring: false, isScheduled: false, nextRestart: nextRestart }
+    status: { isMonitoring: false, isScheduled: false }
   };
 }
 
 describe('ScheduledRestartService', () => {
   let automations: Map<string, ServerAutomation>;
   let service: ScheduledRestartService;
-  let serverInstanceService: any;
-  let serverProcessService: any;
-  let getInstance: any;
-  let saveInstance: any;
-  let sendRconCommand: any;
-  let isRconConnected: any;
 
   beforeEach(() => {
-    jest.resetModules();
+    // Monday 29 September 2025, 03:00 host local time.
+    jest.useFakeTimers({ now: new Date(2025, 8, 29, 3, 0, 0) });
     automations = new Map();
-    jest.mock('../server-instance/server-process.service', () => ({
-      serverProcessService: {
-        getInstanceState: jest.fn().mockReturnValue('running'),
-        getServerProcess: jest.fn().mockReturnValue({ kill: jest.fn() }),
-        setInstanceState: jest.fn()
-      }
-    }));
-    jest.mock('../../utils/ark/instance.utils', () => ({
-      getInstance: jest.fn().mockReturnValue({}),
-      saveInstance: jest.fn()
-    }));
-    jest.mock('../../utils/rcon.utils', () => ({
-      disconnectRcon: jest.fn(),
-      sendRconCommand: jest.fn(),
-      isRconConnected: jest.fn()
-    }));
-    jest.mock('../server-instance/server-instance.service', () => ({
-      serverInstanceService: {
-        getStandardEventCallbacks: jest.fn(() => ({ onLog: jest.fn(), onState: jest.fn() })),
-        startServerInstance: jest.fn()
-      }
-    }));
-    jest.clearAllMocks();
-    automations.clear();
-    // Re-require all dependencies after mocks
-    ({ serverInstanceService } = require('../server-instance/server-instance.service'));
-    ({ serverProcessService } = require('../server-instance/server-process.service'));
-    ({ getInstance, saveInstance } = require('../../utils/ark/instance.utils'));
-    ({ sendRconCommand, isRconConnected } = require('../../utils/rcon.utils'));
-    // Instantiate service after all mocks
-    const { ScheduledRestartService } = require('./scheduled-restart.service');
     service = new ScheduledRestartService(automations);
-  });
-
-  it('should schedule and unschedule restart', () => {
-    automations.set('id', makeAutomation());
-    service.scheduleRestart('id');
-    expect(automations.get('id')!.status.isScheduled).toBe(true);
-    service.unscheduleRestart('id');
-    expect(automations.get('id')!.status.isScheduled).toBe(false);
-  });
-
-  it('should not schedule if automation missing', () => {
-    service.scheduleRestart('missing');
-    expect(automations.size).toBe(0);
-  });
-
-  it('should not unschedule if automation missing', () => {
-    expect(() => service.unscheduleRestart('missing')).not.toThrow();
-  });
-
-  it('should calculate next restart (daily)', () => {
-    const now = new Date();
-    const settings = makeAutomation().settings;
-    const next = service['calculateNextRestart'](settings);
-    expect(next instanceof Date).toBe(true);
-  });
-
-  it('should calculate next restart (weekly)', () => {
-    const settings = makeAutomation({ restartFrequency: 'weekly', restartDays: [1] }).settings;
-    const next = service['calculateNextRestart'](settings);
-    expect(next instanceof Date).toBe(true);
-  });
-
-  it('should execute scheduled restart with RCON', async () => {
-      jest.useFakeTimers();
-  const automation = makeAutomation({}, new Date(Date.now() + 10000));
-  automation.scheduledRestartTimer = {} as any;
-  automations.set('id', automation);
-    isRconConnected.mockReturnValue(true);
-    sendRconCommand.mockResolvedValue('ok');
     serverProcessService.getInstanceState.mockReturnValue('running');
-    serverProcessService.getServerProcess.mockReturnValue({ kill: jest.fn() });
-    getInstance.mockReturnValue({});
-  service.scheduleRestart = jest.fn(); // Prevent recursion
-  // Ensure all dependencies are mocked to trigger restart logic
-  serverProcessService.getInstanceState.mockReturnValue('running');
-  serverProcessService.getServerProcess.mockReturnValue({ kill: jest.fn() });
-  isRconConnected.mockReturnValue(true);
-  getInstance.mockReturnValue({});
-  await service['executeScheduledRestart']('id');
-  // Step 1: advance warning timer
-  jest.advanceTimersByTime(15 * 60 * 1000);
-  jest.runOnlyPendingTimers();
-  await Promise.resolve();
-  // Step 2: advance save/kill timer
-  jest.advanceTimersByTime(2000);
-  jest.runOnlyPendingTimers();
-  await Promise.resolve();
-  // Step 3: advance restart timer
-  jest.advanceTimersByTime(5000);
-  jest.runOnlyPendingTimers();
-  await Promise.resolve();
-  expect(sendRconCommand).toHaveBeenCalled();
-  expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
-  expect(saveInstance).toHaveBeenCalled();
+    rconService.executeRconCommand.mockResolvedValue({ success: true, response: '', instanceId: 'a1' });
+    serverLifecycleService.stopServerInstance.mockResolvedValue({ success: true, instanceId: 'a1' });
+    serverInstanceService.startServerInstance.mockResolvedValue({ started: true, instanceId: 'a1' });
   });
 
-  it('should execute scheduled restart without RCON', async () => {
-      jest.useFakeTimers();
-  const automation = makeAutomation({}, new Date(Date.now() + 10000));
-  automation.scheduledRestartTimer = {} as any;
-  automations.set('id', automation);
-    isRconConnected.mockReturnValue(false);
-    serverProcessService.getInstanceState.mockReturnValue('running');
-    serverProcessService.getServerProcess.mockReturnValue({ kill: jest.fn() });
-    getInstance.mockReturnValue({});
-  service.scheduleRestart = jest.fn(); // Prevent recursion
-  serverProcessService.getInstanceState.mockReturnValue('running');
-  serverProcessService.getServerProcess.mockReturnValue({ kill: jest.fn() });
-  isRconConnected.mockReturnValue(false);
-  getInstance.mockReturnValue({});
-  await service['executeScheduledRestart']('id');
-  // Step 1: advance kill timer
-  jest.advanceTimersByTime(2000);
-  jest.runOnlyPendingTimers();
-  await Promise.resolve();
-  // Step 2: advance restart timer
-  jest.advanceTimersByTime(5000);
-  jest.runOnlyPendingTimers();
-  await Promise.resolve();
-  expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
-  expect(saveInstance).toHaveBeenCalled();
+  afterEach(() => {
+    service.unscheduleRestart('a1');
+    jest.useRealTimers();
   });
 
-  it('should handle errors gracefully', async () => {
-    automations.set('id', makeAutomation());
-    isRconConnected.mockImplementation(() => { throw new Error('fail'); });
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    await service['executeScheduledRestart']('id');
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
+  function schedule(overrides: Partial<AutomationSettings> = {}): ServerAutomation {
+    const automation = makeAutomation(overrides);
+    automations.set('a1', automation);
+    service.scheduleRestart('a1');
+    return automation;
+  }
+
+  function broadcasts(): string[] {
+    return rconService.executeRconCommand.mock.calls.map(([, command]: [string, string]) => command);
+  }
+
+  describe('scheduling', () => {
+    it('schedules a daily restart for the next time of day', () => {
+      const automation = schedule();
+
+      expect(automation.status).toEqual({ isMonitoring: false, isScheduled: true, nextRestart: new Date(2025, 8, 29, 4, 0) });
+    });
+
+    it('schedules a weekly restart on the nearest chosen day', () => {
+      const automation = schedule({ restartFrequency: 'weekly', restartTime: '02:00', restartDays: [1, 3] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 9, 1, 2, 0));
+    });
+
+    it('treats custom as the chosen days at the chosen time, as the UI shows it', () => {
+      const automation = schedule({ restartFrequency: 'custom', restartTime: '02:00', restartDays: [3] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 9, 1, 2, 0));
+    });
+
+    // Each of these used to schedule a delay of zero or less, and then restart the server in a loop.
+    it.each([
+      ['no restart, left enabled', { restartFrequency: 'none' as const }],
+      ['weekly with no days chosen', { restartFrequency: 'weekly' as const, restartDays: [] }],
+      ['an impossible time', { restartTime: '25:99' }],
+      ['an hourly frequency the UI does not offer', { restartFrequency: 'hourly' as unknown as AutomationSettings['restartFrequency'] }]
+    ])('does not schedule %s', async (_label, overrides) => {
+      const automation = schedule(overrides);
+
+      expect(automation.status.isScheduled).toBe(false);
+      expect(jest.getTimerCount()).toBe(0);
+      await jest.advanceTimersByTimeAsync(48 * HOUR);
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+    });
+
+    it('ignores an instance without automation settings', () => {
+      expect(() => service.scheduleRestart('missing')).not.toThrow();
+      expect(() => service.unscheduleRestart('missing')).not.toThrow();
+    });
+
+    it('unschedules', () => {
+      const automation = schedule();
+
+      service.unscheduleRestart('a1');
+
+      expect(automation.status).toEqual({ isMonitoring: false, isScheduled: false });
+      expect(jest.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe('restarting', () => {
+    it('warns the players, waits, then stops the server gracefully and starts it again', async () => {
+      schedule();
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+      expect(broadcasts()).toEqual(['broadcast Server will restart in 5 minutes!']);
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(5 * MINUTE);
+      expect(broadcasts()).toEqual(['broadcast Server will restart in 5 minutes!', 'broadcast Server restarting now!']);
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('server-instance-state', { state: 'stopping', instanceId: 'a1' });
+      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledWith('a1');
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalledWith('a1', expect.any(Function), expect.any(Function));
+      expect(serverProcessService.getServerProcess).not.toHaveBeenCalled();
+    });
+
+    // The server used to be killed and started again 5 s later, whether it had exited or not.
+    it('starts the server again only once the stop has finished', async () => {
+      let finishStop: (result: unknown) => void = () => undefined;
+      serverLifecycleService.stopServerInstance.mockReturnValue(new Promise(resolve => { finishStop = resolve; }));
+      schedule();
+
+      await jest.advanceTimersByTimeAsync(HOUR + 5 * MINUTE + 10 * MINUTE);
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+
+      finishStop({ success: true, instanceId: 'a1' });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
+    });
+
+    it('restarts at once when the players cannot be warned', async () => {
+      rconService.executeRconCommand.mockResolvedValue({ success: false, error: 'RCON not connected for this instance', notSent: true, instanceId: 'a1' });
+      schedule();
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledWith('a1');
+    });
+
+    it('restarts at once when there is no warning time', async () => {
+      schedule({ restartWarningMinutes: 0 });
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      expect(broadcasts()).toEqual(['broadcast Server restarting now!']);
+      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalled();
+    });
+
+    // The countdown timers were not tracked, so a restart still happened after the schedule was disabled.
+    it('cancels a pending restart when the schedule is disabled during the warning', async () => {
+      schedule();
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      service.unscheduleRestart('a1');
+      await jest.advanceTimersByTimeAsync(10 * MINUTE);
+
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+    });
+
+    it('restarts once, on the new schedule, when rescheduled during the warning', async () => {
+      const automation = schedule();
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      automation.settings.restartTime = '06:00';
+      service.scheduleRestart('a1');
+      await jest.advanceTimersByTimeAsync(10 * MINUTE);
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(2 * HOUR);
+      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a server that was stopped by hand during the warning alone', async () => {
+      schedule();
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      serverProcessService.getInstanceState.mockReturnValue('stopped');
+      await jest.advanceTimersByTimeAsync(5 * MINUTE);
+
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+    });
+
+    it('skips a server that is not running, and keeps the schedule', async () => {
+      serverProcessService.getInstanceState.mockReturnValue('stopped');
+      const automation = schedule();
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      expect(broadcasts()).toEqual([]);
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 30, 4, 0));
+    });
+
+    // 'stopping' was broadcast before the stop; left there, every client showed a server stuck stopping.
+    it('does not start a server it could not stop, and tells the clients its real state', async () => {
+      serverLifecycleService.stopServerInstance.mockResolvedValue({ success: false, error: 'Server process not found', instanceId: 'a1' });
+      serverProcessService.getNormalizedInstanceState.mockReturnValue('crashed');
+      schedule({ restartWarningMinutes: 0 });
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalled();
+      expect(messagingService.sendToAll).toHaveBeenLastCalledWith('server-instance-state', { state: 'crashed', instanceId: 'a1' });
+    });
+
+    it('schedules the next restart once one is done', async () => {
+      const automation = schedule();
+
+      await jest.advanceTimersByTimeAsync(HOUR + 5 * MINUTE);
+
+      expect(automation.status).toMatchObject({ isScheduled: true, nextRestart: new Date(2025, 8, 30, 4, 0) });
+      await jest.advanceTimersByTimeAsync(24 * HOUR);
+      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the schedule when a restart throws', async () => {
+      serverInstanceService.startServerInstance.mockRejectedValueOnce(new Error('boom'));
+      const automation = schedule({ restartWarningMinutes: 0 });
+
+      await jest.advanceTimersByTimeAsync(HOUR);
+
+      expect(console.error).toHaveBeenCalled();
+      expect(automation.status).toMatchObject({ isScheduled: true, nextRestart: new Date(2025, 8, 30, 4, 0) });
+    });
   });
 });

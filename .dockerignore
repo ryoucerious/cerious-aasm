@@ -6,3 +6,6 @@ coverage
 coverage-electron
 .git
 *.log
+.env
+.env.*
+electron/**/*.js

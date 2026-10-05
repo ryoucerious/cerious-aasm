@@ -1,61 +1,61 @@
-﻿import { TestBed } from "@angular/core/testing";
-import { HttpClientTestingModule } from "@angular/common/http/testing";
+import { TestBed } from "@angular/core/testing";
 import { EventSubscriptionService } from "./event-subscription.service";
 import { MessagingService } from "./messaging/messaging.service";
 import { ServerInstanceService } from "./server-instance.service";
 import { ServerStateService } from "./server-state.service";
 import { ServerConfigurationService } from "./server-configuration.service";
 import { RconManagementService } from "./rcon-management.service";
-import { NotificationService } from "./notification.service";
-import { of, Observable } from "rxjs";
+import { FieldDefinitionsService } from "./field-definitions.service";
+import { Observable, of, Subject } from "rxjs";
 
-// Mock classes
 class MockMessagingService {
-  receiveMessage(channel: string) {
-    if (channel === 'server-instances') {
-      // Always return an array for server-instances
-      return of([{ id: 1, memory: 123 }]);
-    }
-    // For all other channels, return an object
-    return of({});
-  }
+  channels: Record<string, Subject<any>> = {};
+  receiveMessage = jasmine.createSpy("receiveMessage").and.callFake((channel: string): Observable<any> =>
+    this.channels[channel] ??= new Subject<any>()
+  );
   sendMessage = jasmine.createSpy("sendMessage").and.returnValue(of({}));
 }
 
 class MockServerInstanceService {
-  getActiveServer = jasmine.createSpy("getActiveServer").and.returnValue(of({ id: 1, players: 0, state: "", memory: 0, crossplay: false, mods: [] }));
-  getDefaultInstance = jasmine.createSpy("getDefaultInstance").and.returnValue({ id: 1, crossplay: false, mods: [] });
+  getActiveServer = jasmine.createSpy("getActiveServer").and.returnValue(of(null));
 }
 
 class MockServerStateService {
-  logs$ = of();
+  logsChanged$ = new Subject<string>();
   mapServerState = jasmine.createSpy("mapServerState").and.callFake((state: any) => state);
   clearLogsForInstance = jasmine.createSpy("clearLogsForInstance");
 }
 
 class MockServerConfigurationService {
-  initializeServerInstance = jasmine.createSpy("initializeServerInstance").and.callFake((server: any) => ({ ...server, initialized: true }));
+  initializeServerInstance = jasmine.createSpy("initializeServerInstance").and.callFake((server: any) => ({ mods: [], ...server }));
   createDeepCopy = jasmine.createSpy("createDeepCopy").and.callFake((obj: any) => JSON.parse(JSON.stringify(obj)));
-  modsArrayToString = jasmine.createSpy("modsArrayToString").and.returnValue("");
 }
 
 class MockRconManagementService {
-  subscribeToRconStatus = jasmine.createSpy("subscribeToRconStatus").and.returnValue(of({}));
-}
-
-class MockNotificationService {
-  error = jasmine.createSpy("error");
+  status$ = new Subject<any>();
+  subscribeToRconStatus = jasmine.createSpy("subscribeToRconStatus").and.callFake(() => this.status$);
 }
 
 describe("EventSubscriptionService", () => {
   let service: EventSubscriptionService;
   let messagingService: MockMessagingService;
-  let serverStateService: MockServerStateService;
-  let notificationService: MockNotificationService;
+  let serverInstanceService: MockServerInstanceService;
+  let component: any;
+  let cdr: any;
+
+  const pageState = (overrides: Record<string, unknown> = {}) => ({
+    advancedSettingsMeta: [],
+    activeServerInstance: null,
+    originalServerInstance: null,
+    rconConnected: false,
+    loadBackupSettings: jasmine.createSpy("loadBackupSettings"),
+    loadBackupList: jasmine.createSpy("loadBackupList"),
+    loadModList: jasmine.createSpy("loadModList"),
+    ...overrides
+  });
 
   beforeEach(() => {
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
         EventSubscriptionService,
         { provide: MessagingService, useClass: MockMessagingService },
@@ -63,88 +63,171 @@ describe("EventSubscriptionService", () => {
         { provide: ServerStateService, useClass: MockServerStateService },
         { provide: ServerConfigurationService, useClass: MockServerConfigurationService },
         { provide: RconManagementService, useClass: MockRconManagementService },
-        { provide: NotificationService, useClass: MockNotificationService },
-        { provide: "MessageTransport", useValue: {} }
+        { provide: FieldDefinitionsService, useValue: { getFieldDefinitions: () => of([{ key: "xpMultiplier", label: "XP", tab: "rates", type: "number" }]) } }
       ]
     });
     service = TestBed.inject(EventSubscriptionService);
     messagingService = TestBed.inject(MessagingService) as any;
-    serverStateService = TestBed.inject(ServerStateService) as any;
-    notificationService = TestBed.inject(NotificationService) as any;
-    // Clean up any existing subscriptions from previous tests
-    service.destroySubscriptions();
+    serverInstanceService = TestBed.inject(ServerInstanceService) as any;
+    component = pageState();
+    cdr = { markForCheck: jasmine.createSpy("markForCheck") };
   });
 
   afterEach(() => {
     service.destroySubscriptions();
   });
 
-  it("should be created", () => {
-    expect(service).toBeTruthy();
-  });
-
-  it("should handle notification error messages", () => {
-    const component: any = { 
-      activeServerInstance: { id: 1 },
-      originalServerInstance: {},
-      modsInput: "",
-      rconConnected: false,
-      crossplayPlatforms: [],
-      advancedSettingsMeta: [], 
-      loadBackupSettings: jasmine.createSpy("loadBackupSettings"),
-      loadBackupList: jasmine.createSpy("loadBackupList"),
-      loadModList: jasmine.createSpy("loadModList"),
-      scrollLogsToBottom: jasmine.createSpy("scrollLogsToBottom")
-    };
-    const cdr: any = { markForCheck: jasmine.createSpy("markForCheck") };
-    const serverInstanceService = TestBed.inject(ServerInstanceService) as any;
-    serverInstanceService.getActiveServer.and.returnValue(of(null));
-    spyOn(messagingService, 'receiveMessage').and.callFake((channel: string) => {
-      if (channel === "notification") {
-        return of({ type: "error", message: "test error" });
-      }
-      if (channel === "server-instances") {
-        return of([{ id: 1, memory: 123 }]);
-      }
-      return of({});
-    });
-
+  it("loads the settings metadata for the page", () => {
     service.initializeSubscriptions(component, cdr);
-    expect(notificationService.error).toHaveBeenCalledWith("test error", "Server Start Error");
+    expect(component.advancedSettingsMeta).toEqual([jasmine.objectContaining({ key: "xpMultiplier" })]);
   });
 
   it("should handle clear-server-instance-logs event", () => {
-  const component: any = { advancedSettingsMeta: [], scrollLogsToBottom: () => {}, loadBackupSettings: () => {}, loadBackupList: () => {} };
-    const cdr: any = { markForCheck: jasmine.createSpy("markForCheck") };
-    spyOn(messagingService, 'receiveMessage').and.callFake((channel: string) => {
-      if (channel === "clear-server-instance-logs") {
-        return of({ instanceId: 1 });
-      }
-      if (channel === "server-instances") {
-        return of([{ id: 1, memory: 123 }]);
-      }
-      return of({});
-    });
-
     service.initializeSubscriptions(component, cdr);
-    expect(serverStateService.clearLogsForInstance).toHaveBeenCalledWith(1);
+    messagingService.channels["clear-server-instance-logs"].next({ instanceId: "1" });
+    expect(TestBed.inject(ServerStateService).clearLogsForInstance).toHaveBeenCalledWith("1");
     expect(cdr.markForCheck).toHaveBeenCalled();
   });
 
   it("should handle rcon status event", () => {
-  const component: any = { activeServerInstance: { id: 1 }, rconConnected: false, advancedSettingsMeta: [], scrollLogsToBottom: () => {}, loadBackupSettings: () => {}, loadBackupList: () => {} };
-    const cdr: any = { markForCheck: jasmine.createSpy("markForCheck") };
-    const rconService = TestBed.inject(RconManagementService) as any;
-    rconService.subscribeToRconStatus.and.returnValue(of({ instanceId: 1, connected: true }));
-
     service.initializeSubscriptions(component, cdr);
+    component.activeServerInstance = { id: "1", name: "A" };
+    (TestBed.inject(RconManagementService) as any).status$.next({ instanceId: "1", connected: true });
     expect(component.rconConnected).toBeTrue();
     expect(cdr.markForCheck).toHaveBeenCalled();
   });
 
+  it("loads the selected server and asks for its live state", () => {
+    serverInstanceService.getActiveServer.and.returnValue(of({ id: "A", name: "Alpha", mods: ["1"] }));
+    service.initializeSubscriptions(component, cdr);
+
+    expect(component.activeServerInstance.id).toBe("A");
+    expect(component.originalServerInstance).toEqual(component.activeServerInstance);
+    expect(component.loadModList).toHaveBeenCalled();
+    expect(component.loadBackupSettings).toHaveBeenCalled();
+    expect(messagingService.sendMessage).toHaveBeenCalledWith("get-server-instance-state", { id: "A" });
+    expect(messagingService.sendMessage).toHaveBeenCalledWith("get-server-instance-players", { id: "A" });
+  });
+
+  it("ignores replies that arrive after the user switched to another server", () => {
+    const active$ = new Subject<any>();
+    const replies: Record<string, Subject<any>> = {};
+    serverInstanceService.getActiveServer.and.returnValue(active$);
+    messagingService.sendMessage.and.callFake((channel: string) => replies[channel] = new Subject<any>());
+    service.initializeSubscriptions(component, cdr);
+
+    active$.next({ id: "A", mods: [] });
+    const stateForA = replies["get-server-instance-state"];
+    const playersForA = replies["get-server-instance-players"];
+    active$.next({ id: "B", mods: [] });
+    stateForA.next({ state: "running" });
+    playersForA.next({ players: 9 });
+
+    expect(component.activeServerInstance.id).toBe("B");
+    expect(component.activeServerInstance.state).not.toBe("running");
+    expect(component.activeServerInstance.players).not.toBe(9);
+  });
+
+  it("applies live events only to the server on the page", () => {
+    service.initializeSubscriptions(component, cdr);
+    component.activeServerInstance = { id: "A", name: "Alpha" };
+
+    messagingService.channels["server-instance-state"].next({ instanceId: "B", state: "running" });
+    messagingService.channels["server-instance-players"].next({ instanceId: "A", players: 3 });
+    messagingService.channels["server-instance-memory"].next({ instanceId: "A", memory: 2048 });
+
+    expect(component.activeServerInstance.state).toBeUndefined();
+    expect(component.activeServerInstance.players).toBe(3);
+    expect(component.activeServerInstance.memory).toBe(2048);
+  });
+
+  it("takes edits from other clients but not their state", () => {
+    service.initializeSubscriptions(component, cdr);
+    component.activeServerInstance = { id: "A", name: "Alpha", state: "Running" };
+
+    messagingService.channels["server-instance-updated"].next({ id: "A", name: "Renamed", state: "stopped" });
+
+    expect(component.activeServerInstance.name).toBe("Renamed");
+    expect(component.activeServerInstance.state).toBe("Running");
+    expect(component.originalServerInstance).toEqual(component.activeServerInstance);
+  });
+
+  describe("when the page's server is updated", () => {
+    const update = (msg: Record<string, unknown>) => messagingService.channels["server-instance-updated"].next(msg);
+
+    beforeEach(() => service.initializeSubscriptions(component, cdr));
+
+    it("keeps fields the user changed since the last save when the save echoes back", () => {
+      component.activeServerInstance = { id: "A", name: "Alpha", maxPlayers: 20 };
+      component.originalServerInstance = { id: "A", name: "Alpha", maxPlayers: 10 };
+      update({ id: "A", name: "Alpha", maxPlayers: 10 });
+      expect(component.activeServerInstance.maxPlayers).toBe(20);
+      expect(component.originalServerInstance.maxPlayers).toBe(10);
+    });
+
+    it("leaves the page alone for its own echo", () => {
+      const page = { id: "A", name: "Alpha", mods: [] };
+      component.activeServerInstance = page;
+      component.originalServerInstance = { ...page };
+      component.loadModList.calls.reset();
+      update({ id: "A", name: "Alpha", mods: [] });
+      expect(component.activeServerInstance).toBe(page);
+      expect(component.loadModList).not.toHaveBeenCalled();
+    });
+
+    it("takes another client's edit of a field the user has not touched", () => {
+      component.activeServerInstance = { id: "A", name: "Alpha", maxPlayers: 20 };
+      component.originalServerInstance = { id: "A", name: "Alpha", maxPlayers: 10 };
+      update({ id: "A", name: "Renamed", maxPlayers: 10, mods: ["7"] });
+      expect(component.activeServerInstance.name).toBe("Renamed");
+      expect(component.activeServerInstance.maxPlayers).toBe(20);
+      expect(component.activeServerInstance.mods).toEqual(["7"]);
+      expect(component.originalServerInstance.name).toBe("Renamed");
+      expect(component.originalServerInstance.maxPlayers).toBe(10);
+      expect(component.loadModList).toHaveBeenCalled();
+    });
+  });
+
+  describe("when a server is selected", () => {
+    let active$: Subject<any>;
+
+    beforeEach(() => {
+      active$ = new Subject<any>();
+      serverInstanceService.getActiveServer.and.returnValue(active$);
+      service.initializeSubscriptions(component, cdr);
+    });
+
+    it("does not reload the page when the same server is announced again", () => {
+      active$.next({ id: "A", maxPlayers: 10 });
+      component.activeServerInstance.maxPlayers = 20;
+      active$.next({ id: "A", maxPlayers: 10, name: "Alpha" });
+      expect(component.activeServerInstance.maxPlayers).toBe(20);
+      expect(component.loadBackupSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("works on its own copy of the server", () => {
+      const selected = { id: "A", crossplay: ["Steam (PC)"], mods: [] };
+      active$.next(selected);
+      component.activeServerInstance.crossplay.push("Xbox (XSX)");
+      expect(selected.crossplay).toEqual(["Steam (PC)"]);
+    });
+
+    it("shows no server once none is selected", () => {
+      active$.next({ id: "A", mods: [] });
+      active$.next(null);
+      expect(component.activeServerInstance).toBeNull();
+      expect(component.originalServerInstance).toBeNull();
+    });
+  });
+
+  it("leaves backend notifications to NotificationService", () => {
+    service.initializeSubscriptions(component, cdr);
+    expect(messagingService.receiveMessage).not.toHaveBeenCalledWith("notification");
+  });
+
   it("should destroy subscriptions", () => {
-    service["subscriptions"] = [{ unsubscribe: jasmine.createSpy("unsubscribe") } as any];
+    service.initializeSubscriptions(component, cdr);
     service.destroySubscriptions();
-    expect(service["subscriptions"].length).toBe(0);
+    expect(Object.values(messagingService.channels).every(channel => !channel.observed)).toBeTrue();
   });
 });

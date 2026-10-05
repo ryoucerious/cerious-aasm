@@ -37,7 +37,6 @@ describe('ThemeService', () => {
   afterEach(() => {
     localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.removeAttribute('data-theme');
-    document.documentElement.removeAttribute('data-bs-theme');
   });
 
   it('defaults to following the system', () => {
@@ -57,11 +56,6 @@ describe('ThemeService', () => {
     const service = make();
     expect(service.resolved).toBe('dark');
     expect(attr()).toBe('dark');
-  });
-
-  it('sets data-bs-theme alongside data-theme so Bootstrap follows', () => {
-    make().setPreference('light');
-    expect(document.documentElement.getAttribute('data-bs-theme')).toBe('light');
   });
 
   it('persists an explicit choice', () => {
@@ -127,12 +121,5 @@ describe('ThemeService', () => {
     expect(() => service.setPreference('light')).not.toThrow();
     expect(service.resolved).toBe('light');
     expect(attr()).toBe('light');
-  });
-
-  it('unsubscribes from OS changes on destroy', () => {
-    const service = make();
-    expect(listeners.length).toBe(1);
-    service.destroy();
-    expect(listeners.length).toBe(0);
   });
 });

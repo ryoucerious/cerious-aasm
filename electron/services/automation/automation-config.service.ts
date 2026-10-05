@@ -1,6 +1,8 @@
 import { getInstance, saveInstance } from '../../utils/ark/instance.utils';
 import { AutomationConfigResult, AutomationSettings, ServerAutomation } from '../../types/automation.types';
+import { getOrCreateAutomation } from './automation-defaults';
 
+/** Applies automation settings to the in-memory record and stores them in the instance's config.json. */
 export class AutomationConfigService {
   private automations: Map<string, ServerAutomation>;
 
@@ -8,99 +10,46 @@ export class AutomationConfigService {
     this.automations = automations;
   }
 
-  private getOrCreateAutomation(serverId: string): ServerAutomation {
-    if (!this.automations.has(serverId)) {
-      const automation: ServerAutomation = {
-        serverId,
-        settings: {
-          autoStartOnAppLaunch: false,
-          autoStartOnBoot: false,
-          crashDetectionEnabled: false,
-          crashDetectionInterval: 60000,
-          maxRestartAttempts: 3,
-          scheduledRestartEnabled: false,
-          restartFrequency: 'daily',
-          restartTime: '04:00',
-          restartDays: [0],
-          restartWarningMinutes: 15
-        },
-        restartAttempts: 0,
-        manuallyStopped: false,
-        status: {
-          isMonitoring: false,
-          isScheduled: false
+  configureAutostart(serverId: string, autoStartOnAppLaunch: boolean, autoStartOnBoot: boolean): Promise<AutomationConfigResult> {
+    return this.apply(serverId, { autoStartOnAppLaunch, autoStartOnBoot });
+  }
+
+  configureCrashDetection(serverId: string, enabled: boolean, checkInterval: number, maxRestartAttempts: number): Promise<AutomationConfigResult> {
+    return this.apply(serverId, { crashDetectionEnabled: enabled, crashDetectionInterval: checkInterval, maxRestartAttempts });
+  }
+
+  configureScheduledRestart(
+    serverId: string,
+    enabled: boolean,
+    frequency: AutomationSettings['restartFrequency'],
+    time: string,
+    days: number[],
+    warningMinutes: number
+  ): Promise<AutomationConfigResult> {
+    return this.apply(serverId, {
+      scheduledRestartEnabled: enabled,
+      restartFrequency: frequency,
+      restartTime: time,
+      restartDays: days,
+      restartWarningMinutes: warningMinutes
+    });
+  }
+
+  private async apply(serverId: string, changes: Partial<AutomationSettings>): Promise<AutomationConfigResult> {
+    try {
+      const automation = getOrCreateAutomation(this.automations, serverId);
+      Object.assign(automation.settings, changes);
+
+      const instance = getInstance(serverId);
+      if (instance) {
+        const saved = await saveInstance({ ...instance, ...changes });
+        if (saved.error !== undefined) {
+          return { success: false, error: saved.error };
         }
-      };
-      this.automations.set(serverId, automation);
-    }
-    return this.automations.get(serverId)!;
-  }
-
-  async configureAutostart(serverId: string, autoStartOnAppLaunch: boolean, autoStartOnBoot: boolean): Promise<AutomationConfigResult> {
-    try {
-      const automation = this.getOrCreateAutomation(serverId);
-      automation.settings.autoStartOnAppLaunch = autoStartOnAppLaunch;
-      automation.settings.autoStartOnBoot = autoStartOnBoot;
-
-      // Update instance config.json
-      const instance = getInstance(serverId);
-      if (instance) {
-        instance.autoStartOnAppLaunch = autoStartOnAppLaunch;
-        instance.autoStartOnBoot = autoStartOnBoot;
-        await saveInstance(instance);
-      }
-
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to configure autostart:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
-    }
-  }
-
-  async configureCrashDetection(serverId: string, enabled: boolean, checkInterval: number, maxRestartAttempts: number): Promise<AutomationConfigResult> {
-    try {
-      const automation = this.getOrCreateAutomation(serverId);
-      automation.settings.crashDetectionEnabled = enabled;
-      automation.settings.crashDetectionInterval = checkInterval;
-      automation.settings.maxRestartAttempts = maxRestartAttempts;
-
-      // Update instance config.json
-      const instance = getInstance(serverId);
-      if (instance) {
-        instance.crashDetectionEnabled = enabled;
-        instance.crashDetectionInterval = checkInterval;
-        instance.maxRestartAttempts = maxRestartAttempts;
-        await saveInstance(instance);
       }
       return { success: true };
     } catch (error) {
-      console.error('Failed to configure crash detection:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
-    }
-  }
-
-  async configureScheduledRestart(serverId: string, enabled: boolean, frequency: 'daily' | 'weekly' | 'custom', time: string, days: number[], warningMinutes: number): Promise<AutomationConfigResult> {
-    try {
-      const automation = this.getOrCreateAutomation(serverId);
-      automation.settings.scheduledRestartEnabled = enabled;
-      automation.settings.restartFrequency = frequency;
-      automation.settings.restartTime = time;
-      automation.settings.restartDays = days;
-      automation.settings.restartWarningMinutes = warningMinutes;
-
-      // Update instance config.json
-      const instance = getInstance(serverId);
-      if (instance) {
-        instance.scheduledRestartEnabled = enabled;
-        instance.restartFrequency = frequency;
-        instance.restartTime = time;
-        instance.restartDays = days;
-        instance.restartWarningMinutes = warningMinutes;
-        await saveInstance(instance);
-      }
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to configure scheduled restart:', error);
+      console.error(`[automation-config] Failed to save automation settings for ${serverId}:`, error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }

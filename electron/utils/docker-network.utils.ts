@@ -1,4 +1,4 @@
-import { platformService } from '../services/platform.service';
+import { isRunningInDocker } from './platform.utils';
 
 export interface PortRange {
   start: number;
@@ -46,7 +46,7 @@ export function parsePortRange(value: string | undefined, fallback: PortRange): 
 
 /** Null outside Docker. */
 export function getDockerNetworkInfo(
-  inDocker: boolean = platformService.isRunningInDocker(),
+  inDocker: boolean = isRunningInDocker(),
   env: NodeJS.ProcessEnv = process.env
 ): DockerNetworkInfo | null {
   if (!inDocker) return null;

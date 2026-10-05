@@ -1,155 +1,139 @@
+import { AutomationSettings, ServerAutomation } from '../../types/automation.types';
+import { ScheduleSettings, computeNextRun } from '../../utils/schedule.utils';
+import { messagingService } from '../messaging.service';
+import { rconService } from '../rcon.service';
+import { getStandardEventCallbacks } from '../server-instance/instance-events';
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { serverLifecycleService } from '../server-instance/server-lifecycle.service';
-import {
-  disconnectRcon,
-  sendRconCommand,
-  isRconConnected,
-  connectRcon
-} from '../../utils/rcon.utils';
-import { getInstance, saveInstance } from '../../utils/ark/instance.utils';
-import { AutomationSettings, ServerAutomation } from '../../types/automation.types';
+import { serverProcessService } from '../server-instance/server-process.service';
 
+const MINUTE_MS = 60 * 1000;
+
+/** The warning countdown of a restart in progress; finishing it early lets the restart see it was cancelled. */
+interface Countdown {
+  timer: NodeJS.Timeout;
+  finish: () => void;
+}
+
+/** Restarts servers on their schedule: warns the players over RCON, stops gracefully, starts again. */
 export class ScheduledRestartService {
   private automations: Map<string, ServerAutomation>;
+  // Every (un)schedule starts a new generation. A restart in progress checks it after the warning,
+  // so disabling or changing the schedule cancels a restart that has not begun stopping.
+  private readonly generations = new Map<string, number>();
+  private readonly countdowns = new Map<string, Countdown>();
 
   constructor(automations: Map<string, ServerAutomation>) {
     this.automations = automations;
   }
 
   scheduleRestart(serverId: string): void {
-    const automation = this.automations.get(serverId);
-    if (!automation) return;
-
+    if (!this.automations.has(serverId)) return;
     this.unscheduleRestart(serverId);
-    const nextRestart = this.calculateNextRestart(automation.settings);
-    automation.status.nextRestart = nextRestart;
-    automation.status.isScheduled = true;
-
-    const timeUntilRestart = nextRestart.getTime() - Date.now();
-    automation.scheduledRestartTimer = setTimeout(async () => {
-      await this.executeScheduledRestart(serverId);
-      // Update instance config.json after scheduled restart
-      const instance = getInstance(serverId);
-      if (instance) {
-        await saveInstance(instance);
-      }
-    }, timeUntilRestart);
+    this.arm(serverId, this.generations.get(serverId) ?? 0, new Date());
   }
 
   unscheduleRestart(serverId: string): void {
     const automation = this.automations.get(serverId);
     if (!automation) return;
 
-    if (automation.scheduledRestartTimer) {
-      clearTimeout(automation.scheduledRestartTimer);
-      automation.scheduledRestartTimer = undefined;
-    }
-
+    this.generations.set(serverId, (this.generations.get(serverId) ?? 0) + 1);
+    clearTimeout(automation.scheduledRestartTimer);
+    automation.scheduledRestartTimer = undefined;
+    this.countdowns.get(serverId)?.finish();
     automation.status.isScheduled = false;
     delete automation.status.nextRestart;
-    // Update instance config.json after unscheduling
-    const instance = getInstance(serverId);
-    if (instance) {
-      saveInstance(instance);
-    }
   }
 
-  private calculateNextRestart(settings: AutomationSettings): Date {
-    const now = new Date();
-    const [hours, minutes] = settings.restartTime.split(':').map(Number);
-
-    let nextRestart = new Date();
-    nextRestart.setHours(hours, minutes, 0, 0);
-
-    if (settings.restartFrequency === 'daily') {
-      if (nextRestart <= now) {
-        nextRestart.setDate(nextRestart.getDate() + 1);
-      }
-    } else if (settings.restartFrequency === 'weekly') {
-      const targetDay = settings.restartDays[0];
-      const currentDay = nextRestart.getDay();
-      let daysUntilTarget = targetDay - currentDay;
-
-      if (daysUntilTarget < 0 || (daysUntilTarget === 0 && nextRestart <= now)) {
-        daysUntilTarget += 7;
-      }
-
-      nextRestart.setDate(nextRestart.getDate() + daysUntilTarget);
-    }
-
-    return nextRestart;
-  }
-
-  private async executeScheduledRestart(serverId: string): Promise<void> {
+  private arm(serverId: string, generation: number, after: Date): void {
     const automation = this.automations.get(serverId);
     if (!automation) return;
 
+    const nextRestart = computeNextRun(restartSchedule(automation.settings), after);
+    if (!nextRestart) {
+      console.warn(`[scheduled-restart] Not scheduling restarts for ${serverId}: a "${automation.settings.restartFrequency}" schedule with these settings never runs`);
+      return;
+    }
+
+    automation.status.isScheduled = true;
+    automation.status.nextRestart = nextRestart;
+    automation.scheduledRestartTimer = setTimeout(() => {
+      void this.runScheduledRestart(serverId, generation, nextRestart);
+    }, nextRestart.getTime() - Date.now());
+  }
+
+  private async runScheduledRestart(serverId: string, generation: number, due: Date): Promise<void> {
     try {
-      if (isRconConnected(serverId)) {
-        await sendRconCommand(serverId, `broadcast Server will restart in ${automation.settings.restartWarningMinutes} minutes!`);
-
-        setTimeout(async () => {
-          try {
-            await sendRconCommand(serverId, 'broadcast Server restarting now!');
-            await sendRconCommand(serverId, 'saveworld');
-
-            setTimeout(async () => {
-              const state = require('../server-instance/server-process.service').serverProcessService.getInstanceState(serverId);
-              if (state === 'running') {
-                automation.manuallyStopped = true;
-                const arkProcess = require('../server-instance/server-process.service').serverProcessService.getServerProcess(serverId);
-                if (arkProcess) {
-                  arkProcess.kill();
-                }
-
-                setTimeout(async () => {
-                  try {
-                    const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(serverId);
-                    await serverInstanceService.startServerInstance(serverId, onLog, onState);
-                    // Save instance after restart
-                    const instance = getInstance(serverId);
-                    if (instance) {
-                      await saveInstance(instance);
-                    }
-                  } catch (error) {
-                    console.error(`Failed to start server after scheduled restart:`, error);
-                  }
-                }, 5000);
-              }
-            }, 2000);
-          } catch (error) {
-            console.error('Failed to send restart commands via RCON:', error);
-          }
-        }, automation.settings.restartWarningMinutes * 60 * 1000);
-      } else {
-        const state = require('../server-instance/server-process.service').serverProcessService.getInstanceState(serverId);
-        if (state === 'running') {
-          automation.manuallyStopped = true;
-          const arkProcess = require('../server-instance/server-process.service').serverProcessService.getServerProcess(serverId);
-          if (arkProcess) {
-            arkProcess.kill();
-          }
-
-          setTimeout(async () => {
-            try {
-              const { onLog, onState } = serverInstanceService.getStandardEventCallbacks(serverId);
-              await serverInstanceService.startServerInstance(serverId, onLog, onState);
-              // Save instance after restart
-              const instance = getInstance(serverId);
-              if (instance) {
-                await saveInstance(instance);
-              }
-            } catch (error) {
-              console.error(`Failed to start server after scheduled restart:`, error);
-            }
-          }, 5000);
-        }
-      }
-
-      this.scheduleRestart(serverId);
-
+      await this.restart(serverId, generation);
     } catch (error) {
-      console.error(`Failed to execute scheduled restart for server ${serverId}:`, error);
+      console.error(`[scheduled-restart] Scheduled restart of ${serverId} failed:`, error);
+    }
+    if (this.generations.get(serverId) === generation) {
+      this.arm(serverId, generation, new Date(Math.max(Date.now(), due.getTime())));
     }
   }
+
+  private async restart(serverId: string, generation: number): Promise<void> {
+    const automation = this.automations.get(serverId);
+    if (!automation || serverProcessService.getInstanceState(serverId) !== 'running') {
+      console.log(`[scheduled-restart] ${serverId} is not running; skipping its scheduled restart`);
+      return;
+    }
+
+    const warningMinutes = automation.settings.restartWarningMinutes;
+    if (warningMinutes > 0 && await this.broadcast(serverId, `Server will restart in ${warningMinutes} minutes!`)) {
+      await this.waitForCountdown(serverId, warningMinutes * MINUTE_MS);
+    }
+    if (this.generations.get(serverId) !== generation) return;
+    if (serverProcessService.getInstanceState(serverId) !== 'running') return;
+
+    await this.broadcast(serverId, 'Server restarting now!');
+    // Through the graceful stop, which marks the server stopping first: its exit is then a stop,
+    // not a crash (no crash notice, no crash-detection restart).
+    messagingService.sendToAll('server-instance-state', { state: 'stopping', instanceId: serverId });
+    const stopped = await serverLifecycleService.stopServerInstance(serverId);
+    if (!stopped.success) {
+      console.error(`[scheduled-restart] Could not stop ${serverId} for its scheduled restart: ${stopped.error}`);
+      // Clients were told 'stopping' above.
+      messagingService.sendToAll('server-instance-state', {
+        state: serverProcessService.getNormalizedInstanceState(serverId),
+        instanceId: serverId
+      });
+      return;
+    }
+
+    const { onLog, onState } = getStandardEventCallbacks(serverId);
+    const started = await serverInstanceService.startServerInstance(serverId, onLog, onState);
+    if (!started.started) {
+      console.error(`[scheduled-restart] Could not start ${serverId} after its scheduled restart: ${started.portError}`);
+    }
+  }
+
+  private async broadcast(serverId: string, message: string): Promise<boolean> {
+    const result = await rconService.executeRconCommand(serverId, `broadcast ${message}`);
+    return result.success;
+  }
+
+  private waitForCountdown(serverId: string, ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const finish = () => {
+        clearTimeout(timer);
+        this.countdowns.delete(serverId);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      this.countdowns.set(serverId, { timer, finish });
+    });
+  }
+}
+
+// Only daily and weekly are offered; the UI shows 'custom' as the chosen days at the chosen time.
+function restartSchedule(settings: AutomationSettings): ScheduleSettings {
+  const { restartFrequency, restartTime, restartDays } = settings;
+  const frequency = restartFrequency === 'custom' ? 'weekly' : restartFrequency;
+  return {
+    frequency: frequency === 'daily' || frequency === 'weekly' ? frequency : undefined,
+    time: restartTime,
+    days: restartDays
+  };
 }

@@ -1,4 +1,5 @@
 import { StatMultiplierService } from './stat-multiplier.service';
+import { ServerInstance } from '../models/server-instance.model';
 
 describe('StatMultiplierService', () => {
   let service: StatMultiplierService;
@@ -20,6 +21,23 @@ describe('StatMultiplierService', () => {
   it('should set stat multiplier and get it', () => {
     service.setStatMultiplier(instance, 'Player', 0, 2.5);
     expect(service.getStatMultiplier(instance, 'Player', 0)).toBe(2.5);
+  });
+
+  it('keeps a multiplier of 0 rather than showing the default', () => {
+    service.setStatMultiplier(instance, 'Player', 3, 0);
+    expect(service.getStatMultiplier(instance, 'Player', 3)).toBe(0);
+  });
+
+  it('copies a multiplier of 0 to every stat', () => {
+    service.setStatMultiplier(instance, 'DinoWild', 2, 0);
+    service.copyStatToAll(instance, 2);
+    expect(instance.perLevelStatsMultiplier_DinoWild).toEqual(Array(12).fill(0));
+  });
+
+  it('ignores an unknown multiplier type', () => {
+    service.setStatMultiplier(instance, 'Nonsense', 0, 5);
+    expect(Object.keys(instance)).toEqual([]);
+    expect(service.getStatMultiplier(instance, 'Nonsense', 0)).toBe(1.0);
   });
 
   it('should reset stat to defaults', () => {
@@ -46,7 +64,7 @@ describe('StatMultiplierService', () => {
   });
 
   it('should handle invalid stat index and instance', () => {
-    const minimalInstance = { id: '', name: '' };
+    const minimalInstance: ServerInstance = { id: '', name: '' };
     expect(service.getStatMultiplier(minimalInstance, 'Player', 0)).toBe(1.0);
     expect(service.getStatMultiplier(instance, 'Player', -1)).toBe(1.0);
     expect(service.getStatMultiplier(instance, 'Player', 999)).toBe(1.0);
@@ -70,15 +88,13 @@ describe('StatMultiplierService', () => {
 
   it('should copy stat to all and initialize arrays if missing', () => {
     const inst: any = {};
-    // Set source value for all types
     for (const type of service.multiplierTypes) {
       inst[`perLevelStatsMultiplier_${type}`] = Array(12).fill(2.2);
     }
-    // Remove one type to force initialization
     delete inst.perLevelStatsMultiplier_DinoTamed;
     service.copyStatToAll(inst, 0);
-  expect(inst.perLevelStatsMultiplier_DinoTamed[0]).toBe(1.0);
-  expect(inst.perLevelStatsMultiplier_DinoTamed[5]).toBe(1.0);
+    expect(inst.perLevelStatsMultiplier_DinoTamed[0]).toBe(1.0);
+    expect(inst.perLevelStatsMultiplier_DinoTamed[5]).toBe(1.0);
   });
 
   it('should not overwrite arrays that already exist in initializeStatMultipliers', () => {

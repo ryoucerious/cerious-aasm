@@ -1,22 +1,27 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { FieldDefinition } from '../../../../core/services/field-definitions.service';
+import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
 
 @Component({
   selector: 'app-misc-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FieldMessagesComponent],
   templateUrl: './misc-tab.component.html'
 })
 export class MiscTabComponent {
+  // Fields are addressed by key from the settings metadata, so this stays loosely typed.
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
-  @Input() miscFields: any[] = [];
+  @Input() miscFields: FieldDefinition[] = [];
+  @Input() fieldErrors: FieldMessages = {};
+  @Input() fieldWarnings: FieldMessages = {};
 
   @Output() saveSettings = new EventEmitter<void>();
-  @Output() validateField = new EventEmitter<{key: string, value: any}>();
+  @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
 
-  getFieldsByCategory(category: string): any[] {
+  getFieldsByCategory(category: string): FieldDefinition[] {
     const categories: { [key: string]: string[] } = {
       'gamemode': [
         'bPvE',
@@ -95,30 +100,14 @@ export class MiscTabComponent {
     const categoryKeys = categories[category] || [];
     return categoryKeys
       .map(key => this.miscFields.find(field => field.key === key))
-      .filter((field): field is any => field !== undefined);
-  }
-
-  hasFieldError(key: string): boolean {
-    return false;
-  }
-
-  getFieldError(key: string): string {
-    return '';
-  }
-
-  hasFieldWarning(key: string): boolean {
-    return false;
-  }
-
-  getFieldWarning(key: string): string {
-    return '';
+      .filter((field): field is FieldDefinition => field !== undefined);
   }
 
   onSaveSettings(): void {
     this.saveSettings.emit();
   }
 
-  onValidateField(key: string, value: any): void {
+  onValidateField(key: string, value: unknown): void {
     this.validateField.emit({key, value});
   }
 }

@@ -1,16 +1,8 @@
-/* --- APP SHELL: top bar, side navigation, page frame ---
- *
- * The frame is a column (update banner, top bar) whose last row is a flex row of
- * sidebar + scrolling main content. Every colour is a theme token from _theme.scss.
- */
 @use 'variables' as *;
 
 $topbar-height: 64px;
 $sidenav-width: 248px;
 
-// =========================
-// TOP BAR
-// =========================
 .topbar {
   display: flex;
   align-items: center;
@@ -120,16 +112,11 @@ $sidenav-width: 248px;
 .topbar-actions {
   display: flex;
   align-items: center;
-  // Full height of the bar, so the window controls at the end of it can run edge to edge
-  // the way they do on the desktop. Everything else in here stays centred.
+  // Full bar height so the window controls can run edge to edge; the rest stays centred.
   align-self: stretch;
   gap: 0.5rem;
   flex-shrink: 0;
   margin-left: auto;
-}
-
-.topbar-user {
-  flex-shrink: 0;
 }
 
 .topbar-icon-btn {
@@ -154,8 +141,7 @@ $sidenav-width: 248px;
   }
 }
 
-// A count over the bell. Small enough to sit on the glyph rather than cover it: the ring
-// around it is what separates it from the icon, not its size.
+// Unread count over the bell; the ring, not the size, separates it from the glyph.
 .topbar-badge {
   position: absolute;
   top: 5px;
@@ -181,6 +167,7 @@ $sidenav-width: 248px;
 .topbar-user {
   @include button-reset;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 0.6rem;
   padding: 0.3rem 0.5rem 0.3rem 0.3rem;
@@ -365,9 +352,6 @@ $sidenav-width: 248px;
   }
 }
 
-// =========================
-// ACTIVITY ROWS (shared by the bell and the dashboard)
-// =========================
 .activity-row {
   display: flex;
   align-items: flex-start;
@@ -411,7 +395,6 @@ $sidenav-width: 248px;
   color: var(--text-secondary);
 }
 
-// Soft tinted icon chips
 .tone-primary { background: var(--primary-soft); color: var(--primary); }
 .tone-success { background: var(--success-soft); color: var(--success); }
 .tone-danger  { background: var(--danger-soft);  color: var(--danger); }
@@ -420,9 +403,6 @@ $sidenav-width: 248px;
 .tone-violet  { background: var(--violet-soft);  color: var(--violet); }
 .tone-muted   { background: var(--surface-raised); color: var(--text-secondary); }
 
-// =========================
-// SIDE NAVIGATION
-// =========================
 .sidenav {
   display: flex;
   flex-direction: column;
@@ -446,8 +426,7 @@ $sidenav-width: 248px;
   align-items: center;
   gap: 0.75rem;
   width: 100%;
-  // Shared with the server rows below, so a selected page and a selected server are the
-  // same shape and carry the same accent mark.
+  // Shared with the server rows below so a selected page and server are the same shape.
   min-height: $sidenav-row-height;
   padding: 0.6rem 0.85rem;
   margin-bottom: 2px;
@@ -533,10 +512,6 @@ $sidenav-width: 248px;
   border-top: 1px solid var(--border-muted-1);
 }
 
-.nav-section-bottom {
-  margin-top: 0.75rem;
-}
-
 .nav-section-header {
   display: flex;
   align-items: center;
@@ -608,9 +583,14 @@ $sidenav-width: 248px;
     font-size: 18px;
   }
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: var(--surface-raised);
     color: var(--text-strong);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 }
 
@@ -619,7 +599,6 @@ $sidenav-width: 248px;
   flex-shrink: 0;
 }
 
-// Server list inside the nav
 .sidenav .server-list {
   margin: 0 0 0.25rem;
   padding: 0;
@@ -647,9 +626,7 @@ $sidenav-width: 248px;
   &.selected {
     background: var(--surface-raised);
     color: var(--text-strong);
-    // The same accent mark the active navigation item carries down its left edge, so the
-    // server you are working on reads as selected at a glance. The outline stays neutral;
-    // the mark alone is the signal.
+    // The outline stays neutral; the accent mark shared with .nav-item.active is the signal.
     box-shadow: inset 0 0 0 1px var(--border-muted);
 
     &::before {
@@ -664,12 +641,29 @@ $sidenav-width: 248px;
     }
   }
 
-  .server-name {
+  .server-name-block {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.05rem;
+  }
+
+  .server-name {
+    min-width: 0;
     font-size: 0.92rem;
-    // The whole row is a button, so the name keeps the row's pointer rather than offering a
-    // text caret, and does not select under the double-click that starts a rename.
+    line-height: 1.2;
+    // The row is a button, and a double-click on it starts a rename rather than selecting text.
+    user-select: none;
+    @include text-ellipsis;
+  }
+
+  .server-item-manager {
+    min-width: 0;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    color: var(--text-secondary);
     user-select: none;
     @include text-ellipsis;
   }
@@ -745,33 +739,6 @@ $sidenav-width: 248px;
   background: var(--surface);
 }
 
-.sidenav-footer-logo {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-}
-
-.sidenav-footer-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-  min-width: 0;
-}
-
-.sidenav-footer-name {
-  font-size: 0.9rem;
-  font-weight: $font-medium;
-  color: var(--text-strong);
-}
-
-.sidenav-footer-meta {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-}
-
-// =========================
-// PAGE FRAME
-// =========================
 .page-panel {
   background: var(--surface);
   border: 1px solid var(--card-outline);
@@ -801,7 +768,6 @@ $sidenav-width: 248px;
   }
 }
 
-// Responsive shell
 @media (max-width: 860px) {
   .topbar {
     padding: 0 0.75rem;
@@ -830,9 +796,6 @@ $sidenav-width: 248px;
   }
 }
 
-// =========================
-// DRAWER (settings and other app-wide panels)
-// =========================
 .drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -849,7 +812,6 @@ $sidenav-width: 248px;
 .drawer {
   position: fixed;
   top: 0;
-  right: 0;
   bottom: 0;
   width: min(720px, 94vw);
   display: flex;
@@ -858,9 +820,8 @@ $sidenav-width: 248px;
   border-left: 1px solid var(--border-muted-1);
   box-shadow: -16px 0 48px var(--shadow-color);
   z-index: 1301;
-  // Slid in from the right edge rather than with a transform. A transform makes this the
-  // containing block for every fixed descendant, which threw the modals opened inside it —
-  // and their dropdown lists — off the side of the window.
+  // Slides via `right`, not a transform: a transform would become the containing block for
+  // the fixed-position modals and dropdowns inside and push them off the window.
   right: -100%;
   transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   visibility: hidden;
@@ -869,8 +830,6 @@ $sidenav-width: 248px;
     right: 0;
     visibility: visible;
   }
-
-  &.narrow { width: min(520px, 92vw); }
 }
 
 .drawer-header {
@@ -942,10 +901,6 @@ body.drawer-open {
   overflow: hidden;
 }
 
-// =========================
-// SETTINGS INSIDE THE DRAWER
-// =========================
-// The rail and the section beside it, with the panel's footer underneath both.
 .settings-shell {
   display: flex;
   flex-direction: column;
@@ -961,7 +916,6 @@ body.drawer-open {
   min-height: 0;
 }
 
-// Sits at the foot of the panel on every section, not only About.
 .settings-footer {
   display: flex;
   align-items: center;
@@ -1059,12 +1013,8 @@ body.drawer-open {
   .settings-content { padding: 1rem; }
 }
 
-// =========================
-// CUSTOM WINDOW CHROME
-// =========================
-// The desktop window is frameless, so the top bar doubles as the title bar: its empty
-// areas drag the window, and everything interactive opts back out. These properties are
-// inert in a browser, so the same markup serves the web UI unchanged.
+// The Electron window is frameless, so the top bar is the title bar: empty areas drag the
+// window and interactive elements opt out. Browsers ignore app-region.
 .topbar {
   -webkit-app-region: drag;
   app-region: drag;
@@ -1081,9 +1031,8 @@ body.drawer-open {
   app-region: no-drag;
 }
 
-// The component's own element is the flex item in a centred row, so it has to stretch
-// itself — otherwise the buttons are only as tall as their glyphs and the close button's
-// red fill is a short block floating in the middle of the bar.
+// The host element is the flex item in a centred row; without stretching, the buttons are
+// only as tall as their glyphs and the close button's red fill floats mid-bar.
 app-window-controls {
   display: flex;
   align-self: stretch;
@@ -1094,8 +1043,7 @@ app-window-controls {
   display: flex;
   align-items: stretch;
   align-self: stretch;
-  // Never squeezed: when the bar ran short of room these gave up their width, which left
-  // the close button narrower than the rest and a gap between it and the window edge.
+  // Shrinking narrowed the close button and opened a gap at the window edge.
   flex-shrink: 0;
   margin-left: 0.5rem;
   margin-right: -1.25rem;
@@ -1129,9 +1077,6 @@ app-window-controls {
   .window-control { width: 40px; }
 }
 
-// =========================
-// USERS & ROLES
-// =========================
 .users-settings {
   display: flex;
   flex-direction: column;
@@ -1186,29 +1131,23 @@ app-window-controls {
   overflow-x: auto;
 }
 
-// Specific enough to beat .data-table's fixed layout, which this pair of tables opts out of.
+// Two classes to outrank .data-table's fixed layout. Auto layout sizes columns to their
+// content; a fixed layout split the width evenly and stranded short usernames.
 .data-table.users-table {
   width: 100%;
-  // Columns sized to their content. The shared table layout is fixed, which split the width
-  // into equal shares and left a short username sitting in a column several times the width
-  // of anything in it. The actions column takes the slack instead, so its buttons stay
-  // against the right edge however wide the drawer is.
   table-layout: auto;
 
   th, td { padding: 0.6rem 0.75rem; vertical-align: middle; }
 
-  // Short values keep to one line, so the column sizes to the value rather than wrapping
-  // "Server Manager" into two rows. The description under a name is free to wrap.
+  // Short values stay on one line so their column sizes to the value; descriptions wrap.
   th,
   td:nth-child(2),
   .users-muted,
   .users-actions { white-space: nowrap; }
 }
 
-// Which columns take the leftover width differs by what the table holds. The name and the
-// role are what you read down a list of accounts, so they get the room and the short
-// columns — status, date, buttons — keep to their content. A role's description lives in
-// its first column, so there it is that column alone.
+// The columns that take the leftover width: name and role for accounts, the description
+// column for roles. The rest keep to their content.
 .accounts-table {
   th:nth-child(1) { width: 45%; }
   th:nth-child(2) { width: 35%; }
@@ -1264,8 +1203,8 @@ app-window-controls {
 }
 
 .role-builtin {
-  // inline-flex, not inline: a bordered, padded inline box does not add to the height of
-  // its line, so the badge used to hang over the description underneath it.
+  // inline-flex, not inline: a padded inline box does not add to its line's height and would
+  // overlap the description below.
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
@@ -1286,8 +1225,7 @@ app-window-controls {
   border: 1px dashed var(--border-muted);
   border-radius: 10px;
 
-  // Direct child only: the button below it carries its own icon, which must keep the
-  // button's text colour rather than the muted grey of the empty-state glyph.
+  // Direct child only, so the button's own icon keeps the button's colour.
   > .material-icons { font-size: 36px; color: var(--text-secondary); }
   p { margin: 0.5rem 0 1rem; }
 }
@@ -1320,8 +1258,6 @@ app-window-controls {
   padding: 0.35rem 0;
   cursor: pointer;
 
-  // A switch rather than a checkbox: a permission is something a role has turned on, and
-  // this is the same control the rest of Settings uses for that.
   .toggle-switch {
     margin-top: 0.2rem;
   }
@@ -1348,17 +1284,9 @@ app-window-controls {
   line-height: 1.3;
 }
 
-// Who performed an action, shown beside its time in the activity feed.
 .activity-by {
   color: var(--text-secondary);
 }
-
-// =========================
-// ARK INSTALLATION
-// =========================
-// Kept as an alias: the ARK Installation panel was the first to use this shape and the
-// rest of Settings now shares it.
-.ark-install-card { @extend .settings-card; }
 
 .ark-install-head {
   display: flex;
@@ -1380,7 +1308,7 @@ app-window-controls {
   .material-icons { font-size: 24px; }
 }
 
-// Takes its colours from a tone-* class, so it reads the same way in both themes.
+// Colours come from a tone-* class.
 .ark-status-badge {
   display: inline-flex;
   align-items: center;
@@ -1459,14 +1387,6 @@ app-window-controls {
   }
 }
 
-.ark-install-actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 1.25rem;
-}
-
-// Rail groupings inside the settings drawer.
 .settings-rail-group + .settings-rail-group {
   margin-top: 0.75rem;
 }
@@ -1480,8 +1400,7 @@ app-window-controls {
   padding: 0 0.75rem 0.3rem;
 }
 
-// One section's content. The drawer already frames it, so the panes inside do not need
-// their own card chrome.
+// The drawer already frames each pane, so cards inside drop their own chrome.
 .settings-pane .card,
 .settings-pane .sub-card {
   background: transparent;
@@ -1491,26 +1410,18 @@ app-window-controls {
   padding: 0;
 }
 
-// =========================
-// SETTINGS PANE VOCABULARY
-// =========================
-// Every section of Settings is built from these three pieces, so a person moving between
-// ARK Installation, Web Server and My Account meets the same shapes in the same places
-// rather than a different arrangement on each screen.
 .settings-pane {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-// A group of related settings.
 .settings-card {
   background: var(--surface-base);
   border: 1px solid var(--card-outline);
   border-radius: 12px;
   padding: 1.25rem;
 
-  // The last control in a card should not push a gap against its own edge.
   > .form-group:last-child { margin-bottom: 0; }
 }
 
@@ -1528,7 +1439,6 @@ app-window-controls {
   color: var(--text-secondary);
 }
 
-// A title with something beside it — a status pill, a Start button.
 .settings-card-head {
   display: flex;
   align-items: flex-start;
@@ -1542,7 +1452,6 @@ app-window-controls {
 
 .settings-card-head-text { min-width: 0; }
 
-// A validation message under a field.
 .form-control-label.form-error { color: var(--danger); }
 
 .settings-card-actions {
@@ -1552,7 +1461,6 @@ app-window-controls {
   margin-top: 1.25rem;
 }
 
-// A row of controls that belong on one line: a path and the buttons that change it.
 .settings-input-row {
   display: flex;
   align-items: center;
@@ -1572,7 +1480,6 @@ app-window-controls {
   .settings-rail-group { display: contents; }
 }
 
-// Settings at the foot of the side navigation, replacing the branding block.
 .sidenav-footer-item {
   flex: 1;
   margin-bottom: 0;
@@ -1584,7 +1491,6 @@ app-window-controls {
   color: var(--text-secondary);
 }
 
-// A new version of the app is waiting. Amber, next to the version it would replace.
 .update-help-text {
   white-space: pre-line;
   margin: 0 0 1rem;
@@ -1620,9 +1526,6 @@ app-window-controls {
   color: var(--text-secondary);
 }
 
-// =========================
-// MY ACCOUNT
-// =========================
 .profile-identity {
   display: flex;
   align-items: center;
@@ -1679,21 +1582,12 @@ app-window-controls {
   }
 }
 
-.profile-section-title {
-  margin: 0 0 1rem;
-  font-size: 0.95rem;
-  color: var(--primary);
-}
-
 .profile-settings .settings-section {
   margin-top: 1.5rem;
 }
 
-// =========================
-// TOOLTIP
-// =========================
-// Replaces the browser's own tooltip, which arrives late, ignores the theme and cannot be
-// styled. Positioned by TooltipHostComponent in viewport coordinates.
+// Replaces the native title tooltip, which is slow and ignores the theme. TooltipHostComponent
+// positions it in viewport coordinates.
 .tooltip-bubble {
   position: fixed;
   z-index: 2000;
@@ -1716,7 +1610,6 @@ app-window-controls {
     transform: none;
   }
 
-  // The arrow, pointing at whatever is being described.
   &::after {
     content: '';
     position: absolute;
@@ -1739,58 +1632,6 @@ app-window-controls {
   .tooltip-bubble { transition: none; }
 }
 
-// =========================
-// PANEL CARD (server pages)
-// =========================
-// The same shape Settings uses, for the pages behind a server: a titled card with whatever
-// describes its state beside the title. No folding headers — a page shows its content.
-.panel-card {
-  background: var(--surface);
-  border: 1px solid var(--card-outline);
-  border-radius: 12px;
-  padding: 1.25rem;
-  margin-bottom: 1.25rem;
-}
-
-.panel-card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-}
-
-.panel-card-head-text { min-width: 0; }
-
-.panel-card-head-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-shrink: 0;
-}
-
-.panel-card-title {
-  margin: 0 0 0.15rem;
-  font-size: 0.95rem;
-  font-weight: $font-semibold;
-  color: var(--text-strong);
-}
-
-.panel-card-hint {
-  margin: 0;
-  font-size: 0.8rem;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.panel-card-meta {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-// RCON's command line and the suggestions under it, previously a run of inline styles.
 .rcon-send-row {
   display: flex;
   align-items: center;
@@ -1845,47 +1686,8 @@ app-window-controls {
   overflow-y: auto;
 }
 
-.rcon-response-title {
-  margin-bottom: 0.25rem;
-  font-weight: $font-semibold;
-  color: var(--text-secondary);
-  font-family: inherit;
-}
-
-// A section's title with whatever belongs beside it — a status pill, a Refresh button.
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-
-  h5 { margin: 0 0 0.15rem; }
-  .section-desc { margin: 0; }
-}
-
-.section-head-text { min-width: 0; }
-
-.section-head-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-shrink: 0;
-}
-
-.section-head-fact {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-// Runs the whole width of the three-column grid the server pages lay out in.
 .span-all { grid-column: 1 / -1; }
 
-// The page's own title, above the sections. The pages around it sit in a three-column grid,
-// so the introduction has to be told to run the whole width — the older pages do it with an
-// inline style; this is the same thing, once.
 .page-intro {
   grid-column: 1 / -1;
 
