@@ -221,15 +221,16 @@ onRequest('get-server-instance-players', payload => {
 
 onRequest('get-server-instances', async (_payload, { sender, afterReply }) => {
   const { instances } = await localRuntime.listInstances();
-  // The broadcast carries the full list; each web client receives its own pool's view of it.
-  afterReply(() => messagingService.sendToAll('server-instances', instances));
-  const visible = await meshService.annotateInventory(visibleTo(identifySender(sender), instances));
-  return { instances: visible };
+  const merged = await meshService.withMeshServers(instances);
+  // The broadcast carries the full list, including servers hosted on other machines.
+  afterReply(() => { void serverInstanceService.broadcastInstances(); });
+  return { instances: visibleTo(identifySender(sender), merged) };
 }, { onError: () => ({ instances: [] }) });
 
 onRequest('get-server-instance', async payload => {
   const { instance } = await localRuntime.getInstance(payload.id);
-  return { instance };
+  if (instance) return { instance };
+  return { instance: await meshService.remoteInstance(String(payload.id || '')) };
 }, { onError: () => ({ instance: null }) });
 
 onRequest('save-server-instance', async (payload, { sender, afterReply }) => {

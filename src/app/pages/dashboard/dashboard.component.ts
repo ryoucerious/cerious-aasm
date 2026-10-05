@@ -158,21 +158,27 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.BACKUPS_VIEW);
   }
 
+  private applyMesh(status: { enabled?: boolean; degraded?: boolean; warning?: string | null; nodes?: Array<{ nodeId: string; name: string }> } | null | undefined): void {
+    if (!status?.enabled) {
+      this.meshBanner = '';
+      this.nodeNames.clear();
+    } else {
+      this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
+      this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
+    }
+    this.cdr.markForCheck();
+  }
+
   ngOnInit(): void {
     this.readViewPreferences();
     this.subs.push(this.messaging.sendMessage<{
       enabled?: boolean; degraded?: boolean; warning?: string | null;
       nodes?: Array<{ nodeId: string; name: string }>;
-    }>('get-mesh-status', {}).subscribe(status => {
-      if (!status?.enabled) {
-        this.meshBanner = '';
-        this.nodeNames.clear();
-      } else {
-        this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
-        this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
-      }
-      this.cdr.markForCheck();
-    }));
+    }>('get-mesh-status', {}).subscribe(status => this.applyMesh(status)));
+    this.subs.push(this.messaging.receiveMessage<{
+      enabled?: boolean; degraded?: boolean; warning?: string | null;
+      nodes?: Array<{ nodeId: string; name: string }>;
+    }>('mesh-status').subscribe(status => this.applyMesh(status)));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;

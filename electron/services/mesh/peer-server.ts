@@ -11,6 +11,8 @@ export interface JoinRequest {
   raftAddr: string;
   peerUrl: string;
   protocolVersion: number;
+  /** The joiner's existing node id, so Raft and the mesh registry name the same machine. */
+  nodeId?: string;
 }
 
 export interface JoinResponse {

@@ -1,0 +1,25 @@
+# Second machine for a mesh join test on Docker Desktop.
+#
+# The desktop app keeps peer 4747 and Raft 4002. This container uses other host
+# ports so both can run, and it advertises 127.0.0.1 so the desktop can reach it
+# through the published ports.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mesh-dev.yml up -d --build
+#
+# Web UI:  http://localhost:3001
+# Join this container from the desktop with: https://127.0.0.1:4748
+# Join the desktop from this container with the desktop's member URL, https://<lan-ip>:4747
+
+services:
+  aasm:
+    ports: !override
+      - "3001:3001"
+      - "4748:4748"
+      - "4004:4004"
+    environment:
+      AASM_PORT: "3001"
+      AASM_PEER_PORT: "4748"
+      AASM_RAFT_PORT: "4004"
+      AASM_HTTP_PORT: "4003"
+      AASM_ADVERTISE_HOST: "127.0.0.1"
+      AASM_AUTH_ENABLED: "false"

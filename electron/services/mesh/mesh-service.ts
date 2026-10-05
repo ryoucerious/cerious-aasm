@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -17,8 +18,10 @@ import { relaunchInPlace } from '../docker-runtime-update';
 import { setMeshDesktopMode, setMeshDesktopUser } from '../auth/desktop-session';
 import type { SenderIdentity } from '../auth/permission-gate';
 import { collectCapabilities, ensureNodeIdentity, readNodeIdentity, writeNodeIdentity } from '../runtime/node-identity';
+import type { InstanceConfig } from '../../types/server-instance.types';
 import { localRuntime } from '../runtime/local-runtime';
-import { createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
+import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
+import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateIssuedBy, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
 import { meshTransferStore } from './managed-storage';
 import { providerForProfile } from './cluster-storage';
@@ -35,9 +38,9 @@ import { RqliteClient } from './rqlite-client';
 import { RqliteSupervisor } from './rqlite-supervisor';
 
 const HTTP_USER = 'aasm';
-const PEER_PORT = 4747;
-const HTTP_PORT = 4001;
-const RAFT_PORT = 4002;
+const PEER_PORT = envPort('AASM_PEER_PORT', 4747);
+const HTTP_PORT = envPort('AASM_HTTP_PORT', 4001);
+const RAFT_PORT = envPort('AASM_RAFT_PORT', 4002);
 
 interface LocalSecrets {
   httpUser: string;
@@ -90,10 +93,16 @@ export class MeshService {
         await this.leaveLocally();
         return;
       }
+      await this.ensurePresentedCertificate(identity.nodeId);
+      const row = await this.repo?.getNode(identity.nodeId);
+      if (row && row.meshId !== identity.meshId) {
+        await this.repo.upsertNode({ ...row, meshId: identity.meshId });
+      }
       await this.attach(identity.nodeId);
       await this.importLocalServers(identity.nodeId);
     } catch (error) {
       console.error('[mesh] Could not resume the mesh:', error);
+      if (!this.repo) await this.supervisor.stop();
     }
   }
 
@@ -102,10 +111,11 @@ export class MeshService {
     const identity = ensureNodeIdentity();
     const ca = createMeshCa(input.name || 'cerious-aasm-mesh');
     const keys = generateKeyPair();
-    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, identity.nodeId);
+    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, identity.nodeId, [advertiseHost()]);
     writeCerts(keys.privateKeyPem, signed.certPem, ca.certPem);
     const secrets = freshSecrets();
     writeSecrets(secrets);
+    fs.rmSync(rqliteDir(), { recursive: true, force: true });
     await this.supervisor.start({
       nodeId: identity.nodeId,
       dataDir: rqliteDir(),
@@ -135,6 +145,7 @@ export class MeshService {
       const user = await this.verifyLogin(input.adminUsername || 'admin', input.adminPassword);
       if (user) this.adoptDesktop(user);
     }
+    this.publishStatus();
     return this.status();
   }
 
@@ -151,7 +162,8 @@ export class MeshService {
         publicKeyPem: keys.publicKeyPem,
         raftAddr: `${advertiseHost()}:${RAFT_PORT}`,
         peerUrl: `https://${advertiseHost()}:${PEER_PORT}`,
-        protocolVersion: PROTOCOL_VERSION
+        protocolVersion: PROTOCOL_VERSION,
+        nodeId: identity.nodeId
       } satisfies JoinRequest
     });
     if (response.status !== 200) {
@@ -159,6 +171,7 @@ export class MeshService {
       throw new Error(message);
     }
     const joined = response.body as JoinResponse;
+    const nodeId = joined.nodeId || identity.nodeId;
     writeCerts(keys.privateKeyPem, joined.nodeCert, joined.caCert);
     const secrets: LocalSecrets = {
       httpUser: joined.httpAuthUser,
@@ -167,8 +180,10 @@ export class MeshService {
       advertiseHost: advertiseHost()
     };
     writeSecrets(secrets);
+    await this.supervisor.stop();
+    fs.rmSync(rqliteDir(), { recursive: true, force: true });
     await this.supervisor.start({
-      nodeId: identity.nodeId,
+      nodeId,
       dataDir: rqliteDir(),
       httpAddr: `0.0.0.0:${HTTP_PORT}`,
       raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
@@ -177,17 +192,24 @@ export class MeshService {
       join: joined.raftAddr,
       cert: readCertPaths() || undefined
     });
-    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, identity.nodeId);
-    if (!await waitReady(client, this.supervisor)) throw new Error(this.supervisor.failure() || 'Joined, but rqlite did not become ready');
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
+    if (!await waitReady(client, this.supervisor, 120)) {
+      await removeJoinedNode(joined.joinUrl, secrets.httpUser, secrets.httpPass, nodeId);
+      await this.supervisor.stop();
+      fs.rmSync(rqliteDir(), { recursive: true, force: true });
+      throw new Error(this.supervisor.detail() || this.supervisor.failure() || 'Joined, but rqlite did not become ready');
+    }
     this.repo = new MeshRepository(client);
     this.rqlite = client;
     this.secrets = secrets;
-    writeNodeIdentity({ ...identity, meshId: joined.meshId, name: input.name || identity.name });
-    await this.attach(identity.nodeId);
+    writeNodeIdentity({ ...identity, nodeId, meshId: joined.meshId, name: input.name || identity.name });
+    await this.attach(nodeId);
+    await this.importLocalServers(nodeId);
     if (input.adminPassword) {
       const user = await this.verifyLogin(input.adminUsername || 'admin', input.adminPassword);
       if (user) this.adoptDesktop(user);
     }
+    this.publishStatus();
     return this.status();
   }
 
@@ -205,13 +227,24 @@ export class MeshService {
       throw new Error(protocolError(request.protocolVersion)!);
     }
     const repo = this.repo!;
+    const localId = readNodeIdentity()?.nodeId || '';
+    const requestedId = request.nodeId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.nodeId)
+      ? request.nodeId
+      : '';
+    if (requestedId && requestedId === localId) throw new Error('This machine is already in the mesh.');
     const consumed = await repo.consumeToken(hashToken(request.token), Date.now());
     if (!consumed) throw new Error('Enrollment token is invalid or expired.');
-    const mesh = await repo.getMesh();
+    const mesh = await repo.getMesh(readNodeIdentity()?.meshId);
     const secrets = this.secrets;
     if (!mesh || !secrets) throw new Error('This node is not in a mesh.');
-    const nodeId = randomUUID();
-    const signed = signNodeCertificate(mesh.caCert, mesh.caKey, request.publicKeyPem, nodeId);
+    const nodeId = requestedId || randomUUID();
+    const signed = signNodeCertificate(
+      mesh.caCert,
+      mesh.caKey,
+      request.publicKeyPem,
+      nodeId,
+      [...hostsFromEndpoint(request.peerUrl), ...hostsFromEndpoint(request.raftAddr)]
+    );
     await repo.upsertNode({
       nodeId,
       meshId: mesh.meshId,
@@ -227,6 +260,7 @@ export class MeshService {
       maintenance: false,
       weight: 1
     });
+    this.publishStatus();
     return {
       meshId: mesh.meshId,
       nodeId,
@@ -246,12 +280,13 @@ export class MeshService {
     if (node.certSerial) await this.repo!.revokeSerial(node.certSerial, Date.now());
     await this.repo!.upsertNode({ ...node, status: 'removed' });
     const localId = readNodeIdentity()?.nodeId;
-    const others = (await this.repo!.listNodes()).filter(item => item.status !== 'removed' && item.nodeId !== nodeId);
+    const others = (await this.repo!.listNodes(readNodeIdentity()?.meshId)).filter(item => item.status !== 'removed' && item.nodeId !== nodeId);
     const leaving = nodeId === localId || others.length === 0;
     try { await this.rqlite?.removeMember(nodeId); } catch { /* the cert denylist still rejects the node */ }
     // Leaving, or removing the last member, drops this install back to standalone.
     // The servers on this machine stay where they are.
     if (leaving) await this.leaveLocally();
+    else this.publishStatus();
   }
 
   async verifyLogin(username: string, password: string): Promise<AuthenticatedUser | null> {
@@ -447,6 +482,46 @@ export class MeshService {
     });
   }
 
+  /**
+   * Local servers plus every server the mesh has placed on another machine.
+   * A standalone install returns the local list unchanged.
+   */
+  async withMeshServers<T extends InstanceConfig>(local: T[]): Promise<Array<T | InstanceConfig>> {
+    if (!this.isEnabled() || !this.repo) return local;
+    const localId = readNodeIdentity()?.nodeId || '';
+    let servers: ServerRecord[] = [];
+    let removed = new Set<string>();
+    try {
+      const [rows, nodes] = await Promise.all([
+        this.repo.listServers(),
+        this.repo.listNodes(readNodeIdentity()?.meshId)
+      ]);
+      servers = rows;
+      removed = new Set(nodes.filter(node => node.status === 'removed').map(node => node.nodeId));
+    } catch {
+      return local;
+    }
+    const byId = new Map(servers.map(server => [server.serverId, server]));
+    const tagged = local.map(instance => {
+      const row = byId.get(instance.id);
+      return { ...instance, nodeId: row?.nodeId || instance.nodeId || localId };
+    });
+    const known = new Set(tagged.map(instance => instance.id));
+    const remote = servers
+      .filter(server => server.nodeId && server.nodeId !== localId && !known.has(server.serverId) && !removed.has(server.nodeId))
+      .map(instanceFromMeshServer);
+    return [...tagged, ...remote];
+  }
+
+  /** A server hosted on another machine, for the page that opens it. Null when it lives here or is unknown. */
+  async remoteInstance(id: string): Promise<InstanceConfig | null> {
+    if (!this.repo || !id) return null;
+    const server = await this.repo.getServer(id);
+    const localId = readNodeIdentity()?.nodeId;
+    if (!server || !localId || server.nodeId === localId) return null;
+    return instanceFromMeshServer(server);
+  }
+
   async recordServer(server: { id: string; name?: string; mapName?: string; configRevision?: number; nodeId?: string; operatorUserId?: string | null; managerUserId?: string | null; clusterId?: string }): Promise<void> {
     if (!this.repo) return;
     const localId = readNodeIdentity()?.nodeId || '';
@@ -459,12 +534,13 @@ export class MeshService {
       const decision = partitionDecision(await this.repo.hasQuorum(), 'placement', nodeId === localId);
       if (!decision.allow) throw new Error(decision.reason);
     }
+    const live = (server as { state?: string }).state;
     const record: ServerRecord = {
       serverId: server.id,
       name: server.name || server.id,
       nodeId,
       mapName: server.mapName || '',
-      desiredState: existing?.desiredState || 'stopped',
+      desiredState: existing?.desiredState || (live === 'running' || live === 'starting' ? 'running' : 'stopped'),
       configRevision: Number(server.configRevision) || existing?.configRevision || 1,
       configJson: JSON.stringify(server),
       clusterId: server.clusterId || existing?.clusterId || null,
@@ -624,7 +700,7 @@ export class MeshService {
   }
 
   async diagnostics(): Promise<{ probes: Array<{ target: string; ok: boolean; rttMs: number; error?: string }>; skew: Array<{ nodeId: string; skewMs: number }> }> {
-    const nodes = this.repo ? await this.repo.listNodes() : [];
+    const nodes = this.repo ? await this.repo.listNodes(readNodeIdentity()?.meshId) : [];
     const probes = [];
     for (const node of nodes) {
       if (node.nodeId === readNodeIdentity()?.nodeId) continue;
@@ -706,8 +782,8 @@ export class MeshService {
       return emptyStatus(identity?.nodeId || null, identity?.name || null);
     }
     const [mesh, nodes, clusters, storage, users, quorum, voters, leader] = await Promise.all([
-      this.repo.getMesh(),
-      this.repo.listNodes(),
+      this.repo.getMesh(identity.meshId),
+      this.repo.listNodes(identity.meshId),
       this.repo.listClusters(),
       this.repo.listStorage(),
       this.repo.listUsers(),
@@ -747,6 +823,8 @@ export class MeshService {
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
     if (this.peer) await new Promise<void>(resolve => this.peer!.close(() => resolve()));
     this.peer = null;
     await this.supervisor.stop();
@@ -763,6 +841,58 @@ export class MeshService {
     const identity = readNodeIdentity();
     if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
     await this.stop();
+    this.publishStatus();
+    void serverInstanceService.broadcastInstances();
+  }
+
+  /**
+   * rqlite trusts the CA file on disk and presents the node certificate. Both have to be the CA
+   * for this machine's mesh, and the node certificate has to name the address other nodes dial.
+   * An older install can have several mesh rows left in rqlite; signing with the wrong one makes
+   * a joiner fail with "unknown certificate authority".
+   */
+  private async ensurePresentedCertificate(nodeId: string): Promise<void> {
+    const certs = readCertPaths();
+    const host = this.secrets?.advertiseHost || advertiseHost();
+    const meshId = readNodeIdentity()?.meshId;
+    if (!certs || !this.repo || !this.secrets || !meshId) return;
+    const mesh = await this.repo.getMesh(meshId);
+    if (!mesh?.caCert || !mesh.caKey) return;
+    const nodePem = fs.readFileSync(certs.nodeCert, 'utf8');
+    const caOnDisk = fs.readFileSync(certs.caCert, 'utf8');
+    const caMatches = caOnDisk.trim() === mesh.caCert.trim();
+    const issued = certificateIssuedBy(nodePem, mesh.caCert);
+    const covers = certificateCoversHost(nodePem, host);
+    if (caMatches && issued && covers) return;
+    if (!caMatches) fs.writeFileSync(certs.caCert, mesh.caCert);
+    if (!issued || !covers) {
+      const signed = signNodeCertificate(
+        mesh.caCert,
+        mesh.caKey,
+        publicKeyFromPrivatePem(fs.readFileSync(certs.nodeKey, 'utf8')),
+        nodeId,
+        [host]
+      );
+      fs.writeFileSync(certs.nodeCert, signed.certPem);
+      const row = await this.repo.getNode(nodeId);
+      if (row) await this.repo.upsertNode({ ...row, certSerial: signed.serial });
+    }
+    console.log(`[mesh] Reloaded the mesh certificate for ${host}.`);
+    const secrets = this.secrets;
+    await this.supervisor.stop();
+    await this.supervisor.start({
+      nodeId,
+      dataDir: rqliteDir(),
+      httpAddr: `0.0.0.0:${HTTP_PORT}`,
+      raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
+      authUser: secrets.httpUser,
+      authPass: secrets.httpPass,
+      cert: readCertPaths() || undefined
+    });
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
+    if (!await waitReady(client, this.supervisor)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    this.repo = new MeshRepository(client);
+    this.rqlite = client;
   }
 
   private async attach(nodeId: string): Promise<void> {
@@ -775,7 +905,10 @@ export class MeshService {
         isRevoked: serial => this.repo?.isRevoked(serial) ?? Promise.resolve(false),
         onJoin: body => this.acceptJoin(body),
         onCommand: body => this.executeLocalCommand(body),
-        onHeartbeat: (id, sentAt) => this.seenHeartbeats.set(id, { at: Date.now(), skewMs: clockSkewMs(sentAt) }),
+        onHeartbeat: (id, sentAt) => {
+          this.seenHeartbeats.set(id, { at: Date.now(), skewMs: clockSkewMs(sentAt) });
+          this.publishStatus();
+        },
         onCheckpoint: body => Promise.resolve(this.acceptCheckpoint(body))
       });
     }
@@ -791,6 +924,35 @@ export class MeshService {
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => { void this.reconcileLocal(nodeId); }, 5000);
     void this.reconcileLocal(nodeId);
+  }
+
+  private inventoryFingerprint = '';
+
+  /** Pushes the combined server list when a machine's servers join or leave the mesh. */
+  private async publishInventoryIfChanged(): Promise<void> {
+    if (!this.isEnabled()) return;
+    const { instances } = await localRuntime.listInstances();
+    const merged = await this.withMeshServers(instances);
+    const fingerprint = merged
+      .map(instance => `${instance.id}:${instance.nodeId || ''}:${String((instance as { state?: string }).state || '')}`)
+      .sort()
+      .join('|');
+    if (fingerprint === this.inventoryFingerprint) return;
+    this.inventoryFingerprint = fingerprint;
+    await serverInstanceService.broadcastInstances();
+  }
+
+  private statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Tells every open mesh page on this machine that membership or reachability changed. */
+  private publishStatus(): void {
+    if (this.statusTimer) return;
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
+      void this.status().then(status => messagingService.sendToAll('mesh-status', status)).catch(error => {
+        console.error('[mesh] Could not publish mesh status:', error);
+      });
+    }, 200);
   }
 
   private writeBlock(op: MeshWriteOp): string | null {
@@ -826,7 +988,7 @@ export class MeshService {
       }
       const certs = readCertPaths();
       if (!certs) return;
-      const nodes = await this.repo.listNodes();
+      const nodes = await this.repo.listNodes(readNodeIdentity()?.meshId);
       await Promise.all(nodes.filter(node => node.nodeId !== nodeId && node.status !== 'removed').map(async node => {
         try {
           const response = await peerRequest({
@@ -885,7 +1047,9 @@ export class MeshService {
         applyCluster: (id, arkClusterId, clusterDirOverride) => localRuntime.applyCluster(id, arkClusterId, clusterDirOverride)
       });
       this.peer?.broadcast({ type: 'status', nodeId, at: Date.now(), quorum: this.quorum });
-      void this.announce(nodeId);
+      await this.announce(nodeId);
+      this.publishStatus();
+      void this.publishInventoryIfChanged();
     } catch (error) {
       console.error('[mesh] Reconcile failed:', error);
     }
@@ -957,6 +1121,7 @@ export class MeshService {
         if (await this.repo.getServer(instance.id)) continue;
         await this.recordServer({ ...instance, nodeId });
       }
+      void serverInstanceService.broadcastInstances();
     } catch (error) {
       console.error('[mesh] Could not record local servers:', error);
     }
@@ -1027,7 +1192,7 @@ export class MeshService {
 
   private async placementInputs(): Promise<PlacementInput[]> {
     if (!this.repo) return [];
-    const [nodes, servers] = await Promise.all([this.repo.listNodes(), this.repo.listServers()]);
+    const [nodes, servers] = await Promise.all([this.repo.listNodes(readNodeIdentity()?.meshId), this.repo.listServers()]);
     return nodes.filter(node => node.status !== 'removed').map(node => ({
       nodeId: node.nodeId,
       freeMemoryBytes: node.capabilities.freeMemoryBytes,
@@ -1043,6 +1208,32 @@ export class MeshService {
 }
 
 export const meshService = new MeshService();
+
+setInventoryMerge(instances => meshService.withMeshServers(instances));
+
+function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
+  let parsed: Partial<InstanceConfig> = {};
+  try {
+    const value = JSON.parse(server.configJson) as Partial<InstanceConfig>;
+    if (value && typeof value === 'object') parsed = value;
+  } catch {
+    // The row still carries a name and a map when the stored config is unreadable.
+  }
+  for (const field of ['state', 'status', 'players', 'cpu', 'memory', 'startedAt'] as const) {
+    delete (parsed as Record<string, unknown>)[field];
+  }
+  return {
+    ...parsed,
+    id: server.serverId,
+    name: server.name || parsed.name || server.serverId,
+    mapName: server.mapName || parsed.mapName,
+    nodeId: server.nodeId,
+    operatorUserId: server.operatorUserId,
+    managerUserId: server.managerUserId,
+    configRevision: server.configRevision,
+    state: server.desiredState
+  } as InstanceConfig;
+}
 
 function emptyStatus(nodeId: string | null, nodeName: string | null): MeshStatus {
   return {
@@ -1101,6 +1292,8 @@ function readCertPaths(): { nodeKey: string; nodeCert: string; caCert: string } 
 }
 
 function advertiseHost(): string {
+  const configured = process.env.AASM_ADVERTISE_HOST?.trim();
+  if (configured) return configured;
   for (const entries of Object.values(os.networkInterfaces())) {
     for (const entry of entries || []) {
       const family = entry.family as string | number;
@@ -1110,8 +1303,47 @@ function advertiseHost(): string {
   return '127.0.0.1';
 }
 
-async function waitReady(client: RqliteClient, supervisor: RqliteSupervisor): Promise<boolean> {
-  for (let attempt = 0; attempt < 40; attempt++) {
+function envPort(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) return fallback;
+  return parsed;
+}
+
+function removeJoinedNode(joinUrl: string, user: string, pass: string, nodeId: string): Promise<void> {
+  return new Promise(resolve => {
+    let url: URL;
+    try {
+      url = new URL('/remove', joinUrl.endsWith('/') ? joinUrl : `${joinUrl}/`);
+    } catch {
+      resolve();
+      return;
+    }
+    const payload = JSON.stringify({ id: nodeId });
+    const req = http.request({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      timeout: 3000,
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, res => {
+      res.resume();
+      res.on('end', () => resolve());
+    });
+    req.on('error', () => resolve());
+    req.on('timeout', () => { req.destroy(); resolve(); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function waitReady(client: RqliteClient, supervisor: RqliteSupervisor, attempts = 40): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (supervisor.failure()) return false;
     if (await client.ready()) return true;
     await new Promise(resolve => setTimeout(resolve, 250));

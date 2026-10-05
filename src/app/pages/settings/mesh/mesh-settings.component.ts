@@ -1,6 +1,7 @@
-import { Component, OnInit, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 import { NgIf, NgFor, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { ModalComponent } from '../../../components/modal/modal.component';
 import { MessagingService } from '../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../core/services/notification.service';
@@ -39,7 +40,7 @@ interface MeshStatus {
   templateUrl: './mesh-settings.component.html',
   styleUrls: ['./mesh-settings.component.scss']
 })
-export class MeshSettingsComponent implements OnInit {
+export class MeshSettingsComponent implements OnInit, OnDestroy {
   status: MeshStatus | null = null;
   createName = 'Mesh';
   adminUsername = 'admin';
@@ -53,6 +54,7 @@ export class MeshSettingsComponent implements OnInit {
   updatingKey = '';
   showConfirmLeave = false;
   private leavingNode: MeshNode | null = null;
+  private statusSub?: Subscription;
 
   constructor(
     private messaging: MessagingService,
@@ -63,14 +65,16 @@ export class MeshSettingsComponent implements OnInit {
 
   ngOnInit(): void {
     this.refresh();
+    this.statusSub = this.messaging.receiveMessage<MeshStatus>('mesh-status').subscribe(status => this.apply(status));
+  }
+
+  ngOnDestroy(): void {
+    this.statusSub?.unsubscribe();
   }
 
   refresh(): void {
     this.messaging.sendMessage<MeshStatus>('get-mesh-status', {}).subscribe({
-      next: status => {
-        this.status = status;
-        this.cdr.markForCheck();
-      },
+      next: status => this.apply(status),
       error: () => this.cdr.markForCheck()
     });
   }
@@ -92,8 +96,11 @@ export class MeshSettingsComponent implements OnInit {
 
   join(): void {
     this.busy = true;
-    this.messaging.sendMessage<{ success?: boolean; error?: string }>('join-mesh', { memberUrl: this.memberUrl, token: this.token }).subscribe({
-      next: result => this.finish(result.success ? 'Joined the mesh.' : (result.error || 'Could not join.'), result.success),
+    this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus }>('join-mesh', { memberUrl: this.memberUrl, token: this.token }).subscribe({
+      next: result => {
+        if (result.success && result.status) this.apply(result.status);
+        this.finish(result.success ? 'Joined the mesh.' : (result.error || 'Could not join.'), result.success);
+      },
       error: () => this.finish('Could not join.', false)
     });
   }
@@ -207,6 +214,12 @@ export class MeshSettingsComponent implements OnInit {
         this.cdr.markForCheck();
       }
     });
+  }
+
+  private apply(status: MeshStatus | null | undefined): void {
+    if (!status || typeof status.enabled !== 'boolean') return;
+    this.status = status;
+    this.cdr.markForCheck();
   }
 
   private finish(message: string, ok: boolean | undefined): void {

@@ -17,7 +17,7 @@ import { validateSharedPath } from './cluster-storage';
 import { ManagedTransferStore, materializeAtomic, sha256 } from './managed-storage';
 import { chooseNode, moveServer, scoreNode } from './placement';
 import { hashArgon2id, verifyArgon2id } from './passwords';
-import { createMeshCa, generateKeyPair, newCertificateSerial, normalizeSerial, signNodeCertificate } from './certificates';
+import { createMeshCa, generateKeyPair, newCertificateSerial, normalizeSerial, signNodeCertificate, certificateCoversHost, certificateIssuedBy, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { COMMAND_SKEW_MS, PROTOCOL_VERSION, protocolError } from '../../types/mesh.types';
 import { clockSkewRejects, diskAllowsPlacement, packetDelivered, withLatency } from './faults';
 import { managedStorageProvider } from './managed-storage';
@@ -299,8 +299,13 @@ describe('mesh control plane', () => {
   it('signs a node certificate with the mesh CA and normalizes the serial', () => {
     const ca = createMeshCa('mesh');
     const keys = generateKeyPair();
-    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, 'node-c');
+    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, 'node-c', ['192.168.1.155']);
     expect(signed.certPem).toContain('BEGIN CERTIFICATE');
+    expect(certificateIssuedBy(signed.certPem, ca.certPem)).toBe(true);
+    expect(certificateCoversHost(signed.certPem, '192.168.1.155')).toBe(true);
+    expect(certificateCoversHost(signed.certPem, '10.0.0.8')).toBe(false);
+    expect(hostsFromEndpoint('https://192.168.1.155:4747')).toEqual(['192.168.1.155']);
+    expect(publicKeyFromPrivatePem(keys.privateKeyPem)).toContain('BEGIN PUBLIC KEY');
     expect(signed.serial).toBe(normalizeSerial(signed.serial));
     for (let i = 0; i < 40; i++) {
       expect(parseInt(newCertificateSerial().slice(0, 2), 16)).toBeLessThan(0x80);

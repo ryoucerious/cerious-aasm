@@ -31,10 +31,11 @@ export class RqliteSupervisor {
     this.exited = false;
     fs.mkdirSync(options.dataDir, { recursive: true });
     const httpAdv = advertisedHttp(options.httpAddr, options.raftAddr);
+    const raftBind = `0.0.0.0:${options.raftAddr.slice(options.raftAddr.lastIndexOf(':') + 1)}`;
     const args = [
       '-node-id', options.nodeId,
       '-http-addr', options.httpAddr,
-      '-raft-addr', options.raftAddr,
+      '-raft-addr', raftBind,
       '-http-adv-addr', httpAdv,
       '-raft-adv-addr', options.raftAddr
     ];
@@ -72,12 +73,17 @@ export class RqliteSupervisor {
     return Promise.resolve();
   }
 
+  /** The latest rqlited line that says why clustering failed, even while the process is still retrying. */
+  detail(): string | null {
+    const lines = this.stderr.split(/\r?\n/).map(entry => entry.trim()).filter(entry => /failed|error:/i.test(entry));
+    const specific = [...lines].reverse().find(entry => !/join operation canceled/i.test(entry));
+    return specific || lines[lines.length - 1] || null;
+  }
+
   /** The line from rqlited that says why it stopped, once it has exited with an error. */
   failure(): string | null {
     if (!this.exited) return null;
-    const line = this.stderr.split(/\r?\n/).map(entry => entry.trim()).reverse()
-      .find(entry => /failed|error:/i.test(entry));
-    return line || 'rqlited exited before it was ready';
+    return this.detail() || 'rqlited exited before it was ready';
   }
 
   stop(): Promise<void> {

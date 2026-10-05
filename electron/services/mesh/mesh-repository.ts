@@ -57,8 +57,14 @@ export class MeshRepository {
     );
   }
 
-  async getMesh(): Promise<MeshRecord | null> {
-    const rows = await this.db.query<Record<string, unknown>>('SELECT * FROM mesh LIMIT 1', [], 'none');
+  async getMesh(meshId?: string): Promise<MeshRecord | null> {
+    const rows = await this.db.query<Record<string, unknown>>(
+      meshId
+        ? 'SELECT * FROM mesh WHERE mesh_id = ?'
+        : 'SELECT * FROM mesh ORDER BY created_at DESC LIMIT 1',
+      meshId ? [meshId] : [],
+      'none'
+    );
     const row = rows[0];
     if (!row) return null;
     return {
@@ -77,7 +83,7 @@ export class MeshRepository {
       `INSERT INTO nodes (node_id, mesh_id, name, endpoints, capabilities, leader_eligible, status, last_seen,
          version, protocol_version, cert_serial, maintenance, weight)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(node_id) DO UPDATE SET name = excluded.name, endpoints = excluded.endpoints,
+       ON CONFLICT(node_id) DO UPDATE SET mesh_id = excluded.mesh_id, name = excluded.name, endpoints = excluded.endpoints,
          capabilities = excluded.capabilities, leader_eligible = excluded.leader_eligible, status = excluded.status,
          last_seen = excluded.last_seen, version = excluded.version, protocol_version = excluded.protocol_version,
          cert_serial = excluded.cert_serial, maintenance = excluded.maintenance, weight = excluded.weight`,
@@ -89,8 +95,12 @@ export class MeshRepository {
     );
   }
 
-  async listNodes(): Promise<NodeRecord[]> {
-    const rows = await this.db.query<Record<string, unknown>>('SELECT * FROM nodes ORDER BY name', [], 'none');
+  async listNodes(meshId?: string): Promise<NodeRecord[]> {
+    const rows = await this.db.query<Record<string, unknown>>(
+      meshId ? 'SELECT * FROM nodes WHERE mesh_id = ? ORDER BY name' : 'SELECT * FROM nodes ORDER BY name',
+      meshId ? [meshId] : [],
+      'none'
+    );
     return rows.map(toNode);
   }
 

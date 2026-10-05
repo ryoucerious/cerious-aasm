@@ -12,12 +12,16 @@ interface ForgeCert {
   setIssuer(attrs: unknown): void;
   setExtensions(exts: unknown[]): void;
   sign(key: unknown, md: unknown): void;
+  verify(child: ForgeCert): boolean;
   subject: { attributes: unknown };
 }
 
 interface ForgeApi {
   pki: {
-    rsa: { generateKeyPair(bits: number): { publicKey: unknown; privateKey: unknown } };
+    rsa: {
+      generateKeyPair(bits: number): { publicKey: unknown; privateKey: unknown };
+      setPublicKey(n: unknown, e: unknown): unknown;
+    };
     createCertificate(): ForgeCert;
     certificateToPem(cert: ForgeCert): string;
     certificateFromPem(pem: string): ForgeCert;
@@ -43,6 +47,37 @@ export interface SignedCert {
   serial: string;
 }
 
+const CERT_NOT_BEFORE_SKEW_MS = 60 * 60 * 1000;
+
+function validity(years: number): { notBefore: Date; notAfter: Date } {
+  const notBefore = new Date(Date.now() - CERT_NOT_BEFORE_SKEW_MS);
+  const notAfter = new Date(notBefore);
+  notAfter.setFullYear(notAfter.getFullYear() + years);
+  return { notBefore, notAfter };
+}
+
+/** Hosts a peer will dial. An IP has to be in the certificate or rqlite rejects the connection. */
+export function altNamesForHosts(hosts: string[]): Array<{ type: number; ip?: string; value?: string }> {
+  const seen = new Set<string>();
+  const names: Array<{ type: number; ip?: string; value?: string }> = [];
+  for (const host of hosts) {
+    const value = host.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) names.push({ type: 7, ip: value });
+    else names.push({ type: 2, value });
+  }
+  return names;
+}
+
+export function hostsFromEndpoint(endpoint: string): string[] {
+  const stripped = endpoint.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/.*$/, '');
+  if (!stripped) return [];
+  const host = stripped.startsWith('[')
+    ? stripped.slice(1, stripped.indexOf(']'))
+    : stripped.replace(/:\d+$/, '');
+  return host ? [host] : [];
+}
 export function generateKeyPair(): KeyPair {
   const keys = forge().pki.rsa.generateKeyPair(2048);
   return {
@@ -57,9 +92,9 @@ export function createMeshCa(commonName: string): { certPem: string; keyPem: str
   const cert = api.pki.createCertificate();
   cert.publicKey = keys.publicKey;
   cert.serialNumber = serialHex();
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter = new Date();
-  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10);
+  const validityWindow = validity(10);
+  cert.validity.notBefore = validityWindow.notBefore;
+  cert.validity.notAfter = validityWindow.notAfter;
   const subject = [{ name: 'commonName', value: commonName }];
   cert.setSubject(subject);
   cert.setIssuer(subject);
@@ -75,25 +110,57 @@ export function createMeshCa(commonName: string): { certPem: string; keyPem: str
   };
 }
 
-export function signNodeCertificate(caCertPem: string, caKeyPem: string, publicKeyPem: string, commonName: string): SignedCert {
+export function signNodeCertificate(
+  caCertPem: string,
+  caKeyPem: string,
+  publicKeyPem: string,
+  commonName: string,
+  hosts: string[] = []
+): SignedCert {
   const api = forge();
   const caCert = api.pki.certificateFromPem(caCertPem);
   const caKey = api.pki.privateKeyFromPem(caKeyPem);
   const cert = api.pki.createCertificate();
   cert.publicKey = api.pki.publicKeyFromPem(publicKeyPem);
   cert.serialNumber = serialHex();
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter = new Date();
-  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 2);
+  const validityWindow = validity(2);
+  cert.validity.notBefore = validityWindow.notBefore;
+  cert.validity.notAfter = validityWindow.notAfter;
   cert.setSubject([{ name: 'commonName', value: commonName }]);
   cert.setIssuer(caCert.subject.attributes);
+  const altNames = altNamesForHosts(hosts);
   cert.setExtensions([
     { name: 'basicConstraints', cA: false },
     { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-    { name: 'extKeyUsage', serverAuth: true, clientAuth: true }
+    { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
+    ...(altNames.length ? [{ name: 'subjectAltName', altNames }] : [])
   ]);
   cert.sign(caKey, api.md.sha256.create());
   return { certPem: api.pki.certificateToPem(cert), serial: normalizeSerial(cert.serialNumber) };
+}
+
+export function publicKeyFromPrivatePem(privateKeyPem: string): string {
+  const api = forge();
+  const key = api.pki.privateKeyFromPem(privateKeyPem) as { n: unknown; e: unknown };
+  return api.pki.publicKeyToPem(api.pki.rsa.setPublicKey(key.n, key.e));
+}
+
+export function certificateIssuedBy(certPem: string, caPem: string): boolean {
+  try {
+    const api = forge();
+    return api.pki.certificateFromPem(caPem).verify(api.pki.certificateFromPem(certPem));
+  } catch {
+    return false;
+  }
+}
+
+export function certificateCoversHost(certPem: string, host: string): boolean {
+  const cert = forge().pki.certificateFromPem(certPem) as ForgeCert & {
+    getExtension(name: string): { altNames?: Array<{ type: number; ip?: string; value?: string }> } | null;
+  };
+  const altNames = cert.getExtension('subjectAltName')?.altNames || [];
+  const want = host.toLowerCase();
+  return altNames.some(name => name.ip === host || (name.value || '').toLowerCase() === want);
 }
 
 export function normalizeSerial(serial: string): string {
