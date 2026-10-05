@@ -461,7 +461,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   getAppVersion() {
-    return environment.version || '1.2.1';
+    return environment.version || '1.2.2';
   }
 
   getPlatform() {

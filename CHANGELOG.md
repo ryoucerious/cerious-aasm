@@ -2,7 +2,7 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
-## [Unreleased]
+## [1.2.2] - 2026-10-05
 
 A hardening release, and operator pools. The web interface's sign-in and permission checks, the desktop window and the code that writes files were audited and tightened, and a long list of faults in stopping, restarting, backing up and updating servers were fixed. An admin can now hand a group of servers and the people who work them to an operator, who runs that pool and nobody else's.
 
