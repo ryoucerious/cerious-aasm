@@ -170,14 +170,18 @@ location / {
 
 ## Updating
 
-When a new release is out, the app shows an update icon in the sidebar. It can't update itself from inside the container, so run these on the machine where Docker runs:
+Settings, Mesh lists every machine and can start an ARK update or an app update on the one you pick. Each machine updates its own install.
+
+An app update inside this container downloads `cerious-aasm-runtime.tar.gz` from the release, writes it onto the data volume, and restarts the app process. The container keeps running, so you do not run `docker compose pull` for that. Server data in the volumes stays put. Update one voting machine at a time: restarting the app also restarts that machine's vote.
+
+A release published before this archive existed, or an image you built yourself, still updates from the Docker host:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-The container is recreated from the new image and your data volumes carry over untouched. Stop your ARK servers first if you'd rather not have them cut off mid-game.
+The container is recreated from the new image and your data volumes carry over untouched. A newer image wins over an older in-place update. Stop your ARK servers first if you'd rather not have them cut off mid-game. After an in-place app update, servers that are supposed to be running come back when the app is up.
 
 ## Building the image yourself
 

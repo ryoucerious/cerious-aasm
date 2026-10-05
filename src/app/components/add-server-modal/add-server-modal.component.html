@@ -17,15 +17,21 @@
   </div>
 
   <div class="modal-form-content">
-    <div *ngIf="importMode === 'create'" class="form-group">
-      <label class="form-control-label">Server Name</label>
-      <input #serverNameInput
-             class="form-control"
-             [(ngModel)]="serverName"
-             name="serverName"
-             required
-             placeholder="Enter server name"
-             (keyup.enter)="onAddServer()" />
+    <div *ngIf="importMode === 'create'">
+      <div class="form-group">
+        <label class="form-control-label">Server Name</label>
+        <input #serverNameInput
+               class="form-control"
+               [(ngModel)]="serverName"
+               name="serverName"
+               required
+               placeholder="Enter server name"
+               (keyup.enter)="onAddServer()" />
+      </div>
+      <div class="form-group" *ngIf="placementNodes.length">
+        <label class="form-control-label">Place on</label>
+        <app-dropdown [options]="placementOptions" [(ngModel)]="selectedNodeId" name="placement" ariaLabel="Place on"></app-dropdown>
+      </div>
     </div>
 
     <div *ngIf="importMode === 'import'">

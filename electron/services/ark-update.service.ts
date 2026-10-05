@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { getCurrentInstalledVersion, installArkServer } from '../utils/ark/ark-install.utils';
+import { getCurrentInstalledVersion, installArkServer, isArkServerInstalled } from '../utils/ark/ark-install.utils';
 import { ARK_APP_ID } from '../utils/ark/ark-server/ark-server-paths.utils';
 import { whileServerFilesUpdate } from '../utils/ark/ark-server/ark-server-state.utils';
 import { loadGlobalConfig } from '../utils/global-config.utils';
@@ -527,4 +527,19 @@ export class ArkUpdateService {
       releaseInstallLock();
     }
   }
+}
+
+let boundArkUpdate: ArkUpdateService | null = null;
+
+export function bindArkUpdateService(service: ArkUpdateService): void {
+  boundArkUpdate = service;
+}
+
+/** Starts the local SteamCMD update and returns. The node stops its own servers, updates, then starts them. */
+export function beginClusterUpdate(): { success: boolean; error?: string } {
+  if (!boundArkUpdate) return { success: false, error: 'Update service not initialized' };
+  if (!isArkServerInstalled()) return { success: false, error: 'ARK is not installed on this machine.' };
+  if (isInstallLocked()) return { success: false, error: 'An install or update is already running on this machine.' };
+  void boundArkUpdate.performClusterUpdate();
+  return { success: true };
 }

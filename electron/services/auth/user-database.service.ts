@@ -465,6 +465,31 @@ export class UserDatabaseService {
     return rows.map(row => this.toUser(row));
   }
 
+  /**
+   * In-process copy for mesh import. The hash stays in the main process; the renderer never
+   * receives it. Standalone login continues to use verifyCredentials.
+   */
+  exportCredentialRows(): Array<{
+    id: string;
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    roleId: string;
+    active: boolean;
+    ownerUserId: string | null;
+  }> {
+    this.ensureOpen();
+    return this.queryAll<UserRow>('SELECT * FROM users').map(row => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      passwordHash: row.password_hash,
+      roleId: row.role_id,
+      active: row.active === 1,
+      ownerUserId: row.owner_user_id || null
+    }));
+  }
+
   getUser(id: string): User | null {
     this.ensureOpen();
     const row = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [id]);

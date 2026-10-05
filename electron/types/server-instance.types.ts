@@ -68,6 +68,10 @@ export interface InstanceConfig extends Partial<AutomationSettings> {
   altSaveDirName?: string;
   clusterId?: string;
   clusterDirOverride?: string;
+  /** Monotonic configuration revision. Mesh desired state tracks this. */
+  configRevision?: number;
+  /** Hosting node when this install is in a mesh. Absent on a standalone server. */
+  nodeId?: string;
   serverPlatform?: string;
   crossplay?: string[];
   launchParameters?: string;

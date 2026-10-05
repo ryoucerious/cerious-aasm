@@ -46,6 +46,8 @@ export class ServerCardComponent implements OnDestroy {
   @Input() operatorLabel = '';
   /** Who this server is assigned to, including their role. "Not assigned" stays off the artwork. */
   @Input() assigneeLabel = '';
+  /** Hosting node display name. Empty on a standalone install. */
+  @Input() nodeLabel = '';
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();

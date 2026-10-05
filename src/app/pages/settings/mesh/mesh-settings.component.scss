@@ -1,0 +1,85 @@
+.settings-card-head-text {
+  flex: 1 1 auto;
+}
+
+.mesh-token {
+  margin-top: -0.35rem;
+  word-break: break-all;
+}
+
+.mesh-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mesh-node-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.85rem;
+}
+
+.mesh-node-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mesh-node-identity { min-width: 0; }
+
+.mesh-node-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.mesh-node-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+
+  span + span::before {
+    content: '·';
+    margin: 0 0.4rem;
+  }
+}
+
+.mesh-node-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.mesh-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-muted-1);
+
+  .btn-danger { margin-left: auto; }
+}
+
+.mesh-output {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}

@@ -4,7 +4,8 @@
 #   docker compose up -d
 #   Open http://localhost:3000
 #
-# Update to the latest release:
+# Update to the latest release from Settings, Mesh (the container applies it in place),
+# or from the Docker host:
 #   docker compose pull && docker compose up -d
 #
 # Build from source instead (optional CurseForge key baked in at build time):

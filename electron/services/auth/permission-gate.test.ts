@@ -1,4 +1,6 @@
 import { authorizeChannel, identifySender, isDesktopWindow } from './permission-gate';
+import { noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
+import { setMeshDesktopMode } from './desktop-session';
 import type { ApiProcessSender, WebSocketClient } from '../../types/messaging.types';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES } from '../../types/auth.types';
 import { permissionForChannel } from './channel-permissions';
@@ -19,6 +21,8 @@ function web(user: AuthenticatedUser | null, authEnabled = true): ApiProcessSend
 }
 
 const desktop = { send: jest.fn() } as never;
+
+afterEach(() => setMeshDesktopMode(false));
 
 describe('identifySender', () => {
   it('treats the desktop window as the admin who owns the machine', () => {
@@ -72,6 +76,15 @@ describe('authorizeChannel', () => {
 
   it('asks an anonymous client to sign in', () => {
     expect(authorizeChannel('get-server-instances', web(null))).toEqual({ allowed: false, error: 'You must sign in to do that.' });
+  });
+
+  it('lets the desktop read who it is and sign in once a mesh is on', () => {
+    setMeshDesktopMode(true);
+    expect(authorizeChannel('get-host-resources', desktop)).toEqual({ allowed: false, error: 'You must sign in to do that.' });
+    expect(authorizeChannel('get-current-user', desktop)).toEqual({ allowed: true });
+    expect(authorizeChannel('mesh-login', desktop)).toEqual({ allowed: true });
+    expect(authorizeChannel('mesh-bootstrap-admin', desktop)).toEqual({ allowed: true });
+    expect(authorizeChannel('mesh-bootstrap-admin', web(null))).toEqual({ allowed: false, error: 'You must sign in to do that.' });
   });
 
   it('follows the permission map for everyone else', () => {
@@ -167,6 +180,25 @@ describe('authorizeChannel pool scope', () => {
   it('still refuses on permission before looking at the pool', () => {
     expect(authorizeChannel('start-server-instance', web(operator(['servers.view'])), { id: 's1' }).allowed).toBe(false);
     expect(mockGetInstance).not.toHaveBeenCalled();
+  });
+});
+
+describe('authorizeChannel security version', () => {
+  afterEach(() => registerMeshAuth(null));
+
+  it('rejects an admin session issued before the account security version changed', () => {
+    const admin = { ...account('admin', ALL_PERMISSIONS), securityVersion: 1 };
+    noteSecurityVersion(admin.id, 2);
+    expect(authorizeChannel('get-server-instances', web(admin))).toEqual({
+      allowed: false,
+      error: 'Your session is out of date. Sign in again.'
+    });
+  });
+
+  it('allows a session that matches the current security version', () => {
+    const admin = { ...account('admin', ALL_PERMISSIONS), securityVersion: 2 };
+    noteSecurityVersion(admin.id, 2);
+    expect(authorizeChannel('get-server-instances', web(admin)).allowed).toBe(true);
   });
 });
 });

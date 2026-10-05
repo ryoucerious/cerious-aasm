@@ -1,0 +1,132 @@
+<div class="mesh-settings settings-pane" *ngIf="status">
+  <div class="ark-install-notice" *ngIf="!status.enabled">
+    <i class="material-icons">info</i>
+    <span>This install is standalone. Create a mesh on this machine, or join one with a token from a member.</span>
+  </div>
+  <div class="ark-install-notice warning" *ngIf="status.degraded">
+    <i class="material-icons">warning</i>
+    <span><strong>Mesh Degraded.</strong> Local servers can still be controlled. Security, enrollment, and placement changes wait for quorum.</span>
+  </div>
+  <div class="ark-install-notice warning" *ngIf="status.warning">
+    <i class="material-icons">info</i>
+    <span>{{ status.warning }}</span>
+  </div>
+
+  <section class="settings-card" *ngIf="!status.enabled">
+    <h3 class="settings-card-title">Create a mesh</h3>
+    <p class="settings-card-hint">This machine becomes the first member. Other machines join it with an enrollment token.</p>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-create-name">Mesh name</label>
+      <input id="mesh-create-name" class="form-control" [(ngModel)]="createName" name="createName" />
+    </div>
+    <div class="form-group" *ngIf="needsAdminPassword">
+      <label class="form-control-label" for="mesh-admin-username">Admin username</label>
+      <input id="mesh-admin-username" class="form-control" [(ngModel)]="adminUsername" name="adminUsername" autocomplete="username" />
+    </div>
+    <div class="form-group" *ngIf="needsAdminPassword">
+      <label class="form-control-label" for="mesh-admin-password">Admin password</label>
+      <input id="mesh-admin-password" type="password" class="form-control" [(ngModel)]="adminPassword" name="adminPassword" autocomplete="new-password" />
+      <label class="form-control-label desc">At least 8 characters. This machine has no accounts yet, so this becomes the mesh admin.</label>
+    </div>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="create()" [disabled]="busy">
+        <i class="material-icons">hub</i> Create mesh
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="!status.enabled">
+    <h3 class="settings-card-title">Join a mesh</h3>
+    <p class="settings-card-hint">Use the address of a machine that is already a member, and a one-time token from that machine.</p>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-member-url">Member URL</label>
+      <input id="mesh-member-url" class="form-control" [(ngModel)]="memberUrl" name="memberUrl" placeholder="https://member:4747" />
+    </div>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-token">Enrollment token</label>
+      <input id="mesh-token" class="form-control" [(ngModel)]="token" name="token" autocomplete="off" />
+    </div>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="join()" [disabled]="busy">
+        <i class="material-icons">login</i> Join mesh
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="status.enabled">
+    <div class="settings-card-head">
+      <div class="settings-card-head-text">
+        <h3 class="settings-card-title">{{ status.meshName || 'Mesh' }}</h3>
+        <p class="settings-card-hint">Each machine updates its own ARK install and its own app. Update one voting machine at a time. Leave returns this machine to standalone. Its servers stay here.</p>
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" (click)="issueToken()" [disabled]="busy || status.degraded">
+        <i class="material-icons">key</i> Enrollment token
+      </button>
+    </div>
+    <p class="settings-card-hint mesh-token" *ngIf="issuedToken">Give this token to the joining machine once: {{ issuedToken }}</p>
+    <p class="settings-card-hint" *ngIf="!nodes.length">No machines have joined yet.</p>
+    <div class="mesh-node-list" *ngIf="nodes.length">
+      <article class="mesh-node-card" *ngFor="let node of nodes">
+        <div class="mesh-node-top">
+          <div class="mesh-node-identity">
+            <h4 class="mesh-node-name">{{ node.name }}</h4>
+            <p class="mesh-node-meta">
+              <span *ngIf="node.nodeId === status.nodeId">This machine</span>
+              <span>Version {{ node.version || 'unknown' }}</span>
+            </p>
+          </div>
+          <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
+        </div>
+        <div class="mesh-node-actions">
+          <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'ark')" [disabled]="!canUpdate || !!updatingKey">
+            Update ARK
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'app')" [disabled]="!canUpdate || !!updatingKey">
+            Update app
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="maintenance(node)" [disabled]="status.degraded">
+            {{ node.maintenance ? 'Clear drain' : 'Drain' }}
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" (click)="askRemove(node)" [disabled]="status.degraded">
+            {{ node.nodeId === status.nodeId ? 'Leave' : 'Remove' }}
+          </button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="status.enabled">
+    <h3 class="settings-card-title">Reachability</h3>
+    <p class="settings-card-hint">Checks the peer and Raft ports. The mesh does not require a VPN for this.</p>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-ghost" (click)="diagnostics()">
+        <i class="material-icons">lan</i> Check reachability
+      </button>
+    </div>
+    <pre class="mesh-output" *ngIf="diagnosticText">{{ diagnosticText }}</pre>
+  </section>
+
+  <section class="settings-card" *ngIf="status.enabled">
+    <h3 class="settings-card-title">WireGuard</h3>
+    <p class="settings-card-hint">Optional. Joining a mesh does not require WireGuard. Apply runs only when it is installed on this host.</p>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-ghost" (click)="wireguard()">
+        <i class="material-icons">vpn_key</i> Show config
+      </button>
+      <button type="button" class="btn btn-primary" (click)="applyWireguard()" [disabled]="!wireguardText">
+        Apply on this host
+      </button>
+    </div>
+    <pre class="mesh-output" *ngIf="wireguardText">{{ wireguardText }}</pre>
+  </section>
+
+  <app-modal [title]="'Leave mesh'" [show]="showConfirmLeave" (close)="cancelLeave()">
+    <div class="modal-confirmation">
+      Leave {{ status.meshName || 'this mesh' }}? This machine returns to standalone. Servers on it stay here.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelLeave()">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmLeave()">Leave</button>
+    </div>
+  </app-modal>
+</div>

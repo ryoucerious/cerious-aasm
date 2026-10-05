@@ -212,7 +212,11 @@ export interface ServerInstance {
   disableImprinting?: boolean;
 
   // Cluster functionality
-  clusterId?: string; // ID of the cluster this server belongs to
+  clusterId?: string; // ARK cluster id string passed as -ClusterId
+  /** Monotonic configuration revision. */
+  configRevision?: number;
+  /** Hosting mesh node. Absent when this install is not in a mesh. */
+  nodeId?: string;
   clusterName?: string; // Name of the cluster (for display purposes)
   clusterOrder?: number; // Order in which this server should start within the cluster (0-based)
   clusterRole?: 'primary' | 'secondary' | 'backup'; // Role of this server within the cluster

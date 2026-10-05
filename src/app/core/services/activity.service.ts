@@ -61,6 +61,7 @@ export class ActivityService implements OnDestroy {
     // app has no socket and asks once.
     this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
     if (ipc.isElectron) this.refresh();
+    this.subs.push(this.messaging.receiveMessage('mesh-auth-changed').subscribe(() => this.refresh()));
 
     // These are the broadcasts the backend turns into activity entries. Rather than
     // duplicating that classification here, any of them simply prompts a reload; the

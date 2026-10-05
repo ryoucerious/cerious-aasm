@@ -9,6 +9,7 @@ import { NotificationService } from './core/services/notification.service';
 import { ThemeService } from './core/services/theme.service';
 import { ActivityService } from './core/services/activity.service';
 import { LiveServersService } from './core/services/live-servers.service';
+import { AuthService } from './core/services/auth.service';
 import { ServerInstance } from './core/models/server-instance.model';
 import { ConnectionLostComponent } from './components/connect-lost/connection-lost.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
@@ -43,6 +44,7 @@ export class App implements OnInit, OnDestroy {
   private stopListeningForClose: (() => void) | null = null;
   private connectTimeout: ReturnType<typeof setTimeout> | undefined;
   private everConnected = false;
+  private identitySub: Subscription | null = null;
 
   constructor(
     private cdr: ChangeDetectorRef,
@@ -50,6 +52,7 @@ export class App implements OnInit, OnDestroy {
     private ipc: IpcService,
     private serverLifecycle: ServerLifecycleService,
     private router: Router,
+    private auth: AuthService,
     // Eagerly instantiate NotificationService for global notifications
     _notification: NotificationService,
     // Eagerly instantiate ThemeService so the theme applies and keeps following the OS
@@ -75,6 +78,8 @@ export class App implements OnInit, OnDestroy {
     this.isLoginPage = this.router.url === '/login';
 
     if (this.isElectron) {
+      this.identitySub = this.auth.identity$.subscribe(() => this.routeForMeshSignIn());
+      void this.auth.whenReady().then(() => this.routeForMeshSignIn());
       this.stopListeningForClose = this.ipc.on('app-close-request', () => this.onCloseRequested());
       return;
     }
@@ -131,9 +136,16 @@ export class App implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.connectionSub?.unsubscribe();
     this.unauthorizedSub?.unsubscribe();
+    this.identitySub?.unsubscribe();
     this.stopListeningForClose?.();
     clearTimeout(this.connectTimeout);
     window.removeEventListener('resize', this.onWindowResize);
+  }
+
+  /** A joined mesh has no implicit desktop admin. Leave the shell until someone signs in. */
+  private routeForMeshSignIn(): void {
+    if (!this.auth.needsMeshSignIn || this.router.url.startsWith('/login')) return;
+    void this.router.navigate(['/login']);
   }
 
   onServerSelected(server: ServerInstance) {

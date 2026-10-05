@@ -29,6 +29,8 @@
     </div>
   </section>
 
+  <p class="dash-hero-subtitle" *ngIf="meshBanner">{{ meshBanner }}</p>
+
   <div class="dash-grid">
     <div class="dash-main">
       <div class="dash-section-header">
@@ -61,6 +63,7 @@
                          [canBackups]="canBackups"
                          [assigneeLabel]="poolDirectory.assigneeLabel(server)"
                          [operatorLabel]="poolDirectory.operatorLabel(server)"
+                         [nodeLabel]="nodeLabel(server)"
                          [hostMemoryTotalBytes]="hostMemoryTotal"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
@@ -201,7 +204,7 @@
   </div>
 </div>
 
-<app-add-server-modal [show]="showAddModal" [servers]="servers" (closed)="onAddModalClosed()"></app-add-server-modal>
+<app-add-server-modal [show]="showAddModal" [servers]="servers" [placementNodes]="placementNodes" (closed)="onAddModalClosed()"></app-add-server-modal>
 
 <app-modal [title]="'Start All Servers'" [show]="showConfirmStartAll" (close)="showConfirmStartAll = false">
   <div class="modal-confirmation">Start all servers?</div>

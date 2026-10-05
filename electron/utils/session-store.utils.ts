@@ -24,6 +24,8 @@ export interface SessionData {
   roleId?: string;
   permissions?: Permission[];
   loginFingerprint?: string;
+  /** Mesh security version observed at sign-in. */
+  securityVersion?: number;
 }
 
 interface StoredSession {
@@ -34,6 +36,7 @@ interface StoredSession {
   roleId?: string;
   permissions?: string[];
   loginFingerprint?: string;
+  securityVersion?: number;
 }
 
 interface StoreFile {
@@ -173,7 +176,8 @@ function toSession(entry: StoredSession): SessionData | null {
     permissions: Array.isArray(entry.permissions)
       ? entry.permissions.filter((p): p is Permission => typeof p === 'string')
       : undefined,
-    loginFingerprint: typeof entry.loginFingerprint === 'string' ? entry.loginFingerprint : undefined
+    loginFingerprint: typeof entry.loginFingerprint === 'string' ? entry.loginFingerprint : undefined,
+    securityVersion: typeof entry.securityVersion === 'number' ? entry.securityVersion : undefined
   };
 }
 
@@ -187,7 +191,8 @@ function saveSessions(): void {
       userId: session.userId,
       roleId: session.roleId,
       permissions: session.permissions,
-      loginFingerprint: session.loginFingerprint
+      loginFingerprint: session.loginFingerprint,
+      securityVersion: session.securityVersion
     }))
   };
   try {

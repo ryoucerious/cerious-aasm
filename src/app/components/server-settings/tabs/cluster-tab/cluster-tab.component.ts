@@ -17,6 +17,8 @@ export class ClusterTabComponent {
   @Input() isElectron = false;
   @Input() fieldErrors: FieldMessages = {};
   @Input() fieldWarnings: FieldMessages = {};
+  /** Shown when mesh transfer storage for this server is degraded. Empty leaves the tab unchanged. */
+  @Input() transferNote = '';
 
   @Output() validateField = new EventEmitter<{key: string, value: unknown}>();
   @Output() saveSettings = new EventEmitter<void>();

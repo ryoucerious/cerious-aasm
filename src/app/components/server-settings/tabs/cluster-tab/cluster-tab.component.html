@@ -2,6 +2,7 @@
   <div class="form-group page-intro">
     <h4>Server Cluster Configuration</h4>
     <p class="form-control-label desc">Configure this server to be part of an ARK cluster for cross-server character and item transfers.</p>
+    <p class="form-control-label desc" *ngIf="transferNote">{{ transferNote }}</p>
   </div>
 
   <div class="settings-section">

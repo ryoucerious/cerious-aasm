@@ -171,7 +171,32 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'delete-role': PERMISSIONS.USERS_MANAGE,
   // Reading your own identity is not a privilege; every signed-in user needs it.
   'get-current-user': null,
-  'change-own-password': null
+  'change-own-password': null,
+
+  // Mesh. get-mesh-status and mesh-login are also allowed for a desktop window that has not
+  // signed in yet; see authorizeChannel. Unknown channels stay admin-only.
+  'get-mesh-status': null,
+  'mesh-login': null,
+  'mesh-logout': null,
+  'mesh-bootstrap-admin': null,
+  'create-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'join-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'create-enrollment-token': PERMISSIONS.NODES_ENROLL,
+  'remove-mesh-node': PERMISSIONS.NODES_REMOVE,
+  'get-mesh-nodes': PERMISSIONS.NODES_VIEW,
+  'set-node-maintenance': PERMISSIONS.NODES_MANAGE,
+  'create-cluster': PERMISSIONS.CLUSTERS_MANAGE,
+  'get-clusters': PERMISSIONS.CLUSTERS_VIEW,
+  'validate-cluster-storage': PERMISSIONS.CLUSTERS_STORAGE_MANAGE,
+  'move-server': PERMISSIONS.SERVERS_MOVE,
+  'suggest-placement': PERMISSIONS.SERVERS_CREATE,
+  'mesh-diagnostics': PERMISSIONS.MESH_VIEW,
+  'mesh-wireguard': PERMISSIONS.MESH_CONFIGURE,
+  'mesh-wireguard-apply': PERMISSIONS.MESH_CONFIGURE,
+  'mesh-node-update': PERMISSIONS.APP_INSTALL,
+  'backup-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'restart-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
+  'get-mesh-audit': PERMISSIONS.MESH_VIEW
 };
 
 function ruleFor(channel: string): ChannelRule | undefined {

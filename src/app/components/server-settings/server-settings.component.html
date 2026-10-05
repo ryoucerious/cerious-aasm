@@ -103,6 +103,7 @@
       [isElectron]="isElectron"
       [fieldErrors]="fieldErrors"
       [fieldWarnings]="fieldWarnings"
+      [transferNote]="transferNote"
       (saveSettings)="settingsChanged.emit()"
       (validateField)="validateField($event.key, $event.value)"
       (testConnectivity)="testClusterConnectivity()">

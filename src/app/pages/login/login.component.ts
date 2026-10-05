@@ -1,8 +1,10 @@
-import { Component, inject } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectorRef } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
+import { IpcService } from '../../core/services/ipc.service';
+import { MessagingService } from '../../core/services/messaging/messaging.service';
 
 @Component({
   selector: 'app-login',
@@ -10,14 +12,44 @@ import { AuthService } from '../../core/services/auth.service';
   imports: [NgIf, FormsModule],
   templateUrl: './login.component.html'
 })
-export class LoginComponent {
+export class LoginComponent implements OnInit {
   private auth = inject(AuthService);
   private router = inject(Router);
+  private ipc = inject(IpcService);
+  private messaging = inject(MessagingService);
+  private cdr = inject(ChangeDetectorRef);
 
   username = '';
   password = '';
   errorMessage = '';
   isLoading = false;
+  /** A mesh with no accounts yet: this form creates the admin instead of checking a password. */
+  creatingAdmin = false;
+  readonly isElectron: boolean;
+
+  constructor() {
+    this.isElectron = this.ipc.isElectron;
+  }
+
+  ngOnInit(): void {
+    if (!this.isElectron) return;
+    this.messaging.sendMessage<{ enabled?: boolean; hasAccounts?: boolean }>('get-mesh-status', {}).subscribe(status => {
+      this.creatingAdmin = !!status?.enabled && status.hasAccounts === false;
+      this.cdr.markForCheck();
+    });
+  }
+
+  get heading(): string {
+    if (!this.isElectron) return 'Web Interface Login';
+    return this.creatingAdmin ? 'Create the mesh admin' : 'Sign in';
+  }
+
+  get hint(): string {
+    if (!this.isElectron) return '';
+    return this.creatingAdmin
+      ? 'This mesh has no accounts yet. The password needs at least 8 characters.'
+      : 'This machine is in a mesh. Sign in with your account.';
+  }
 
   // The password goes exactly as typed: spaces are characters like any other.
   async onLogin() {
@@ -28,7 +60,9 @@ export class LoginComponent {
 
     this.isLoading = true;
     this.errorMessage = '';
-    const result = await this.auth.login(this.username.trim(), this.password);
+    const result = this.creatingAdmin
+      ? await this.auth.bootstrapMeshAdmin(this.username.trim(), this.password)
+      : await this.auth.login(this.username.trim(), this.password);
     this.isLoading = false;
 
     if (result.success) {
@@ -51,7 +85,9 @@ export class LoginComponent {
       return 'Unable to reach the server. Please check that it is running and try again.';
     }
     if (status === 401) {
-      return 'Incorrect username or password. Please try again.';
+      return serverError && serverError !== 'Invalid credentials'
+        ? serverError
+        : 'Incorrect username or password. Please try again.';
     }
     if (status === 400) {
       return serverError || 'Please enter your username and password.';

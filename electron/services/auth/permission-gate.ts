@@ -2,10 +2,16 @@ import { AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types'
 import type { WebContents } from 'electron';
 import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
 import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
+import { meshDesktopIdentity } from './desktop-session';
+import { securityVersionStale } from '../mesh/mesh-hooks';
 import { instanceVisibleTo } from './pool-access';
 import { getInstance } from '../../utils/ark/instance.utils';
 
-/** What a message sender is allowed to do. */
+/** Channels the desktop window may use after a mesh is on and before anyone has signed in. */
+const DESKTOP_BEFORE_SIGN_IN = new Set([
+  'mesh-login', 'mesh-logout', 'mesh-bootstrap-admin', 'get-mesh-status', 'get-current-user', 'create-mesh', 'join-mesh'
+]);
+
 export interface SenderIdentity {
   /** null for the local desktop app, which is not a database account. */
   user: AuthenticatedUser | null;
@@ -53,6 +59,8 @@ export function identifySender(sender: MessageSender): SenderIdentity {
     return (sender as WebSocketClient)._authEnabled === false ? LOCAL_DESKTOP : ANONYMOUS;
   }
 
+  const override = meshDesktopIdentity();
+  if (override !== 'standalone') return override;
   return LOCAL_DESKTOP;
 }
 
@@ -82,9 +90,16 @@ export interface AuthorizationResult {
 export function authorizeChannel(channel: string, sender: MessageSender, payload?: unknown): AuthorizationResult {
   const identity = identifySender(sender);
 
+  if (identity.user && securityVersionStale(identity.user.id, identity.user.securityVersion)) {
+    return { allowed: false, error: 'Your session is out of date. Sign in again.' };
+  }
+
   if (identity.isAdmin) return { allowed: true };
 
   if (!identity.user) {
+    if (identity.isLocalDesktop && DESKTOP_BEFORE_SIGN_IN.has(channel)) {
+      return { allowed: true };
+    }
     return { allowed: false, error: 'You must sign in to do that.' };
   }
 

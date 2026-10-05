@@ -120,6 +120,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * when the desktop app loads the bundle over file://.
    */
   readonly heroBackground = `url("${HERO_IMAGE}")`;
+  meshBanner = '';
+  private nodeNames = new Map<string, string>();
 
   private subs: Subscription[] = [];
 
@@ -158,6 +160,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.readViewPreferences();
+    this.subs.push(this.messaging.sendMessage<{
+      enabled?: boolean; degraded?: boolean; warning?: string | null;
+      nodes?: Array<{ nodeId: string; name: string }>;
+    }>('get-mesh-status', {}).subscribe(status => {
+      if (!status?.enabled) {
+        this.meshBanner = '';
+        this.nodeNames.clear();
+      } else {
+        this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
+        this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
+      }
+      this.cdr.markForCheck();
+    }));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
@@ -222,6 +237,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   get canReorder(): boolean {
     return this.sort === 'custom' && this.filter === 'all';
+  }
+
+  nodeLabel(server: ServerInstance): string {
+    if (!server.nodeId) return '';
+    return this.nodeNames.get(server.nodeId) || server.nodeId;
+  }
+
+  get placementNodes(): Array<{ nodeId: string; name: string }> {
+    return [...this.nodeNames.entries()].map(([nodeId, name]) => ({ nodeId, name }));
   }
 
   refreshVisible(): void {

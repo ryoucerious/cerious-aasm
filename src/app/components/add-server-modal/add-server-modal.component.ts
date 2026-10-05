@@ -28,6 +28,10 @@ export type ImportMode = 'create' | 'import' | 'clone';
 export class AddServerModalComponent implements OnChanges {
   @Input() show = false;
   @Input() servers: ServerInstance[] = [];
+  /** Mesh nodes the operator may place a new server on. Empty on a standalone install. */
+  @Input() placementNodes: Array<{ nodeId: string; name: string }> = [];
+  selectedNodeId = '';
+  placementOptions: DropdownOption<string>[] = [];
 
   /**
    * The clone source picker lists the existing servers by name. Rebuilt when the list
@@ -58,6 +62,12 @@ export class AddServerModalComponent implements OnChanges {
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['servers']) {
       this.cloneOptions = (this.servers || []).map(server => ({ value: server, label: server.name }));
+    }
+    if (changes['placementNodes']) {
+      this.placementOptions = [
+        { value: '', label: 'Auto-select' },
+        ...this.placementNodes.map(node => ({ value: node.nodeId, label: node.name }))
+      ];
     }
     if (changes['show'] && this.show) {
       this.reset();
@@ -107,10 +117,14 @@ export class AddServerModalComponent implements OnChanges {
     this.backupFileInput?.nativeElement.click();
   }
 
+  private placementFields(): { nodeId?: string } {
+    return this.selectedNodeId ? { nodeId: this.selectedNodeId } : {};
+  }
+
   private createNewServer(): void {
     this.busy = true;
     this.serverInstanceService.getDefaultInstanceFromMeta().pipe(
-      switchMap(defaults => this.serverInstanceService.save({ ...defaults, name: this.serverName, sessionName: this.serverName }))
+      switchMap(defaults => this.serverInstanceService.save({ ...defaults, name: this.serverName, sessionName: this.serverName, ...this.placementFields() }))
     ).subscribe({
       next: result => this.handleSaveResult(result, 'Failed to create server'),
       error: () => this.fail('Failed to create server')
@@ -200,6 +214,7 @@ export class AddServerModalComponent implements OnChanges {
     this.selectedBackupFile = null;
     this.selectedBackupFilePath = '';
     this.selectedServerToClone = null;
+    this.selectedNodeId = '';
     this.busy = false;
   }
 

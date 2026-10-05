@@ -17,9 +17,10 @@ import { userDatabaseService } from '../services/auth/user-database.service';
 import { PERMISSIONS } from '../types/auth.types';
 import type { MessageSender } from '../types/messaging.types';
 import * as instanceUtils from '../utils/ark/instance.utils';
-import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 import { validateInstanceId } from '../utils/validation.utils';
 import type { InstanceConfig } from '../types/server-instance.types';
+import { localRuntime } from '../services/runtime/local-runtime';
+import { meshService } from '../services/mesh/mesh-service';
 import { onRequest } from './handler.utils';
 
 const UP_OR_QUEUED = new Set(['running', 'starting', 'queued']);
@@ -101,9 +102,11 @@ onRequest('stop-all-instances', async (_payload, { sender, afterReply }) => {
   return { success: true, stopping: eligible.map(instance => instance.id) };
 });
 
-onRequest('force-stop-server-instance', async payload => {
+onRequest('force-stop-server-instance', async (payload, { sender }) => {
   const { id } = payload;
-  const result = await serverInstanceService.forceStopInstance(id);
+  const remote = await forwardRemote('force-stop', id, sender);
+  if (remote) return remote;
+  const result = await localRuntime.forceStop(id);
   if (result.success) {
     messagingService.sendToAll('rcon-status', { instanceId: id, connected: false });
     messagingService.sendToAll('server-instance-log', { log: '[FORCE STOP] Server force stopped', instanceId: id });
@@ -117,27 +120,30 @@ onRequest('force-stop-server-instance', async payload => {
 }, { fallbackError: 'Failed to force stop server' });
 
 // SaveWorld, DoExit, a wait for the process, then a kill if it is still there: can take minutes.
-onRequest('stop-server-instance', async payload => {
+onRequest('stop-server-instance', async (payload, { sender }) => {
   const { id } = payload;
   if (!validateInstanceId(id)) {
     return { success: false, instanceId: id, error: 'Invalid instance ID' };
   }
-  const result = await serverLifecycleService.stopServerInstance(id);
+  const remote = await forwardRemote('stop', id, sender);
+  if (remote) return remote;
+  const result = await localRuntime.stop(id);
   if (result.success) {
     serverMonitoringService.stopPlayerPolling(id);
     automationService.setManuallyStopped(id, true);
     messagingService.sendToAll('rcon-status', { instanceId: id, connected: false });
+    await meshService.noteDesired(id, 'stopped');
   }
   return { success: result.success, instanceId: id, error: result.error };
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
 
 onRequest('get-server-instance-state', payload => {
   const { id } = payload;
-  return { state: getNormalizedInstanceState(id), instanceId: id };
+  return { state: localRuntime.state(id), instanceId: id };
 }, { onError: (_error, payload) => ({ state: 'unknown', instanceId: payload.id }) });
 
 onRequest('get-server-instance-logs', payload => {
-  const { log, instanceId } = serverMonitoringService.getInstanceLogs(payload.id, payload.maxLines);
+  const { log, instanceId } = localRuntime.logs(payload.id, payload.maxLines);
   return { log, instanceId };
 }, { onError: (_error, payload) => ({ log: '', instanceId: payload.id }) });
 
@@ -181,7 +187,7 @@ onRequest('get-rcon-status', payload => {
 
 // The console shows `response` whatever happened, so failures go there too.
 onRequest('rcon-command', async payload => {
-  const result = await serverOperationsService.executeRconCommand(payload.id, payload.command);
+  const result = await localRuntime.rcon(payload.id, payload.command);
   return { instanceId: result.instanceId, response: result.response || result.error || 'No response' };
 }, {
   fallbackError: 'RCON command failed',
@@ -190,12 +196,15 @@ onRequest('rcon-command', async payload => {
 
 onRequest('start-server-instance', async (payload, { sender }) => {
   const { id } = payload;
+  const remote = await forwardRemote('start', id, sender);
+  if (remote) return remote;
   messagingService.sendToAll('clear-server-instance-logs', { instanceId: id });
   const { onLog, onState } = getStandardEventCallbacks(id);
-  const result = await serverInstanceService.startServerInstance(id, onLog, onState);
+  const result = await localRuntime.start(id, onLog, onState);
 
   if (result.started) {
     messagingService.sendToAll('notification', { type: 'info', message: `${result.instanceName} started.`, instanceId: id });
+    await meshService.noteDesired(id, 'running');
   } else if (result.portError) {
     messagingService.sendToOriginator('notification', { type: 'error', message: result.portError }, sender);
   }
@@ -211,14 +220,15 @@ onRequest('get-server-instance-players', payload => {
 }, { onError: (_error, payload) => ({ instanceId: payload.id, players: 0 }) });
 
 onRequest('get-server-instances', async (_payload, { sender, afterReply }) => {
-  const { instances } = await serverManagementService.getAllInstances();
+  const { instances } = await localRuntime.listInstances();
   // The broadcast carries the full list; each web client receives its own pool's view of it.
   afterReply(() => messagingService.sendToAll('server-instances', instances));
-  return { instances: visibleTo(identifySender(sender), instances) };
+  const visible = await meshService.annotateInventory(visibleTo(identifySender(sender), instances));
+  return { instances: visible };
 }, { onError: () => ({ instances: [] }) });
 
 onRequest('get-server-instance', async payload => {
-  const { instance } = await serverManagementService.getInstance(payload.id);
+  const { instance } = await localRuntime.getInstance(payload.id);
   return { instance };
 }, { onError: () => ({ instance: null }) });
 
@@ -241,10 +251,15 @@ onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
     if (refusal) return { success: false, error: refusal };
   }
 
-  const result = await serverManagementService.saveInstance(instance);
+  const result = await localRuntime.saveInstance(instance);
 
   if (result.success && result.instance) {
     const saved: InstanceConfig = result.instance;
+    try {
+      await meshService.recordServer(saved);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Could not update mesh placement.' };
+    }
     afterReply(() => messagingService.sendToAll('server-instance-updated', saved));
     afterReply(() => serverInstanceService.broadcastInstances());
     afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: describeSave(previous, saved), instanceId: saved.id }, sender));
@@ -295,7 +310,7 @@ onRequest('set-server-operator', async (payload, { sender, afterReply }) => {
 
 onRequest('delete-server-instance', async (payload, { sender, afterReply }) => {
   const { id } = payload;
-  const result = await serverInstanceService.deleteInstance(id);
+  const result = await localRuntime.deleteInstance(id);
 
   if (result.success) {
     afterReply(() => serverInstanceService.broadcastInstances());
@@ -349,6 +364,24 @@ onRequest('reorder-server-instances', async payload => {
   await serverInstanceService.broadcastInstances();
   return { success: true };
 }, { fallbackError: 'Failed to reorder server instances' });
+
+onRequest('restart-server-instance', async (payload, { sender }) => {
+  const { id } = payload;
+  const remote = await forwardRemote('restart', id, sender);
+  if (remote) return remote;
+  const stopped = await localRuntime.stop(id);
+  if (!stopped.success) return { success: false, instanceId: id, error: stopped.error };
+  const { onLog, onState } = getStandardEventCallbacks(id);
+  const started = await localRuntime.start(id, onLog, onState);
+  return { success: started.started, instanceId: id, error: started.portError };
+}, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
+
+async function forwardRemote(operation: 'start' | 'stop' | 'force-stop' | 'restart', id: string, sender: MessageSender) {
+  const actor = identifySender(sender).user?.username || 'desktop';
+  const remote = await meshService.forwardIfRemote(operation, id, actor);
+  if (!remote) return null;
+  return { success: remote.success, instanceId: id, error: remote.error };
+}
 
 function describeSave(previous: InstanceConfig | null, saved: InstanceConfig): string {
   if (previous && previous.name !== saved.name) {

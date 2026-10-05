@@ -67,9 +67,10 @@ import { messagingService } from './services/messaging.service';
 import { webServerService } from './services/web-server.service';
 import { applicationService, readAuthArgs } from './services/application.service';
 import { LogService } from './services/log.service';
-import { ArkUpdateService, stopSteamCmdQuery } from './services/ark-update.service';
+import { ArkUpdateService, bindArkUpdateService, stopSteamCmdQuery } from './services/ark-update.service';
 import { autoUpdateService } from './services/auto-update.service';
 import { playerHistoryService } from './services/player-history.service';
+import { meshService } from './services/mesh/mesh-service';
 import { userDatabaseService } from './services/auth/user-database.service';
 import { scopeBroadcast } from './services/auth/pool-broadcast';
 import { cleanupAllRconConnections } from './utils/rcon.utils';
@@ -98,6 +99,7 @@ import './handlers/host-resources-handler';
 import './handlers/user-handler';
 import './handlers/activity-handler';
 import './handlers/player-history-handler';
+import './handlers/mesh-handler';
 
 const DEV_SERVER_URL = 'http://localhost:4200';
 const CLOSE_RESPONSE_TIMEOUT_MS = 10000;
@@ -106,6 +108,7 @@ const SHUTDOWN_POLL_MS = 1000;
 
 const arkUpdateService = new ArkUpdateService(messagingService);
 setArkUpdateService(arkUpdateService);
+bindArkUpdateService(arkUpdateService);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -182,6 +185,11 @@ function cleanup(): void {
     playerHistoryService.stop();
   } catch (error) {
     console.error('[main] Error stopping player history:', error);
+  }
+  try {
+    void meshService.stop();
+  } catch (error) {
+    console.error('[main] Error stopping the mesh:', error);
   }
   try {
     arkUpdateService.stop();
@@ -507,10 +515,12 @@ app.on('ready', async () => {
   LogService.clearArkLogFiles();
   await applicationService.initializeApplication();
 
+  await prepareAccounts();
+  await meshService.resumeIfJoined().catch(error => console.error('[main] Mesh did not resume:', error));
+  // The window asks who is signed in as soon as it opens, so the mesh decision has to come first.
   createWindow();
   initializeBackupSystem().catch(error => console.error('[main] Backup system failed to start:', error));
   automationService.initializeAutomation();
-  await prepareAccounts();
 
   // Feeds the dashboard's 24-hour player chart, once a minute.
   playerHistoryService.start(playerCountsByInstance);

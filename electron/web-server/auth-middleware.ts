@@ -61,7 +61,7 @@ export function sessionAuth(req: express.Request, res: express.Response, next: e
  * Who a session belongs to: an account, or the legacy single login, identified by the fingerprint of
  * the login the password was checked against (see legacyLoginFingerprint).
  */
-export type SessionOwner = Pick<AuthenticatedUser, 'id' | 'roleId' | 'permissions'> | { loginFingerprint: string };
+export type SessionOwner = (Pick<AuthenticatedUser, 'id' | 'roleId' | 'permissions'> & { securityVersion?: number }) | { loginFingerprint: string };
 
 /**
  * The account is stored on the session so the WebSocket handshake can attach an identity without a
@@ -71,7 +71,7 @@ export function createSession(req: express.Request, res: express.Response, usern
   const token = generateSessionToken();
   const session: SessionData = 'loginFingerprint' in owner
     ? { username, created: new Date(), loginFingerprint: owner.loginFingerprint }
-    : { username, created: new Date(), userId: owner.id, roleId: owner.roleId, permissions: owner.permissions };
+    : { username, created: new Date(), userId: owner.id, roleId: owner.roleId, permissions: owner.permissions, securityVersion: owner.securityVersion };
   setSession(token, session);
   res.cookie(SESSION_COOKIE, token, { ...cookieOptions(req), maxAge: SESSION_MAX_AGE_MS });
 }

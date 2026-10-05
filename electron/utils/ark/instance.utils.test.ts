@@ -221,9 +221,9 @@ describe('instance.utils', () => {
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/${expectedId}`, { recursive: true });
       expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
         `${mockInstancesBaseDir}/${expectedId}/config.json`,
-        { ...instanceData, id: expectedId, sortOrder: 0 }
+        { ...instanceData, id: expectedId, sortOrder: 0, configRevision: 1 }
       );
-      expect(result).toEqual({ ...instanceData, id: expectedId, sortOrder: 0 });
+      expect(result).toEqual({ ...instanceData, id: expectedId, sortOrder: 0, configRevision: 1 });
     });
 
     it('should save instance with provided ID', async () => {
@@ -232,8 +232,8 @@ describe('instance.utils', () => {
       const result = await saveInstance(instanceData);
 
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id`, { recursive: true });
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...instanceData, sortOrder: 0 });
-      expect(result).toEqual({ ...instanceData, sortOrder: 0 });
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...instanceData, sortOrder: 0, configRevision: 1 });
+      expect(result).toEqual({ ...instanceData, sortOrder: 0, configRevision: 1 });
     });
 
     it('rejects a traversal id before creating any directory', async () => {
@@ -256,8 +256,8 @@ describe('instance.utils', () => {
         startedAt: 1700000000000
       });
 
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...settings, sortOrder: 0 });
-      expect(result).toEqual({ ...settings, sortOrder: 0 });
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(`${mockInstancesBaseDir}/custom-id/config.json`, { ...settings, sortOrder: 0, configRevision: 1 });
+      expect(result).toEqual({ ...settings, sortOrder: 0, configRevision: 1 });
     });
 
     it('should return error for duplicate server name', async () => {
@@ -286,8 +286,8 @@ describe('instance.utils', () => {
       const result = await saveInstance(instanceData);
 
       expect(mockedFs.mkdirSync).toHaveBeenCalledWith(`${mockInstancesBaseDir}/existing-1`, { recursive: true });
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(mockConfigPath, instanceData);
-      expect(result).toEqual(instanceData);
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(mockConfigPath, { ...instanceData, configRevision: 1 });
+      expect(result).toEqual({ ...instanceData, configRevision: 1 });
     });
 
     it('should handle case-insensitive name comparison', async () => {

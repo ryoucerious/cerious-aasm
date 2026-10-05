@@ -39,7 +39,8 @@ export function resolveSocketIdentity(request: IncomingMessage): SocketIdentity 
         roleId: session.roleId || '',
         roleName: '',
         permissions: session.permissions || [],
-        active: true
+        active: true,
+        securityVersion: session.securityVersion
       }
     : {
         id: LEGACY_ADMIN_ID,

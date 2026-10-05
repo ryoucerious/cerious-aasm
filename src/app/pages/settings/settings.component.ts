@@ -14,6 +14,7 @@ import { ModalComponent } from '../../components/modal/modal.component';
 import { DrawerComponent } from '../../components/drawer/drawer.component';
 import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
+import { MeshSettingsComponent } from './mesh/mesh-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { environment } from '../../../environments/environment';
@@ -90,7 +91,7 @@ interface SystemInfoReply {
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent],
+  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent],
   templateUrl: './settings.component.html'
 })
 export class SettingsPageComponent implements OnInit {
@@ -180,6 +181,7 @@ export class SettingsPageComponent implements OnInit {
       { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
       { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
       { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
+      { id: 'mesh', label: 'Mesh', icon: 'hub', group: 'Access' },
       ...(this.isElectron ? [{ id: 'web-server' as const, label: 'Web Server', icon: 'cloud', group: 'Access' }] : []),
       { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
       { id: 'about', label: 'About', icon: 'info', group: 'Application' }

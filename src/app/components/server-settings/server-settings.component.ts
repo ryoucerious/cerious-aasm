@@ -120,6 +120,7 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   firewallStatus: FirewallStatus | null = null;
   fieldErrors: FieldMessages = {};
   fieldWarnings: FieldMessages = {};
+  transferNote = '';
 
   private readonly subscriptions = new Subscription();
 
@@ -137,6 +138,14 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
 
   ngOnInit() {
     this.checkFirewallStatus();
+    this.subscriptions.add(this.messagingService.sendMessage<{ degraded?: boolean; storage?: Array<{ health?: { ok?: boolean } }> }>('get-mesh-status', {}).subscribe(status => {
+      const storageDown = Array.isArray(status?.storage) && status.storage.some(item => item.health && item.health.ok === false);
+      this.transferNote = status?.degraded
+        ? 'Mesh Degraded. Local control still works. Transfer health may be stale.'
+        : storageDown
+          ? 'Cluster transfer storage is degraded. Game processes keep running.'
+          : '';
+    }));
   }
 
   ngOnChanges(changes: SimpleChanges) {

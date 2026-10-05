@@ -3,6 +3,7 @@ import * as path from 'path';
 import { messagingService } from './messaging.service';
 import { settingsService } from './settings.service';
 import { userDatabaseService } from './auth/user-database.service';
+import { meshAuth } from './mesh/mesh-hooks';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import { AuthenticatedUser, LEGACY_ADMIN_ID, ROLE_IDS, SessionUser } from '../types/auth.types';
 import type { ApiProcessSender, ChildToMainMessage, MainToChildMessage } from '../types/messaging.types';
@@ -197,7 +198,51 @@ export class WebServerService {
   }
 
   private relayToBus(child: ChildProcess, message: Extract<ChildToMainMessage, { type: 'messaging-event' }>): void {
-    const { user, authEnabled, accountGone } = this.resolveIdentity(message.user, message.authEnabled !== false);
+    const mesh = meshAuth();
+    if (mesh?.enabled()) {
+      void this.relayMesh(child, message, mesh);
+      return;
+    }
+    const { user, authEnabled, accountGone } = this.resolveLocal(message.user, message.authEnabled !== false);
+    this.dispatch(child, message, user, authEnabled, accountGone);
+  }
+
+  private async relayMesh(
+    child: ChildProcess,
+    message: Extract<ChildToMainMessage, { type: 'messaging-event' }>,
+    mesh: NonNullable<ReturnType<typeof meshAuth>>
+  ): Promise<void> {
+    const claimed = message.user;
+    const authEnabled = message.authEnabled !== false;
+    if (!claimed?.id || claimed.id === LEGACY_ADMIN_ID) {
+      const local = this.resolveLocal(claimed, authEnabled);
+      this.dispatch(child, message, local.user, local.authEnabled, local.accountGone);
+      return;
+    }
+    try {
+      const resolved = await mesh.resolve(claimed.id);
+      if (!resolved?.user.active) {
+        this.dispatch(child, message, null, true, true);
+        return;
+      }
+      if (typeof claimed.securityVersion === 'number' && claimed.securityVersion < resolved.securityVersion) {
+        this.dispatch(child, message, null, true, true);
+        return;
+      }
+      this.dispatch(child, message, resolved.user, authEnabled, false);
+    } catch (error) {
+      console.warn('[web-server] Could not resolve a mesh account; treating it as signed out:', error);
+      this.dispatch(child, message, null, true, false);
+    }
+  }
+
+  private dispatch(
+    child: ChildProcess,
+    message: Extract<ChildToMainMessage, { type: 'messaging-event' }>,
+    user: AuthenticatedUser | null,
+    authEnabled: boolean,
+    accountGone: boolean
+  ): void {
     const sender: ApiProcessSender = {
       type: 'api-process',
       cid: message.cid,
@@ -226,7 +271,7 @@ export class WebServerService {
    * role and permissions are read fresh, so a demotion, deactivation or deletion applies to the
    * next message rather than at the next sign-in.
    */
-  private resolveIdentity(
+  private resolveLocal(
     claimed: SessionUser | null | undefined,
     authEnabled: boolean
   ): { user: AuthenticatedUser | null; authEnabled: boolean; accountGone: boolean } {
@@ -252,7 +297,10 @@ export class WebServerService {
   private async verifyCredentialsForChild(child: ChildProcess, message: Extract<ChildToMainMessage, { type: 'auth-verify' }>): Promise<void> {
     let user: AuthenticatedUser | null = null;
     try {
-      user = await userDatabaseService.verifyCredentials(message.username, message.password);
+      const mesh = meshAuth();
+      user = mesh?.enabled()
+        ? await mesh.verify(message.username, message.password)
+        : await userDatabaseService.verifyCredentials(message.username, message.password);
     } catch (error) {
       console.error('[web-server] Credential check failed:', error);
     }

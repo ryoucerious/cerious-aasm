@@ -82,7 +82,10 @@ COPY --from=build --chown=aasm:aasm /app/node_modules ./node_modules
 COPY --from=build --chown=aasm:aasm /app/dist ./dist
 COPY --from=build --chown=aasm:aasm /app/electron ./electron
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+COPY scripts/fetch-rqlite.js scripts/fetch-rqlite.js
+RUN RQLITE_TARGET=linux-amd64 node scripts/fetch-rqlite.js \
+    && chown -R aasm:aasm /app/resources \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3000

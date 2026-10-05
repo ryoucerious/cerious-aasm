@@ -38,6 +38,12 @@ describe('ServerInstanceService', () => {
     expect(requests('get-server-instances').length).toBe(1);
   });
 
+  it('asks again after a mesh sign-in, because the first ask was refused', () => {
+    create(true);
+    channels['mesh-auth-changed'].next({});
+    expect(requests('get-server-instances').length).toBe(2);
+  });
+
   it('asks for the list once per connection in the web UI', () => {
     create(false);
     expect(requests('get-server-instances').length).toBe(0);

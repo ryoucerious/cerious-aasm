@@ -52,8 +52,10 @@
     "electron-updater": "^6.8.3",
     "express": "^5.1.0",
     "fs-extra": "^11.2.0",
+    "hash-wasm": "^4.12.0",
     "helmet": "^8.1.0",
     "ngx-toastr": "^19.0.0",
+    "node-forge": "^1.4.0",
     "node-pty": "^1.1.0",
     "node-sqlite3-wasm": "^0.8.60",
     "rcon": "^1.1.0",
@@ -127,6 +129,11 @@
         {
           "from": "resources/diskinfo.js",
           "to": "scripts/diskinfo.js"
+        },
+        {
+          "from": "resources/rqlite/windows-amd64",
+          "to": "rqlite/windows-amd64",
+          "filter": ["rqlited.exe"]
         }
       ]
     },
@@ -157,6 +164,13 @@
       "category": "Game",
       "synopsis": "ARK: Survival Ascended Server Manager",
       "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
+      "extraResources": [
+        {
+          "from": "resources/rqlite/linux-amd64",
+          "to": "rqlite/linux-amd64",
+          "filter": ["rqlited"]
+        }
+      ],
       "maintainer": "r YOU cerious",
       "executableArgs": [
         "--no-sandbox",

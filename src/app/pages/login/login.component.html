@@ -3,7 +3,8 @@
     <div class="login-header">
       <img class="login-logo" src="assets/logo-square-256.png" alt="" />
       <h1>Cerious AASM</h1>
-      <h2>Web Interface Login</h2>
+      <h2>{{ heading }}</h2>
+      <p class="settings-card-hint" *ngIf="hint">{{ hint }}</p>
     </div>
     <div class="login-form">
       <div class="form-group">
@@ -37,7 +38,7 @@
           (click)="onLogin()" 
           [disabled]="!username.trim() || !password || isLoading"
         >
-          <span *ngIf="!isLoading">Login</span>
+          <span *ngIf="!isLoading">{{ creatingAdmin ? 'Create admin' : 'Login' }}</span>
           <span *ngIf="isLoading">Logging in...</span>
         </button>
       </div>

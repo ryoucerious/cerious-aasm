@@ -12,7 +12,7 @@
   </div>
 
   <div class="server-card-body">
-    <div class="server-card-details" *ngIf="sessionName || showOperator || showAssignee || connectAddress">
+    <div class="server-card-details" *ngIf="sessionName || showOperator || showAssignee || connectAddress || nodeLabel">
       <div class="server-card-details-main">
         <div class="server-card-session" *ngIf="sessionName" [attr.data-tooltip]="sessionName">
           <span class="material-icons">public</span>
@@ -21,6 +21,10 @@
         <div class="server-card-session" *ngIf="showOperator" [attr.data-tooltip]="operatorLabel">
           <span class="material-icons">badge</span>
           <span class="server-card-session-name">{{ operatorLabel }}</span>
+        </div>
+        <div class="server-card-session" *ngIf="nodeLabel" [attr.data-tooltip]="nodeLabel">
+          <span class="material-icons">hub</span>
+          <span class="server-card-session-name">{{ nodeLabel }}</span>
         </div>
         <div class="server-card-session" *ngIf="showAssignee" [attr.data-tooltip]="assigneeLabel">
           <span class="material-icons">person</span>

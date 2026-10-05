@@ -78,6 +78,16 @@ describe('AddServerModalComponent', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/server', 'general']);
   });
 
+  it('places a new server on the chosen node', () => {
+    component.placementNodes = [{ nodeId: 'node-1', name: 'Jareds-PC' }];
+    component.ngOnChanges({ placementNodes: { currentValue: component.placementNodes } } as any);
+    expect(component.placementOptions.map(option => option.label)).toEqual(['Auto-select', 'Jareds-PC']);
+    component.serverName = 'Fresh';
+    component.selectedNodeId = 'node-1';
+    component.onAddServer();
+    expect(serverInstanceService.save).toHaveBeenCalledWith(jasmine.objectContaining({ nodeId: 'node-1' }));
+  });
+
   it('clones without carrying the source id', () => {
     component.setImportMode('clone');
     component.serverName = 'Copy';

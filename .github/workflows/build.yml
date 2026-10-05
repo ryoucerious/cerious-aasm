@@ -113,6 +113,39 @@ jobs:
           name: electron-linux-rpm
           path: dist-electron/*.rpm
 
+  pack-runtime:
+    # The archive a Docker container applies in place. It is the built app, not a new image.
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Update npm
+        run: npm install -g npm@11
+      - name: Install dependencies
+        run: npm ci
+      - name: Inject CurseForge API Key
+        env:
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: sed -i "s|CURSEFORGE_KEY_PLACEHOLDER|${CURSEFORGE_API_KEY}|g" src/environments/environment.prod.ts
+      - name: Build the runtime archive
+        run: |
+          npm run build
+          npx tsc -p tsconfig.electron.json
+          tar -czf cerious-aasm-runtime.tar.gz package.json dist electron
+      - name: Upload runtime archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-runtime
+          path: cerious-aasm-runtime.tar.gz
+
   build-docker:
     # Also needs the desktop builds, not just test, so a failed Windows/Linux package
     # can't leave a passing :latest image behind.
@@ -145,7 +178,7 @@ jobs:
             curseforge_api_key=${{ secrets.CURSEFORGE_API_KEY }}
 
   create-release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, pack-runtime]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -169,6 +202,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: electron-linux-rpm
+          path: ./release-files/
+      - name: Download Docker runtime archive
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-runtime
           path: ./release-files/
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2

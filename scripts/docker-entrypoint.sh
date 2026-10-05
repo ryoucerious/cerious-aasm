@@ -120,17 +120,68 @@ fi
 # One app per container, so a single-instance lock in the saved userData is stale.
 rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/cerious-aasm/Singleton"*
 
-node_modules/.bin/electron electron/main.js "${args[@]}" "$@" &
-APP_PID=$!
+# A runtime archive on the data volume is the in-place app update. It is used only when it is
+# newer than the image, so a later image pull still wins.
+apply_runtime() {
+  local overlay="${XDG_DATA_HOME:-$HOME/.local/share/cerious-aasm}/runtime"
+  if [ ! -f "${overlay}/package.json" ]; then
+    return 0
+  fi
+  local use
+  use=$(node -e "
+    const fs = require('fs');
+    const parse = version => {
+      const [core, ...pre] = String(version || '0').replace(/^v/, '').split('-');
+      return { core: core.split('.').map(part => Number(part) || 0), pre: pre.join('-') };
+    };
+    const newer = (remote, current) => {
+      const r = parse(remote);
+      const c = parse(current);
+      for (let i = 0; i < Math.max(r.core.length, c.core.length); i++) {
+        const difference = (r.core[i] ?? 0) - (c.core[i] ?? 0);
+        if (difference !== 0) return difference > 0;
+      }
+      if (!r.pre || !c.pre) return !r.pre && !!c.pre;
+      return r.pre.localeCompare(c.pre, undefined, { numeric: true, sensitivity: 'base' }) > 0;
+    };
+    const overlayVersion = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')).version;
+    const imageVersion = JSON.parse(fs.readFileSync('/app/package.json', 'utf8')).version;
+    process.stdout.write(newer(overlayVersion, imageVersion) ? '1' : '0');
+  " "${overlay}/package.json")
+  if [ "$use" != "1" ]; then
+    return 0
+  fi
+  echo "[cerious-aasm] Applying the in-place app update from ${overlay}"
+  if [ -d "${overlay}/dist" ]; then
+    rm -rf /app/dist
+    cp -a "${overlay}/dist" /app/dist
+  fi
+  if [ -d "${overlay}/electron" ]; then
+    rm -rf /app/electron
+    cp -a "${overlay}/electron" /app/electron
+  fi
+  cp -a "${overlay}/package.json" /app/package.json
+}
 
+stopping=0
 shutdown() {
+  stopping=1
   kill -TERM "$APP_PID" 2>/dev/null || true
   wait "$APP_PID" 2>/dev/null || true
   kill "$XVFB_PID" 2>/dev/null || true
 }
 trap shutdown TERM INT
 
-wait "$APP_PID"
-status=$?
-kill "$XVFB_PID" 2>/dev/null || true
-exit "$status"
+# Exit 75 asks for another app process in this same container. Any other exit stops the container.
+while true; do
+  apply_runtime
+  node_modules/.bin/electron electron/main.js "${args[@]}" "$@" &
+  APP_PID=$!
+  status=0
+  wait "$APP_PID" || status=$?
+  if [ "$stopping" -eq 1 ] || [ "$status" -ne 75 ]; then
+    kill "$XVFB_PID" 2>/dev/null || true
+    exit "$status"
+  fi
+  echo "[cerious-aasm] Restarting the app process in place"
+done

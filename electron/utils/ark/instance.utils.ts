@@ -102,6 +102,11 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
   }
 
   const config: InstanceConfig = { ...instance, id };
+  const previous = all.find(inst => inst.id === id);
+  const priorRevision = previous && Number.isFinite(Number(previous.configRevision)) ? Number(previous.configRevision) : 0;
+  // A mesh apply already carries the desired revision. A local edit bumps from whatever is on disk.
+  const incoming = Number(instance.configRevision);
+  config.configRevision = Number.isFinite(incoming) && incoming > priorRevision ? incoming : priorRevision + 1;
   for (const field of RUNTIME_FIELDS) {
     delete config[field];
   }

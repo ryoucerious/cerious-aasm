@@ -30,7 +30,18 @@ export const PERMISSIONS = {
   ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
   ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
   ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
-  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete',
+  NODES_VIEW: 'nodes.view',
+  NODES_ENROLL: 'nodes.enroll',
+  NODES_MANAGE: 'nodes.manage',
+  NODES_REMOVE: 'nodes.remove',
+  SERVERS_MOVE: 'servers.move',
+  CLUSTERS_VIEW: 'clusters.view',
+  CLUSTERS_MANAGE: 'clusters.manage',
+  CLUSTERS_STORAGE_MANAGE: 'clusters.storage.manage',
+  MESH_VIEW: 'mesh.view',
+  MESH_CONFIGURE: 'mesh.configure',
+  MESH_SECURITY_MANAGE: 'mesh.security.manage'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];

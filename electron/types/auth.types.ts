@@ -42,7 +42,19 @@ export const PERMISSIONS = {
   ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
   ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
   ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
-  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete',
+  // Mesh. Start and stop stay on servers.control. These cover membership, placement and clusters.
+  NODES_VIEW: 'nodes.view',
+  NODES_ENROLL: 'nodes.enroll',
+  NODES_MANAGE: 'nodes.manage',
+  NODES_REMOVE: 'nodes.remove',
+  SERVERS_MOVE: 'servers.move',
+  CLUSTERS_VIEW: 'clusters.view',
+  CLUSTERS_MANAGE: 'clusters.manage',
+  CLUSTERS_STORAGE_MANAGE: 'clusters.storage.manage',
+  MESH_VIEW: 'mesh.view',
+  MESH_CONFIGURE: 'mesh.configure',
+  MESH_SECURITY_MANAGE: 'mesh.security.manage'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
@@ -74,7 +86,18 @@ export const PERMISSION_DESCRIPTIONS: Record<Permission, { label: string; group:
   [PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE]: { label: 'Add attendants',         group: 'Accounts', description: 'Add or edit an attendant in your pool.' },
   [PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE]: { label: 'Delete attendants',      group: 'Accounts', description: 'Delete an attendant in your pool.' },
   [PERMISSIONS.ACCOUNTS_VIEWERS_CREATE]:    { label: 'Add viewers',            group: 'Accounts', description: 'Add or edit a viewer in your pool.' },
-  [PERMISSIONS.ACCOUNTS_VIEWERS_DELETE]:    { label: 'Delete viewers',         group: 'Accounts', description: 'Delete a viewer in your pool.' }
+  [PERMISSIONS.ACCOUNTS_VIEWERS_DELETE]:    { label: 'Delete viewers',         group: 'Accounts', description: 'Delete a viewer in your pool.' },
+  [PERMISSIONS.NODES_VIEW]:                 { label: 'View nodes',             group: 'Mesh', description: 'See mesh nodes, health and where each server is hosted.' },
+  [PERMISSIONS.NODES_ENROLL]:               { label: 'Enroll nodes',           group: 'Mesh', description: 'Create an enrollment token so another machine can join.' },
+  [PERMISSIONS.NODES_MANAGE]:               { label: 'Manage nodes',           group: 'Mesh', description: 'Rename a node or put it into maintenance.' },
+  [PERMISSIONS.NODES_REMOVE]:               { label: 'Remove nodes',           group: 'Mesh', description: 'Remove a node and revoke its certificate.' },
+  [PERMISSIONS.SERVERS_MOVE]:               { label: 'Move servers',           group: 'Mesh', description: 'Move a server to another node. Healthy servers never move on their own.' },
+  [PERMISSIONS.CLUSTERS_VIEW]:              { label: 'View clusters',          group: 'Mesh', description: 'See logical ARK clusters and transfer-storage health.' },
+  [PERMISSIONS.CLUSTERS_MANAGE]:            { label: 'Manage clusters',        group: 'Mesh', description: 'Create clusters and choose which servers belong to them.' },
+  [PERMISSIONS.CLUSTERS_STORAGE_MANAGE]:    { label: 'Manage cluster storage', group: 'Mesh', description: 'Set and validate the shared transfer path.' },
+  [PERMISSIONS.MESH_VIEW]:                  { label: 'View mesh',              group: 'Mesh', description: 'See mesh health, leadership and whether the mesh is degraded.' },
+  [PERMISSIONS.MESH_CONFIGURE]:             { label: 'Configure mesh',         group: 'Mesh', description: 'Create or join a mesh, and change mesh settings.' },
+  [PERMISSIONS.MESH_SECURITY_MANAGE]:       { label: 'Manage mesh security',   group: 'Mesh', description: 'Change mesh-wide security settings.' }
 };
 
 export interface Role {
@@ -110,10 +133,12 @@ export interface User {
 export interface AuthenticatedUser extends User {
   roleName: string;
   permissions: Permission[];
+  /** Present for a mesh login. A session older than the account's current version is refused. */
+  securityVersion?: number;
 }
 
 /** What the web server child knows of a client from its session cookie; main re-resolves it. */
-export type SessionUser = Pick<AuthenticatedUser, 'id' | 'username' | 'displayName' | 'roleId' | 'roleName' | 'permissions' | 'active'>;
+export type SessionUser = Pick<AuthenticatedUser, 'id' | 'username' | 'displayName' | 'roleId' | 'roleName' | 'permissions' | 'active' | 'securityVersion'>;
 
 /** The id given to a session from the single login that predates accounts. It acts as Admin. */
 export const LEGACY_ADMIN_ID = 'legacy-admin';
@@ -170,7 +195,8 @@ export const BUILT_IN_ROLES: { id: string; name: string; description: string; pe
       PERMISSIONS.MODS_MANAGE, PERMISSIONS.AUTOMATION_MANAGE,
       PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, PERMISSIONS.ACCOUNTS_MANAGERS_DELETE,
       PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE,
-      PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE
+      PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE,
+      PERMISSIONS.NODES_VIEW, PERMISSIONS.MESH_VIEW, PERMISSIONS.CLUSTERS_VIEW
     ]
   },
   {

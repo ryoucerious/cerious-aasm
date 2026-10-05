@@ -9,6 +9,13 @@ import {
   isAssignableRole, PERMISSIONS
 } from '../types/auth.types';
 import { onRequest } from './handler.utils';
+import { meshWriteBlock } from '../services/mesh/mesh-hooks';
+import { meshService } from '../services/mesh/mesh-service';
+
+function securityPaused(): { success: false; error: string } | null {
+  const error = meshWriteBlock('security-write');
+  return error ? { success: false, error } : null;
+}
 
 /**
  * Accounts: users, roles and the current session's identity.
@@ -48,6 +55,8 @@ onRequest('get-users', (_payload, { sender }) => ({
 }), { onError: message => ({ success: false, error: message, users: [], roles: [] }) });
 
 onRequest('create-user', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { username, password, displayName, roleId, active } = payload;
   const identity = identifySender(sender);
   const kind = callerKind(identity);
@@ -66,11 +75,14 @@ onRequest('create-user', async (payload, { sender, afterReply }) => {
 
   const result = await userDatabaseService.createUser({ username, password, displayName, roleId, active, ownerUserId });
   if (!result.success) return { success: false, error: result.error };
+  await meshService.syncUser(result.data.id);
   afterReply(() => broadcastUsersChanged());
   return { success: true, user: result.data };
 });
 
 onRequest('update-user', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { id } = payload;
   const identity = identifySender(sender);
   const kind = callerKind(identity);
@@ -120,11 +132,14 @@ onRequest('update-user', async (payload, { sender, afterReply }) => {
     ...(ownerUserId !== undefined ? { ownerUserId } : {})
   });
   if (!result.success) return { success: false, error: result.error };
+  await meshService.syncUser(id);
   afterReply(() => broadcastUsersChanged(id));
   return { success: true, user: result.data };
 });
 
 onRequest('delete-user', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { id } = payload;
   const identity = identifySender(sender);
   if (identity.user && identity.user.id === id) {
@@ -153,6 +168,7 @@ onRequest('delete-user', async (payload, { sender, afterReply }) => {
 
   const result = userDatabaseService.deleteUser(id);
   if (!result.success) return { success: false, error: result.error };
+  await meshService.forgetUser(id);
   afterReply(() => broadcastUsersChanged(id));
   return { success: true, id };
 });
@@ -197,18 +213,23 @@ onRequest('get-roles', () => ({
   builtInRoleIds: BUILT_IN_ROLES.map(role => role.id)
 }), { onError: message => ({ success: false, error: message, roles: [], permissions: [] }) });
 
-onRequest('create-role', (payload, { sender, afterReply }) => {
+onRequest('create-role', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { name, description, permissions } = payload;
   const refusal = grantRefusal(identifySender(sender), permissions, []);
   if (refusal) return { success: false, error: refusal };
 
   const result = userDatabaseService.createRole({ name, description, permissions });
   if (!result.success) return { success: false, error: result.error };
+  await meshService.syncRole(result.data.id, result.data.name, result.data.permissions);
   afterReply(() => broadcastUsersChanged());
   return { success: true, role: result.data };
 });
 
-onRequest('update-role', (payload, { sender, afterReply }) => {
+onRequest('update-role', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { id, name, description, permissions } = payload;
   const existing = typeof id === 'string' ? userDatabaseService.getRole(id) : null;
   const refusal = grantRefusal(identifySender(sender), permissions, existing?.permissions ?? []);
@@ -216,29 +237,36 @@ onRequest('update-role', (payload, { sender, afterReply }) => {
 
   const result = userDatabaseService.updateRole({ id, name, description, permissions });
   if (!result.success) return { success: false, error: result.error };
+  await meshService.syncRole(id, result.data.name, result.data.permissions);
   // Everyone holding this role now has different rights, so their sessions must be refreshed.
   afterReply(() => broadcastUsersChanged(undefined, id));
   return { success: true, role: result.data };
 });
 
-onRequest('delete-role', (payload, { sender, afterReply }) => {
+onRequest('delete-role', async (payload, { sender, afterReply }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { id } = payload;
   const refusal = roleDeletionRefusal(identifySender(sender), id);
   if (refusal) return { success: false, error: refusal };
 
   const result = userDatabaseService.deleteRole(id);
   if (!result.success) return { success: false, error: result.error };
+  await meshService.syncRole(id, '', []);
   afterReply(() => broadcastUsersChanged());
   return { success: true, id };
 });
 
 onRequest('change-own-password', async (payload, { sender }) => {
+  const paused = securityPaused();
+  if (paused) return paused;
   const { currentPassword, newPassword } = payload;
   const identity = identifySender(sender);
   if (!identity.user) {
     return { success: false, error: 'The desktop app does not sign in, so there is no password to change here.' };
   }
   const result = await userDatabaseService.changeOwnPassword(identity.user.id, currentPassword, newPassword);
+  if (result.success) await meshService.syncUser(identity.user.id);
   return result.success ? { success: true } : { success: false, error: result.error };
 });
 
