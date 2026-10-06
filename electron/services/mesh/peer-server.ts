@@ -1,8 +1,9 @@
+import * as fs from 'fs';
 import * as https from 'https';
 import * as http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { normalizeSerial } from './certificates';
-import type { CommandResult, ControlCommand } from '../../types/mesh.types';
+import type { CommandResult, ControlCommand, MeshQuery } from '../../types/mesh.types';
 
 export interface JoinRequest {
   token: string;
@@ -34,7 +35,16 @@ export interface PeerHandlers {
   onJoin(body: JoinRequest): Promise<JoinResponse>;
   onCommand(body: ControlCommand): Promise<CommandResult>;
   onHeartbeat(nodeId: string, sentAt: number): void;
-  onCheckpoint?(body: { serverId: string; checksum: string; files: Array<{ rel: string; data: string }> }): Promise<{ checksum: string }>;
+  /** The frames a node that has just subscribed to /v1/events gets first: how things stand now. */
+  onSubscribe?(): unknown[];
+  /** A read-only question about a server this node hosts. */
+  onQuery?(body: { serverId: string; query: MeshQuery; args?: Record<string, unknown> }): Promise<unknown>;
+  /** A move's destination: wipe the staging area for this server. */
+  onCheckpointBegin?(body: { serverId: string }): Promise<void> | void;
+  /** One file of a move, streamed. The request body is the file. */
+  onCheckpointFile?(serverId: string, rel: string, body: NodeJS.ReadableStream): Promise<void>;
+  /** All files sent: check them against the list and return their checksum. */
+  onCheckpointFinish?(body: { serverId: string; rels: string[] }): Promise<{ checksum: string }>;
 }
 
 export interface PeerServer extends https.Server {
@@ -66,10 +76,16 @@ export function startPeerServer(port: number, handlers: PeerHandlers): Promise<P
       socket.close(4001, 'A mesh client certificate is required.');
       return;
     }
+    // Joins the broadcast list only once the certificate is known not to be revoked.
     void handlers.isRevoked(serial).then(revoked => {
-      if (revoked) socket.close(4001, 'This node certificate has been revoked.');
-    });
-    sockets.add(socket);
+      if (revoked) {
+        socket.close(4001, 'This node certificate has been revoked.');
+        return;
+      }
+      if (socket.readyState !== WebSocket.OPEN) return;
+      sockets.add(socket);
+      for (const frame of handlers.onSubscribe?.() || []) socket.send(JSON.stringify(frame));
+    }, () => socket.close(1011, 'Could not check this node certificate.'));
     socket.on('close', () => sockets.delete(socket));
     socket.on('message', raw => {
       try {
@@ -106,16 +122,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
     const serial = peerSerial(req);
     const socket = req.socket as import('tls').TLSSocket;
     if (!serial || !socket.authorized) {
-      send(res, 401, { error: 'A mesh client certificate is required.' });
+      refuse(req, res, 'A mesh client certificate is required.');
       return;
     }
     if (await handlers.isRevoked(serial)) {
-      send(res, 401, { error: 'This node certificate has been revoked.' });
+      refuse(req, res, 'This node certificate has been revoked.');
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/command') {
       const body = await readJson<ControlCommand>(req);
       send(res, 200, await handlers.onCommand(body));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/query' && handlers.onQuery) {
+      send(res, 200, await handlers.onQuery(await readJson<{ serverId: string; query: MeshQuery; args?: Record<string, unknown> }>(req)));
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/heartbeat') {
@@ -124,9 +144,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       send(res, 200, { ok: true, now: Date.now() });
       return;
     }
-    if (req.method === 'POST' && url.pathname === '/v1/checkpoint' && handlers.onCheckpoint) {
-      const body = await readJson<{ serverId: string; checksum: string; files: Array<{ rel: string; data: string }> }>(req);
-      send(res, 200, await handlers.onCheckpoint(body));
+    if (req.method === 'POST' && url.pathname === '/v1/checkpoint/begin' && handlers.onCheckpointBegin) {
+      await handlers.onCheckpointBegin(await readJson<{ serverId: string }>(req));
+      send(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'PUT' && url.pathname === '/v1/checkpoint/file' && handlers.onCheckpointFile) {
+      await handlers.onCheckpointFile(url.searchParams.get('serverId') || '', url.searchParams.get('rel') || '', req);
+      send(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/checkpoint/finish' && handlers.onCheckpointFinish) {
+      send(res, 200, await handlers.onCheckpointFinish(await readJson<{ serverId: string; rels: string[] }>(req)));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/health') {
@@ -137,6 +166,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
   } catch (error) {
     send(res, 400, { error: error instanceof Error ? error.message : 'Bad request' });
   }
+}
+
+/** Answers 401 and discards whatever body the caller is still sending. */
+function refuse(req: http.IncomingMessage, res: http.ServerResponse, error: string): void {
+  req.resume();
+  send(res, 401, { error });
 }
 
 function peerSerial(req: http.IncomingMessage): string | null {
@@ -191,21 +226,91 @@ export function peerRequest(options: {
       key: options.key,
       rejectUnauthorized: !options.insecure,
       headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : undefined
-    }, res => {
-      const chunks: Buffer[] = [];
-      res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let body: unknown = text;
-        try { body = text ? JSON.parse(text) : {}; } catch { /* leave text */ }
-        resolve({ status: res.statusCode || 0, body });
-      });
-    });
+    }, res => readResponse(res, resolve));
     req.on('error', reject);
     if (options.timeoutMs) {
       req.setTimeout(options.timeoutMs, () => req.destroy(new Error('The node did not answer in time.')));
     }
     if (payload) req.write(payload);
     req.end();
+  });
+}
+
+/**
+ * Streams a file to a peer with PUT, over the same mTLS as peerRequest. Memory use does not
+ * grow with the file, so a large world save moves like a small one.
+ */
+export function peerUpload(options: {
+  url: string;
+  file: string;
+  ca?: string;
+  cert?: string;
+  key?: string;
+  timeoutMs?: number;
+}): Promise<{ status: number; body: unknown }> {
+  const target = new URL(options.url);
+  const size = fs.statSync(options.file).size;
+  return new Promise((resolve, reject) => {
+    let answered = false;
+    const req = https.request({
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method: 'PUT',
+      ca: options.ca,
+      cert: options.cert,
+      key: options.key,
+      headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': size }
+    }, res => {
+      answered = true;
+      readResponse(res, resolve);
+    });
+    // A peer that refuses the upload answers before reading it; the broken pipe after that is expected.
+    req.on('error', error => { if (!answered) reject(error); });
+    if (options.timeoutMs) {
+      req.setTimeout(options.timeoutMs, () => req.destroy(new Error('The node did not answer in time.')));
+    }
+    const source = fs.createReadStream(options.file);
+    source.on('error', error => req.destroy(error));
+    source.pipe(req);
+  });
+}
+
+/**
+ * Subscribes to another node's /v1/events with this node's certificate. Frames arrive as parsed
+ * JSON. The caller re-subscribes after onClose; nothing here reconnects on its own.
+ */
+export function subscribeEvents(options: {
+  url: string;
+  ca?: string;
+  cert?: string;
+  key?: string;
+  onEvent(event: unknown): void;
+  onOpen?(): void;
+  onClose?(code: number): void;
+}): { close(): void } {
+  const socket = new WebSocket(options.url, { ca: options.ca, cert: options.cert, key: options.key });
+  socket.on('open', () => options.onOpen?.());
+  socket.on('message', raw => {
+    try {
+      options.onEvent(JSON.parse(raw.toString()));
+    } catch {
+      /* ignore a malformed frame */
+    }
+  });
+  socket.on('close', code => options.onClose?.(code));
+  socket.on('error', () => { /* 'close' follows */ });
+  return { close: () => socket.close() };
+}
+
+function readResponse(res: http.IncomingMessage, resolve: (value: { status: number; body: unknown }) => void): void {
+  const chunks: Buffer[] = [];
+  res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+  res.on('end', () => {
+    const text = Buffer.concat(chunks).toString('utf8');
+    let body: unknown = text;
+    try { body = text ? JSON.parse(text) : {}; } catch { /* leave text */ }
+    resolve({ status: res.statusCode || 0, body });
   });
 }

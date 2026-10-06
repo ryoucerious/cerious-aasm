@@ -92,6 +92,121 @@ Mesh owns desired state, placement, desired configuration revision, and
 ASA cluster membership. Hosting node owns actual PID/container, runtime
 metrics, applied config, and local save/runtime state.
 
+### How desired state is kept
+
+The hosting node writes a server's desired state. A start or stop that
+succeeds there records it afterwards: a local click, Start All or Stop
+All, a force stop, a restart, or a command forwarded from another node.
+Start All and Stop All cover every server the user can see: servers on
+other nodes go to their hosts as one `start-all` or `stop-all` command
+per node, and a node that fails is reported to the user who asked.
+
+The reconciler acts on a change of desired state, once. The first time
+it sees a server placed on its node (after a restart, or a move onto the
+node) it starts one that should be running. It never stops a running
+server on first sight. Between changes it leaves the process alone, so
+crashes, scheduled restarts and updates stay with the local policies.
+
+Without quorum the decision is kept on the hosting node in
+`mesh/desired-intents.json`. It wins over the replicated row there and
+is written when quorum returns. A stop made during a partition holds,
+across a restart of the app too.
+
+### Config saves
+
+A server's config is saved on the node that hosts it. An edit made on
+another node goes there as a `save-config` command, and so does a new
+server placed on another node; Auto-select picks that node before
+anything is saved. No node keeps a copy of a server it does not host.
+Placement changes only through a move, never through a save.
+
+A save on the hosting node during a partition is kept: the config is on
+disk, the server is listed in `mesh/pending-configs.json`, and the mesh
+row is written when quorum returns. Creating a server on another node
+needs quorum.
+
+Each tick the hosting node also records any server whose config on disk
+has a higher `configRevision` than its mesh row, whatever saved it: an
+INI edit, an ownership change, a config import, the cluster flags the
+reconciler wrote. A server imported from a backup is recorded as it is
+created.
+
+Each tick a node sets aside, in `Saved/MeshMoved`, any server directory
+of its own whose server another member hosts. A server whose node has
+left the mesh is kept, since that copy may be the only one.
+
+Auto-select only considers nodes that answered a heartbeat recently and
+can take `save-config`. Each node refreshes its capabilities, version
+and protocol in its own row as it announces itself.
+
+### Servers on other nodes
+
+Every server page works the same whichever node hosts the server.
+
+- **Reads** (state, log, player count, online players, RCON status, an
+  INI file) are `POST /v1/query` to the hosting node. They are not
+  commands: not logged, no quorum, only a reachable host. The host
+  answers only about servers placed on it.
+- **Changes** (an RCON command, connecting or disconnecting RCON, saving
+  an INI file, the operator or assigned manager) are commands: `rcon`,
+  `connect-rcon`, `disconnect-rcon`, `save-ini`, `set-ownership`. They
+  are authorized on the node the user is on, audited, and run once per
+  CommandId on the host. `set-ownership` changes only those two fields.
+  A host refuses a command about a server another node hosts.
+- **Live events** for a server (log lines, state, players, CPU, memory,
+  RCON status) are relayed by its host over `/v1/events`. Each node keeps
+  one subscription to every other member, using its node certificate,
+  and shows an event only when the sender hosts the server it is about.
+  A subscriber joins the broadcast list only after its certificate is
+  known not to be revoked.
+
+Each tick a node notes every server's placement and pool. The permission
+gate uses it for a server with no config on this machine, so pool
+restrictions apply to servers on other nodes; pool-scoped broadcasts use
+it to reach the right accounts.
+
+### Delete and move
+
+Deleting a server removes its mesh row first, then its files. If the
+files cannot be deleted the row is put back. A server hosted elsewhere is
+deleted by its host through a `delete` command. A server whose host has
+been removed from the mesh can only be forgotten.
+
+A move runs as a `move` command on the node hosting the server:
+
+``` text
+Source       SaveWorld → stop → list config + saves → checksum
+             → POST /v1/checkpoint/begin
+             → PUT /v1/checkpoint/file, one streamed request per file
+             → POST /v1/checkpoint/finish
+Destination  stage in Saved/MeshIncoming → check the file list → checksum
+Source       compare checksums → placement write, only if still on source
+             → set its own copy aside in Saved/MeshMoved
+Destination  reconciler sees the placement → promote staged files → start
+```
+
+Files are streamed, so memory use does not grow with the size of the
+world. The checksum is sha256 over each relative path and its bytes, in
+code-point path order, so nodes with different locales agree.
+
+A failure before the placement write leaves the server where it was and
+starts it again if it was running. After the write there is no rollback.
+
+Once an hour each node removes staged files that nothing has written to
+for 2 hours (a move that was abandoned), and copies in `Saved/MeshMoved`
+set aside more than 14 days ago.
+
+### Versions
+
+Mesh protocol 2 adds the `delete`, `move`, `save-config`, `start-all`,
+`stop-all`, `rcon`, `connect-rcon`, `disconnect-rcon`, `save-ini` and
+`set-ownership` commands, `/v1/query`, the live event relay and the
+streamed checkpoint. A node refuses to send one of these to a node whose
+recorded protocol is older and says that node needs an update; start,
+stop, restart and updates still work across versions. A protocol 2 node accepts a protocol 1 node joining
+through it, but a protocol 1 node refuses a newer one, so update the node
+you join through first.
+
 ## Enrollment and transport
 
 Enrollment uses a short-lived one-time token. The joining node generates

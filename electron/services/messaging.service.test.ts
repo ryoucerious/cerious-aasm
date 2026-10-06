@@ -172,6 +172,27 @@ describe('MessagingService', () => {
       expect(observer.recordFromBroadcast).toHaveBeenCalledWith('chan', { foo: 1 });
     });
 
+    it('sendToAll hands each broadcast to the relay tap', () => {
+      const tap = jest.fn();
+      service.broadcastTap = tap;
+
+      service.sendToAll('server-instance-log', { instanceId: 's1', log: 'x' });
+
+      expect(tap).toHaveBeenCalledWith('server-instance-log', { instanceId: 's1', log: 'x' });
+      service.broadcastTap = null;
+    });
+
+    it('still delivers a broadcast when the relay tap throws', () => {
+      const renderer = { send: jest.fn(), on: jest.fn() };
+      service.addWebContents(renderer as never);
+      service.broadcastTap = () => { throw new Error('peer gone'); };
+
+      service.sendToAll('chan', { foo: 1 });
+
+      expect(renderer.send).toHaveBeenCalledWith('chan', { foo: 1 });
+      service.broadcastTap = null;
+    });
+
     it('sendToAllOthers skips the sender', () => {
       const own = { send: jest.fn(), on: jest.fn() };
       const other = { send: jest.fn(), on: jest.fn() };

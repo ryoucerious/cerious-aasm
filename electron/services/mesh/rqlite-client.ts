@@ -46,25 +46,29 @@ export class RqliteClient implements SqlExecutor {
 
   async status(): Promise<ExecutorStatus> {
     const raw = await this.get('/status');
+    // rqlited always sends `store.leader`; with no leader its fields are empty strings.
     const store = (raw.store || {}) as {
       leader?: { node_id?: string; addr?: string };
-      nodes?: Array<{ id?: string; voter?: boolean }>;
-      raft?: { leader?: string };
+      nodes?: Array<{ id?: string; suffrage?: string }>;
     };
     const nodes = store.nodes || [];
-    const voters = nodes.filter(node => node.voter !== false).length || 1;
+    const voters = nodes.filter(node => node.suffrage !== 'nonvoter').length || 1;
     const leaderId = store.leader?.node_id || null;
     return {
       leader: leaderId === this.nodeId,
       voters,
-      hasQuorum: Boolean(store.leader || store.raft?.leader),
+      hasQuorum: Boolean(leaderId),
       leaderNodeId: leaderId
     };
   }
 
-  async ready(): Promise<boolean> {
+  /**
+   * True once rqlited answers. By default it must also see a leader; a node that restarts
+   * cut off from the others never does, so resuming passes requireLeader: false.
+   */
+  async ready(options: { requireLeader?: boolean } = {}): Promise<boolean> {
     try {
-      const response = await this.request('GET', '/readyz');
+      const response = await this.request('GET', options.requireLeader === false ? '/readyz?noleader' : '/readyz');
       return response.status === 200;
     } catch {
       return false;

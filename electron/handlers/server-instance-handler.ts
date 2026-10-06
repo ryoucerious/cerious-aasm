@@ -3,12 +3,9 @@ import { serverInstanceService } from '../services/server-instance/server-instan
 import { getStandardEventCallbacks } from '../services/server-instance/instance-events';
 import { serverLifecycleService } from '../services/server-instance/server-lifecycle.service';
 import { serverMonitoringService } from '../services/server-instance/server-monitoring.service';
-import { serverOperationsService } from '../services/server-instance/server-operations.service';
 import { serverManagementService } from '../services/server-instance/server-management.service';
 import { serverProcessService } from '../services/server-instance/server-process.service';
 import { automationService } from '../services/automation/automation.service';
-import { arkConfigService } from '../services/ark-config.service';
-import { rconService } from '../services/rcon.service';
 import { activityLogService } from '../services/activity-log.service';
 import { identifySender, isDesktopWindow, SenderIdentity } from '../services/auth/permission-gate';
 import { filterInstancesForUser } from '../services/auth/pool-access';
@@ -33,47 +30,64 @@ function visibleTo(identity: SenderIdentity, instances: InstanceConfig[]): Insta
   return identity.isAdmin ? instances : filterInstancesForUser(identity.user, instances);
 }
 
-/** The ids a Start All or Stop All from this sender covers; undefined means every server. */
-function scopeIds(identity: SenderIdentity, instances: InstanceConfig[]): string[] | undefined {
-  return identity.isAdmin ? undefined : visibleTo(identity, instances).map(instance => instance.id);
+/** Who a command sent to another node is recorded as. */
+function actorOf(sender: MessageSender): string {
+  return identifySender(sender).user?.username || 'desktop';
 }
 
-onRequest('get-ini-file', payload => {
+/** The detail a remote command returned, typed for the caller. */
+function detailOf<T>(result: { detail?: unknown }): Partial<T> {
+  return (result.detail && typeof result.detail === 'object' ? result.detail : {}) as Partial<T>;
+}
+
+onRequest('get-ini-file', async payload => {
   const { instanceId, filename } = payload;
-  const content = arkConfigService.readIniFile(instanceId, filename);
+  const remote = await meshService.queryRemote<{ content: string }>(String(instanceId || ''), 'ini', { filename });
+  const content = remote ? remote.content : localRuntime.readIni(instanceId, filename);
   return { success: true, content, instanceId, filename };
 });
 
-onRequest('save-ini-file', async payload => {
+onRequest('save-ini-file', async (payload, { sender }) => {
   const { instanceId, filename, content } = payload;
-  arkConfigService.writeIniFile(instanceId, filename, content);
-
-  // Every start rewrites the INI files from config.json, which would undo the edit without the merge.
-  try {
-    const existing = instanceUtils.getInstance(instanceId);
-    if (existing) {
-      const saved = await instanceUtils.saveInstance({ ...existing, ...arkConfigService.parseIniToConfig(filename, content) });
-      if (saved.error) {
-        console.warn(`[server-instance-handler] Could not merge ${filename} into the instance config: ${saved.error}`);
-      } else {
-        messagingService.sendToAll('server-instance-updated', saved);
-      }
-    }
-  } catch {
-    // Not the error itself: a JSON syntax error quotes config.json, which holds the RCON password.
-    console.warn(`[server-instance-handler] Could not merge ${filename} into the instance config`);
+  const remote = await meshService.forwardIfRemote('save-ini', String(instanceId || ''), actorOf(sender), { filename, content });
+  if (remote) {
+    const saved = detailOf<{ instance: InstanceConfig }>(remote).instance;
+    if (saved) messagingService.sendToAll('server-instance-updated', saved);
+    return remote.success ? { success: true, instanceId, filename } : { success: false, error: remote.error, instanceId, filename };
   }
-
+  const saved = await localRuntime.saveIni(instanceId, filename, content);
+  if (saved) messagingService.sendToAll('server-instance-updated', saved);
   return { success: true, instanceId, filename };
 });
 
-onRequest('start-all-instances', async (_payload, { sender, afterReply }) => {
+/**
+ * What a Start All or Stop All from this sender covers: the visible servers hosted here, the ids
+ * for the local lifecycle (undefined is every local server), and, per other node, the visible
+ * servers that node hosts. A copy kept here of a server another node hosts is left out.
+ */
+async function planAll(identity: SenderIdentity) {
   const { instances } = await serverManagementService.getAllInstances();
+  const visible = visibleTo(identity, await meshService.withMeshServers(instances));
+  const { local, remote } = await meshService.hostsOf(visible.map(instance => instance.id));
+  const hostedHere = new Set(local);
+  const localVisible = visible.filter(instance => hostedHere.has(instance.id));
+  const everyLocal = identity.isAdmin && instances.every(instance => hostedHere.has(instance.id));
+  return { localVisible, onlyIds: everyLocal ? undefined : localVisible.map(instance => instance.id), remote };
+}
+
+/** The reply went out before other nodes answered, so a node that failed is reported separately. */
+function reportHosts(results: Array<{ nodeName: string; result: { success: boolean; error?: string } }>, verb: string, sender: MessageSender): void {
+  for (const { nodeName, result } of results) {
+    if (result.success) continue;
+    const message = `${nodeName} could not ${verb} its servers: ${result.error || 'no reason was given'}`;
+    messagingService.sendToOriginator('notification', { type: 'error', message }, sender);
+  }
+}
+
+onRequest('start-all-instances', async (_payload, { sender, afterReply }) => {
   const identity = identifySender(sender);
-  const onlyIds = scopeIds(identity, instances);
-  const eligible: InstanceConfig[] = visibleTo(identity, instances).filter(
-    (instance: InstanceConfig) => !UP_OR_QUEUED.has(serverProcessService.getNormalizedInstanceState(instance.id))
-  );
+  const { localVisible, onlyIds, remote } = await planAll(identity);
+  const eligible = localVisible.filter(instance => !UP_OR_QUEUED.has(serverProcessService.getNormalizedInstanceState(instance.id)));
 
   // Queued straight away, so get-server-instance-state says so before the staggered start reaches it.
   for (const { id } of eligible) {
@@ -82,23 +96,32 @@ onRequest('start-all-instances', async (_payload, { sender, afterReply }) => {
   }
 
   // Answered before the starts, which are staggered and report through the state callbacks.
-  afterReply(async () => { await serverLifecycleService.startAllInstances(undefined, onlyIds); });
+  afterReply(async () => {
+    const others = meshService.commandHosts('start-all', remote, identity.user?.username || 'desktop')
+      .then(results => reportHosts(results, 'start', sender));
+    const { started } = await serverLifecycleService.startAllInstances(undefined, onlyIds);
+    for (const id of started) await meshService.noteDesired(id, 'running');
+    await others;
+  });
   return { success: true, starting: eligible.map(instance => instance.id) };
 });
 
 onRequest('stop-all-instances', async (_payload, { sender, afterReply }) => {
-  const { instances } = await serverManagementService.getAllInstances();
   const identity = identifySender(sender);
-  const onlyIds = scopeIds(identity, instances);
-  const eligible: InstanceConfig[] = visibleTo(identity, instances).filter(
-    (instance: InstanceConfig) => UP.has(serverProcessService.getNormalizedInstanceState(instance.id))
-  );
+  const { localVisible, onlyIds, remote } = await planAll(identity);
+  const eligible = localVisible.filter(instance => UP.has(serverProcessService.getNormalizedInstanceState(instance.id)));
 
   for (const { id } of eligible) {
     messagingService.sendToAll('server-instance-state', { instanceId: id, state: 'stopping' });
   }
 
-  afterReply(async () => { await serverLifecycleService.stopAllInstances(onlyIds); });
+  afterReply(async () => {
+    const others = meshService.commandHosts('stop-all', remote, identity.user?.username || 'desktop')
+      .then(results => reportHosts(results, 'stop', sender));
+    const { stopped } = await serverLifecycleService.stopAllInstances(onlyIds);
+    for (const id of stopped) await meshService.noteDesired(id, 'stopped');
+    await others;
+  });
   return { success: true, stopping: eligible.map(instance => instance.id) };
 });
 
@@ -108,6 +131,7 @@ onRequest('force-stop-server-instance', async (payload, { sender }) => {
   if (remote) return remote;
   const result = await localRuntime.forceStop(id);
   if (result.success) {
+    await meshService.noteDesired(id, 'stopped');
     messagingService.sendToAll('rcon-status', { instanceId: id, connected: false });
     messagingService.sendToAll('server-instance-log', { log: '[FORCE STOP] Server force stopped', instanceId: id });
     serverMonitoringService.stopPlayerPolling(id);
@@ -137,27 +161,26 @@ onRequest('stop-server-instance', async (payload, { sender }) => {
   return { success: result.success, instanceId: id, error: result.error };
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
 
-onRequest('get-server-instance-state', payload => {
+// A server hosted on another node is read from that node; its live events are relayed here.
+onRequest('get-server-instance-state', async payload => {
   const { id } = payload;
-  return { state: localRuntime.state(id), instanceId: id };
+  const remote = await meshService.queryRemote<{ state: string }>(String(id || ''), 'state');
+  return { state: remote ? remote.state : localRuntime.state(id), instanceId: id };
 }, { onError: (_error, payload) => ({ state: 'unknown', instanceId: payload.id }) });
 
-onRequest('get-server-instance-logs', payload => {
+onRequest('get-server-instance-logs', async payload => {
+  const remote = await meshService.queryRemote<{ log: string }>(String(payload.id || ''), 'logs', { maxLines: payload.maxLines });
+  if (remote) return { log: remote.log, instanceId: payload.id };
   const { log, instanceId } = localRuntime.logs(payload.id, payload.maxLines);
   return { log, instanceId };
 }, { onError: (_error, payload) => ({ log: '', instanceId: payload.id }) });
 
-onRequest('connect-rcon', async (payload, { afterReply }) => {
+onRequest('connect-rcon', async (payload, { sender, afterReply }) => {
   const { id } = payload;
-  const result = await serverOperationsService.connectRcon(id);
-  afterReply(() => {
-    messagingService.sendToAll('rcon-status', { instanceId: id, connected: result.connected || false });
-    if (result.connected) {
-      serverMonitoringService.startPlayerPolling(id, (instanceId, players) => {
-        messagingService.sendToAll('server-instance-players', { instanceId, players });
-      });
-    }
-  });
+  const remote = await meshService.forwardIfRemote('connect-rcon', String(id || ''), actorOf(sender));
+  if (remote) return { success: remote.success, connected: !!detailOf<{ connected: boolean }>(remote).connected, instanceId: id, error: remote.error };
+  const result = await localRuntime.connectRcon(id);
+  afterReply(() => localRuntime.announceRcon(id, result.connected || false));
   return { success: result.success, connected: result.connected, instanceId: result.instanceId, error: result.error };
 }, {
   fallbackError: 'Failed to connect RCON',
@@ -166,27 +189,31 @@ onRequest('connect-rcon', async (payload, { afterReply }) => {
 
 onRequest('get-online-players', async payload => {
   const { id } = payload;
-  const players = await rconService.getOnlinePlayers(id);
+  const remote = await meshService.queryRemote<{ players: unknown[] }>(String(id || ''), 'online-players');
+  const players = remote ? remote.players : await localRuntime.onlinePlayers(id);
   return { success: true, instanceId: id, players };
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
 
-onRequest('disconnect-rcon', async (payload, { afterReply }) => {
+onRequest('disconnect-rcon', async (payload, { sender, afterReply }) => {
   const { id } = payload;
-  const result = await serverOperationsService.disconnectRcon(id);
-  afterReply(() => {
-    messagingService.sendToAll('rcon-status', { instanceId: id, connected: false });
-    serverMonitoringService.stopPlayerPolling(id);
-  });
+  const remote = await meshService.forwardIfRemote('disconnect-rcon', String(id || ''), actorOf(sender));
+  if (remote) return { success: remote.success, connected: false, instanceId: id };
+  const result = await localRuntime.disconnectRcon(id);
+  afterReply(() => localRuntime.announceRconDown(id));
   return { success: result.success, connected: result.connected, instanceId: result.instanceId };
 }, { onError: (_error, payload) => ({ success: false, connected: false, instanceId: payload.id }) });
 
-onRequest('get-rcon-status', payload => {
-  const { success, connected, instanceId } = serverOperationsService.getRconStatus(payload.id);
+onRequest('get-rcon-status', async payload => {
+  const remote = await meshService.queryRemote<{ success: boolean; connected: boolean }>(String(payload.id || ''), 'rcon-status');
+  if (remote) return { success: remote.success, connected: remote.connected, instanceId: payload.id };
+  const { success, connected, instanceId } = localRuntime.rconStatus(payload.id);
   return { success, connected, instanceId };
 }, { onError: (_error, payload) => ({ success: false, connected: false, instanceId: payload.id }) });
 
 // The console shows `response` whatever happened, so failures go there too.
-onRequest('rcon-command', async payload => {
+onRequest('rcon-command', async (payload, { sender }) => {
+  const remote = await meshService.forwardIfRemote('rcon', String(payload.id || ''), actorOf(sender), { command: payload.command });
+  if (remote) return { instanceId: payload.id, response: detailOf<{ response: string }>(remote).response || remote.error || 'No response' };
   const result = await localRuntime.rcon(payload.id, payload.command);
   return { instanceId: result.instanceId, response: result.response || result.error || 'No response' };
 }, {
@@ -214,16 +241,19 @@ onRequest('start-server-instance', async (payload, { sender }) => {
   onError: (error, payload) => ({ success: false, instanceId: payload.id, error })
 });
 
-onRequest('get-server-instance-players', payload => {
-  const { instanceId, players } = serverMonitoringService.getPlayerCount(payload.id);
+onRequest('get-server-instance-players', async payload => {
+  const remote = await meshService.queryRemote<{ players: number }>(String(payload.id || ''), 'players');
+  if (remote) return { instanceId: payload.id, players: remote.players };
+  const { instanceId, players } = localRuntime.players(payload.id);
   return { instanceId, players };
 }, { onError: (_error, payload) => ({ instanceId: payload.id, players: 0 }) });
 
 onRequest('get-server-instances', async (_payload, { sender, afterReply }) => {
   const { instances } = await localRuntime.listInstances();
   const merged = await meshService.withMeshServers(instances);
-  // The broadcast carries the full list, including servers hosted on other machines.
-  afterReply(() => { void serverInstanceService.broadcastInstances(); });
+  // The broadcast carries the full list, including servers hosted on other machines; each web
+  // client receives its own pool's view of it.
+  afterReply(() => messagingService.sendToAll('server-instances', merged));
   return { instances: visibleTo(identifySender(sender), merged) };
 }, { onError: () => ({ instances: [] }) });
 
@@ -235,7 +265,10 @@ onRequest('get-server-instance', async payload => {
 
 onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
   const { instance } = payload;
-  const previous: InstanceConfig | null = instance?.id ? instanceUtils.getInstance(instance.id) : null;
+  // A server hosted on another node has no config here; the mesh holds its last saved one.
+  const previous: InstanceConfig | null = instance?.id
+    ? (await meshService.remoteInstance(String(instance.id))) ?? instanceUtils.getInstance(instance.id)
+    : null;
   const identity = identifySender(sender);
 
   // The channel opens on either permission; which half applies depends on whether the server exists.
@@ -252,15 +285,26 @@ onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
     if (refusal) return { success: false, error: refusal };
   }
 
-  const result = await localRuntime.saveInstance(instance);
+  const isConfig = !!instance && typeof instance === 'object';
+  const elsewhere = isConfig ? await meshService.saveElsewhere(instance, identity.user?.username || 'desktop') : null;
+  let result: { success: boolean; instance?: InstanceConfig; error?: string };
+  if (elsewhere) {
+    result = elsewhere;
+  } else {
+    // Placement is decided above; the config saved here does not carry it.
+    const { nodeId: _placement, ...config } = isConfig ? instance : {};
+    result = await localRuntime.saveInstance(isConfig ? config : instance);
+    if (result.success && result.instance) {
+      try {
+        await meshService.recordServer(result.instance);
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Could not record the server in the mesh.' };
+      }
+    }
+  }
 
   if (result.success && result.instance) {
     const saved: InstanceConfig = result.instance;
-    try {
-      await meshService.recordServer(saved);
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Could not update mesh placement.' };
-    }
     afterReply(() => messagingService.sendToAll('server-instance-updated', saved));
     afterReply(() => serverInstanceService.broadcastInstances());
     afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: describeSave(previous, saved), instanceId: saved.id }, sender));
@@ -275,9 +319,34 @@ function ownershipSaved(channel: string, saved: InstanceConfig, afterReply: (fn:
   return { success: true, instance: saved };
 }
 
+/** A server's config for an ownership change: from disk here, or from the mesh for one hosted elsewhere. */
+async function serverForOwnership(instanceId: unknown): Promise<InstanceConfig | null> {
+  if (typeof instanceId !== 'string') return null;
+  return instanceUtils.getInstance(instanceId) ?? await meshService.remoteInstance(instanceId);
+}
+
+/** Applies an ownership change here, or on the node hosting the server. */
+async function saveOwnership(
+  channel: string,
+  existing: InstanceConfig,
+  patch: { operatorUserId?: string | null; managerUserId?: string | null },
+  sender: MessageSender,
+  afterReply: (fn: () => void | Promise<void>) => void
+) {
+  const remote = await meshService.forwardIfRemote('set-ownership', existing.id, actorOf(sender), patch);
+  if (remote) {
+    const saved = detailOf<{ instance: InstanceConfig }>(remote).instance;
+    if (!remote.success || !saved) return { success: false, error: remote.error || 'That server was not saved.' };
+    return ownershipSaved(channel, saved, afterReply);
+  }
+  const saved = await instanceUtils.saveInstance({ ...existing, ...patch });
+  if (saved.error !== undefined) return { success: false, error: saved.error };
+  return ownershipSaved(channel, saved, afterReply);
+}
+
 onRequest('assign-server-manager', async (payload, { sender, afterReply }) => {
   const { instanceId, managerUserId } = payload;
-  const existing: InstanceConfig | null = typeof instanceId === 'string' ? instanceUtils.getInstance(instanceId) : null;
+  const existing = await serverForOwnership(instanceId);
   if (!existing) return { success: false, error: 'That server was not found.' };
   const identity = identifySender(sender);
   if (!canAssignFor(identity, existing)) return { success: false, error: 'That server is not in your pool.' };
@@ -286,15 +355,13 @@ onRequest('assign-server-manager', async (payload, { sender, afterReply }) => {
   const refusal = assigneeRefusal(assignee, existing.operatorUserId, lookupUser);
   if (refusal) return { success: false, error: refusal };
 
-  const saved = await instanceUtils.saveInstance({ ...existing, managerUserId: assignee });
-  if (saved.error !== undefined) return { success: false, error: saved.error };
-  return ownershipSaved('assign-server-manager', saved, afterReply);
+  return saveOwnership('assign-server-manager', existing, { managerUserId: assignee }, sender, afterReply);
 }, { fallbackError: 'Could not assign that server manager.' });
 
 onRequest('set-server-operator', async (payload, { sender, afterReply }) => {
   const { instanceId } = payload;
   if (!identifySender(sender).isAdmin) return { success: false, error: 'Only an admin can move a server between pools.' };
-  const existing: InstanceConfig | null = typeof instanceId === 'string' ? instanceUtils.getInstance(instanceId) : null;
+  const existing = await serverForOwnership(instanceId);
   if (!existing) return { success: false, error: 'That server was not found.' };
 
   const operatorUserId: string | null = payload.operatorUserId || null;
@@ -304,21 +371,28 @@ onRequest('set-server-operator', async (payload, { sender, afterReply }) => {
   }
   // An assignee from the old pool cannot follow the server into the new one.
   const keepAssignee = !!existing.managerUserId && assigneeRefusal(existing.managerUserId, operatorUserId, lookupUser) === null;
-  const saved = await instanceUtils.saveInstance({ ...existing, operatorUserId, managerUserId: keepAssignee ? existing.managerUserId : null });
-  if (saved.error !== undefined) return { success: false, error: saved.error };
-  return ownershipSaved('set-server-operator', saved, afterReply);
+  const managerUserId = keepAssignee ? (existing.managerUserId ?? null) : null;
+  return saveOwnership('set-server-operator', existing, { operatorUserId, managerUserId }, sender, afterReply);
 }, { fallbackError: 'Could not move that server.' });
 
 onRequest('delete-server-instance', async (payload, { sender, afterReply }) => {
   const { id } = payload;
-  const result = await localRuntime.deleteInstance(id);
+  let result: { success: boolean; error?: string; id?: string };
+  const remote = await forwardRemote('delete', id, sender);
+  if (remote) {
+    result = remote;
+    // An edit or a placement made on this machine can leave a copy of a server hosted elsewhere.
+    if (remote.success && instanceUtils.getInstance(id)) await localRuntime.deleteInstance(id);
+  } else {
+    result = await meshService.deleteHostedServer(id, () => localRuntime.deleteInstance(id));
+  }
 
   if (result.success) {
     afterReply(() => serverInstanceService.broadcastInstances());
     afterReply(() => activityLogService.record('info', 'Server deleted', id, identifySender(sender).user?.username || null));
     afterReply(() => messagingService.sendToAllOthers('notification', { type: 'info', message: 'Server deleted.', instanceId: id }, sender));
   }
-  return { success: result.success, id: result.id };
+  return { success: result.success, id: result.id ?? id, error: result.error };
 }, { onError: (_error, payload) => ({ success: false, id: payload.id }) });
 
 // `fileName` is still sent by clients; it is never used, so it cannot end up in a path.
@@ -333,6 +407,7 @@ onRequest('import-server-from-backup', async (payload, { sender, afterReply }) =
   if (result.success && instance) {
     // Lands in the importer's pool, as a server they created would.
     instance = await stampImportedPool(instance, sender);
+    await meshService.recordServer(instance);
     afterReply(() => serverInstanceService.broadcastInstances());
   }
   return { success: result.success, instance, message: result.message, error: result.error };
@@ -374,10 +449,11 @@ onRequest('restart-server-instance', async (payload, { sender }) => {
   if (!stopped.success) return { success: false, instanceId: id, error: stopped.error };
   const { onLog, onState } = getStandardEventCallbacks(id);
   const started = await localRuntime.start(id, onLog, onState);
+  if (started.started) await meshService.noteDesired(id, 'running');
   return { success: started.started, instanceId: id, error: started.portError };
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
 
-async function forwardRemote(operation: 'start' | 'stop' | 'force-stop' | 'restart', id: string, sender: MessageSender) {
+async function forwardRemote(operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete', id: string, sender: MessageSender) {
   const actor = identifySender(sender).user?.username || 'desktop';
   const remote = await meshService.forwardIfRemote(operation, id, actor);
   if (!remote) return null;

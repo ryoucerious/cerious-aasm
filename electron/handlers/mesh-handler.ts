@@ -108,9 +108,7 @@ onRequest('validate-cluster-storage', async payload => {
 
 onRequest('move-server', async (payload, { sender }) => {
   const actor = identifySender(sender).user?.username || 'desktop';
-  void actor;
-  const result = await meshService.move(String(payload.serverId || payload.id || ''), String(payload.nodeId || ''));
-  return result;
+  return meshService.move(String(payload.serverId || payload.id || ''), String(payload.nodeId || ''), actor);
 });
 
 onRequest('mesh-diagnostics', async () => ({ success: true, ...(await meshService.diagnostics()) }));

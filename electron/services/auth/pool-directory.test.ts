@@ -2,6 +2,7 @@ import { PoolDirectory, poolDirectory, PoolSnapshot } from './pool-directory';
 import { userDatabaseService } from './user-database.service';
 import { getAllInstancesSync } from '../../utils/ark/instance.utils';
 import { notifyInstancesChanged } from '../../utils/ark/instance-changes';
+import { noteMeshServers } from '../mesh/mesh-hooks';
 
 jest.mock('./user-database.service', () => ({ userDatabaseService: { listUsers: jest.fn() } }));
 jest.mock('../../utils/ark/instance.utils', () => ({ getAllInstancesSync: jest.fn() }));
@@ -31,6 +32,35 @@ describe('PoolDirectory', () => {
         { id: 'v1', roleId: 'viewer', ownerUserId: 'op1' }
       ],
       instances: [{ id: 's1', operatorUserId: 'op1', managerUserId: null }, { id: 's2', operatorUserId: null, managerUserId: null }]
+    });
+  });
+
+  describe('in a mesh', () => {
+    afterEach(() => noteMeshServers([]));
+
+    it('includes the servers other nodes host, so their broadcasts reach the right pool', () => {
+      db.listUsers.mockReturnValue([user('op1', 'operator')]);
+      mockInstances.mockReturnValue([{ id: 's1', operatorUserId: 'op1' }]);
+      noteMeshServers([
+        { serverId: 's1', nodeId: 'here', operatorUserId: 'op1', managerUserId: null },
+        { serverId: 'r1', nodeId: 'n2', operatorUserId: 'op1', managerUserId: 'm1' }
+      ]);
+
+      expect(poolDirectory.snapshot().instances).toEqual([
+        { id: 's1', operatorUserId: 'op1', managerUserId: null },
+        { id: 'r1', operatorUserId: 'op1', managerUserId: 'm1' }
+      ]);
+    });
+
+    it('reloads when the servers in the mesh change', () => {
+      db.listUsers.mockReturnValue([user('op1', 'operator')]);
+      mockInstances.mockReturnValue([]);
+      noteMeshServers([{ serverId: 'r1', nodeId: 'n2', operatorUserId: 'op1', managerUserId: null }]);
+      expect(poolDirectory.snapshot().instances.map(instance => instance.operatorUserId)).toEqual(['op1']);
+
+      noteMeshServers([{ serverId: 'r1', nodeId: 'n2', operatorUserId: 'op2', managerUserId: null }]);
+
+      expect(poolDirectory.snapshot().instances.map(instance => instance.operatorUserId)).toEqual(['op2']);
     });
   });
 

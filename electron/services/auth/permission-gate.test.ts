@@ -1,5 +1,5 @@
 import { authorizeChannel, identifySender, isDesktopWindow } from './permission-gate';
-import { noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
+import { noteMeshServers, noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
 import { setMeshDesktopMode } from './desktop-session';
 import type { ApiProcessSender, WebSocketClient } from '../../types/messaging.types';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES } from '../../types/auth.types';
@@ -132,6 +132,29 @@ describe('authorizeChannel pool scope', () => {
   const operator = (permissions: AuthenticatedUser['permissions']) => ({ ...account('operator', permissions), id: 'op-1' });
 
   beforeEach(() => mockGetInstance.mockReset());
+  afterEach(() => noteMeshServers([]));
+
+  it('refuses a call about a server another node hosts outside the pool', () => {
+    mockGetInstance.mockReturnValue(null);
+    noteMeshServers([{ serverId: 's9', nodeId: 'n2', operatorUserId: 'op-2', managerUserId: null }]);
+
+    expect(authorizeChannel('rcon-command', web(operator(['rcon.use'])), { id: 's9' }))
+      .toEqual({ allowed: false, error: 'That server is not in your pool.' });
+  });
+
+  it('allows a call about a server another node hosts inside the pool', () => {
+    mockGetInstance.mockReturnValue(null);
+    noteMeshServers([{ serverId: 's9', nodeId: 'n2', operatorUserId: 'op-1', managerUserId: null }]);
+
+    expect(authorizeChannel('save-ini-file', web(operator(['servers.configure'])), { instanceId: 's9' })).toEqual({ allowed: true });
+  });
+
+  it('checks the pool of a server being moved', () => {
+    mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-2' } as never);
+
+    expect(authorizeChannel('move-server', web(operator(['servers.move'])), { serverId: 's1', nodeId: 'n2' }).allowed).toBe(false);
+  });
+
 
   it('refuses a call about a server outside the caller\'s pool', () => {
     mockGetInstance.mockReturnValue({ id: 's1', operatorUserId: 'op-2' } as never);

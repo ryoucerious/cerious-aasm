@@ -26,6 +26,10 @@ jest.mock('../services/auth/user-database.service', () => ({
 }));
 
 jest.mock('../utils/ark/instance.utils', () => ({ getAllInstances: jest.fn() }));
+// A standalone install: the mesh is off, so these sync calls do nothing.
+jest.mock('../services/mesh/mesh-service', () => ({
+  meshService: { syncUser: jest.fn(async () => undefined), forgetUser: jest.fn(async () => undefined), syncRole: jest.fn(async () => undefined) }
+}));
 
 const mockMessaging = jest.mocked(messagingService);
 const mockGetAllInstances = jest.mocked(getAllInstances);

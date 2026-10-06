@@ -58,6 +58,9 @@ export class MessagingService extends EventEmitter {
    */
   scopeBroadcast: BroadcastScoper | null = null;
 
+  /** Sees every broadcast after it is sent. The mesh relays its servers' live events through it. */
+  broadcastTap: ((channel: string, data: unknown) => void) | null = null;
+
   /** The web server child that relays web clients, or null while it is not running. */
   setApiProcess(child: ChildProcess | null): void {
     this.apiProcess = child;
@@ -271,6 +274,11 @@ export class MessagingService extends EventEmitter {
     this.notifyObserver(observer => observer.recordFromBroadcast(channel, data));
     this.sendToAllRenderers(channel, data);
     this.broadcastToWebClients(channel, data);
+    try {
+      this.broadcastTap?.(channel, data);
+    } catch (error) {
+      console.error('[messaging] The broadcast relay failed:', error);
+    }
   }
 
   /** Send to every renderer and web client except the sender. */

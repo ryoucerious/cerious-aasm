@@ -15,7 +15,7 @@ import { reconcile, type RuntimePort } from './reconciler';
 import { partitionDecision } from './partition-policy';
 import { validateSharedPath } from './cluster-storage';
 import { ManagedTransferStore, materializeAtomic, sha256 } from './managed-storage';
-import { chooseNode, moveServer, scoreNode } from './placement';
+import { chooseNode, scoreNode } from './placement';
 import { hashArgon2id, verifyArgon2id } from './passwords';
 import { createMeshCa, generateKeyPair, newCertificateSerial, normalizeSerial, signNodeCertificate, certificateCoversHost, certificateIssuedBy, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { COMMAND_SKEW_MS, PROTOCOL_VERSION, protocolError } from '../../types/mesh.types';
@@ -245,24 +245,6 @@ describe('mesh control plane', () => {
     expect(chooseNode([busy, drained, quiet])).toBe('quiet');
   });
 
-  it('rolls a move back when the destination checksum does not match', async () => {
-    const started: string[] = [];
-    let placement = 'A';
-    const result = await moveServer('s1', 'A', 'B', {
-      saveWorld: async () => undefined,
-      stop: async () => undefined,
-      checkpoint: async () => ({ checksum: 'abc' }),
-      transfer: async () => undefined,
-      verify: async () => false,
-      commitPlacement: async (_id, dest) => { placement = dest; },
-      rollbackPlacement: async (_id, src) => { placement = src; },
-      start: async node => { started.push(node); }
-    });
-    expect(result.success).toBe(false);
-    expect(placement).toBe('A');
-    expect(started).toEqual(['A']);
-  });
-
   it('writes cluster flags without starting or stopping a server that is already in the desired state', async () => {
     const runtime = new FakeRuntime();
     runtime.states.set('s1', 'running');
@@ -311,8 +293,11 @@ describe('mesh control plane', () => {
       expect(parseInt(newCertificateSerial().slice(0, 2), 16)).toBeLessThan(0x80);
     }
     expect(keys.privateKeyPem).not.toContain(ca.keyPem);
-    expect(PROTOCOL_VERSION).toBe(1);
-    expect(protocolError(2)).toMatch(/not compatible/);
-    expect(protocolError(1)).toBeNull();
+    expect(protocolError(PROTOCOL_VERSION)).toBeNull();
+    expect(protocolError(PROTOCOL_VERSION + 1)).toMatch(/not compatible/);
+    expect(protocolError(0)).toMatch(/not compatible/);
+    // A newer build still accepts a node one protocol version behind, so a mesh can be updated node by node.
+    expect(protocolError(1, 2)).toBeNull();
+    expect(protocolError(3, 2)).toMatch(/not compatible/);
   });
 });

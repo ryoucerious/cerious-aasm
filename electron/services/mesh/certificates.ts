@@ -163,6 +163,11 @@ export function certificateCoversHost(certPem: string, host: string): boolean {
   return altNames.some(name => name.ip === host || (name.value || '').toLowerCase() === want);
 }
 
+/** The serial a peer sees when this certificate is presented, as stored in `nodes.cert_serial`. */
+export function certificateSerial(certPem: string): string {
+  return normalizeSerial(forge().pki.certificateFromPem(certPem).serialNumber);
+}
+
 export function normalizeSerial(serial: string): string {
   return serial.replace(/[^0-9a-fA-F]/g, '').toLowerCase().replace(/^0+/, '') || '0';
 }

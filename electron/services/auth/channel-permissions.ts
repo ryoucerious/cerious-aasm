@@ -188,7 +188,7 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'create-cluster': PERMISSIONS.CLUSTERS_MANAGE,
   'get-clusters': PERMISSIONS.CLUSTERS_VIEW,
   'validate-cluster-storage': PERMISSIONS.CLUSTERS_STORAGE_MANAGE,
-  'move-server': PERMISSIONS.SERVERS_MOVE,
+  'move-server': byServerId(PERMISSIONS.SERVERS_MOVE),
   'suggest-placement': PERMISSIONS.SERVERS_CREATE,
   'mesh-diagnostics': PERMISSIONS.MESH_VIEW,
   'mesh-wireguard': PERMISSIONS.MESH_CONFIGURE,

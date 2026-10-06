@@ -14,6 +14,7 @@ import { identifySender } from '../services/auth/permission-gate';
 import { userDatabaseService } from '../services/auth/user-database.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
+import { meshService } from '../services/mesh/mesh-service';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn(), sendToAllOthers: jest.fn() }
@@ -56,6 +57,21 @@ jest.mock('../services/auth/permission-gate', () => ({
 jest.mock('../utils/ark/instance.utils', () => ({ getInstance: jest.fn(), saveInstance: jest.fn() }));
 jest.mock('../services/auth/user-database.service', () => ({ userDatabaseService: { getUser: jest.fn() } }));
 jest.mock('../utils/ark/ark-server/ark-server-state.utils', () => ({ getNormalizedInstanceState: jest.fn() }));
+// A standalone install unless a test says otherwise: every server is local.
+jest.mock('../services/mesh/mesh-service', () => ({
+  meshService: {
+    forwardIfRemote: jest.fn(async () => null),
+    noteDesired: jest.fn(async () => undefined),
+    withMeshServers: jest.fn(async (instances: unknown[]) => instances),
+    remoteInstance: jest.fn(async () => null),
+    saveElsewhere: jest.fn(async () => null),
+    hostsOf: jest.fn(async (ids: string[]) => ({ local: ids, remote: new Map() })),
+    commandHosts: jest.fn(async () => []),
+    recordServer: jest.fn(async () => undefined),
+    deleteHostedServer: jest.fn(async (_id: string, deleteLocal: () => Promise<unknown>) => deleteLocal()),
+    queryRemote: jest.fn(async () => null)
+  }
+}));
 
 const mockMessaging = jest.mocked(messagingService);
 const mockInstance = jest.mocked(serverInstanceService);
@@ -67,6 +83,7 @@ const mockManagement = jest.mocked(serverManagementService);
 const mockArkConfig = jest.mocked(arkConfigService);
 const mockInstanceUtils = jest.mocked(instanceUtils);
 const mockUsers = jest.mocked(userDatabaseService);
+const mockMesh = jest.mocked(meshService);
 
 const DESKTOP: ReturnType<typeof identifySender> = { user: null, permissions: [], isAdmin: true, isLocalDesktop: true };
 function operatorIdentity(id: string, permissions: string[] = ['servers.view', 'servers.control', 'servers.create', 'servers.configure']): ReturnType<typeof identifySender> {
@@ -246,6 +263,44 @@ describe('server-instance-handler', () => {
       expect(mockLifecycle.startAllInstances).not.toHaveBeenCalled();
     });
 
+    it('starts servers hosted on other nodes through those nodes', async () => {
+      mockMesh.withMeshServers.mockImplementationOnce(async instances => [...instances, { id: 'r1', nodeId: 'n2' }] as never);
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'b', 'c', 'd', 'e'], remote: new Map([['n2', ['r1']]]) });
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockMesh.hostsOf).toHaveBeenCalledWith(['a', 'b', 'c', 'd', 'e', 'r1']);
+      expect(mockMesh.commandHosts).toHaveBeenCalledWith('start-all', new Map([['n2', ['r1']]]), expect.any(String));
+    });
+
+    it('does not start a copy kept here of a server another node hosts', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'c', 'd', 'e'], remote: new Map([['n2', ['b']]]) });
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockProcess.setInstanceState.mock.calls).toEqual([['d', 'queued']]);
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, ['a', 'c', 'd', 'e']);
+    });
+
+    it('tells the requester when another node could not start its servers', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a'], remote: new Map([['n2', ['r1']]]) });
+      mockMesh.commandHosts.mockResolvedValueOnce([{ nodeId: 'n2', nodeName: 'Box', result: { success: false, error: 'That node could not be reached.' } }]);
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(
+        'notification', { type: 'error', message: 'Box could not start its servers: That node could not be reached.' }, sender
+      );
+    });
+
+    it('records the servers that started as meant to be running', async () => {
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: ['b'], failed: ['d'] });
+
+      await request('start-all-instances', { requestId: 'r1' });
+
+      expect(mockMesh.noteDesired.mock.calls).toEqual([['b', 'running']]);
+    });
+
     it('answers a request without a payload', async () => {
       await request('start-all-instances', undefined);
 
@@ -279,10 +334,145 @@ describe('server-instance-handler', () => {
       expect(mockLifecycle.stopAllInstances).not.toHaveBeenCalled();
     });
 
+    it('stops servers hosted on other nodes through those nodes', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'b', 'c', 'd'], remote: new Map([['n2', ['r1']]]) });
+
+      await request('stop-all-instances', { requestId: 'r1' });
+
+      expect(mockMesh.commandHosts).toHaveBeenCalledWith('stop-all', new Map([['n2', ['r1']]]), expect.any(String));
+    });
+
+    it('does not stop a copy kept here of a server another node hosts', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['b', 'c', 'd'], remote: new Map([['n2', ['a']]]) });
+
+      await request('stop-all-instances', { requestId: 'r1' });
+
+      expect(broadcasts('server-instance-state')).toEqual([{ instanceId: 'c', state: 'stopping' }]);
+      expect(mockLifecycle.stopAllInstances).toHaveBeenCalledWith(['b', 'c', 'd']);
+    });
+
+    it('records the servers that stopped as meant to be stopped', async () => {
+      mockLifecycle.stopAllInstances.mockResolvedValue({ stopped: ['a'], failed: ['c'] });
+
+      await request('stop-all-instances', { requestId: 'r1' });
+
+      expect(mockMesh.noteDesired.mock.calls).toEqual([['a', 'stopped']]);
+    });
+
     it('answers a request without a payload', async () => {
       await request('stop-all-instances', undefined);
 
       expect(replies('stop-all-instances')).toEqual([{ success: true, stopping: ['a', 'c'], requestId: undefined }]);
+    });
+  });
+
+  describe('a server hosted on another node', () => {
+    afterEach(() => {
+      mockMesh.queryRemote.mockReset().mockImplementation(async () => null);
+      mockMesh.forwardIfRemote.mockReset().mockImplementation(async () => null);
+    });
+
+    it('reads its state, log, players and RCON status from its host', async () => {
+      mockMesh.queryRemote.mockImplementation(async (_id, query) => ({
+        state: { state: 'running', instanceId: 'a1' },
+        logs: { log: 'Server started', instanceId: 'a1' },
+        players: { players: 3, instanceId: 'a1' },
+        'rcon-status': { success: true, connected: true, instanceId: 'a1' },
+        'online-players': { players: [{ name: 'Ada' }], instanceId: 'a1' },
+        ini: { content: '[ServerSettings]', instanceId: 'a1' }
+      } as Record<string, unknown>)[query] as never);
+
+      await request('get-server-instance-state', { id: 'a1', requestId: 'r1' });
+      await request('get-server-instance-logs', { id: 'a1', maxLines: 200, requestId: 'r2' });
+      await request('get-server-instance-players', { id: 'a1', requestId: 'r3' });
+      await request('get-rcon-status', { id: 'a1', requestId: 'r4' });
+      await request('get-online-players', { id: 'a1', requestId: 'r5' });
+      await request('get-ini-file', { instanceId: 'a1', filename: 'GameUserSettings.ini', requestId: 'r6' });
+
+      expect(replies('get-server-instance-state')).toEqual([{ state: 'running', instanceId: 'a1', requestId: 'r1' }]);
+      expect(replies('get-server-instance-logs')).toEqual([{ log: 'Server started', instanceId: 'a1', requestId: 'r2' }]);
+      expect(replies('get-server-instance-players')).toEqual([{ players: 3, instanceId: 'a1', requestId: 'r3' }]);
+      expect(replies('get-rcon-status')).toEqual([{ success: true, connected: true, instanceId: 'a1', requestId: 'r4' }]);
+      expect(replies('get-online-players')).toEqual([{ success: true, players: [{ name: 'Ada' }], instanceId: 'a1', requestId: 'r5' }]);
+      expect(replies('get-ini-file')).toEqual([{ success: true, content: '[ServerSettings]', instanceId: 'a1', filename: 'GameUserSettings.ini', requestId: 'r6' }]);
+      expect(mockMesh.queryRemote).toHaveBeenCalledWith('a1', 'logs', { maxLines: 200 });
+      expect(mockMesh.queryRemote).toHaveBeenCalledWith('a1', 'ini', { filename: 'GameUserSettings.ini' });
+      expect(mockArkConfig.readIniFile).not.toHaveBeenCalled();
+    });
+
+    it('saves an INI file on its host and shows the merged config here', async () => {
+      const saved = { id: 'a1', name: 'Alpha', sessionName: 'Merged' };
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { instance: saved } });
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'GameUserSettings.ini', content: '[x]', requestId: 'r1' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('save-ini', 'a1', expect.any(String), { filename: 'GameUserSettings.ini', content: '[x]' });
+      expect(mockArkConfig.writeIniFile).not.toHaveBeenCalled();
+      expect(replies('save-ini-file')).toEqual([{ success: true, instanceId: 'a1', filename: 'GameUserSettings.ini', requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+    });
+
+    it('passes on an INI save its host refused', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: false, error: 'That node could not be reached.' });
+
+      await request('save-ini-file', { instanceId: 'a1', filename: 'Game.ini', content: '[x]', requestId: 'r1' });
+
+      expect(replies('save-ini-file')).toEqual([{ success: false, error: 'That node could not be reached.', instanceId: 'a1', filename: 'Game.ini', requestId: 'r1' }]);
+    });
+
+    it('sends RCON commands to its host and shows the answer', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { response: 'No Players Connected' } });
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: false, error: 'RCON is not connected' });
+
+      await request('rcon-command', { id: 'a1', command: 'ListPlayers', requestId: 'r1' });
+      await request('rcon-command', { id: 'a1', command: 'ListPlayers', requestId: 'r2' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('rcon', 'a1', expect.any(String), { command: 'ListPlayers' });
+      expect(replies('rcon-command')).toEqual([
+        { instanceId: 'a1', response: 'No Players Connected', requestId: 'r1' },
+        { instanceId: 'a1', response: 'RCON is not connected', requestId: 'r2' }
+      ]);
+      expect(mockOperations.executeRconCommand).not.toHaveBeenCalled();
+    });
+
+    it('connects and disconnects RCON on its host', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { connected: true } });
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { connected: false } });
+
+      await request('connect-rcon', { id: 'a1', requestId: 'r1' });
+      await request('disconnect-rcon', { id: 'a1', requestId: 'r2' });
+
+      expect(replies('connect-rcon')).toEqual([{ success: true, connected: true, instanceId: 'a1', requestId: 'r1' }]);
+      expect(replies('disconnect-rcon')).toEqual([{ success: true, connected: false, instanceId: 'a1', requestId: 'r2' }]);
+      expect(mockOperations.connectRcon).not.toHaveBeenCalled();
+      expect(mockOperations.disconnectRcon).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restart-server-instance', () => {
+    beforeEach(() => {
+      jest.mocked(getStandardEventCallbacks).mockReturnValue({ onLog: jest.fn(), onState: jest.fn() });
+    });
+
+    it('stops, starts, and records the server as meant to be running', async () => {
+      mockLifecycle.stopServerInstance.mockResolvedValue({ success: true, instanceId: 'a1' });
+      mockInstance.startServerInstance.mockResolvedValue({ started: true, instanceName: 'Alpha' });
+
+      await request('restart-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.startServerInstance).toHaveBeenCalledWith('a1', expect.any(Function), expect.any(Function));
+      expect(replies('restart-server-instance')).toEqual([{ success: true, instanceId: 'a1', requestId: 'r1' }]);
+      expect(mockMesh.noteDesired.mock.calls).toEqual([['a1', 'running']]);
+    });
+
+    it('does not start the server when the stop fails', async () => {
+      mockLifecycle.stopServerInstance.mockResolvedValue({ success: false, instanceId: 'a1', error: 'RCON timed out' });
+
+      await request('restart-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.startServerInstance).not.toHaveBeenCalled();
+      expect(mockMesh.noteDesired).not.toHaveBeenCalled();
+      expect(replies('restart-server-instance')).toEqual([{ success: false, instanceId: 'a1', error: 'RCON timed out', requestId: 'r1' }]);
     });
   });
 
@@ -300,6 +490,22 @@ describe('server-instance-handler', () => {
       expect(mockMonitoring.stopPlayerPolling).toHaveBeenCalledWith('a1');
       expect(automationService.setManuallyStopped).toHaveBeenCalledWith('a1', true);
       expect(replies('force-stop-server-instance')).toEqual([{ ...result, requestId: 'r1' }]);
+    });
+
+    it('records a forced stop as meant to be stopped', async () => {
+      mockInstance.forceStopInstance.mockResolvedValue({ success: true, instanceId: 'a1', instanceName: 'Alpha', shouldNotifyAutomation: false });
+
+      await request('force-stop-server-instance', { id: 'a1' });
+
+      expect(mockMesh.noteDesired.mock.calls).toEqual([['a1', 'stopped']]);
+    });
+
+    it('records nothing when the forced stop fails', async () => {
+      mockInstance.forceStopInstance.mockResolvedValue({ success: false, error: 'Invalid instance ID' });
+
+      await request('force-stop-server-instance', { id: '../x' });
+
+      expect(mockMesh.noteDesired).not.toHaveBeenCalled();
     });
 
     it('leaves automation alone when the service does not ask for it', async () => {
@@ -774,6 +980,47 @@ describe('server-instance-handler', () => {
       expect(replyOrder('save-server-instance')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
     });
 
+    it('saves a server hosted on another node there and writes nothing here', async () => {
+      const saved = { id: 'a1', name: 'New', nodeId: 'n2' };
+      mockMesh.remoteInstance.mockResolvedValueOnce({ id: 'a1', name: 'Old', nodeId: 'n2' } as never);
+      mockMesh.saveElsewhere.mockResolvedValueOnce({ success: true, instance: saved as never });
+
+      await request('save-server-instance', { instance: { id: 'a1', name: 'New' }, requestId: 'r1' });
+
+      expect(mockMesh.saveElsewhere).toHaveBeenCalledWith({ id: 'a1', name: 'New' }, expect.any(String));
+      expect(mockManagement.saveInstance).not.toHaveBeenCalled();
+      expect(replies('save-server-instance')).toEqual([{ success: true, instance: saved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+      expect(notices()).toEqual([['notification', { type: 'info', message: 'Server renamed from "Old" to "New".', instanceId: 'a1' }, sender]]);
+    });
+
+    it('passes on a save another node refused', async () => {
+      mockMesh.saveElsewhere.mockResolvedValueOnce({ success: false, error: 'That node could not be reached.' });
+
+      await request('save-server-instance', { instance: { name: 'Fresh', nodeId: 'n2' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'That node could not be reached.', requestId: 'r1' }]);
+      expect(mockMessaging.sendToAll).not.toHaveBeenCalled();
+    });
+
+    it('checks an edit of a server on another node against the configure permission', async () => {
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op1', ['servers.view', 'servers.create']));
+      mockMesh.remoteInstance.mockResolvedValueOnce({ id: 'a1', name: 'Alpha', nodeId: 'n2', operatorUserId: 'op1' } as never);
+
+      await request('save-server-instance', { instance: { id: 'a1', name: 'Renamed' }, requestId: 'r1' });
+
+      expect(replies('save-server-instance')).toEqual([{ success: false, error: 'Your role cannot change server settings.', requestId: 'r1' }]);
+      expect(mockMesh.saveElsewhere).not.toHaveBeenCalled();
+    });
+
+    it('does not write the placement into a config saved here', async () => {
+      mockManagement.saveInstance.mockResolvedValue({ success: true, instance: { id: 'a1', name: 'Alpha' } });
+
+      await request('save-server-instance', { instance: { id: 'a1', name: 'Alpha', nodeId: 'n1' }, requestId: 'r1' });
+
+      expect(mockManagement.saveInstance).toHaveBeenCalledWith({ id: 'a1', name: 'Alpha' });
+    });
+
     it('still tells the others when sending the list fails', async () => {
       const saved = { id: 'a1', name: 'Alpha' };
       mockInstanceUtils.getInstance.mockReturnValue(null);
@@ -848,6 +1095,38 @@ describe('server-instance-handler', () => {
       expect(identifySender).toHaveBeenCalledWith(sender);
       expect(activityLogService.record).toHaveBeenCalledWith('info', 'Server deleted', 'a1', 'jared');
       expect(mockMessaging.sendToAllOthers).toHaveBeenCalledWith('notification', { type: 'info', message: 'Server deleted.', instanceId: 'a1' }, sender);
+    });
+
+    it('deletes a server hosted on another node through that node, then the copy kept here', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true });
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1' } as never);
+      mockInstance.deleteInstance.mockResolvedValue({ success: true, id: 'a1' });
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('delete', 'a1', expect.any(String));
+      expect(mockInstance.deleteInstance).toHaveBeenCalledWith('a1');
+      expect(replies('delete-server-instance')).toEqual([{ success: true, id: 'a1', requestId: 'r1' }]);
+    });
+
+    it('leaves the files here alone when the hosting node refuses the delete', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: false, error: 'That node could not be reached.' });
+      mockInstanceUtils.getInstance.mockReturnValue({ id: 'a1' } as never);
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.deleteInstance).not.toHaveBeenCalled();
+      expect(mockInstance.broadcastInstances).not.toHaveBeenCalled();
+      expect(replies('delete-server-instance')).toEqual([{ success: false, id: 'a1', error: 'That node could not be reached.', requestId: 'r1' }]);
+    });
+
+    it('passes on the mesh refusing to delete a server hosted here', async () => {
+      mockMesh.deleteHostedServer.mockResolvedValueOnce({ success: false, error: 'Mesh is partitioned.' });
+
+      await request('delete-server-instance', { id: 'a1', requestId: 'r1' });
+
+      expect(mockInstance.deleteInstance).not.toHaveBeenCalled();
+      expect(replies('delete-server-instance')).toEqual([{ success: false, id: 'a1', error: 'Mesh is partitioned.', requestId: 'r1' }]);
     });
 
     it('still tells the others when the activity feed fails', async () => {
@@ -1132,6 +1411,52 @@ describe('server-instance-handler', () => {
       mockInstanceUtils.getInstance.mockReturnValue(s1 as never);
       await request('set-server-operator', { instanceId: 's1', operatorUserId: 'm1', requestId: 'r3' });
       expect(replies('set-server-operator')[2]).toEqual({ success: false, error: 'Choose an active operator for this server.', requestId: 'r3' });
+    });
+
+    it('assigns a manager to a server on another node through its host', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockMesh.remoteInstance.mockResolvedValue({ ...s1, nodeId: 'n2' } as never);
+      const saved = { ...s1, managerUserId: 'm1' };
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { instance: saved } });
+
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm1', requestId: 'r1' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('set-ownership', 's1', expect.any(String), { managerUserId: 'm1' });
+      expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+      expect(replies('assign-server-manager')).toEqual([{ success: true, instance: saved, requestId: 'r1' }]);
+      expect(broadcasts('server-instance-updated')).toEqual([saved]);
+    });
+
+    it('checks the pool of a server on another node before assigning', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockMesh.remoteInstance.mockResolvedValue({ ...s1, nodeId: 'n2' } as never);
+      jest.mocked(identifySender).mockReturnValue(operatorIdentity('op2'));
+
+      await request('assign-server-manager', { instanceId: 's1', managerUserId: 'm2', requestId: 'r1' });
+
+      expect(replies('assign-server-manager')).toEqual([{ success: false, error: 'That server is not in your pool.', requestId: 'r1' }]);
+      expect(mockMesh.forwardIfRemote).not.toHaveBeenCalled();
+    });
+
+    it('moves a server on another node between pools through its host', async () => {
+      mockInstanceUtils.getInstance.mockReturnValue(null);
+      mockMesh.remoteInstance.mockResolvedValue({ ...s1, nodeId: 'n2', managerUserId: 'm1' } as never);
+      const moved = { ...s1, operatorUserId: 'op2', managerUserId: null };
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { instance: moved } });
+
+      await request('set-server-operator', { instanceId: 's1', operatorUserId: 'op2', requestId: 'r1' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('set-ownership', 's1', expect.any(String), { operatorUserId: 'op2', managerUserId: null });
+      expect(replies('set-server-operator')).toEqual([{ success: true, instance: moved, requestId: 'r1' }]);
+    });
+
+    it('records an imported server in the mesh', async () => {
+      const imported = { id: 'i1', name: 'Imported' };
+      mockInstance.importServerFromBackup.mockResolvedValue({ success: true, instance: imported, message: 'Imported' });
+
+      await request('import-server-from-backup', { serverName: 'Imported', fileData: 'ZGF0YQ==', requestId: 'r1' });
+
+      expect(mockMesh.recordServer).toHaveBeenCalledWith(imported);
     });
 
     it('stamps an imported server with the importer\'s pool', async () => {

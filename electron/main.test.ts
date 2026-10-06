@@ -45,6 +45,7 @@ jest.mock('./services/application.service', () => ({
 jest.mock('./services/log.service', () => ({ LogService: { clearArkLogFiles: jest.fn() } }));
 jest.mock('./services/ark-update.service', () => ({
   ArkUpdateService: jest.fn(() => ({ initialize: jest.fn(async () => undefined), stop: jest.fn() })),
+  bindArkUpdateService: jest.fn(),
   stopSteamCmdQuery: jest.fn(),
 }));
 jest.mock('./utils/installer.utils', () => ({ releaseInstallLockIfHeld: jest.fn() }));
@@ -87,6 +88,10 @@ jest.mock('./handlers/host-resources-handler', () => ({}));
 jest.mock('./handlers/user-handler', () => ({}));
 jest.mock('./handlers/activity-handler', () => ({}));
 jest.mock('./handlers/player-history-handler', () => ({}));
+jest.mock('./handlers/mesh-handler', () => ({}));
+jest.mock('./services/mesh/mesh-service', () => ({
+  meshService: { resumeIfJoined: jest.fn(async () => undefined), stop: jest.fn(async () => undefined) },
+}));
 
 class FakeWebContents extends EventEmitter {
   readonly send = jest.fn();

@@ -3,7 +3,7 @@ import type { WebContents } from 'electron';
 import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
 import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
 import { meshDesktopIdentity } from './desktop-session';
-import { securityVersionStale } from '../mesh/mesh-hooks';
+import { meshServer, securityVersionStale } from '../mesh/mesh-hooks';
 import { instanceVisibleTo } from './pool-access';
 import { getInstance } from '../../utils/ark/instance.utils';
 
@@ -116,7 +116,8 @@ export function authorizeChannel(channel: string, sender: MessageSender, payload
   const key = instanceKeyForChannel(channel);
   if (key) {
     for (const id of instanceIdsFromPayload(payload, key)) {
-      const instance = getInstance(id);
+      // A server hosted on another node has no config here; the mesh knows its pool.
+      const instance = getInstance(id) ?? meshServer(id);
       if (instance && !instanceVisibleTo(identity.user, instance)) {
         return { allowed: false, error: 'That server is not in your pool.' };
       }

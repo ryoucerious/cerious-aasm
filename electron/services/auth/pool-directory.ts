@@ -2,6 +2,7 @@ import { ROLE_IDS } from '../../types/auth.types';
 import { userDatabaseService } from './user-database.service';
 import { getAllInstancesSync } from '../../utils/ark/instance.utils';
 import { instanceChanges } from '../../utils/ark/instance-changes';
+import { meshServers, onMeshServersChanged } from '../mesh/mesh-hooks';
 import type { PoolInstance, PoolUser } from './pool-access';
 
 /**
@@ -64,15 +65,26 @@ function loadFromDatabase(): PoolSnapshot {
     .filter(user => user.active)
     .map(user => ({ id: user.id, roleId: user.roleId, ownerUserId: user.ownerUserId }));
   const scoped = users.some(user => user.roleId !== ROLE_IDS.ADMIN);
-  const instances = scoped
+  const local = scoped
     ? getAllInstancesSync().map(instance => ({
         id: instance.id as string,
         operatorUserId: instance.operatorUserId ?? null,
         managerUserId: instance.managerUserId ?? null
       }))
     : [];
+  // Servers other nodes host, so their relayed broadcasts reach the right pool.
+  const known = new Set(local.map(instance => instance.id));
+  const remote = scoped
+    ? meshServers().filter(server => !known.has(server.serverId)).map(server => ({
+        id: server.serverId,
+        operatorUserId: server.operatorUserId,
+        managerUserId: server.managerUserId
+      }))
+    : [];
+  const instances = [...local, ...remote];
   return { users, instances, scoped };
 }
 
 export const poolDirectory = new PoolDirectory();
 instanceChanges.on('changed', () => poolDirectory.invalidate());
+onMeshServersChanged(() => poolDirectory.invalidate());

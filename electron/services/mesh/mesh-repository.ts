@@ -1,7 +1,7 @@
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 import type {
-  AuditRecord, ClusterRecord, CommandRecord, CommandResult, MeshRecord, NodeCapabilities,
+  AuditRecord, ClusterRecord, CommandRecord, CommandResult, DesiredState, MeshRecord, NodeCapabilities,
   NodeEndpoints, NodeRecord, RoleRecord, ServerRecord, StorageHealth, StorageProfileRecord, UserRecord
 } from '../../types/mesh.types';
 
@@ -215,6 +215,30 @@ export class MeshRepository {
         server.configJson, server.clusterId, server.operatorUserId, server.managerUserId
       ]
     );
+  }
+
+  /** Only while the server is still placed on `nodeId`; a moved server is left alone. */
+  async setDesiredState(serverId: string, nodeId: string, desiredState: DesiredState): Promise<void> {
+    await this.db.exec(
+      'UPDATE servers SET desired_state = ? WHERE server_id = ? AND node_id = ?',
+      [desiredState, serverId, nodeId]
+    );
+  }
+
+  /**
+   * Moves a server to another node in one write, only if it is still placed on `fromNodeId`.
+   * True when it moved. `desiredState` replaces the stored one when given.
+   */
+  async commitPlacement(serverId: string, fromNodeId: string, toNodeId: string, desiredState?: DesiredState): Promise<boolean> {
+    const changed = await this.db.exec(
+      'UPDATE servers SET node_id = ?, desired_state = COALESCE(?, desired_state) WHERE server_id = ? AND node_id = ?',
+      [toNodeId, desiredState ?? null, serverId, fromNodeId]
+    );
+    return changed === 1;
+  }
+
+  async deleteServer(serverId: string): Promise<void> {
+    await this.db.exec('DELETE FROM servers WHERE server_id = ?', [serverId]);
   }
 
   async listServers(): Promise<ServerRecord[]> {

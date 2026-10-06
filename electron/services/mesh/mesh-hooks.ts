@@ -17,9 +17,50 @@ let auth: MeshAuthApi | null = null;
 let writeBlock: (op: MeshWriteOp) => string | null = () => null;
 const securityVersions = new Map<string, number>();
 
+/** Placement and ownership of every server the mesh knows, as of the last reconcile tick. */
+export interface MeshServerSummary {
+  serverId: string;
+  nodeId: string;
+  operatorUserId: string | null;
+  managerUserId: string | null;
+}
+
+let meshServerList = new Map<string, MeshServerSummary>();
+const meshServerListeners = new Set<() => void>();
+
 export function registerMeshAuth(next: MeshAuthApi | null): void {
   auth = next;
-  if (!next) securityVersions.clear();
+  if (!next) {
+    securityVersions.clear();
+    noteMeshServers([]);
+  }
+}
+
+/**
+ * The permission gate and the broadcast scoping are synchronous; they read servers hosted on
+ * other nodes from here. Listeners hear about a change, not about every tick.
+ */
+export function noteMeshServers(servers: MeshServerSummary[]): void {
+  const next = new Map(servers.map(server => [server.serverId, { ...server }]));
+  const same = next.size === meshServerList.size && [...next].every(([id, server]) => {
+    const before = meshServerList.get(id);
+    return !!before && before.nodeId === server.nodeId && before.operatorUserId === server.operatorUserId
+      && before.managerUserId === server.managerUserId;
+  });
+  meshServerList = next;
+  if (!same) for (const listener of meshServerListeners) listener();
+}
+
+export function meshServer(serverId: string): MeshServerSummary | null {
+  return meshServerList.get(serverId) ?? null;
+}
+
+export function meshServers(): MeshServerSummary[] {
+  return [...meshServerList.values()];
+}
+
+export function onMeshServersChanged(listener: () => void): void {
+  meshServerListeners.add(listener);
 }
 
 /** Current replicated security version. A session issued below this is stale. */

@@ -7,6 +7,9 @@ import { serverOperationsService } from '../server-instance/server-operations.se
 import { serverProcessService } from '../server-instance/server-process.service';
 import { getNormalizedInstanceState } from '../../utils/ark/ark-server/ark-server-state.utils';
 import * as instanceUtils from '../../utils/ark/instance.utils';
+import { arkConfigService } from '../ark-config.service';
+import { messagingService } from '../messaging.service';
+import { rconService } from '../rcon.service';
 
 /**
  * The local game plane. Handlers and the mesh reconciler call this instead of the
@@ -36,6 +39,85 @@ export class LocalRuntime {
 
   stop(id: string) {
     return serverLifecycleService.stopServerInstance(id);
+  }
+
+  /** Start All for these servers on this machine, one after another with the configured delay. */
+  startAll(ids: string[]): Promise<{ started: string[]; failed: string[] }> {
+    return serverLifecycleService.startAllInstances(undefined, ids);
+  }
+
+  stopAll(ids: string[]): Promise<{ stopped: string[]; failed: string[] }> {
+    return serverLifecycleService.stopAllInstances(ids);
+  }
+
+  connectRcon(id: string) {
+    return serverOperationsService.connectRcon(id);
+  }
+
+  /** Tells every client whether RCON is up and, while it is, reports the player count. */
+  announceRcon(id: string, connected: boolean): void {
+    messagingService.sendToAll('rcon-status', { instanceId: id, connected });
+    if (!connected) return;
+    serverMonitoringService.startPlayerPolling(id, (instanceId, players) => {
+      messagingService.sendToAll('server-instance-players', { instanceId, players });
+    });
+  }
+
+  disconnectRcon(id: string) {
+    return serverOperationsService.disconnectRcon(id);
+  }
+
+  announceRconDown(id: string): void {
+    messagingService.sendToAll('rcon-status', { instanceId: id, connected: false });
+    serverMonitoringService.stopPlayerPolling(id);
+  }
+
+  rconStatus(id: string) {
+    return serverOperationsService.getRconStatus(id);
+  }
+
+  players(id: string) {
+    return serverMonitoringService.getPlayerCount(id);
+  }
+
+  onlinePlayers(id: string) {
+    return rconService.getOnlinePlayers(id);
+  }
+
+  readIni(id: string, filename: string): string {
+    return arkConfigService.readIniFile(id, filename);
+  }
+
+  /**
+   * Writes an INI file and merges it into config.json; every start rewrites the INI files from
+   * config.json, which would undo the edit without the merge. Returns the saved config, or null
+   * when the merge could not be made (the INI file is written either way).
+   */
+  async saveIni(id: string, filename: string, content: string): Promise<InstanceConfig | null> {
+    arkConfigService.writeIniFile(id, filename, content);
+    try {
+      const existing = instanceUtils.getInstance(id);
+      if (!existing) return null;
+      const saved = await instanceUtils.saveInstance({ ...existing, ...arkConfigService.parseIniToConfig(filename, content) });
+      if (saved.error) {
+        console.warn(`[local-runtime] Could not merge ${filename} into the instance config: ${saved.error}`);
+        return null;
+      }
+      return saved as InstanceConfig;
+    } catch {
+      // Not the error itself: a JSON syntax error quotes config.json, which holds the RCON password.
+      console.warn(`[local-runtime] Could not merge ${filename} into the instance config`);
+      return null;
+    }
+  }
+
+  /** Sets a few fields of a server's config, keeping the rest as they are on disk. */
+  async patchConfig(id: string, patch: Partial<InstanceConfig>): Promise<{ instance?: InstanceConfig; error?: string }> {
+    const existing = instanceUtils.getInstance(id);
+    if (!existing) return { error: 'That server was not found.' };
+    const saved = await instanceUtils.saveInstance({ ...existing, ...patch });
+    if (saved.error !== undefined) return { error: saved.error };
+    return { instance: saved as InstanceConfig };
   }
 
   forceStop(id: string): Promise<ServerInstanceResult> {

@@ -37,20 +37,26 @@ export function chooseNode(nodes: PlacementInput[]): string | null {
   return best?.id ?? null;
 }
 
+/** The steps of a move, all run on the source node. */
 export interface MoveHooks {
+  isRunning(serverId: string): boolean;
   saveWorld(serverId: string): Promise<void>;
-  stop(nodeId: string, serverId: string): Promise<void>;
+  stop(serverId: string): Promise<void>;
   checkpoint(serverId: string): Promise<{ checksum: string }>;
-  transfer(serverId: string, checksum: string): Promise<void>;
-  verify(serverId: string, checksum: string): Promise<boolean>;
-  commitPlacement(serverId: string, destinationNodeId: string): Promise<void>;
-  rollbackPlacement(serverId: string, sourceNodeId: string): Promise<void>;
-  start(nodeId: string, serverId: string): Promise<void>;
+  /** Sends the checkpoint; resolves with the checksum the destination computed. */
+  transfer(serverId: string, checksum: string): Promise<string>;
+  /** One placement write, only if the server is still placed on the source. Throws otherwise. */
+  commitPlacement(serverId: string, destinationNodeId: string, keepRunning: boolean): Promise<void>;
+  /** Takes the source's copy out of its server list once the destination owns the server. */
+  release(serverId: string): Promise<void>;
+  restart(serverId: string): Promise<void>;
 }
 
 /**
- * Save, checkpoint, checksum, then one placement revision. The destination starts only after
- * that commit. A failed verify rolls the revision back and starts the source again.
+ * Runs on the source node: save and stop, checkpoint, send, compare checksums, then one
+ * placement write. The destination's reconciler starts the server once it sees that write, so
+ * nothing here starts it there. Any failure before the write leaves the placement alone and
+ * starts the server here again if it was running; after the write there is no rollback.
  * The checkpoint is the instance config and saves. It does not include the shared SteamCMD tree
  * or a Proton prefix; the destination recreates the prefix from the instance id.
  */
@@ -59,27 +65,31 @@ export async function moveServer(
   sourceNodeId: string,
   destinationNodeId: string,
   hooks: MoveHooks
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; warning?: string }> {
   if (sourceNodeId === destinationNodeId) {
     return { success: false, error: 'That server is already on this node.' };
   }
-  let committed = false;
+  const running = hooks.isRunning(serverId);
   try {
-    await hooks.saveWorld(serverId);
-    await hooks.stop(sourceNodeId, serverId);
-    const checkpoint = await hooks.checkpoint(serverId);
-    await hooks.transfer(serverId, checkpoint.checksum);
-    const verified = await hooks.verify(serverId, checkpoint.checksum);
-    if (!verified) throw new Error('Destination checksum did not match the checkpoint.');
-    await hooks.commitPlacement(serverId, destinationNodeId);
-    committed = true;
-    await hooks.start(destinationNodeId, serverId);
-    return { success: true };
-  } catch (error) {
-    if (committed) {
-      try { await hooks.rollbackPlacement(serverId, sourceNodeId); } catch { /* best effort */ }
+    if (running) {
+      await hooks.saveWorld(serverId);
+      await hooks.stop(serverId);
     }
-    try { await hooks.start(sourceNodeId, serverId); } catch { /* source may already be up */ }
+    const checkpoint = await hooks.checkpoint(serverId);
+    const received = await hooks.transfer(serverId, checkpoint.checksum);
+    if (received !== checkpoint.checksum) throw new Error('Destination checksum did not match the checkpoint.');
+    await hooks.commitPlacement(serverId, destinationNodeId, running);
+  } catch (error) {
+    if (running) {
+      try { await hooks.restart(serverId); } catch { /* reported by the start itself */ }
+    }
     return { success: false, error: error instanceof Error ? error.message : 'Move failed' };
   }
+  try {
+    await hooks.release(serverId);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown error';
+    return { success: true, warning: `The server moved, but its old files here could not be set aside: ${reason}` };
+  }
+  return { success: true };
 }
