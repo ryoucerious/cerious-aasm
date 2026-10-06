@@ -286,8 +286,25 @@ TLS through as raw TCP; one that ends TLS removes the certificates.
 - **Advertised addresses can differ from listen ports.** A node listens
   on `AASM_PEER_PORT` and `AASM_RAFT_PORT` and tells others to dial
   `AASM_ADVERTISE_PEER_URL` and `AASM_ADVERTISE_RAFT_ADDR` (defaults:
-  `AASM_ADVERTISE_HOST` with those ports). They are read when the node
-  creates or joins a mesh and kept; its certificate covers their hosts.
+  `AASM_ADVERTISE_HOST` with those ports), or an address typed in on
+  Create or Join. They are read when the node creates or joins a mesh
+  and kept; its certificate covers their hosts.
+- **A member can change its address while it stays in the mesh**
+  (Settings → Mesh, Change address; `set-address` command). It is done
+  on the member itself, with quorum:
+  1. Every other member that can be asked TLS-probes the new peer and
+     Raft endpoints and must find this member's certificate (CN = node
+     id) on both. If one cannot, nothing changes and the error names
+     it. A member that cannot be asked at all is skipped and named.
+  2. The member re-signs its certificate for the old and new hosts,
+     presents it (`setSecureContext`), and records the new endpoints
+     and serial. Members keep dialing the old address until they read
+     the new one.
+  3. rqlited restarts under the new `-raft-adv-addr` with `-join`
+     through the other members' Raft addresses, and the leader replaces
+     its record. A member alone rewrites its own membership with
+     `raft/peers.json`. If the database does not list it at the new
+     address in time, it goes back to the old one.
 
 The mesh CA key is in the replicated state, so every member can enroll
 a node. A removed node may still hold it, which the rules above make

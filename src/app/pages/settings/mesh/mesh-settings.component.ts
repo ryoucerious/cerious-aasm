@@ -1,12 +1,26 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
-import { NgIf, NgFor, NgClass } from '@angular/common';
+import { NgIf, NgFor, NgClass, NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { ModalComponent } from '../../../components/modal/modal.component';
-import { MessagingService } from '../../../core/services/messaging/messaging.service';
+import { MESH_ADDRESS_TIMEOUT_MS, MessagingService } from '../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { PERMISSIONS } from '../../../core/models/auth.model';
+
+/** Where other machines reach one: a host, and the TCP ports they dial. */
+interface MeshAddress {
+  host: string;
+  peerPort: number;
+  raftPort: number;
+}
+
+/** An address as it is being typed: the ports are whatever the number boxes hold. */
+interface AddressForm {
+  host: string;
+  peerPort: number | null;
+  raftPort: number | null;
+}
 
 interface MeshNode {
   nodeId: string;
@@ -15,6 +29,7 @@ interface MeshNode {
   maintenance: boolean;
   version: string;
   connected?: boolean;
+  address?: MeshAddress | null;
 }
 
 interface MeshStatus {
@@ -28,7 +43,12 @@ interface MeshStatus {
   nodes: MeshNode[];
   /** In a mesh, not yet back in touch with it after a restart. */
   reconnecting?: boolean;
+  /** Where other machines reach this one, or would if it created or joined a mesh now. */
+  advertise?: MeshAddress;
 }
+
+const DEFAULT_PEER_PORT = 4747;
+const DEFAULT_RAFT_PORT = 4002;
 
 /**
  * Create or join a mesh, and see the nodes that share it.
@@ -37,7 +57,7 @@ interface MeshStatus {
 @Component({
   selector: 'app-mesh-settings',
   standalone: true,
-  imports: [NgIf, NgFor, NgClass, FormsModule, ModalComponent],
+  imports: [NgIf, NgFor, NgClass, NgTemplateOutlet, FormsModule, ModalComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './mesh-settings.component.html',
   styleUrls: ['./mesh-settings.component.scss']
@@ -58,6 +78,13 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   /** The machine whose name is being edited, and the name typed so far. */
   renamingNodeId: string | null = null;
   renameText = '';
+  /** The machine whose address is being changed, and the address typed so far. */
+  addressNodeId: string | null = null;
+  addressForm: AddressForm = { host: '', peerPort: null, raftPort: null };
+  savingAddress = false;
+  /** Create or join at another address than this machine's own, such as a public one. */
+  otherAddress = false;
+  ownAddress: AddressForm = { host: '', peerPort: null, raftPort: null };
   private leavingNode: MeshNode | null = null;
   private statusSub?: Subscription;
 
@@ -92,8 +119,9 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     this.busy = true;
     this.messaging.sendMessage<{ success?: boolean; error?: string }>('create-mesh', {
       name: this.createName,
-      ...(this.needsAdminPassword ? { adminUsername: this.adminUsername, adminPassword: this.adminPassword } : {})
-    }).subscribe({
+      ...(this.needsAdminPassword ? { adminUsername: this.adminUsername, adminPassword: this.adminPassword } : {}),
+      ...this.typedAddress()
+    }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
       next: result => this.finish(result.success ? 'Mesh created.' : (result.error || 'Could not create the mesh.'), result.success),
       error: () => this.finish('Could not create the mesh.', false)
     });
@@ -101,7 +129,11 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
 
   join(): void {
     this.busy = true;
-    this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus }>('join-mesh', { memberUrl: this.memberUrl, token: this.token }).subscribe({
+    this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus }>('join-mesh', {
+      memberUrl: this.memberUrl,
+      token: this.token,
+      ...this.typedAddress()
+    }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
       next: result => {
         if (result.success && result.status) this.apply(result.status);
         this.finish(result.success ? 'Joined the mesh.' : (result.error || 'Could not join.'), result.success);
@@ -252,6 +284,78 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
         this.cdr.markForCheck();
       }
     });
+  }
+
+  /** Where the others reach a machine, in a line. */
+  addressText(address: MeshAddress | null | undefined): string {
+    if (!address) return 'an address it has not reported';
+    return `${address.host}, on TCP ports ${address.peerPort} and ${address.raftPort}`;
+  }
+
+  startAddress(node: MeshNode): void {
+    const current = node.address ?? (node.nodeId === this.status?.nodeId ? this.status?.advertise : null);
+    this.addressNodeId = node.nodeId;
+    this.addressForm = {
+      host: current?.host ?? '',
+      peerPort: current?.peerPort ?? DEFAULT_PEER_PORT,
+      raftPort: current?.raftPort ?? DEFAULT_RAFT_PORT
+    };
+    this.cdr.markForCheck();
+  }
+
+  cancelAddress(): void {
+    this.addressNodeId = null;
+    this.cdr.markForCheck();
+  }
+
+  /** Every other machine checks it can reach this one there first, then the mesh database moves: up to a minute or two. */
+  saveAddress(node: MeshNode): void {
+    this.savingAddress = true;
+    this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus; detail?: { notAsked?: string[] } }>('set-mesh-node-address', {
+      nodeId: node.nodeId,
+      host: this.addressForm.host,
+      peerPort: Number(this.addressForm.peerPort),
+      raftPort: Number(this.addressForm.raftPort)
+    }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
+      next: result => {
+        this.savingAddress = false;
+        if (!result?.success) {
+          this.notification.error(result?.error || 'Could not change that machine\'s address.');
+        } else {
+          this.addressNodeId = null;
+          const notAsked = result.detail?.notAsked || [];
+          this.notification.success(notAsked.length
+            ? `${node.name} has its new address. ${notAsked.join(', ')} could not be asked to check it, and will use it once back.`
+            : `${node.name} has its new address.`);
+        }
+        this.apply(result?.status);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.savingAddress = false;
+        this.notification.error('Could not change that machine\'s address.');
+        this.cdr.markForCheck();
+      }
+    });
+    this.cdr.markForCheck();
+  }
+
+  useOtherAddress(): void {
+    const own = this.status?.advertise;
+    this.ownAddress = { host: own?.host ?? '', peerPort: own?.peerPort ?? DEFAULT_PEER_PORT, raftPort: own?.raftPort ?? DEFAULT_RAFT_PORT };
+    this.otherAddress = true;
+    this.cdr.markForCheck();
+  }
+
+  useOwnAddress(): void {
+    this.otherAddress = false;
+    this.cdr.markForCheck();
+  }
+
+  /** The address typed in for Create or Join, if another than this machine's own was chosen. */
+  private typedAddress(): { address?: { host: string; peerPort: number; raftPort: number } } {
+    if (!this.otherAddress) return {};
+    return { address: { host: this.ownAddress.host, peerPort: Number(this.ownAddress.peerPort), raftPort: Number(this.ownAddress.raftPort) } };
   }
 
   private apply(status: MeshStatus | null | undefined): void {

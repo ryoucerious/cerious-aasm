@@ -25,10 +25,18 @@ describe('ServerHeaderComponent', () => {
     expect(el.querySelector('.server-header-page')?.textContent).toContain('Rates');
   });
 
+  // A move is occasional: it sits under More actions, away from Start, Stop and Force.
   describe('moving to another machine', () => {
-    function moveButton(): HTMLButtonElement | null {
+    const page = (): HTMLElement => fixture.nativeElement as HTMLElement;
+
+    function moreButton(): HTMLButtonElement | null {
       fixture.detectChanges();
-      return fixture.nativeElement.querySelector('.server-header-move');
+      return page().querySelector('.server-header-more');
+    }
+
+    function moveItem(): HTMLButtonElement | null {
+      fixture.detectChanges();
+      return page().querySelector('.server-header-menu .server-header-move');
     }
 
     function stopped(): void {
@@ -36,26 +44,61 @@ describe('ServerHeaderComponent', () => {
       fixture.componentRef.setInput('live', { ...component.live, state: 'stopped' });
     }
 
-    it('offers Move for a server that is off, when it may be moved', () => {
+    it('is under More actions, not beside Start and Stop', () => {
+      stopped();
+      fixture.componentRef.setInput('canMove', true);
+      fixture.detectChanges();
+
+      const controls = Array.from(page().querySelectorAll('.server-header-actions > button')).map(button => button.textContent?.trim());
+      expect(controls.some(label => label?.includes('Move'))).toBeFalse();
+      expect(moveItem()).toBeNull();
+
+      moreButton()!.click();
+
+      expect(moveItem()?.textContent).toContain('Move to another machine');
+    });
+
+    it('moves a server that is off, and closes the menu', () => {
       stopped();
       fixture.componentRef.setInput('canMove', true);
       spyOn(component.moveServer, 'emit');
+      moreButton()!.click();
 
-      moveButton()!.click();
+      moveItem()!.click();
 
       expect(component.moveServer.emit).toHaveBeenCalled();
+      expect(moveItem()).toBeNull();
     });
 
-    it('does not offer it while the server is running', () => {
+    it('says to stop a running server before moving it', () => {
+      fixture.componentRef.setInput('canMove', true);
+      spyOn(component.moveServer, 'emit');
+      moreButton()!.click();
+
+      moveItem()!.click();
+
+      expect(moveItem()!.disabled).toBeTrue();
+      expect(page().querySelector('.server-header-menu')?.textContent).toContain('Stop the server to move it');
+      expect(component.moveServer.emit).not.toHaveBeenCalled();
+    });
+
+    it('closes on Escape, and on a click anywhere else', () => {
+      stopped();
       fixture.componentRef.setInput('canMove', true);
 
-      expect(moveButton()).toBeNull();
+      moreButton()!.click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(moveItem()).toBeNull();
+
+      moreButton()!.click();
+      document.body.click();
+      expect(moveItem()).toBeNull();
     });
 
-    it('does not offer it when the server may not be moved, or there is nowhere to move it', () => {
+    it('is not there when the server may not be moved, or there is nowhere to move it', () => {
       stopped();
 
-      expect(moveButton()).toBeNull();
+      expect(moreButton()).toBeNull();
     });
   });
 

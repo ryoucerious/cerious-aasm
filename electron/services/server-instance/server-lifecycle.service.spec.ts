@@ -23,11 +23,13 @@ jest.mock('./server-process.service', () => ({
 }));
 jest.mock('./instance-events', () => ({ getStandardEventCallbacks: jest.fn() }));
 jest.mock('../../utils/ark/ark-server/ark-server-cleanup.utils', () => ({ waitForProcessSweeps: jest.fn(async () => undefined) }));
+jest.mock('../../utils/ark/instance.utils', () => ({ getAllInstances: jest.fn(async () => []) }));
 
 import * as fs from 'fs';
 import { isTcpPortInUse, isUdpPortInUse } from '../../utils/network.utils';
 import { validateInstanceRuntimeTree } from '../../utils/ark/ark-server/ark-server-paths.utils';
 import { waitForProcessSweeps } from '../../utils/ark/ark-server/ark-server-cleanup.utils';
+import { getAllInstances } from '../../utils/ark/instance.utils';
 import { serverManagementService } from './server-management.service';
 import { serverProcessService } from './server-process.service';
 import { getStandardEventCallbacks } from './instance-events';
@@ -51,6 +53,7 @@ describe('ServerLifecycleService', () => {
     mockProcess.hasActiveProcess.mockReturnValue(false);
     mockProcess.startServerProcess.mockResolvedValue({ success: true, instanceId: 'a1' });
     mockManagement.prepareInstanceConfiguration.mockResolvedValue(undefined);
+    jest.mocked(getAllInstances).mockResolvedValue([]);
     jest.mocked(validateInstanceRuntimeTree).mockReturnValue({ valid: true, missing: [], sharedInstallBroken: false });
   });
 
@@ -219,6 +222,47 @@ describe('ServerLifecycleService', () => {
         expect(mockUdp).toHaveBeenCalledWith(7777, '0.0.0.0');
         expect(mockTcp).toHaveBeenCalledWith(27020, '0.0.0.0');
         expect(mockUdp).toHaveBeenCalledWith(27015, '0.0.0.0');
+      });
+
+      describe('shared with another server on this machine', () => {
+        const other = { id: 'b2', name: 'Beta', gamePort: 7787, queryPort: 27015, rconPort: 27030 };
+
+        beforeEach(() => {
+          jest.mocked(getAllInstances).mockResolvedValue([instance, other]);
+        });
+
+        // A server still starting has not bound its ports yet, so a bind test passes.
+        it.each(['starting', 'running', 'stopping'])('refuses while that server is %s, naming it', async state => {
+          mockProcess.getNormalizedInstanceState.mockImplementation(id => (id === 'b2' ? state : 'stopped'));
+
+          await expect(serverLifecycleService.startServerInstance('a1', instance)).resolves.toEqual({
+            success: false,
+            error: `Query port 27015 is also used by "Beta", which is ${state}. Stop it first, or give this server other ports.`,
+            instanceId: 'a1'
+          });
+          expect(mockProcess.startServerProcess).not.toHaveBeenCalled();
+        });
+
+        it('names the peer port, which is the game port plus one', async () => {
+          jest.mocked(getAllInstances).mockResolvedValue([instance, { id: 'b2', name: 'Beta', gamePort: 7778, queryPort: 27025, rconPort: 27030 }]);
+          mockProcess.getNormalizedInstanceState.mockImplementation(id => (id === 'b2' ? 'running' : 'stopped'));
+
+          const result = await serverLifecycleService.startServerInstance('a1', instance);
+
+          expect(result.error).toMatch(/^Peer port 7778 is also used by "Beta"/);
+        });
+
+        it('does not count the server itself, still marked stopping after its process ended', async () => {
+          mockProcess.getNormalizedInstanceState.mockImplementation(id => (id === 'a1' ? 'stopping' : 'stopped'));
+
+          await expect(serverLifecycleService.startServerInstance('a1', instance)).resolves.toEqual({ success: true, instanceId: 'a1' });
+        });
+
+        it('starts while that server is off', async () => {
+          mockProcess.getNormalizedInstanceState.mockReturnValue('stopped');
+
+          await expect(serverLifecycleService.startServerInstance('a1', instance)).resolves.toEqual({ success: true, instanceId: 'a1' });
+        });
       });
 
       it.each([

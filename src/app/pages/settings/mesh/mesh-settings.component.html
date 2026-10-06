@@ -12,6 +12,25 @@
     <span>{{ status.warning }}</span>
   </div>
 
+  <section class="settings-card mesh-own-address" *ngIf="standalone">
+    <h3 class="settings-card-title">How other machines reach this one</h3>
+    <p class="settings-card-hint" *ngIf="!otherAddress">
+      Other machines will reach this one at <strong>{{ addressText(status.advertise) }}</strong>, the address it has on its own network.
+    </p>
+    <div class="settings-card-actions" *ngIf="!otherAddress">
+      <button type="button" class="btn btn-ghost btn-sm" (click)="useOtherAddress()">Use another address</button>
+    </div>
+    <ng-container *ngIf="otherAddress">
+      <ng-container *ngTemplateOutlet="addressFields; context: { $implicit: ownAddress }"></ng-container>
+      <p class="settings-card-hint">
+        For machines outside this network, use your public IP address or a dynamic DNS name, and forward both TCP ports on your router to this machine.
+      </p>
+      <div class="settings-card-actions">
+        <button type="button" class="btn btn-ghost btn-sm" (click)="useOwnAddress()">Use this machine's own address</button>
+      </div>
+    </ng-container>
+  </section>
+
   <section class="settings-card" *ngIf="standalone">
     <h3 class="settings-card-title">Create a mesh</h3>
     <p class="settings-card-hint">This machine becomes the first member. Other machines join it with an enrollment token.</p>
@@ -80,13 +99,31 @@
               <span *ngIf="node.nodeId === status.nodeId">This machine</span>
               <span>Version {{ node.version || 'unknown' }}</span>
             </p>
+            <p class="mesh-node-meta mesh-node-address" *ngIf="node.address">Reached at {{ addressText(node.address) }}</p>
           </div>
           <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
+        </div>
+        <div class="mesh-address-form" *ngIf="addressNodeId === node.nodeId">
+          <ng-container *ngTemplateOutlet="addressFields; context: { $implicit: addressForm }"></ng-container>
+          <p class="settings-card-hint">
+            For machines outside this network, use a public IP address or a dynamic DNS name, and forward both TCP ports on that machine's router to it.
+            Every other machine checks it can reach {{ node.name }} there before anything changes, then the mesh database moves. This can take a minute.
+          </p>
+          <div class="mesh-address-actions">
+            <button type="button" class="btn btn-primary btn-sm" (click)="saveAddress(node)" [disabled]="savingAddress">
+              {{ savingAddress ? 'Checking every machine can reach it…' : 'Save address' }}
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="cancelAddress()" [disabled]="savingAddress">Cancel</button>
+          </div>
         </div>
         <div class="mesh-node-actions">
           <button type="button" class="btn btn-ghost btn-sm mesh-node-rename" *ngIf="canManageNodes && renamingNodeId !== node.nodeId"
                   (click)="startRename(node)" [disabled]="status.degraded">
             Rename
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" *ngIf="canManageNodes && addressNodeId !== node.nodeId"
+                  (click)="startAddress(node)" [disabled]="status.degraded || savingAddress || !node.connected">
+            Change address
           </button>
           <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'ark')" [disabled]="!canUpdate || !!updatingKey">
             Update ARK
@@ -139,4 +176,23 @@
       <button type="button" class="btn btn-danger" (click)="confirmLeave()">Leave</button>
     </div>
   </app-modal>
+
+  <!-- An address: the host other machines dial, and the outside TCP ports. -->
+  <ng-template #addressFields let-form>
+    <div class="mesh-address-fields">
+      <div class="form-group mesh-address-host-group">
+        <label class="form-control-label">Address</label>
+        <input class="form-control mesh-address-host" [(ngModel)]="form.host" [ngModelOptions]="{ standalone: true }"
+               placeholder="203.0.113.5 or mesh.example.org" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Connection port</label>
+        <input type="number" class="form-control mesh-address-peer" [(ngModel)]="form.peerPort" [ngModelOptions]="{ standalone: true }" min="1" max="65535" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Database port</label>
+        <input type="number" class="form-control mesh-address-raft" [(ngModel)]="form.raftPort" [ngModelOptions]="{ standalone: true }" min="1" max="65535" />
+      </div>
+    </div>
+  </ng-template>
 </div>

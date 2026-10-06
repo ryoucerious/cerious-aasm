@@ -17,7 +17,7 @@ import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
 import { meshDesktopIdentity, setMeshDesktopMode } from '../auth/desktop-session';
 import { isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { knownClusters, rememberClusters } from '../clusters/cluster-registry';
-import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
+import { certificateCoversHost, certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
 jest.mock('../../utils/platform.utils', () => ({
@@ -28,7 +28,7 @@ jest.mock('../../utils/platform.utils', () => ({
 }));
 jest.mock('./rqlite-supervisor', () => ({ RqliteSupervisor: jest.fn() }));
 jest.mock('./rqlite-client', () => ({ RqliteClient: jest.fn() }));
-jest.mock('./peer-server', () => ({ startPeerServer: jest.fn(), peerRequest: jest.fn(), peerUpload: jest.fn(), peerDownload: jest.fn(), subscribeEvents: jest.fn() }));
+jest.mock('./peer-server', () => ({ startPeerServer: jest.fn(), peerRequest: jest.fn(), peerUpload: jest.fn(), peerDownload: jest.fn(), subscribeEvents: jest.fn(), probeTls: jest.fn() }));
 jest.mock('../runtime/local-runtime', () => ({
   localRuntime: {
     listInstances: jest.fn(),
@@ -80,7 +80,7 @@ jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import { RqliteSupervisor } from './rqlite-supervisor';
 import { RqliteClient } from './rqlite-client';
-import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
 import { localRuntime } from '../runtime/local-runtime';
 import { userDatabaseService } from '../auth/user-database.service';
@@ -95,6 +95,8 @@ class FakeRqlite {
   readonly executor: SqliteExecutor;
   /** False for a restarted node whose copy no leader has filled in yet: it has no tables. */
   loaded = true;
+  /** The Raft members, at the addresses the cluster holds for them. */
+  raftMembers: Array<{ id: string; addr: string; voter: boolean }> = [];
   constructor(db: SqliteHandle, readonly view: ExecutorStatus) {
     this.executor = new SqliteExecutor(db, view);
   }
@@ -109,6 +111,7 @@ class FakeRqlite {
   status() { return this.executor.status(); }
   async ready(options: { requireLeader?: boolean } = {}) { return this.view.hasQuorum || options.requireLeader === false; }
   async removeMember() { /* not used here */ }
+  async members() { return this.raftMembers.map(member => ({ ...member })); }
   async backup() { return Buffer.alloc(0); }
 }
 
@@ -146,7 +149,7 @@ describe('MeshService', () => {
     }) as unknown as RqliteSupervisor);
     jest.mocked(RqliteClient).mockImplementation(() => rqlite as unknown as RqliteClient);
     jest.mocked(subscribeEvents).mockImplementation(() => ({ close: jest.fn() }));
-    jest.mocked(startPeerServer).mockResolvedValue({ close: (done?: () => void) => done?.(), broadcast: jest.fn() } as never);
+    jest.mocked(startPeerServer).mockResolvedValue({ close: (done?: () => void) => done?.(), broadcast: jest.fn(), useCertificate: jest.fn() } as never);
     jest.mocked(localRuntime.listInstances).mockResolvedValue({ instances: [] });
     jest.mocked(localRuntime.state).mockReturnValue('stopped');
     jest.mocked(localRuntime.appliedRevision).mockReturnValue(1);
@@ -424,6 +427,21 @@ describe('MeshService', () => {
       expect(abort.cert).toContain('BEGIN CERTIFICATE');
     }, 30_000);
 
+    it('joins at the address typed in, for a machine outside the member\'s network', async () => {
+      await service.joinMesh({ memberUrl: MEMBER, token, address: { host: 'mesh-b.example.org', peerPort: 4747, raftPort: 4002 } });
+
+      const [join] = calls('/v1/join');
+      expect(join.body).toMatchObject({ peerUrl: 'https://mesh-b.example.org:4747', raftAddr: 'mesh-b.example.org:4002' });
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'mesh', 'rqlite-auth.json'), 'utf8')))
+        .toMatchObject({ peerUrl: 'https://mesh-b.example.org:4747', raftAddr: 'mesh-b.example.org:4002' });
+    }, 30_000);
+
+    it('refuses an address that is not one before sending the token', async () => {
+      await expect(service.joinMesh({ memberUrl: MEMBER, token, address: { host: 'not an address', peerPort: 4747, raftPort: 4002 } }))
+        .rejects.toThrow('is not an IPv4 address or a host name');
+      expect(peerRequest).not.toHaveBeenCalled();
+    });
+
     it('keeps a copy of this machine\'s accounts before the mesh\'s replace them', async () => {
       await service.joinMesh({ memberUrl: MEMBER, token });
 
@@ -474,6 +492,17 @@ describe('MeshService', () => {
       expect(supervisorStarts()[0]).toMatchObject({
         raftAddr: 'mesh-a.example.com:14002', raftBind: '0.0.0.0:4002', httpAddr: '127.0.0.1:4001'
       });
+      expect(certificateCoversHost(fs.readFileSync(path.join(root, 'mesh', 'node.crt'), 'utf8'), 'mesh-a.example.com')).toBe(true);
+      expect(startPeerServer).toHaveBeenCalledWith(4747, expect.anything());
+    }, 30_000);
+
+    it('creates a mesh at the address typed in, listening on its own ports', async () => {
+      await service.createMesh({ name: 'Public', address: { host: 'mesh-a.example.com', peerPort: 14747, raftPort: 14002 } });
+
+      expect((await repo.getNode(LOCAL))?.endpoints).toMatchObject({
+        peerUrl: 'https://mesh-a.example.com:14747', raftAddr: 'mesh-a.example.com:14002'
+      });
+      expect(supervisorStarts()[0]).toMatchObject({ raftAddr: 'mesh-a.example.com:14002', raftBind: '0.0.0.0:4002' });
       expect(certificateCoversHost(fs.readFileSync(path.join(root, 'mesh', 'node.crt'), 'utf8'), 'mesh-a.example.com')).toBe(true);
       expect(startPeerServer).toHaveBeenCalledWith(4747, expect.anything());
     }, 30_000);
@@ -2021,6 +2050,198 @@ describe('MeshService', () => {
   });
 
   // A container goes by its container id until someone names it.
+  describe('the address other machines use to reach it', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+    const NEW = { host: 'mesh.example.org', peerPort: 14747, raftPort: 14002 };
+    let supervisor: { start: jest.Mock; stop: jest.Mock };
+    /** Whether the cluster takes this machine back under the address it rejoins with. */
+    let rejoinTaken: boolean;
+    /** What the other machine answers when asked to reach this one at the new address. */
+    let probeAnswer: { status: number; body: unknown } | Error;
+
+    const secretsFile = () => path.join(root, 'mesh', 'rqlite-auth.json');
+    const nodeCert = () => fs.readFileSync(path.join(root, 'mesh', 'node.crt'), 'utf8');
+    const sent = (suffix: string) => jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith(suffix));
+
+    /** Runs the change's waits on the fake clock until it is done. */
+    async function settled<T>(pending: Promise<T>): Promise<T> {
+      let done = false;
+      void pending.then(() => { done = true; }, () => { done = true; });
+      for (let step = 0; step < 400 && !done; step++) await jest.advanceTimersByTimeAsync(500);
+      return pending;
+    }
+
+    beforeEach(async () => {
+      const ca = createMeshCa('mesh');
+      const keys = generateKeyPair();
+      const current = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, LOCAL, ['127.0.0.1']);
+      fs.writeFileSync(path.join(root, 'mesh', 'node.key'), keys.privateKeyPem);
+      fs.writeFileSync(path.join(root, 'mesh', 'node.crt'), current.certPem);
+      fs.writeFileSync(path.join(root, 'mesh', 'ca.crt'), ca.certPem);
+      await repo.saveMesh({ meshId: 'mesh-1', name: 'Test', schemaVersion: 1, securityEpoch: 1, caCert: ca.certPem, caKey: ca.keyPem, createdAt: 1 });
+      await repo.upsertNode(nodeRow(LOCAL, current.serial));
+      await repo.upsertNode({
+        ...nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'),
+        name: 'Basement',
+        endpoints: { peerUrl: 'https://10.0.0.2:4747', raftAddr: '10.0.0.2:4002', httpAddr: '' }
+      });
+      rqlite.raftMembers = [{ id: LOCAL, addr: '127.0.0.1:4002', voter: true }, { id: REMOTE, addr: '10.0.0.2:4002', voter: true }];
+      rejoinTaken = true;
+      probeAnswer = { status: 200, body: { peer: { ok: true }, raft: { ok: true } } };
+      jest.mocked(peerRequest).mockImplementation(async options => {
+        if (options.url.endsWith('/v1/probe-address')) {
+          if (probeAnswer instanceof Error) throw probeAnswer;
+          return probeAnswer;
+        }
+        return { status: 200, body: { success: true } };
+      });
+      supervisor = jest.mocked(RqliteSupervisor).mock.results.at(-1)!.value;
+      // As rqlite does: a member on its own reads peers.json; otherwise the leader replaces the
+      // record of a member that rejoins under a new address.
+      supervisor.start.mockImplementation(async (options: { nodeId: string; raftAddr: string; join?: string; dataDir: string }) => {
+        const peersFile = path.join(options.dataDir, 'raft', 'peers.json');
+        if (fs.existsSync(peersFile)) {
+          rqlite.raftMembers = (JSON.parse(fs.readFileSync(peersFile, 'utf8')) as Array<{ id: string; address: string }>)
+            .map(peer => ({ id: peer.id, addr: peer.address, voter: true }));
+          fs.renameSync(peersFile, path.join(options.dataDir, 'raft', 'peers.info'));
+        } else if (options.join && rejoinTaken) {
+          rqlite.raftMembers = rqlite.raftMembers.map(member => (member.id === options.nodeId ? { ...member, addr: options.raftAddr } : member));
+        }
+      });
+      await service.resumeIfJoined();
+    });
+
+    it('moves to a new address once every other machine has reached it there', async () => {
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result).toMatchObject({ success: true });
+      expect(sent('/v1/probe-address')).toEqual([expect.objectContaining({
+        url: 'https://10.0.0.2:4747/v1/probe-address',
+        body: { peerUrl: 'https://mesh.example.org:14747', raftAddr: 'mesh.example.org:14002' }
+      })]);
+      expect((await repo.getNode(LOCAL))?.endpoints).toMatchObject({ peerUrl: 'https://mesh.example.org:14747', raftAddr: 'mesh.example.org:14002' });
+      expect(JSON.parse(fs.readFileSync(secretsFile(), 'utf8'))).toMatchObject({ peerUrl: 'https://mesh.example.org:14747', raftAddr: 'mesh.example.org:14002' });
+    });
+
+    // The others still dial the old address until they read the new one.
+    it('presents a certificate for the old address and the new, with its serial recorded for every member', async () => {
+      const before = (await repo.getNode(LOCAL))!.certSerial;
+
+      await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(certificateCoversHost(nodeCert(), 'mesh.example.org')).toBe(true);
+      expect(certificateCoversHost(nodeCert(), '127.0.0.1')).toBe(true);
+      const peer = await (jest.mocked(startPeerServer).mock.results[0].value as Promise<{ useCertificate: jest.Mock }>);
+      expect(peer.useCertificate).toHaveBeenCalledWith(nodeCert(), expect.stringContaining('PRIVATE KEY'));
+      const after = (await repo.getNode(LOCAL))!.certSerial;
+      expect(after).not.toBe(before);
+      expect(after).toBe(certificateSerial(nodeCert()));
+    });
+
+    it('rejoins the mesh database under the new address, through the other members', async () => {
+      await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(supervisor.start).toHaveBeenLastCalledWith(expect.objectContaining({ raftAddr: 'mesh.example.org:14002', join: '10.0.0.2:4002' }));
+      expect(rqlite.raftMembers.find(member => member.id === LOCAL)?.addr).toBe('mesh.example.org:14002');
+    });
+
+    it('changes nothing when another machine cannot reach it there, and says which, where and why', async () => {
+      probeAnswer = { status: 200, body: { peer: { ok: false, error: 'Connection refused.' }, raft: { ok: true } } };
+      const starts = supervisor.start.mock.calls.length;
+      const certificate = nodeCert();
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Basement could not reach this machine at mesh.example.org:14747 (Connection refused.)');
+      expect((await repo.getNode(LOCAL))?.endpoints.peerUrl).toBe('https://127.0.0.1:4747');
+      expect(nodeCert()).toBe(certificate);
+      expect(supervisor.start.mock.calls.length).toBe(starts);
+    });
+
+    it('says when another machine is too old to check a new address', async () => {
+      probeAnswer = { status: 404, body: { error: 'Not found' } };
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('Basement runs an older version of Cerious AASM') });
+    });
+
+    it('goes ahead without a machine that cannot be asked at all, and names it', async () => {
+      probeAnswer = new Error('connect ECONNREFUSED 10.0.0.2:4747');
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result).toMatchObject({ success: true, detail: expect.objectContaining({ notAsked: ['Basement'] }) });
+    });
+
+    it('goes back to its old address when the mesh database does not take the new one', async () => {
+      rejoinTaken = false;
+      const secretsBefore = JSON.parse(fs.readFileSync(secretsFile(), 'utf8'));
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('kept its old address') });
+      expect((await repo.getNode(LOCAL))?.endpoints).toMatchObject({ peerUrl: 'https://127.0.0.1:4747', raftAddr: '127.0.0.1:4002' });
+      expect(JSON.parse(fs.readFileSync(secretsFile(), 'utf8'))).toEqual(secretsBefore);
+      expect(supervisor.start).toHaveBeenLastCalledWith(expect.objectContaining({ raftAddr: '127.0.0.1:4002', join: '10.0.0.2:4002' }));
+    });
+
+    it('on its own, rewrites its own membership to the new address', async () => {
+      await repo.upsertNode({ ...(await repo.getNode(REMOTE))!, status: 'removed' });
+      rqlite.raftMembers = [{ id: LOCAL, addr: '127.0.0.1:4002', voter: true }];
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result).toMatchObject({ success: true });
+      expect(sent('/v1/probe-address')).toEqual([]);
+      expect(supervisor.start).toHaveBeenLastCalledWith(expect.objectContaining({ raftAddr: 'mesh.example.org:14002', join: undefined }));
+      expect(rqlite.raftMembers).toEqual([{ id: LOCAL, addr: 'mesh.example.org:14002', voter: true }]);
+    });
+
+    it('needs quorum', async () => {
+      view.hasQuorum = false;
+      view.leaderNodeId = null;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      const result = await settled(service.changeAddress(LOCAL, NEW, 'admin'));
+
+      expect(result.success).toBe(false);
+      expect(sent('/v1/probe-address')).toEqual([]);
+    });
+
+    it('refuses something that is not an address', async () => {
+      await expect(service.changeAddress(LOCAL, { host: 'my mesh', peerPort: 1, raftPort: 2 }, 'admin'))
+        .resolves.toEqual({ success: false, error: '"my mesh" is not an IPv4 address or a host name.' });
+    });
+
+    it('asks another machine to change its own address', async () => {
+      await settled(service.changeAddress(REMOTE, NEW, 'admin'));
+
+      const [command] = sent('/v1/command');
+      expect(command.url).toBe('https://10.0.0.2:4747/v1/command');
+      expect(command.body).toMatchObject({ operation: 'set-address', targetNode: REMOTE, args: NEW });
+    });
+
+    it('answers another machine asking whether it can be reached at a new address, by the certificate found there', async () => {
+      jest.mocked(probeTls).mockImplementation(async ({ port }) => (port === 14747 ? { commonName: REMOTE } : { commonName: LOCAL }));
+      const handlers = jest.mocked(startPeerServer).mock.calls[0][1];
+
+      const answer = await handlers.onProbeAddress!(REMOTE, { peerUrl: 'https://mesh.example.org:14747', raftAddr: 'mesh.example.org:14002' });
+
+      expect(probeTls).toHaveBeenCalledWith(expect.objectContaining({ host: 'mesh.example.org', port: 14747 }));
+      expect(probeTls).toHaveBeenCalledWith(expect.objectContaining({ host: 'mesh.example.org', port: 14002 }));
+      expect(answer).toEqual({ peer: { ok: true }, raft: { ok: false, error: 'Another machine answers there.' } });
+    });
+
+    it('reports where each machine is reached, and the address this one uses', async () => {
+      const status = await service.status();
+
+      expect(status.nodes.find(node => node.nodeId === REMOTE)?.address).toEqual({ host: '10.0.0.2', peerPort: 4747, raftPort: 4002 });
+      expect(status.advertise).toEqual({ host: '127.0.0.1', peerPort: 4747, raftPort: 4002 });
+    });
+  });
+
   describe('naming machines', () => {
     const REMOTE = '22222222-2222-4222-8222-222222222222';
 

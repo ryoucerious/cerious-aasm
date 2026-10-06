@@ -111,21 +111,18 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
     delete config[field];
   }
 
-  // Two servers on one port cannot both run. A new server arrives with the default ports and
-  // takes the next free set; an edit that lands on another server's port is refused.
+  // A new server arrives with the default ports and takes the next free set. Shared ports never
+  // stop a save: two servers on one port can be kept, and only one of them run at a time, which
+  // starting checks. A server moved here from another machine comes with ports a server here
+  // may already use.
   const others = all.filter(inst => inst.id !== id);
-  const conflict = findPortConflict(config, others);
-  if (conflict) {
-    if (all.some(inst => inst.id === id)) {
-      return { error: `${conflict.protocol} port ${conflict.port} is already used by "${conflict.name}".` };
-    }
+  if (!all.some(inst => inst.id === id) && findPortConflict(config, others)) {
     const free = nextFreePortSet(others);
-    if (!free) {
-      return { error: 'Every port set is in use. Free one before adding another server.' };
+    if (free) {
+      config.gamePort = free.gamePort;
+      config.queryPort = free.queryPort;
+      config.rconPort = free.rconPort;
     }
-    config.gamePort = free.gamePort;
-    config.queryPort = free.queryPort;
-    config.rconPort = free.rconPort;
   }
 
   // A new server has no place in the sidebar yet. Give it the next place, and give any

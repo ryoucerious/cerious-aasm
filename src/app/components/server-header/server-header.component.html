@@ -35,8 +35,18 @@
     <button type="button" class="btn btn-ghost" (click)="forceStopServer.emit()" [disabled]="!canForceStop" title="Force stop">
       <span class="material-icons">power_off</span> Force
     </button>
-    <button type="button" class="btn btn-ghost server-header-move" *ngIf="canMoveNow" (click)="moveServer.emit()" title="Move to another machine">
-      <span class="material-icons">drive_file_move</span> Move
-    </button>
+    <!-- Occasional actions, kept apart from the controls used every day. -->
+    <div class="server-header-more-anchor" *ngIf="canMove">
+      <button type="button" class="btn btn-ghost btn-icon-only server-header-more" (click)="toggleMenu($event)"
+              title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuOpen">
+        <span class="material-icons">more_horiz</span>
+      </button>
+      <div class="card-menu server-header-menu" *ngIf="menuOpen" role="menu" (click)="$event.stopPropagation()">
+        <button type="button" class="card-menu-item server-header-move" role="menuitem" [disabled]="!canMoveNow" (click)="onMove()">
+          <span class="material-icons">drive_file_move</span> Move to another machine…
+        </button>
+        <p class="server-header-menu-note" *ngIf="!canMoveNow">Stop the server to move it.</p>
+      </div>
+    </div>
   </div>
 </section>

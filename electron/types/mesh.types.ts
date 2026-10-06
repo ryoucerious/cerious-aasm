@@ -30,7 +30,8 @@ export const COMMAND_PROTOCOL: Record<ControlCommand['operation'], number> = {
   'connect-rcon': 2,
   'disconnect-rcon': 2,
   'save-ini': 2,
-  'set-ownership': 2
+  'set-ownership': 2,
+  'set-address': 2
 };
 
 /** Read-only questions one node asks the node hosting a server. Not commands: never logged, no quorum. */
@@ -77,6 +78,20 @@ export interface NodeRecord {
   resources?: NodeResources | null;
   /** Set when a status snapshot is built: how its copy of each cluster's files stands. Null once stale. */
   clusterSync?: Record<string, ClusterSyncStatus> | null;
+  /** Set when a status snapshot is built: where the others reach it, from its peer URL and Raft address. */
+  address?: MeshAddress | null;
+}
+
+/**
+ * Where other machines reach a member: a host, and the ports they dial. Behind a port forward
+ * the ports can differ from the ones the member listens on.
+ */
+export interface MeshAddress {
+  host: string;
+  /** The peer API: status, commands, moves, cluster files. */
+  peerPort: number;
+  /** The mesh database (Raft). */
+  raftPort: number;
 }
 
 /** How one machine's copy of a cluster's transfer files stands. */
@@ -224,7 +239,7 @@ export interface ControlCommand {
   targetNode: string;
   operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete' | 'move' | 'save-config'
     | 'start-all' | 'stop-all' | 'rcon' | 'connect-rcon' | 'disconnect-rcon' | 'save-ini' | 'set-ownership'
-    | 'update-ark' | 'update-app';
+    | 'update-ark' | 'update-app' | 'set-address';
   serverId: string;
   /** Move only: the node that receives the server. */
   destinationNodeId?: string;
@@ -232,7 +247,7 @@ export interface ControlCommand {
   instance?: Record<string, unknown>;
   /** start-all and stop-all only: the servers on the target node to act on. */
   serverIds?: string[];
-  /** rcon: { command }. save-ini: { filename, content }. set-ownership: { operatorUserId, managerUserId }. */
+  /** rcon: { command }. save-ini: { filename, content }. set-ownership: { operatorUserId, managerUserId }. set-address: a MeshAddress. */
   args?: Record<string, unknown>;
   expiry: number;
   issuedAt: number;
@@ -255,6 +270,8 @@ export interface MeshStatus {
   hasAccounts: boolean;
   /** In a mesh, but not yet back in touch with it after a restart. Not standalone: it must not offer to create or join one. */
   reconnecting?: boolean;
+  /** Where other machines reach this one: as it joined with, or, outside a mesh, as it would advertise. */
+  advertise?: MeshAddress;
   nodes: NodeRecord[];
   clusters: ClusterRecord[];
   storage: StorageProfileRecord[];

@@ -95,3 +95,28 @@
   line-height: 1.4;
   white-space: pre-wrap;
 }
+
+// Address first and widest; the two ports beside it, narrow.
+.mesh-address-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8rem 8rem;
+  gap: 0 0.75rem;
+
+  @media (max-width: 560px) {
+    grid-template-columns: 1fr 1fr;
+
+    .mesh-address-host-group { grid-column: 1 / -1; }
+  }
+}
+
+.mesh-address-form {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-muted-1);
+}
+
+.mesh-address-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}

@@ -561,6 +561,13 @@ $server-card-detail-gap: 0.25rem;
   }
 
   &.danger { color: var(--danger); .material-icons { color: var(--danger); } }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+
+    &:hover { background: none; color: var(--text-primary); }
+  }
 }
 
 // List view: hero becomes a slim left strip, everything else flows in one row
@@ -1099,6 +1106,32 @@ $server-card-detail-gap: 0.25rem;
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+.server-header-more-anchor {
+  position: relative;
+  display: flex;
+}
+
+// As tall as the buttons beside it, just narrower (.btn-icon-only reserves a taller box).
+.server-header-actions .server-header-more {
+  min-width: 0;
+  min-height: 0;
+  padding: 0.4rem 0.55rem;
+}
+
+// The header does not clip, so the menu hangs from its button rather than the viewport.
+.card-menu.server-header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+}
+
+.server-header-menu-note {
+  margin: 0.15rem 0.65rem 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .settings-toolbar {

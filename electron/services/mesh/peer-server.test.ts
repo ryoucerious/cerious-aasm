@@ -9,9 +9,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
+import * as net from 'net';
 import type { AddressInfo } from 'net';
 import { certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
-import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
 
 describe('peer server checkpoint uploads', () => {
   let dir: string;
@@ -32,6 +33,7 @@ describe('peer server checkpoint uploads', () => {
   /** Cluster file contents this node keeps, by sha256. */
   const clusterObjects = new Map<string, string>();
   const onHeartbeat = jest.fn();
+  const onProbeAddress = jest.fn();
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-peer-'));
@@ -55,6 +57,7 @@ describe('peer server checkpoint uploads', () => {
       onJoin: jest.fn(),
       onCommand: jest.fn(),
       onHeartbeat,
+      onProbeAddress,
       onCheckpointBegin: async () => held as never,
       onClusterObject: sha256 => clusterObjects.get(sha256) ?? null,
       onCheckpointFile: async (serverId, rel, body, offset) => {
@@ -298,5 +301,52 @@ describe('peer server checkpoint uploads', () => {
 
     expect(response.status).toBe(401);
     expect(received).toEqual([]);
+  });
+
+  describe('reaching a member at a new address', () => {
+    /** A port nothing listens on. */
+    async function closedPort(): Promise<number> {
+      const probe = net.createServer();
+      await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
+      const free = (probe.address() as AddressInfo).port;
+      await new Promise<void>(resolve => probe.close(() => resolve()));
+      return free;
+    }
+
+    it('lets a member ask whether it can be reached at an address, only ever about itself', async () => {
+      onProbeAddress.mockResolvedValue({ peer: { ok: true }, raft: { ok: true } });
+
+      const response = await peerRequest({
+        url: `https://127.0.0.1:${port}/v1/probe-address`,
+        method: 'POST',
+        body: { nodeId: 'someone-else', peerUrl: 'https://203.0.113.5:4747', raftAddr: '203.0.113.5:4002' },
+        ca: caPem,
+        ...client
+      });
+
+      expect(response).toEqual({ status: 200, body: { peer: { ok: true }, raft: { ok: true } } });
+      expect(onProbeAddress).toHaveBeenCalledWith('client', { peerUrl: 'https://203.0.113.5:4747', raftAddr: '203.0.113.5:4002' });
+    });
+
+    it('names the machine it finds at an address, by its certificate', async () => {
+      await expect(probeTls({ host: '127.0.0.1', port, ca: caPem, ...client })).resolves.toEqual({ commonName: 'server' });
+    });
+
+    it('says why nothing could be reached at an address', async () => {
+      const probe = await probeTls({ host: '127.0.0.1', port: await closedPort(), ca: caPem, ...client, timeoutMs: 3000 });
+
+      expect(probe.commonName).toBeNull();
+      expect(probe.error).toMatch(/refused/i);
+    });
+
+    // Last: the server goes on with the new certificate.
+    it('presents a certificate put in place to the connections that follow', async () => {
+      const keys = generateKeyPair();
+      const next = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, 'server-moved', ['127.0.0.1', '203.0.113.5']);
+
+      server.useCertificate(next.certPem, keys.privateKeyPem);
+
+      await expect(probeTls({ host: '127.0.0.1', port, ca: caPem, ...client })).resolves.toEqual({ commonName: 'server-moved' });
+    });
   });
 });

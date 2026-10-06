@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as https from 'https';
 import * as http from 'http';
+import * as net from 'net';
+import * as tls from 'tls';
 import { WebSocketServer, WebSocket } from 'ws';
 import { normalizeSerial } from './certificates';
 import type { HeldFile } from './checkpoint';
@@ -58,11 +60,25 @@ export interface PeerHandlers {
   onClusterObject?(sha256: string): string | null;
   /** All files sent: check them against the list and return their checksum. */
   onCheckpointFinish?(body: { serverId: string; rels: string[] }): Promise<{ checksum: string }>;
+  /**
+   * A member is about to change the address the others reach it at: can this node reach it
+   * there? `nodeId` is the asking member, from its certificate, so a member only ever asks
+   * about itself.
+   */
+  onProbeAddress?(nodeId: string, body: { peerUrl: string; raftAddr: string }): Promise<AddressProbe>;
+}
+
+/** Whether a member could be reached at an address, on its peer port and on its Raft port. */
+export interface AddressProbe {
+  peer: { ok: boolean; error?: string };
+  raft: { ok: boolean; error?: string };
 }
 
 export interface PeerServer extends https.Server {
   /** Ephemeral status. These frames are not Raft log entries. */
   broadcast(event: unknown): void;
+  /** Presents this certificate to every connection from now on; open ones keep theirs. */
+  useCertificate(certPem: string, keyPem: string): void;
 }
 
 /**
@@ -118,6 +134,9 @@ export function startPeerServer(port: number, handlers: PeerHandlers): Promise<P
     for (const socket of sockets) {
       if (socket.readyState === WebSocket.OPEN) socket.send(payload);
     }
+  };
+  server.useCertificate = (certPem, keyPem) => {
+    server.setSecureContext({ cert: certPem, key: keyPem, ca: handlers.caPem });
   };
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -204,6 +223,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       send(res, 200, await handlers.onCheckpointFinish(await readJson<{ serverId: string; rels: string[] }>(req)));
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/v1/probe-address' && handlers.onProbeAddress) {
+      const body = await readJson<{ peerUrl?: unknown; raftAddr?: unknown }>(req);
+      send(res, 200, await handlers.onProbeAddress(nodeId, { peerUrl: String(body.peerUrl ?? ''), raftAddr: String(body.raftAddr ?? '') }));
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/v1/health') {
       send(res, 200, { ok: true, now: Date.now() });
       return;
@@ -254,6 +278,61 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
   res.end(payload);
+}
+
+/**
+ * Who answers at host:port over TLS: the node id its mesh certificate names, or why nothing
+ * did. The certificate must chain to the mesh CA; its host names are not checked, since this
+ * asks whether a member can be reached at an address it does not yet hold a certificate for.
+ * Works on the peer port and on rqlite's Raft port, which present the same certificate.
+ */
+export function probeTls(options: {
+  host: string;
+  port: number;
+  ca: string;
+  cert: string;
+  key: string;
+  timeoutMs?: number;
+}): Promise<{ commonName: string | null; error?: string }> {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (result: { commonName: string | null; error?: string }): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+    const socket = tls.connect({
+      host: options.host,
+      port: options.port,
+      ca: options.ca,
+      cert: options.cert,
+      key: options.key,
+      // SNI takes a name, not an IP address.
+      servername: net.isIP(options.host) ? undefined : options.host,
+      checkServerIdentity: () => undefined
+    }, () => {
+      const name = socket.getPeerCertificate()?.subject?.CN;
+      finish(socket.authorized && typeof name === 'string' && name
+        ? { commonName: name }
+        : { commonName: null, error: 'It did not present a certificate from this mesh.' });
+    });
+    socket.setTimeout(options.timeoutMs ?? 8000, () => finish({ commonName: null, error: 'Timed out.' }));
+    socket.on('error', error => finish({ commonName: null, error: describeSocketError(error) }));
+  });
+}
+
+function describeSocketError(error: Error & { code?: string }): string {
+  switch (error.code) {
+    case 'ECONNREFUSED': return 'Connection refused.';
+    case 'ETIMEDOUT': return 'Timed out.';
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH': return 'No route to that address.';
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN': return 'That name does not resolve.';
+    case 'ECONNRESET': return 'The connection was reset.';
+    default: return error.message;
+  }
 }
 
 export function peerRequest(options: {

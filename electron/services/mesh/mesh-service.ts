@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ALL_PERMISSIONS, AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
 import {
-  COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ClusterRecord, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
+  COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ClusterRecord, type MeshAddress, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
   type NodeRecord, type NodeResources, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
@@ -40,7 +40,8 @@ import {
 } from './checkpoint';
 import { chooseNode, moveServer, type PlacementInput } from './placement';
 import { partitionDecision } from './partition-policy';
-import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents, type AddressProbe, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
+import { addressFromEndpoints, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
 import { reconcile, type ReconcileMemory } from './reconciler';
 import { DesiredIntents } from './desired-intent';
 import { PendingConfigs } from './pending-configs';
@@ -248,12 +249,13 @@ export class MeshService {
     }
   }
 
-  async createMesh(input: { name: string; adminUsername?: string; adminPassword?: string }): Promise<MeshStatus> {
+  async createMesh(input: { name: string; adminUsername?: string; adminPassword?: string; address?: { host?: unknown; peerPort?: unknown; raftPort?: unknown } }): Promise<MeshStatus> {
     if (this.isEnabled()) return this.status();
+    const address = input.address ? meshAddressOf(input.address) : null;
     const identity = ensureNodeIdentity();
     const ca = createMeshCa(input.name || 'cerious-aasm-mesh');
     const keys = generateKeyPair();
-    const secrets = freshSecrets();
+    const secrets = freshSecrets(address);
     const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, identity.nodeId, advertisedHosts(secrets));
     writeCerts(keys.privateKeyPem, signed.certPem, ca.certPem);
     writeSecrets(secrets);
@@ -290,8 +292,13 @@ export class MeshService {
    * it before the token is sent, and the join itself only trusts that CA: nothing in between
    * (a proxy that ends TLS, an impostor) can read the token or the credentials that come back.
    */
-  async joinMesh(input: { memberUrl: string; token: string; name?: string; adminPassword?: string; adminUsername?: string }): Promise<MeshStatus> {
+  async joinMesh(input: {
+    memberUrl: string; token: string; name?: string; adminPassword?: string; adminUsername?: string;
+    /** Where the others reach this machine, when they cannot reach it at its own address: outside their network, say. */
+    address?: { host?: unknown; peerPort?: unknown; raftPort?: unknown };
+  }): Promise<MeshStatus> {
     if (this.isEnabled()) throw new Error('This node is already in a mesh. Leave it before joining another.');
+    const address = input.address ? meshAddressOf(input.address) : null;
     const [secret, pinned] = String(input.token || '').trim().split('.');
     if (!secret || !pinned) throw new Error('This token does not name the mesh it is for. Create a new token on a member.');
     const memberUrl = input.memberUrl.replace(/\/$/, '');
@@ -313,8 +320,8 @@ export class MeshService {
         token: secret,
         nodeName: identity.name,
         publicKeyPem: keys.publicKeyPem,
-        raftAddr: advertisedRaftAddr(),
-        peerUrl: advertisedPeerUrl(),
+        raftAddr: address ? raftAddrFor(address) : advertisedRaftAddr(),
+        peerUrl: address ? peerUrlFor(address) : advertisedPeerUrl(),
         protocolVersion: PROTOCOL_VERSION,
         nodeId: identity.nodeId
       } satisfies JoinRequest
@@ -328,7 +335,7 @@ export class MeshService {
     const nodeId = joined.nodeId || identity.nodeId;
     writeCerts(keys.privateKeyPem, joined.nodeCert, joined.caCert);
     const secrets: LocalSecrets = {
-      ...freshSecrets(),
+      ...freshSecrets(address),
       httpUser: joined.httpAuthUser,
       httpPass: joined.httpAuthPass
     };
@@ -691,6 +698,223 @@ export class MeshService {
   }
 
   /**
+   * Changes where the other machines reach a member, such as a public address or a dynamic DNS
+   * name for a machine outside their network. The member makes the change itself: this one, or
+   * another asked by command.
+   */
+  async changeAddress(nodeId: string, input: { host?: unknown; peerPort?: unknown; raftPort?: unknown }, actor = 'desktop'): Promise<CommandResult> {
+    let address: MeshAddress;
+    try {
+      address = meshAddressOf(input);
+    } catch (error) {
+      return { success: false, error: messageOf(error) };
+    }
+    if (!this.repo) return { success: false, error: 'Mesh is not enabled.' };
+    const blocked = this.writeBlock('enroll');
+    if (blocked) return { success: false, error: blocked };
+    const target = await this.repo.getNode(nodeId);
+    if (!target || target.status === 'removed') return { success: false, error: 'That machine is not in the mesh.' };
+    const command: ControlCommand = {
+      commandId: randomUUID(),
+      correlationId: randomUUID(),
+      actor,
+      targetNode: nodeId,
+      operation: 'set-address',
+      serverId: nodeId,
+      args: { ...address },
+      expiry: Date.now() + 10 * 60_000,
+      issuedAt: Date.now(),
+      expectedRevision: null
+    };
+    if (nodeId === this.identity()?.nodeId) return this.executeLocalCommand(command);
+    return this.sendCommand(target, command, 5 * 60_000);
+  }
+
+  /** While this machine changes its address: its rqlited restarts under the new one. */
+  private changingAddress = false;
+
+  /**
+   * Moves this machine to a new address without leaving the mesh.
+   *
+   * 1. Every other member that can be asked must reach it there, on both ports, and find its
+   *    certificate; otherwise nothing changes.
+   * 2. A certificate naming the old address and the new is presented, and recorded with the new
+   *    address: members dial the old one until they read the new.
+   * 3. rqlited restarts under the new Raft address. With other members it rejoins through them
+   *    and the leader replaces its record; on its own it rewrites its membership with peers.json.
+   *    If the mesh database does not take it, it goes back to the old address.
+   */
+  private async changeOwnAddress(address: MeshAddress): Promise<CommandResult> {
+    const identity = this.identity();
+    const certs = readCertPaths();
+    const secrets = this.secrets;
+    if (!this.repo || !this.rqlite || !identity?.meshId || !certs || !secrets) return { success: false, error: 'This machine is not in a mesh.' };
+    if (this.changingAddress) return { success: false, error: 'This machine is already changing its address.' };
+    const blocked = this.writeBlock('enroll');
+    if (blocked) return { success: false, error: blocked };
+    const nodeId = identity.nodeId;
+    const peerUrl = peerUrlFor(address);
+    const raftAddr = raftAddrFor(address);
+    if (peerUrl === peerUrlOf(secrets) && raftAddr === raftAddrOf(secrets)) return { success: true, detail: { address, unchanged: true } };
+    this.changingAddress = true;
+    try {
+      const repo = this.repo;
+      const [mesh, row, members] = await Promise.all([repo.getMesh(identity.meshId), repo.getNode(nodeId), this.rqlite.members()]);
+      if (!mesh?.caKey || !row) return { success: false, error: 'This machine\'s record in the mesh was not found.' };
+
+      const probed = await this.probeFromMembers(nodeId, address);
+      if (probed.error) return { success: false, error: probed.error };
+
+      const keyPem = fs.readFileSync(certs.nodeKey, 'utf8');
+      const previousCert = fs.readFileSync(certs.nodeCert, 'utf8');
+      const signed = signNodeCertificate(mesh.caCert, mesh.caKey, publicKeyFromPrivatePem(keyPem), nodeId, [...new Set([...advertisedHosts(secrets), address.host])]);
+      fs.writeFileSync(certs.nodeCert, signed.certPem);
+      this.peer?.useCertificate(signed.certPem, keyPem);
+      try {
+        await repo.upsertNode({ ...row, endpoints: { ...row.endpoints, peerUrl, raftAddr }, certSerial: signed.serial });
+      } catch (error) {
+        // The members still hold the old serial: present the certificate they know.
+        fs.writeFileSync(certs.nodeCert, previousCert);
+        this.peer?.useCertificate(previousCert, keyPem);
+        throw error;
+      }
+      const next: LocalSecrets = { ...secrets, advertiseHost: address.host, peerUrl, raftAddr };
+      writeSecrets(next);
+      this.secrets = next;
+
+      const others = members.filter(member => member.id !== nodeId).map(member => member.addr);
+      if (await this.rejoinRaft(nodeId, next, others)) {
+        console.log(`[mesh] This machine is now reached at ${peerUrl} and ${raftAddr}.`);
+        this.publishStatus();
+        return { success: true, detail: { address, notAsked: probed.notAsked } };
+      }
+      const why = this.supervisor.detail();
+      // The certificate names both addresses, so it stays.
+      writeSecrets(secrets);
+      this.secrets = secrets;
+      await this.rejoinRaft(nodeId, secrets, others);
+      await this.bestEffort('record the old address again', () => this.repo!.upsertNode({ ...row, certSerial: signed.serial }));
+      this.publishStatus();
+      return { success: false, error: `The mesh database did not take this machine at ${raftAddr}${why ? ` (${why})` : ''}. It kept its old address.` };
+    } catch (error) {
+      return { success: false, error: messageOf(error) };
+    } finally {
+      this.changingAddress = false;
+    }
+  }
+
+  /**
+   * Asks each other member whether it reaches this machine at `address`. One that cannot be asked
+   * at all is passed over and named; one that answers and cannot reach it stops the change.
+   */
+  private async probeFromMembers(nodeId: string, address: MeshAddress): Promise<{ error?: string; notAsked: string[] }> {
+    const certs = readCertPaths();
+    const others = (await this.repo!.listNodes(this.identity()?.meshId)).filter(node => node.nodeId !== nodeId && node.status !== 'removed');
+    if (!certs || others.length === 0) return { notAsked: [] };
+    const tls = {
+      ca: fs.readFileSync(certs.caCert, 'utf8'),
+      cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+      key: fs.readFileSync(certs.nodeKey, 'utf8')
+    };
+    const notAsked: string[] = [];
+    const failures: string[] = [];
+    await Promise.all(others.map(async node => {
+      let response: { status: number; body: unknown };
+      try {
+        response = await peerRequest({
+          url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/probe-address`,
+          method: 'POST',
+          body: { peerUrl: peerUrlFor(address), raftAddr: raftAddrFor(address) },
+          ...tls,
+          timeoutMs: 30_000
+        });
+      } catch {
+        notAsked.push(node.name);
+        return;
+      }
+      if (response.status === 404) {
+        failures.push(`${node.name} runs an older version of Cerious AASM, which cannot check a new address. Update it first.`);
+        return;
+      }
+      if (response.status !== 200) {
+        failures.push(`${node.name} could not check the new address: ${(response.body as { error?: string })?.error || `error ${response.status}`}.`);
+        return;
+      }
+      const probe = response.body as Partial<AddressProbe>;
+      if (!probe.peer?.ok) failures.push(`${node.name} could not reach this machine at ${address.host}:${address.peerPort} (${probe.peer?.error || 'no answer'}).`);
+      if (!probe.raft?.ok) failures.push(`${node.name} could not reach this machine at ${address.host}:${address.raftPort} (${probe.raft?.error || 'no answer'}).`);
+    }));
+    if (failures.length > 0) {
+      return {
+        error: `${failures.join(' ')} Nothing was changed. Check that TCP ports ${address.peerPort} and ${address.raftPort} reach this machine. `
+          + 'A machine on the same network as this one reaches it by its public address only if the router supports NAT loopback.',
+        notAsked
+      };
+    }
+    return { notAsked: notAsked.sort() };
+  }
+
+  /**
+   * Restarts this machine's rqlited under the Raft address in `secrets`: through the other
+   * members, whose leader replaces its record, or on its own with peers.json. True once the
+   * mesh database holds it at that address.
+   */
+  private async rejoinRaft(nodeId: string, secrets: LocalSecrets, others: string[]): Promise<boolean> {
+    const raftAddr = raftAddrOf(secrets);
+    await this.supervisor.stop();
+    if (others.length === 0) {
+      const raftDir = path.join(rqliteDir(), 'raft');
+      fs.mkdirSync(raftDir, { recursive: true });
+      fs.writeFileSync(path.join(raftDir, 'peers.json'), JSON.stringify([{ id: nodeId, address: raftAddr, non_voter: false }]));
+    }
+    await this.startRqlite(nodeId, secrets, others.length > 0 ? others.join(',') : undefined);
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
+    this.rqlite = client;
+    this.repo = new MeshRepository(client);
+    if (!await waitReady(client, this.supervisor, 120)) return false;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try {
+        if ((await client.members()).some(member => member.id === nodeId && member.addr === raftAddr)) return true;
+      } catch {
+        /* rqlited is still settling */
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    return false;
+  }
+
+  /** Another member asks whether this one reaches it at an address: its own certificate has to answer there. */
+  private async probeAddress(askerId: string, body: { peerUrl: string; raftAddr: string }): Promise<AddressProbe> {
+    const address = addressFromEndpoints(body.peerUrl, body.raftAddr);
+    const certs = readCertPaths();
+    if (!address || !certs) {
+      const unusable = { ok: false, error: 'That is not an address.' };
+      return { peer: unusable, raft: unusable };
+    }
+    const tls = {
+      ca: fs.readFileSync(certs.caCert, 'utf8'),
+      cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+      key: fs.readFileSync(certs.nodeKey, 'utf8')
+    };
+    const check = async (port: number): Promise<{ ok: boolean; error?: string }> => {
+      const found = await probeTls({ host: address.host, port, ...tls, timeoutMs: 8000 });
+      if (found.commonName === askerId) return { ok: true };
+      return { ok: false, error: found.commonName ? 'Another machine answers there.' : (found.error || 'No answer.') };
+    };
+    const [peer, raft] = await Promise.all([check(address.peerPort), check(address.raftPort)]);
+    return { peer, raft };
+  }
+
+  /** Where other machines reach this one: as it joined with, or as it would advertise if it created or joined a mesh now. */
+  private advertisedAddress(): MeshAddress | undefined {
+    const secrets = this.secrets ?? (this.identity()?.meshId ? readSecrets() : null);
+    return addressFromEndpoints(
+      secrets ? peerUrlOf(secrets) : advertisedPeerUrl(),
+      secrets ? raftAddrOf(secrets) : advertisedRaftAddr()
+    ) ?? undefined;
+  }
+
+  /**
    * Runs a command addressed to this node, once per CommandId. A start or stop that succeeds
    * becomes this node's desired state for the server, so the reconciler keeps it.
    */
@@ -768,6 +992,7 @@ export class MeshService {
         if (deleted.success) void serverInstanceService.broadcastInstances();
         return { success: deleted.success, error: deleted.error };
       }
+      if (current.operation === 'set-address') return this.changeOwnAddress(meshAddressOf(args));
       if (current.operation === 'update-ark') return beginClusterUpdate();
       if (current.operation === 'update-app') {
         const applied = await autoUpdateService.applyAvailableUpdate();
@@ -1475,13 +1700,14 @@ export class MeshService {
     if (!this.repo && identity?.meshId) {
       return {
         ...emptyStatus(identity.nodeId, identity.name),
+        advertise: this.advertisedAddress(),
         meshId: identity.meshId,
         reconnecting: true,
         warning: 'This machine is in a mesh and is reconnecting to the other members. A mesh of two needs both machines running to get going again.'
       };
     }
     if (!this.repo || !identity?.meshId) {
-      return emptyStatus(identity?.nodeId || null, identity?.name || null);
+      return { ...emptyStatus(identity?.nodeId || null, identity?.name || null), advertise: this.advertisedAddress() };
     }
     const [mesh, nodes, clusters, storage, users, quorum, voters, leader] = await Promise.all([
       this.repo.getMesh(identity.meshId),
@@ -1518,8 +1744,10 @@ export class MeshService {
         ),
         host: hostOf(node.endpoints.peerUrl),
         resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId),
-        clusterSync: node.nodeId === identity.nodeId ? this.clusterSync?.summary() ?? {} : this.reportedClusterSync(node.nodeId)
+        clusterSync: node.nodeId === identity.nodeId ? this.clusterSync?.summary() ?? {} : this.reportedClusterSync(node.nodeId),
+        address: addressFromEndpoints(node.endpoints.peerUrl, node.endpoints.raftAddr)
       })),
+      advertise: this.advertisedAddress(),
       clusters,
       storage
     };
@@ -1670,6 +1898,8 @@ export class MeshService {
         },
         // Cluster file contents, for another member that has to place a version this one recorded.
         onClusterObject: sha256 => this.clusterSync?.objectPath(sha256) ?? null,
+        // Another member is about to change its address: whether this one reaches it there.
+        onProbeAddress: (askerId, body) => this.probeAddress(askerId, body),
         // A move's destination stages the streamed files; they become the server when its placement arrives.
         onCheckpointBegin: body => beginStage(String(body.serverId || ''), {
           resume: body.resume === true,
@@ -1724,7 +1954,7 @@ export class MeshService {
   }
 
   private syncClusters(): void {
-    if (!this.repo || !this.clusterSync) return;
+    if (!this.repo || !this.clusterSync || this.changingAddress) return;
     void this.clusterSync.syncOnce().catch(error => console.warn('[mesh] Could not sync cluster files:', messageOf(error)));
   }
 
@@ -2052,7 +2282,8 @@ export class MeshService {
   }
 
   private async reconcileLocal(nodeId: string): Promise<void> {
-    if (!this.repo) return;
+    // While this machine changes its address its rqlited restarts; the next check picks up after.
+    if (!this.repo || this.changingAddress) return;
     try {
       if (await this.adoptClusterCredential(nodeId)) return;
       this.quorum = await this.repo.hasQuorum();
@@ -2523,10 +2754,13 @@ function writeSecrets(secrets: LocalSecrets): void {
   fs.writeFileSync(secretsPath(), JSON.stringify(secrets), { mode: 0o600 });
 }
 
-function freshSecrets(): LocalSecrets {
+/** A new node's secrets. `address`, when typed in, is where the others reach it; otherwise the environment or this machine's own address. */
+function freshSecrets(address?: MeshAddress | null): LocalSecrets {
   return {
-    httpUser: HTTP_USER, httpPass: randomUUID(), peerPort: PEER_PORT, advertiseHost: advertiseHost(),
-    peerUrl: advertisedPeerUrl(), raftAddr: advertisedRaftAddr()
+    httpUser: HTTP_USER, httpPass: randomUUID(), peerPort: PEER_PORT,
+    advertiseHost: address?.host ?? advertiseHost(),
+    peerUrl: address ? peerUrlFor(address) : advertisedPeerUrl(),
+    raftAddr: address ? raftAddrFor(address) : advertisedRaftAddr()
   };
 }
 
@@ -2558,11 +2792,11 @@ function advertisedHosts(secrets: LocalSecrets): string[] {
   return [...new Set([...hostsFromEndpoint(peerUrlOf(secrets)), ...hostsFromEndpoint(raftAddrOf(secrets))])];
 }
 
-/** The addresses are fixed when the node joins; a later change needs leaving and joining again. */
+/** The addresses are kept from the join; environment settings do not move a member, Settings → Mesh does. */
 function warnIfAdvertiseChanged(secrets: LocalSecrets): void {
   const wanted = [process.env.AASM_ADVERTISE_PEER_URL ? advertisedPeerUrl() : null, process.env.AASM_ADVERTISE_RAFT_ADDR ? advertisedRaftAddr() : null];
   if ((wanted[0] && wanted[0] !== peerUrlOf(secrets)) || (wanted[1] && wanted[1] !== raftAddrOf(secrets))) {
-    console.warn(`[mesh] This node joined advertising ${peerUrlOf(secrets)} and ${raftAddrOf(secrets)}. New advertise settings take effect after leaving the mesh and joining again.`);
+    console.warn(`[mesh] This node joined advertising ${peerUrlOf(secrets)} and ${raftAddrOf(secrets)}. To move it, change its address in Settings → Mesh.`);
   }
 }
 

@@ -3,6 +3,13 @@ import { meshService } from '../services/mesh/mesh-service';
 import { ensureNodeIdentity } from '../services/runtime/node-identity';
 import { onRequest } from './handler.utils';
 
+/** The address typed in on Create or Join, if any: where the others reach this machine. */
+function addressOf(payload: Record<string, unknown>): { host: unknown; peerPort: unknown; raftPort: unknown } | undefined {
+  const address = payload.address as Record<string, unknown> | undefined;
+  if (!address || typeof address !== 'object' || !String(address.host ?? '').trim()) return undefined;
+  return { host: address.host, peerPort: address.peerPort, raftPort: address.raftPort };
+}
+
 onRequest('get-mesh-status', async () => {
   const status = await meshService.status();
   if (!status.nodeId) ensureNodeIdentity();
@@ -35,7 +42,8 @@ onRequest('create-mesh', async payload => {
     const status = await meshService.createMesh({
       name: String(payload.name || 'Mesh'),
       adminUsername: payload.adminUsername ? String(payload.adminUsername) : undefined,
-      adminPassword: payload.adminPassword ? String(payload.adminPassword) : undefined
+      adminPassword: payload.adminPassword ? String(payload.adminPassword) : undefined,
+      address: addressOf(payload)
     });
     return { success: true, status };
   } catch (error) {
@@ -50,7 +58,8 @@ onRequest('join-mesh', async payload => {
       token: String(payload.token || ''),
       name: payload.name ? String(payload.name) : undefined,
       adminUsername: payload.adminUsername ? String(payload.adminUsername) : undefined,
-      adminPassword: payload.adminPassword ? String(payload.adminPassword) : undefined
+      adminPassword: payload.adminPassword ? String(payload.adminPassword) : undefined,
+      address: addressOf(payload)
     });
     return { success: true, status };
   } catch (error) {
@@ -92,6 +101,15 @@ onRequest('rename-mesh-node', async payload => {
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Could not rename that machine.' };
   }
+});
+
+// Checks every other machine can reach it there first; takes up to a minute while the mesh database moves.
+onRequest('set-mesh-node-address', async (payload, { sender }) => {
+  const actor = identifySender(sender).user?.username || 'desktop';
+  const result = await meshService.changeAddress(String(payload.nodeId || ''), {
+    host: payload.host, peerPort: payload.peerPort, raftPort: payload.raftPort
+  }, actor);
+  return { ...result, status: await meshService.status() };
 });
 
 onRequest('suggest-placement', async () => ({ nodeId: await meshService.suggestPlacement() }));

@@ -348,13 +348,26 @@ describe('instance.utils', () => {
       expect(result).toEqual(expect.objectContaining({ gamePort: 7800, queryPort: 27100, rconPort: 27200 }));
     });
 
-    it('rejects moving an existing server onto a port another server uses', async () => {
+    // Only one of them can run at a time, which starting checks. A server moved here from
+    // another machine arrives with ports a server here may already use.
+    it('saves an existing server onto a port another server uses', async () => {
       onDisk(one, two);
 
       const result = await saveInstance({ ...two, gamePort: 7777 });
 
-      expect(result).toEqual({ error: 'UDP port 7777 is already used by "One".' });
-      expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ id: two.id, gamePort: 7777 }));
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(expect.stringContaining(`${two.id}/config.json`), expect.objectContaining({ gamePort: 7777 }));
+    });
+
+    it('saves a new server with the ports it came with when every port set is taken', async () => {
+      const taken = Array.from({ length: 25 }, (_unused, index) => ({
+        id: `s${index}`, name: `S${index}`, gamePort: 7777 + index * 10, queryPort: 27015 + index * 10, rconPort: 27020 + index * 10
+      }));
+      onDisk(...taken);
+
+      const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+
+      expect(result).toEqual(expect.objectContaining({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 }));
     });
 
     it('lets an existing server keep its own ports', async () => {

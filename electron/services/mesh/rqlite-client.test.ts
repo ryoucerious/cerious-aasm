@@ -23,11 +23,28 @@ describe('RqliteClient against rqlited responses', () => {
   let baseUrl = '';
   let status: unknown = LEADERLESS_STATUS;
   const requested: string[] = [];
+  const removed: string[] = [];
 
   beforeAll(async () => {
     server = http.createServer((req, res) => {
       requested.push(req.url || '');
       const url = new URL(req.url || '/', 'http://rqlite');
+      if (url.pathname === '/remove') {
+        // rqlited v10.5.2 answers 405 to anything but DELETE here.
+        if (req.method !== 'DELETE') {
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+          removed.push(String(JSON.parse(body).id));
+          res.writeHead(200);
+          res.end();
+        });
+        return;
+      }
       if (url.pathname === '/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status));
@@ -58,6 +75,23 @@ describe('RqliteClient against rqlited responses', () => {
 
   beforeEach(() => {
     requested.length = 0;
+    removed.length = 0;
+  });
+
+  it('takes a member out of the Raft cluster the way rqlited accepts', async () => {
+    await new RqliteClient(baseUrl, '', '', 'a').removeMember('b');
+
+    expect(removed).toEqual(['b']);
+  });
+
+  it('lists each member at the Raft address the cluster holds for it', async () => {
+    status = LED_STATUS;
+
+    expect(await new RqliteClient(baseUrl, '', '', 'a').members()).toEqual([
+      { id: 'a', addr: '10.0.0.1:4002', voter: true },
+      { id: 'b', addr: '10.0.0.2:4002', voter: true },
+      { id: 'n', addr: '10.0.0.3:4002', voter: false }
+    ]);
   });
 
   it('reports no quorum when rqlite has no leader', async () => {

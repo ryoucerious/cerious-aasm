@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output, ChangeDetectionStrategy } from '@angular/core';
+import { Component, EventEmitter, HostListener, Input, Output, ChangeDetectionStrategy } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance, ServerInstanceDraft } from '../../core/models/server-instance.model';
 import { getMapVisual, MapVisual } from '../../core/utils/map-visuals';
@@ -10,7 +10,8 @@ import {
 
 /**
  * The strip at the top of every server page: identity, status, live stats and the
- * start / stop / force controls. The page below it changes with the sidebar; this does not.
+ * start / stop / force controls, with occasional actions such as a move under More actions.
+ * The page below it changes with the sidebar; this does not.
  *
  * `server` is the page's working copy (its state is the mapped display string such as
  * "Running"); `live` is the roster entry with runtime numbers. Either may be missing briefly
@@ -36,6 +37,26 @@ export class ServerHeaderComponent {
   @Output() stopServer = new EventEmitter<void>();
   @Output() forceStopServer = new EventEmitter<void>();
   @Output() moveServer = new EventEmitter<void>();
+
+  /** More actions is open. */
+  menuOpen = false;
+
+  toggleMenu(event: Event): void {
+    event.stopPropagation();
+    this.menuOpen = !this.menuOpen;
+  }
+
+  @HostListener('document:click')
+  @HostListener('document:keydown.escape')
+  closeMenu(): void {
+    this.menuOpen = false;
+  }
+
+  onMove(): void {
+    if (!this.canMoveNow) return;
+    this.menuOpen = false;
+    this.moveServer.emit();
+  }
 
   get visual(): MapVisual {
     return getMapVisual(this.server?.mapName || this.live?.mapName);

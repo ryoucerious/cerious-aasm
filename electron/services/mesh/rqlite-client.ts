@@ -62,6 +62,15 @@ export class RqliteClient implements SqlExecutor {
     };
   }
 
+  /** The cluster's members, at the Raft addresses its configuration holds for them. */
+  async members(): Promise<Array<{ id: string; addr: string; voter: boolean }>> {
+    const raw = await this.get('/status');
+    const store = (raw.store || {}) as { nodes?: Array<{ id?: string; addr?: string; suffrage?: string }> };
+    return (store.nodes || [])
+      .filter(node => typeof node.id === 'string' && typeof node.addr === 'string')
+      .map(node => ({ id: node.id!, addr: node.addr!, voter: node.suffrage !== 'nonvoter' }));
+  }
+
   /**
    * True once rqlited answers. By default it must also see a leader; a node that restarts
    * cut off from the others never does, so resuming passes requireLeader: false.
@@ -76,7 +85,8 @@ export class RqliteClient implements SqlExecutor {
   }
 
   async removeMember(nodeId: string): Promise<void> {
-    const response = await this.request('POST', '/remove', JSON.stringify({ id: nodeId }));
+    // DELETE: rqlited answers 405 to a POST here, which left removed nodes voting.
+    const response = await this.request('DELETE', '/remove', JSON.stringify({ id: nodeId }));
     if (response.status >= 400) throw new Error(`rqlite remove failed (${response.status})`);
   }
 
@@ -107,7 +117,11 @@ export class RqliteClient implements SqlExecutor {
     if (this.authUser) {
       headers.Authorization = `Basic ${Buffer.from(`${this.authUser}:${this.authPass}`).toString('base64')}`;
     }
-    if (payload) headers['Content-Type'] = 'application/json';
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      // Node frames a DELETE's body only with a length; without one rqlited reads none.
+      headers['Content-Length'] = String(Buffer.byteLength(payload));
+    }
     return new Promise((resolve, reject) => {
       const req = http.request({
         protocol: url.protocol,

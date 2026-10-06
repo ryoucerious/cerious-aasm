@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import { parsePort, validateInstanceId } from '../../utils/validation.utils';
 import { getMultiHomeAddress } from '../../utils/ark/ark-args.utils';
+import { getAllInstances } from '../../utils/ark/instance.utils';
+import { findPortConflict, type PortConflict } from '../../utils/ark/port-sets';
 import { getArkExecutablePath, validateInstanceRuntimeTree } from '../../utils/ark/ark-server/ark-server-paths.utils';
 import { waitForProcessSweeps } from '../../utils/ark/ark-server/ark-server-cleanup.utils';
 import { SERVER_BEING_MOVED, SERVER_FILES_UPDATING, areServerFilesUpdating, isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
@@ -18,6 +20,8 @@ const DEFAULT_RCON_PORT = 27020;
 const DEFAULT_START_DELAY_SECONDS = 60;
 
 const ALREADY_UP = 'Instance is already running or starting';
+/** A server in one of these states holds its ports, or is about to. */
+const HOLDS_PORTS = new Set(['starting', 'running', 'stopping']);
 
 export class ServerLifecycleService {
   private readonly startsInProgress = new Set<string>();
@@ -148,7 +152,28 @@ export class ServerLifecycleService {
     // A leftover sweep matches by command line: one still running after the spawn would kill the
     // new process. It also frees the ports being checked.
     await waitForProcessSweeps(instanceId);
+    const shared = await this.portsSharedHere(instance, instanceId);
+    if (shared) return { success: false, error: shared, instanceId };
     return this.validateInstancePorts(instance, instanceId);
+  }
+
+  /**
+   * Another server on this machine with one of the same ports, up or on its way up. Servers may
+   * share ports in their settings; only one of them can run at a time. A bind test misses a
+   * server that is still starting, which binds its ports only once its map has loaded, and the
+   * peer port, which ARK takes as the game port plus one.
+   */
+  private async portsSharedHere(instance: InstanceConfig, instanceId: string): Promise<string | null> {
+    for (const other of await getAllInstances()) {
+      if (other.id === instanceId) continue;
+      const state = serverProcessService.getNormalizedInstanceState(other.id);
+      if (!HOLDS_PORTS.has(state)) continue;
+      const conflict = findPortConflict(instance, [other]);
+      if (conflict) {
+        return `${portLabel(instance, conflict)} ${conflict.port} is also used by "${conflict.name}", which is ${state}. Stop it first, or give this server other ports.`;
+      }
+    }
+    return null;
   }
 
   /** Bind tests on the address ARK will bind: UDP for the game and query ports, TCP for RCON. */
@@ -233,6 +258,15 @@ function limitTo(instances: InstanceConfig[], onlyIds?: string[]): InstanceConfi
   if (!onlyIds) return instances;
   const allowed = new Set(onlyIds);
   return instances.filter(instance => allowed.has(instance.id));
+}
+
+/** Which of the server's ports a conflict is on. */
+function portLabel(instance: InstanceConfig, conflict: PortConflict): string {
+  if (conflict.protocol === 'TCP') return 'RCON port';
+  const gamePort = parsePort(instance.gamePort) ?? DEFAULT_GAME_PORT;
+  if (conflict.port === gamePort) return 'Game port';
+  if (conflict.port === gamePort + 1) return 'Peer port';
+  return 'Query port';
 }
 
 export const serverLifecycleService = new ServerLifecycleService();
