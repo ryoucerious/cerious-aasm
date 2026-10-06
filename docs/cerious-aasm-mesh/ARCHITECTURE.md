@@ -183,10 +183,15 @@ off: the placement write sets its desired state to stopped.
 ``` text
 Source       check it is off and not already moving → mark it moving
              → list config + saves → checksum
-             → POST /v1/checkpoint/begin
-             → PUT /v1/checkpoint/file, one streamed request per file
+             → POST /v1/checkpoint/begin { resume: true }
+Destination  keep what is staged in Saved/MeshIncoming; answer with each
+             staged file's size and sha256
+Source       skip a file held whole; carry on one held in part, when what
+             is held is the start of ours; send the rest from the start
+             → PUT /v1/checkpoint/file?offset=N, one streamed request per file
              → POST /v1/checkpoint/finish
-Destination  stage in Saved/MeshIncoming → check the file list → checksum
+Destination  drop staged files the move does not list → check the file
+             list → checksum
 Source       compare checksums → placement write (desired: stopped), only
              if still on source → set its own copy aside in Saved/MeshMoved
 Destination  reconciler sees the placement → promote staged files
@@ -194,13 +199,28 @@ Destination  reconciler sees the placement → promote staged files
 
 Files are streamed, so memory use does not grow with the size of the
 world. The checksum is sha256 over each relative path and its bytes, in
-code-point path order, so nodes with different locales agree.
+code-point path order, so nodes with different locales agree. A resumed
+move is checked the same way as a fresh one.
 
-A failure before the placement write leaves the server where it was, off.
-After the write there is no rollback.
+A failure before the placement write leaves the server where it was, off,
+and what arrived stays staged: moving again carries on from there. A file
+that fails to send (no answer, a dropped connection, 409 when the
+destination's copy changed, or a fault on the destination) is tried again
+after 2, 5 and 15 seconds, carrying on from where the destination's copy
+then ends; a refusal is not retried. After the placement write there is
+no rollback.
+
+While it runs, the host broadcasts `server-move-progress` (preparing,
+checking, copying with bytes done of the total and what was already
+there, verifying), at most twice a second. It is scoped like the other
+per-server channels and relayed to the other nodes, so the move dialog
+shows it wherever it was opened.
+
+An older destination wipes its staging at begin and does not say what
+it holds, so the source sends everything from the start, as before.
 
 Once an hour each node removes staged files that nothing has written to
-for 2 hours (a move that was abandoned), and copies in `Saved/MeshMoved`
+for a day (a move that was abandoned), and copies in `Saved/MeshMoved`
 set aside more than 14 days ago.
 
 ### Versions

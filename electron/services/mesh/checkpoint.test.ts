@@ -15,7 +15,7 @@ jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn()
 
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import {
-  archiveInstance, beginStage, checkpointManifest, checksumTree, finishStage, promoteStaged, pruneMeshFolders, writeStagedFile
+  archiveInstance, beginStage, checkpointManifest, checksumTree, fileDigest, finishStage, promoteStaged, pruneMeshFolders, writeStagedFile
 } from './checkpoint';
 
 const SAVE = 'SavedArks/TheIsland_WP/TheIsland_WP.ark';
@@ -108,12 +108,77 @@ describe('checkpoint', () => {
       await expect(finishStage('isle', ['config.json', SAVE])).rejects.toThrow(/did not arrive/);
     });
 
-    it('will not finish with a file nobody listed', async () => {
+    // A continued move keeps what an earlier attempt sent, which can include a file the server
+    // no longer has.
+    it('drops files an earlier attempt left that this move does not list', async () => {
       beginStage('isle');
       await writeStagedFile('isle', 'config.json', Readable.from(Buffer.from('{}')));
       await writeStagedFile('isle', 'extra.bin', Readable.from(Buffer.from('?')));
 
-      await expect(finishStage('isle', ['config.json'])).rejects.toThrow(/not part of the move/);
+      expect(await finishStage('isle', ['config.json'])).toBe(expectedChecksum([['config.json', '{}']]));
+      expect(fs.existsSync(path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'MeshIncoming', 'isle', 'extra.bin'))).toBe(false);
+    });
+
+    describe('continuing an interrupted move', () => {
+      const staged = (rel: string) => path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'MeshIncoming', 'isle', rel);
+      const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+
+      async function interrupted(): Promise<void> {
+        beginStage('isle');
+        await writeStagedFile('isle', 'config.json', Readable.from(Buffer.from('{"id":"isle"}')));
+        await writeStagedFile('isle', SAVE, Readable.from(Buffer.from('wor'))); // cut off part way
+      }
+
+      it('keeps what an earlier attempt received, and says what it holds', async () => {
+        await interrupted();
+
+        expect(await beginStage('isle', { resume: true })).toEqual([
+          { rel: SAVE, size: 3, sha256: sha('wor') },
+          { rel: 'config.json', size: 13, sha256: sha('{"id":"isle"}') }
+        ]);
+        expect(fs.readFileSync(staged(SAVE), 'utf8')).toBe('wor');
+      });
+
+      it('says only what it holds of the files it is asked about', async () => {
+        await interrupted();
+
+        expect(await beginStage('isle', { resume: true, rels: [SAVE, 'never-sent.bin'] })).toEqual([{ rel: SAVE, size: 3, sha256: sha('wor') }]);
+      });
+
+      it('holds nothing for a server it has not been sent', async () => {
+        expect(await beginStage('isle', { resume: true })).toEqual([]);
+      });
+
+      it('carries on a file from where its copy ends', async () => {
+        await interrupted();
+
+        await writeStagedFile('isle', SAVE, Readable.from(Buffer.from('ld')), 3);
+
+        expect(fs.readFileSync(staged(SAVE), 'utf8')).toBe('world');
+      });
+
+      it('carries on from an earlier point, dropping what came after it', async () => {
+        await interrupted();
+        await writeStagedFile('isle', SAVE, Readable.from(Buffer.from('ldXX')), 3);
+
+        await writeStagedFile('isle', SAVE, Readable.from(Buffer.from('ld')), 3);
+
+        expect(fs.readFileSync(staged(SAVE), 'utf8')).toBe('world');
+      });
+
+      it('refuses to carry on past the end of what it holds', async () => {
+        await interrupted();
+
+        await expect(writeStagedFile('isle', SAVE, Readable.from(Buffer.from('d')), 4)).rejects.toThrow('only 3 bytes');
+      });
+
+      it('fingerprints a whole file, or the start of one, the same on both ends', async () => {
+        await interrupted();
+
+        expect(await fileDigest(staged(SAVE))).toBe(sha('wor'));
+        expect(await fileDigest(staged(SAVE), 2)).toBe(sha('wo'));
+        expect(await fileDigest(staged(SAVE), 0)).toBe(sha(''));
+      });
     });
 
     it('starts a new transfer from nothing, dropping files from an earlier attempt', async () => {
@@ -143,15 +208,26 @@ describe('checkpoint', () => {
       walk(dir);
     }
 
-    it('removes the files of a move that stopped arriving hours ago', async () => {
+    it('removes the files of a move that stopped arriving more than a day ago', async () => {
       const now = Date.now();
       await stage('old');
-      age(path.join(saved, 'MeshIncoming', 'old'), now - 3 * HOUR);
+      age(path.join(saved, 'MeshIncoming', 'old'), now - 25 * HOUR);
       await stage('fresh');
 
       pruneMeshFolders(now);
 
       expect(fs.readdirSync(path.join(saved, 'MeshIncoming'))).toEqual(['fresh']);
+    });
+
+    // Long enough to continue the move after an outage.
+    it('keeps the files of an interrupted move for a day', async () => {
+      const now = Date.now();
+      await stage('isle');
+      age(path.join(saved, 'MeshIncoming', 'isle'), now - 20 * HOUR);
+
+      pruneMeshFolders(now);
+
+      expect(fs.existsSync(path.join(saved, 'MeshIncoming', 'isle', SAVE))).toBe(true);
     });
 
     it('keeps a transfer that is still receiving files, however long it has run', async () => {

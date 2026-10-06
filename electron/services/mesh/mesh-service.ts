@@ -33,7 +33,8 @@ import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteB
 import { MeshRepository } from './mesh-repository';
 import { hashArgon2id, hashToken, newEnrollmentToken, verifyArgon2id, verifyBcrypt } from './passwords';
 import {
-  archiveInstance, beginStage, checkpointManifest, checksumTree, finishStage, promoteStaged, pruneMeshFolders, writeStagedFile
+  archiveInstance, beginStage, checkpointManifest, checksumTree, fileDigest, finishStage, promoteStaged, pruneMeshFolders, writeStagedFile,
+  type HeldFile
 } from './checkpoint';
 import { chooseNode, moveServer, type PlacementInput } from './placement';
 import { partitionDecision } from './partition-policy';
@@ -60,7 +61,7 @@ const QUERY_TIMEOUT_MS = 15_000;
 /** Live per-server events the hosting node relays, so another node can show the server live. */
 const RELAY_CHANNELS = new Set([
   'server-instance-log', 'server-instance-state', 'server-instance-players', 'server-instance-memory',
-  'server-instance-cpu', 'rcon-status', 'clear-server-instance-logs'
+  'server-instance-cpu', 'rcon-status', 'clear-server-instance-logs', 'server-move-progress'
 ]);
 /** Commands about one server. The node running one must be the node hosting that server. */
 const SERVER_COMMANDS = new Set<ControlCommand['operation']>([
@@ -1128,6 +1129,8 @@ export class MeshService {
 
   /** The move itself, with starts of the server refused here until it settles. It arrives off. */
   private async copyAndHandOver(serverId: string, localId: string, destination: NodeRecord): Promise<CommandResult> {
+    const progress = new MoveProgress(serverId, destination.name);
+    progress.report('preparing');
     let rels: string[] = [];
     const result = await moveServer(serverId, localId, destination.nodeId, {
       isRunning: id => UP_STATES.has(localRuntime.state(id)),
@@ -1141,7 +1144,7 @@ export class MeshService {
         if (!rels.includes('config.json')) throw new Error('That server has no files on this node.');
         return { checksum: await checksumTree(getInstanceDir(id), rels) };
       },
-      transfer: async id => this.deliverCheckpoint(id, destination, rels),
+      transfer: async id => this.deliverCheckpoint(id, destination, rels, progress),
       commitPlacement: async (id, dest, keepRunning) => {
         // Off here, so off there, whatever desired state a crash or an outside stop left behind.
         const moved = await this.repo!.commitPlacement(id, localId, dest, keepRunning ? 'running' : 'stopped');
@@ -1160,30 +1163,105 @@ export class MeshService {
    * Streams a checkpoint to the destination one file at a time and returns the checksum it
    * computed over what it stored. Nothing is held in memory whole.
    */
-  private async deliverCheckpoint(serverId: string, destination: NodeRecord, rels: string[]): Promise<string> {
+  private async deliverCheckpoint(serverId: string, destination: NodeRecord, rels: string[], progress: MoveProgress): Promise<string> {
     const certs = readCertPaths();
     if (!certs) throw new Error('This node has no mesh certificate.');
-    const tls = {
-      ca: fs.readFileSync(certs.caCert, 'utf8'),
-      cert: fs.readFileSync(certs.nodeCert, 'utf8'),
-      key: fs.readFileSync(certs.nodeKey, 'utf8')
-    };
-    const base = `${destination.endpoints.peerUrl.replace(/\/$/, '')}/v1/checkpoint`;
-    const refused = (response: { status: number; body: unknown }, what: string): Error =>
-      new Error((response.body as { error?: string })?.error || `The destination did not accept ${what}.`);
-
-    const begun = await peerRequest({ url: `${base}/begin`, method: 'POST', body: { serverId }, ...tls, timeoutMs: 60_000 });
-    if (begun.status !== 200) throw refused(begun, 'the move');
     const dir = getInstanceDir(serverId);
+    const transfer: Transfer = {
+      serverId,
+      dir,
+      base: `${destination.endpoints.peerUrl.replace(/\/$/, '')}/v1/checkpoint`,
+      tls: {
+        ca: fs.readFileSync(certs.caCert, 'utf8'),
+        cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+        key: fs.readFileSync(certs.nodeKey, 'utf8')
+      },
+      resumable: false,
+      progress
+    };
+    const sizes = new Map(rels.map(rel => [rel, fs.statSync(path.join(dir, rel)).size]));
+    progress.bytesTotal = [...sizes.values()].reduce((sum, size) => sum + size, 0);
+    progress.report('checking');
+
+    // Asks to carry on whatever an earlier attempt sent. An older destination wipes instead and
+    // does not say what it holds; everything is then sent from the start.
+    const begun = await peerRequest({
+      url: `${transfer.base}/begin`, method: 'POST', body: { serverId, resume: true }, ...transfer.tls, timeoutMs: MOVE_TIMEOUT_MS
+    });
+    if (begun.status !== 200) throw refusedBy(begun, 'the move');
+    const held = (begun.body as { held?: HeldFile[] } | null)?.held;
+    transfer.resumable = Array.isArray(held);
+    const toSend: Array<{ rel: string; offset: number }> = [];
     for (const rel of rels) {
-      const query = `serverId=${encodeURIComponent(serverId)}&rel=${encodeURIComponent(rel)}`;
-      const sent = await peerUpload({ url: `${base}/file?${query}`, file: path.join(dir, rel), ...tls, timeoutMs: MOVE_TIMEOUT_MS });
-      if (sent.status !== 200) throw refused(sent, rel);
+      const have = held?.find(file => file.rel === rel);
+      const offset = await alreadyThere(path.join(dir, rel), sizes.get(rel)!, have);
+      progress.resumedBytes += offset;
+      if (!have || offset < sizes.get(rel)!) toSend.push({ rel, offset });
     }
-    const finished = await peerRequest({ url: `${base}/finish`, method: 'POST', body: { serverId, rels }, ...tls, timeoutMs: MOVE_TIMEOUT_MS });
+    progress.bytesDone = progress.resumedBytes;
+    progress.report('copying');
+
+    for (const { rel, offset } of toSend) await this.sendFile(transfer, rel, offset);
+    progress.bytesDone = progress.bytesTotal;
+    progress.report('copying', true);
+
+    progress.report('verifying');
+    const finished = await peerRequest({
+      url: `${transfer.base}/finish`, method: 'POST', body: { serverId, rels }, ...transfer.tls, timeoutMs: MOVE_TIMEOUT_MS
+    });
     const checksum = (finished.body as { checksum?: string })?.checksum;
-    if (finished.status !== 200 || !checksum) throw refused(finished, 'the files');
+    if (finished.status !== 200 || !checksum) throw refusedBy(finished, 'the files');
     return checksum;
+  }
+
+  /**
+   * Sends one file, carried on from `offset`. A dropped connection is retried after each of
+   * MOVE_RETRY_DELAYS_MS, carrying on from wherever the destination's copy then ends.
+   */
+  private async sendFile(transfer: Transfer, rel: string, offset: number): Promise<void> {
+    const file = path.join(transfer.dir, rel);
+    const otherFiles = transfer.progress.bytesDone - offset;
+    for (let attempt = 0; ; attempt++) {
+      transfer.progress.bytesDone = otherFiles + offset;
+      const outcome = await this.uploadOnce(transfer, rel, file, offset);
+      if (outcome.ok) return;
+      if (!outcome.retry || attempt >= MOVE_RETRY_DELAYS_MS.length) throw outcome.error;
+      await wait(MOVE_RETRY_DELAYS_MS[attempt]);
+      offset = transfer.resumable ? await this.carriedOnFrom(transfer, rel, file) : 0;
+    }
+  }
+
+  /**
+   * One try at a file. No answer, a conflict (the destination's copy changed) or a fault on the
+   * destination is worth trying again; a refusal is not.
+   */
+  private async uploadOnce(transfer: Transfer, rel: string, file: string, offset: number): Promise<{ ok: true } | { ok: false; retry: boolean; error: Error }> {
+    const query = `serverId=${encodeURIComponent(transfer.serverId)}&rel=${encodeURIComponent(rel)}&offset=${offset}`;
+    try {
+      const sent = await peerUpload({
+        url: `${transfer.base}/file?${query}`, file, start: offset, onProgress: bytes => transfer.progress.add(bytes),
+        ...transfer.tls, timeoutMs: MOVE_TIMEOUT_MS
+      });
+      if (sent.status === 200) return { ok: true };
+      return { ok: false, retry: sent.status === 409 || sent.status >= 500, error: refusedBy(sent, rel) };
+    } catch (error) {
+      return { ok: false, retry: true, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+  }
+
+  /** Where the destination's copy of a file now ends, when it is the start of ours. 0 when it cannot say. */
+  private async carriedOnFrom(transfer: Transfer, rel: string, file: string): Promise<number> {
+    try {
+      const asked = await peerRequest({
+        url: `${transfer.base}/begin`, method: 'POST', body: { serverId: transfer.serverId, resume: true, rels: [rel] },
+        ...transfer.tls, timeoutMs: MOVE_TIMEOUT_MS
+      });
+      if (asked.status !== 200) return 0;
+      const have = (asked.body as { held?: HeldFile[] } | null)?.held?.find(held => held.rel === rel);
+      return await alreadyThere(file, fs.statSync(file).size, have);
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -1497,8 +1575,11 @@ export class MeshService {
           this.publishStatus();
         },
         // A move's destination stages the streamed files; they become the server when its placement arrives.
-        onCheckpointBegin: body => beginStage(String(body.serverId || '')),
-        onCheckpointFile: (serverId, rel, body) => writeStagedFile(serverId, rel, body),
+        onCheckpointBegin: body => beginStage(String(body.serverId || ''), {
+          resume: body.resume === true,
+          rels: Array.isArray(body.rels) ? body.rels.map(String) : undefined
+        }),
+        onCheckpointFile: (serverId, rel, body, offset) => writeStagedFile(serverId, rel, body, offset),
         onCheckpointFinish: async body => ({ checksum: await finishStage(String(body.serverId || ''), Array.isArray(body.rels) ? body.rels : []) })
       });
     }
@@ -2083,6 +2164,76 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
     configRevision: server.configRevision,
     state: server.desiredState
   } as InstanceConfig;
+}
+
+/** A file of a move is tried again after each of these, so a brief drop does not end the move. */
+const MOVE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
+/** How often a move says how far it has got. */
+const MOVE_PROGRESS_EVERY_MS = 500;
+
+type MovePhase = 'preparing' | 'checking' | 'copying' | 'verifying';
+
+/** The files of one move on their way to the destination. */
+interface Transfer {
+  serverId: string;
+  dir: string;
+  base: string;
+  tls: { ca: string; cert: string; key: string };
+  /** The destination keeps what it was sent and says what it holds; an older one does not. */
+  resumable: boolean;
+  progress: MoveProgress;
+}
+
+/**
+ * Tells every screen showing a server how far its move has got: on a change of phase, when
+ * asked, and otherwise at most every MOVE_PROGRESS_EVERY_MS. Other nodes hear it relayed.
+ */
+class MoveProgress {
+  bytesTotal = 0;
+  bytesDone = 0;
+  /** What the destination already held from an earlier attempt. */
+  resumedBytes = 0;
+  private phase: MovePhase | null = null;
+  private reportedAt = 0;
+
+  constructor(private readonly serverId: string, private readonly destinationName: string) {}
+
+  report(phase: MovePhase, force = false): void {
+    const now = Date.now();
+    if (!force && phase === this.phase && now - this.reportedAt < MOVE_PROGRESS_EVERY_MS) return;
+    this.phase = phase;
+    this.reportedAt = now;
+    messagingService.sendToAll('server-move-progress', {
+      instanceId: this.serverId,
+      destinationName: this.destinationName,
+      phase,
+      bytesDone: this.bytesDone,
+      bytesTotal: this.bytesTotal,
+      resumedBytes: this.resumedBytes
+    });
+  }
+
+  add(bytes: number): void {
+    this.bytesDone += bytes;
+    this.report('copying');
+  }
+}
+
+/**
+ * How much of a file the destination already holds: all of it or the start of it, when its copy
+ * matches ours byte for byte. 0 when it holds none, or something else.
+ */
+async function alreadyThere(file: string, size: number, have: HeldFile | undefined): Promise<number> {
+  if (!have || have.size > size) return 0;
+  return have.sha256 === await fileDigest(file, have.size) ? have.size : 0;
+}
+
+function refusedBy(response: { status: number; body: unknown }, what: string): Error {
+  return new Error((response.body as { error?: string } | null)?.error || `The destination did not accept ${what}.`);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 const NODE_NAME_MAX = 64;

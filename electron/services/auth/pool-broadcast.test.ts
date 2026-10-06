@@ -46,6 +46,14 @@ describe('scopeBroadcast', () => {
       .toEqual({ userIds: ['a1', 'm1'], owners: true });
   });
 
+  it('addresses how far a move has got to those who can see the server being moved', () => {
+    const progress = { instanceId: 's2', phase: 'copying', bytesDone: 1, bytesTotal: 2, resumedBytes: 0 };
+
+    expect(scopeBroadcast('server-move-progress', progress, directory(snapshot))).toEqual([
+      { data: progress, audience: { userIds: ['a1', 'm1'], owners: true } }
+    ]);
+  });
+
   it('addresses server-instance-updated by the instance itself', () => {
     expect(scopeBroadcast('server-instance-updated', s2, directory(snapshot))).toEqual([
       { data: s2, audience: { userIds: ['a1', 'm1'], owners: true } }

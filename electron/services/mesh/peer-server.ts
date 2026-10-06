@@ -3,6 +3,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { normalizeSerial } from './certificates';
+import type { HeldFile } from './checkpoint';
 import type { CommandResult, ControlCommand, MeshQuery } from '../../types/mesh.types';
 
 export interface JoinRequest {
@@ -46,10 +47,13 @@ export interface PeerHandlers {
   onSubscribe?(): unknown[];
   /** A read-only question about a server this node hosts. */
   onQuery?(body: { serverId: string; query: MeshQuery; args?: Record<string, unknown> }): Promise<unknown>;
-  /** A move's destination: wipe the staging area for this server. */
-  onCheckpointBegin?(body: { serverId: string }): Promise<void> | void;
-  /** One file of a move, streamed. The request body is the file. */
-  onCheckpointFile?(serverId: string, rel: string, body: NodeJS.ReadableStream): Promise<void>;
+  /**
+   * A move's destination: wipe the staging area for this server, or, to carry on an interrupted
+   * move, keep it and say what it holds.
+   */
+  onCheckpointBegin?(body: { serverId: string; resume?: boolean; rels?: string[] }): Promise<HeldFile[] | null | void> | void;
+  /** One file of a move, streamed, from byte `offset` of the file. The request body is the rest of it. */
+  onCheckpointFile?(serverId: string, rel: string, body: NodeJS.ReadableStream, offset: number): Promise<void>;
   /** All files sent: check them against the list and return their checksum. */
   onCheckpointFinish?(body: { serverId: string; rels: string[] }): Promise<{ checksum: string }>;
 }
@@ -168,12 +172,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/checkpoint/begin' && handlers.onCheckpointBegin) {
-      await handlers.onCheckpointBegin(await readJson<{ serverId: string }>(req));
-      send(res, 200, { ok: true });
+      const held = await handlers.onCheckpointBegin(await readJson<{ serverId: string; resume?: boolean; rels?: string[] }>(req));
+      // An older source never asks to resume, and an older destination never answers with this.
+      send(res, 200, held ? { ok: true, held } : { ok: true });
       return;
     }
     if (req.method === 'PUT' && url.pathname === '/v1/checkpoint/file' && handlers.onCheckpointFile) {
-      await handlers.onCheckpointFile(url.searchParams.get('serverId') || '', url.searchParams.get('rel') || '', req);
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      if (!Number.isInteger(offset) || offset < 0) {
+        req.resume();
+        send(res, 400, { error: 'A file can only be carried on from a whole byte.' });
+        return;
+      }
+      await handlers.onCheckpointFile(url.searchParams.get('serverId') || '', url.searchParams.get('rel') || '', req, offset);
       send(res, 200, { ok: true });
       return;
     }
@@ -187,7 +198,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
     }
     send(res, 404, { error: 'Not found' });
   } catch (error) {
-    send(res, 400, { error: error instanceof Error ? error.message : 'Bad request' });
+    // A handler can name the status, such as 409 when a carried-on file no longer matches.
+    const status = (error as { statusCode?: unknown } | null)?.statusCode;
+    send(res, typeof status === 'number' ? status : 400, { error: error instanceof Error ? error.message : 'Bad request' });
   }
 }
 
@@ -279,13 +292,18 @@ export function peerRequest(options: {
 export function peerUpload(options: {
   url: string;
   file: string;
+  /** The byte to start from, when the peer already holds the file up to it. */
+  start?: number;
+  /** Hears each chunk as it is read for sending, in bytes. */
+  onProgress?: (bytes: number) => void;
   ca?: string;
   cert?: string;
   key?: string;
   timeoutMs?: number;
 }): Promise<{ status: number; body: unknown }> {
   const target = new URL(options.url);
-  const size = fs.statSync(options.file).size;
+  const start = options.start ?? 0;
+  const size = Math.max(0, fs.statSync(options.file).size - start);
   return new Promise((resolve, reject) => {
     let answered = false;
     const req = https.request({
@@ -307,8 +325,9 @@ export function peerUpload(options: {
     if (options.timeoutMs) {
       req.setTimeout(options.timeoutMs, () => req.destroy(new Error('The node did not answer in time.')));
     }
-    const source = fs.createReadStream(options.file);
+    const source = fs.createReadStream(options.file, { start });
     source.on('error', error => req.destroy(error));
+    if (options.onProgress) source.on('data', chunk => options.onProgress!(chunk.length));
     source.pipe(req);
   });
 }

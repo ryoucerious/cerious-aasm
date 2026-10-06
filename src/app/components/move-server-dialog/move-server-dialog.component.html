@@ -14,11 +14,24 @@
       <p class="move-dialog-error">No other machine can take it right now: every other member is unreachable or draining.</p>
     </ng-template>
 
-    <p class="move-dialog-progress" *ngIf="moving" role="status">
-      <span class="move-dialog-spinner" aria-hidden="true"></span>
-      Copying {{ server.name }} to {{ destinationName }}… A large world can take several minutes.
-    </p>
+    <div class="move-dialog-progress" *ngIf="moving" role="status" aria-live="polite">
+      <ng-container *ngIf="!copying; else copyingFiles">
+        <p class="move-dialog-step">
+          <span class="move-dialog-spinner" aria-hidden="true"></span>
+          {{ progress ? status : 'Copying ' + server.name + ' to ' + destinationName + '…' }}
+        </p>
+      </ng-container>
+      <ng-template #copyingFiles>
+        <p class="move-dialog-step">Copying {{ server.name }} to {{ destinationName }}: {{ copiedLabel }}</p>
+        <span class="meter move-dialog-meter"><span class="meter-fill tone-primary" [style.width.%]="percent"></span></span>
+      </ng-template>
+      <p class="move-dialog-resumed" *ngIf="resumedLabel">{{ resumedLabel }}</p>
+      <p class="move-dialog-note">A large world can take several minutes.</p>
+    </div>
     <p class="move-dialog-error" *ngIf="error" role="alert">{{ error }}</p>
+    <p class="move-dialog-hint" *ngIf="error && canCarryOn">
+      What arrived on {{ destinationName }} is kept for a day. Move again to carry on from where this attempt stopped.
+    </p>
 
     <div class="action-group-modal">
       <button type="button" class="btn" (click)="cancel()" [disabled]="moving">Cancel</button>

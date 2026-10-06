@@ -26,7 +26,9 @@ describe('peer server checkpoint uploads', () => {
   let revocationDelayMs = 0;
   /** What the server tells each new subscriber first. */
   let greeting: unknown[] = [];
-  const received: Array<{ serverId: string; rel: string; bytes: Buffer }> = [];
+  const received: Array<{ serverId: string; rel: string; bytes: Buffer; offset: number }> = [];
+  /** What the destination says it already holds when a move begins. */
+  let held: unknown = null;
   const onHeartbeat = jest.fn();
 
   beforeAll(async () => {
@@ -51,10 +53,11 @@ describe('peer server checkpoint uploads', () => {
       onJoin: jest.fn(),
       onCommand: jest.fn(),
       onHeartbeat,
-      onCheckpointFile: async (serverId, rel, body) => {
+      onCheckpointBegin: async () => held as never,
+      onCheckpointFile: async (serverId, rel, body, offset) => {
         const chunks: Buffer[] = [];
         for await (const chunk of body) chunks.push(chunk as Buffer);
-        received.push({ serverId, rel, bytes: Buffer.concat(chunks) });
+        received.push({ serverId, rel, bytes: Buffer.concat(chunks), offset });
       }
     });
     port = (server.address() as AddressInfo).port;
@@ -72,6 +75,7 @@ describe('peer server checkpoint uploads', () => {
     trustChecks.length = 0;
     revocationDelayMs = 0;
     greeting = [];
+    held = null;
   });
 
   function upload(file: string, rel: string, tls: { cert?: string; key?: string } = client) {
@@ -94,6 +98,45 @@ describe('peer server checkpoint uploads', () => {
     expect(received[0].serverId).toBe('isle');
     expect(received[0].rel).toBe('SavedArks/The Island/world.ark');
     expect(received[0].bytes.equals(fs.readFileSync(file))).toBe(true);
+  });
+
+  it('starts a file at the byte it is carried on from, sending only the rest, and says how much it sent', async () => {
+    const file = path.join(dir, 'world.ark');
+    fs.writeFileSync(file, 'world');
+    const progress: number[] = [];
+
+    const response = await peerUpload({
+      url: `https://127.0.0.1:${port}/v1/checkpoint/file?serverId=isle&rel=world.ark&offset=3`,
+      file,
+      start: 3,
+      onProgress: bytes => progress.push(bytes),
+      ca: caPem,
+      ...client
+    });
+
+    expect(response.status).toBe(200);
+    expect(received).toEqual([{ serverId: 'isle', rel: 'world.ark', bytes: Buffer.from('ld'), offset: 3 }]);
+    expect(progress.reduce((sum, bytes) => sum + bytes, 0)).toBe(2);
+  });
+
+  it('refuses an offset that is not a whole number of bytes', async () => {
+    const file = path.join(dir, 'world.ark');
+    fs.writeFileSync(file, 'world');
+
+    const response = await peerUpload({ url: `https://127.0.0.1:${port}/v1/checkpoint/file?serverId=isle&rel=world.ark&offset=-1`, file, ca: caPem, ...client });
+
+    expect(response.status).toBe(400);
+    expect(received).toEqual([]);
+  });
+
+  it('answers the start of a move with what this node already holds of it', async () => {
+    held = [{ rel: 'world.ark', size: 3, sha256: 'abc' }];
+
+    const response = await peerRequest({
+      url: `https://127.0.0.1:${port}/v1/checkpoint/begin`, method: 'POST', body: { serverId: 'isle', resume: true }, ca: caPem, ...client
+    });
+
+    expect(response).toEqual({ status: 200, body: { ok: true, held: [{ rel: 'world.ark', size: 3, sha256: 'abc' }] } });
   });
 
   it('refuses an upload without a mesh client certificate', async () => {

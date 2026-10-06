@@ -11,6 +11,7 @@ describe('MoveServerDialogComponent', () => {
   let component: MoveServerDialogComponent;
   let sendMessage: jasmine.Spy;
   let reply$: Subject<unknown>;
+  let progress$: Subject<unknown>;
   let destinations: MoveDestination[];
   let notification: { success: jasmine.Spy; error: jasmine.Spy; warning: jasmine.Spy };
 
@@ -19,12 +20,13 @@ describe('MoveServerDialogComponent', () => {
   beforeEach(async () => {
     destinations = [{ nodeId: 'box', name: 'Basement Box' }, { nodeId: 'lab', name: 'Lab' }];
     reply$ = new Subject<unknown>();
+    progress$ = new Subject<unknown>();
     sendMessage = jasmine.createSpy('sendMessage').and.returnValue(reply$);
     notification = { success: jasmine.createSpy('success'), error: jasmine.createSpy('error'), warning: jasmine.createSpy('warning') };
     await TestBed.configureTestingModule({
       imports: [MoveServerDialogComponent],
       providers: [
-        { provide: MessagingService, useValue: { sendMessage } },
+        { provide: MessagingService, useValue: { sendMessage, receiveMessage: (channel: string) => (channel === 'server-move-progress' ? progress$ : new Subject()) } },
         { provide: NotificationService, useValue: notification },
         { provide: MeshNodesService, useValue: { destinationsFor: () => destinations } }
       ]
@@ -131,5 +133,80 @@ describe('MoveServerDialogComponent', () => {
 
     expect(page.textContent).toContain('No other machine can take it right now');
     expect(confirmButton(page).disabled).toBeTrue();
+  });
+
+  describe('while the files are on their way', () => {
+    const GB = 1024 ** 3;
+
+    function moving(): HTMLElement {
+      const page = open();
+      choose('lab');
+      confirmButton(page).click();
+      fixture.detectChanges();
+      return page;
+    }
+
+    function report(update: Record<string, unknown>): void {
+      progress$.next({ instanceId: 'isle', destinationName: 'Lab', bytesDone: 0, bytesTotal: 0, resumedBytes: 0, ...update });
+      fixture.detectChanges();
+    }
+
+    it('says what it is doing before the copy starts and after it ends', () => {
+      const page = moving();
+      const status = () => page.querySelector('.move-dialog-progress')?.textContent?.replace(/\s+/g, ' ').trim();
+
+      report({ phase: 'preparing' });
+      expect(status()).toContain('Preparing The Isle\'s files');
+      report({ phase: 'checking' });
+      expect(status()).toContain('Checking what Lab already has');
+      report({ phase: 'verifying' });
+      expect(status()).toContain('Checking the copy on Lab');
+    });
+
+    it('shows how far the copy has got', () => {
+      const page = moving();
+
+      report({ phase: 'copying', bytesDone: 1.8 * GB, bytesTotal: 2.3 * GB });
+
+      expect(page.querySelector('.move-dialog-progress')?.textContent).toContain('1.8 GB of 2.3 GB (78%)');
+      expect((page.querySelector('.move-dialog-meter .meter-fill') as HTMLElement).style.width).toBe('78%');
+      expect(page.querySelector('.move-dialog-resumed')).toBeNull();
+    });
+
+    it('says how much an earlier attempt had already sent', () => {
+      const page = moving();
+
+      report({ phase: 'copying', bytesDone: 1.2 * GB, bytesTotal: 2.3 * GB, resumedBytes: 1.2 * GB });
+
+      expect(page.querySelector('.move-dialog-resumed')?.textContent).toContain('Carrying on: 1.2 GB was already on Lab.');
+    });
+
+    it('ignores how far another server\'s move has got', () => {
+      const page = moving();
+
+      progress$.next({ instanceId: 'other', phase: 'copying', bytesDone: GB, bytesTotal: 2 * GB, resumedBytes: 0 });
+      fixture.detectChanges();
+
+      expect(page.querySelector('.move-dialog-meter')).toBeNull();
+    });
+
+    it('says a move that failed part way can be carried on', () => {
+      const page = moving();
+      report({ phase: 'copying', bytesDone: GB, bytesTotal: 2 * GB });
+
+      reply$.next({ success: false, error: 'socket hang up' });
+      fixture.detectChanges();
+
+      expect(page.querySelector('.move-dialog-hint')?.textContent).toContain('Move again to carry on from where this attempt stopped.');
+    });
+
+    it('does not offer to carry on a move that was refused before anything was sent', () => {
+      const page = moving();
+
+      reply$.next({ success: false, error: 'Stop the server before moving it.' });
+      fixture.detectChanges();
+
+      expect(page.querySelector('.move-dialog-hint')).toBeNull();
+    });
   });
 });

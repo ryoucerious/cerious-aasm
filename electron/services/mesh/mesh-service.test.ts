@@ -801,6 +801,199 @@ describe('MeshService', () => {
       return uploaded;
     }
 
+    /**
+     * A destination that keeps what it is sent, as a current node does: it answers a resumed begin
+     * with what it holds, and carries a file on from an offset. An older one wipes and holds nothing.
+     */
+    function stagingDestination(initial: Record<string, string> = {}, resumable = true) {
+      const staged = new Map(Object.entries(initial));
+      const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+      const uploads: Array<{ rel: string; offset: number; start: number }> = [];
+      const begins: Array<{ resume?: boolean; rels?: string[] }> = [];
+      jest.mocked(peerRequest).mockImplementation(async options => {
+        if (options.url.endsWith('/v1/checkpoint/begin')) {
+          const body = options.body as { resume?: boolean; rels?: string[] };
+          begins.push(body);
+          if (!resumable || !body.resume) staged.clear();
+          if (!resumable) return { status: 200, body: { ok: true } };
+          const held = [...staged].filter(([rel]) => !body.rels || body.rels.includes(rel))
+            .map(([rel, text]) => ({ rel, size: text.length, sha256: sha(text) }));
+          return { status: 200, body: { ok: true, held } };
+        }
+        if (options.url.endsWith('/v1/checkpoint/finish')) {
+          const rels = (options.body as { rels: string[] }).rels;
+          for (const rel of [...staged.keys()]) if (!rels.includes(rel)) staged.delete(rel);
+          return { status: 200, body: { checksum: checksumOf([...staged.entries()]) } };
+        }
+        return { status: 200, body: { ok: true } };
+      });
+      jest.mocked(peerUpload).mockImplementation(async options => {
+        const url = new URL(options.url);
+        const rel = url.searchParams.get('rel') || '';
+        const offset = Number(url.searchParams.get('offset') || 0);
+        const start = options.start ?? 0;
+        uploads.push({ rel, offset, start });
+        const rest = fs.readFileSync(options.file, 'utf8').slice(start);
+        options.onProgress?.(rest.length);
+        staged.set(rel, (offset ? (staged.get(rel) || '').slice(0, offset) : '') + rest);
+        return { status: 200, body: { ok: true } };
+      });
+      return { staged, uploads, begins };
+    }
+
+    async function offServerHere(): Promise<void> {
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await place('isle', LOCAL, 'stopped');
+      writeInstance('isle');
+      await service.resumeIfJoined();
+    }
+
+    /**
+     * Runs fake time on until `promise` settles. A move reads real files before it reaches a retry
+     * delay, so each step first lets real I/O finish.
+     */
+    async function untilSettled<T>(promise: Promise<T>, stepMs = 1_000, maxSteps = 200): Promise<T> {
+      let settled = false;
+      void promise.then(() => { settled = true; }, () => { settled = true; });
+      const realImmediate = jest.requireActual<typeof import('timers')>('timers').setImmediate;
+      for (let step = 0; step < maxSteps && !settled; step++) {
+        await new Promise(resolve => realImmediate(resolve));
+        await jest.advanceTimersByTimeAsync(stepMs);
+      }
+      return promise;
+    }
+
+    /** The move fails a file the way a dropped connection does. */
+    function dropUploadsOf(rel: string, times: number, keep?: (staged: Map<string, string>) => void, staged?: Map<string, string>): () => number {
+      const upload = jest.mocked(peerUpload).getMockImplementation()!;
+      let attempts = 0;
+      jest.mocked(peerUpload).mockImplementation(async options => {
+        if (new URL(options.url).searchParams.get('rel') !== rel) return upload(options);
+        attempts++;
+        if (attempts > times) return upload(options);
+        if (keep && staged) keep(staged);
+        throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+      });
+      return () => attempts;
+    }
+
+    describe('carrying on an interrupted move', () => {
+      it('sends only what the destination does not already hold, carrying a cut-off file on where it ends', async () => {
+        await offServerHere();
+        const destination = stagingDestination({ 'config.json': '{"id":"isle"}', [SAVE]: 'wo' });
+
+        const result = await service.move('isle', REMOTE, 'ada');
+
+        expect(result).toMatchObject({ success: true });
+        expect(destination.uploads).toEqual([{ rel: SAVE, offset: 2, start: 2 }]);
+        expect(destination.staged.get(SAVE)).toBe('world');
+        expect((await repo.getServer('isle'))?.nodeId).toBe(REMOTE);
+      });
+
+      it('sends a file whole again when what the destination holds of it is not the same', async () => {
+        await offServerHere();
+        const destination = stagingDestination({ [SAVE]: 'xx', 'gone.bak': 'old' });
+
+        const result = await service.move('isle', REMOTE, 'ada');
+
+        expect(result).toMatchObject({ success: true });
+        expect(destination.uploads).toEqual([{ rel: SAVE, offset: 0, start: 0 }, { rel: 'config.json', offset: 0, start: 0 }]);
+        expect([...destination.staged.keys()].sort()).toEqual([SAVE, 'config.json'].sort());
+      });
+
+      it('copies everything to a destination too old to keep what it was sent', async () => {
+        await offServerHere();
+        const destination = stagingDestination({}, false);
+
+        const result = await service.move('isle', REMOTE, 'ada');
+
+        expect(result).toMatchObject({ success: true });
+        expect(destination.uploads.every(upload => upload.offset === 0 && upload.start === 0)).toBe(true);
+      });
+    });
+
+    describe('a dropped connection', () => {
+      it('retries the file, carrying it on from where the destination\'s copy ends', async () => {
+        await offServerHere();
+        const destination = stagingDestination();
+        dropUploadsOf(SAVE, 1, staged => staged.set(SAVE, 'wor'), destination.staged);
+
+        const result = await untilSettled(service.move('isle', REMOTE, 'ada'));
+
+        expect(result).toMatchObject({ success: true });
+        expect(destination.begins).toContainEqual({ serverId: 'isle', resume: true, rels: [SAVE] });
+        expect(destination.uploads.filter(upload => upload.rel === SAVE)).toEqual([{ rel: SAVE, offset: 3, start: 3 }]);
+        expect(destination.staged.get(SAVE)).toBe('world');
+      });
+
+      it('retries a destination that cannot carry a file on from the start of that file, without wiping the rest', async () => {
+        await offServerHere();
+        const destination = stagingDestination({}, false);
+        dropUploadsOf(SAVE, 1);
+
+        const result = await untilSettled(service.move('isle', REMOTE, 'ada'));
+
+        expect(result).toMatchObject({ success: true });
+        expect(destination.begins).toHaveLength(1);
+        expect(destination.uploads.filter(upload => upload.rel === SAVE)).toEqual([{ rel: SAVE, offset: 0, start: 0 }]);
+      });
+
+      it('gives up after three retries and leaves the server where it was, off', async () => {
+        await offServerHere();
+        stagingDestination();
+        const attempts = dropUploadsOf(SAVE, 99);
+
+        const result = await untilSettled(service.move('isle', REMOTE, 'ada'));
+
+        expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('socket hang up') }));
+        expect(attempts()).toBe(4);
+        expect((await repo.getServer('isle'))?.nodeId).toBe(LOCAL);
+        expect(localRuntime.start).not.toHaveBeenCalled();
+      });
+
+      it('does not retry a file the destination refused', async () => {
+        await offServerHere();
+        stagingDestination();
+        let attempts = 0;
+        jest.mocked(peerUpload).mockImplementation(async () => {
+          attempts++;
+          return { status: 400, body: { error: 'Checkpoint path is not inside the instance.' } };
+        });
+
+        const result = await service.move('isle', REMOTE, 'ada');
+
+        expect(result).toEqual(expect.objectContaining({ success: false, error: 'Checkpoint path is not inside the instance.' }));
+        expect(attempts).toBe(1);
+      });
+    });
+
+    it('reports how far it has got to every screen showing the server', async () => {
+      await offServerHere();
+      stagingDestination({ 'config.json': '{"id":"isle"}', [SAVE]: 'wo' });
+      jest.mocked(messagingService.sendToAll).mockClear();
+
+      await service.move('isle', REMOTE, 'ada');
+
+      const reports = jest.mocked(messagingService.sendToAll).mock.calls
+        .filter(([channel]) => channel === 'server-move-progress').map(([, data]) => data as Record<string, unknown>);
+      expect(reports.map(report => report.phase)).toEqual(['preparing', 'checking', 'copying', 'copying', 'verifying']);
+      expect(reports[2]).toEqual({ instanceId: 'isle', destinationName: REMOTE.slice(0, 4), phase: 'copying', bytesDone: 15, bytesTotal: 18, resumedBytes: 15 });
+      expect(reports[3]).toMatchObject({ phase: 'copying', bytesDone: 18, bytesTotal: 18 });
+    });
+
+    it('keeps the files of an interrupted move it is receiving, and carries them on', async () => {
+      await service.resumeIfJoined();
+      const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+      await peer.onCheckpointBegin!({ serverId: 'isle' });
+      await peer.onCheckpointFile!('isle', SAVE, Readable.from(Buffer.from('wor')), 0);
+
+      const held = await peer.onCheckpointBegin!({ serverId: 'isle', resume: true });
+      await peer.onCheckpointFile!('isle', SAVE, Readable.from(Buffer.from('ld')), 3);
+
+      expect(held).toEqual([{ rel: SAVE, size: 3, sha256: createHash('sha256').update('wor').digest('hex') }]);
+      expect(fs.readFileSync(path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'MeshIncoming', 'isle', SAVE), 'utf8')).toBe('world');
+    });
+
     it('moves a server that is off: streams its files, commits, sets its copy aside, and it arrives off', async () => {
       await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
       await place('isle', LOCAL, 'stopped');
@@ -936,13 +1129,13 @@ describe('MeshService', () => {
       expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['isle']]);
     });
 
-    it('clears out the files of a move that was abandoned hours ago', async () => {
+    it('clears out the files of a move that was abandoned more than a day ago', async () => {
       const stale = path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'MeshIncoming', 'isle');
       fs.mkdirSync(stale, { recursive: true });
       fs.writeFileSync(path.join(stale, 'config.json'), '{}');
-      const hoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
-      fs.utimesSync(path.join(stale, 'config.json'), hoursAgo, hoursAgo);
-      fs.utimesSync(stale, hoursAgo, hoursAgo);
+      const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      fs.utimesSync(path.join(stale, 'config.json'), dayAgo, dayAgo);
+      fs.utimesSync(stale, dayAgo, dayAgo);
 
       await service.resumeIfJoined();
       await jest.advanceTimersByTimeAsync(5_000);
@@ -1449,6 +1642,15 @@ describe('MeshService', () => {
       await place('far', REMOTE);
       await service.resumeIfJoined();
       await jest.advanceTimersByTimeAsync(5_000);
+    });
+
+    // The move dialog may be open on another node than the one running the move.
+    it('relays how far a move of a server it hosts has got', async () => {
+      const progress = { instanceId: 'isle', phase: 'copying', bytesDone: 1, bytesTotal: 2, resumedBytes: 0 };
+
+      messagingService.broadcastTap!('server-move-progress', progress);
+
+      expect(await peerBroadcast()).toHaveBeenCalledWith({ type: 'server-event', nodeId: LOCAL, channel: 'server-move-progress', data: progress });
     });
 
     it('relays the live events of a server it hosts to the other nodes', async () => {

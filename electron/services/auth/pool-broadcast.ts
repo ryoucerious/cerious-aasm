@@ -26,7 +26,8 @@ const INSTANCE_ID_CHANNELS = new Set([
   'rcon-status',
   'clear-server-instance-logs',
   'backup-created',
-  'notification'
+  'notification',
+  'server-move-progress'
 ]);
 
 type Directory = Pick<PoolDirectory, 'snapshot'>;

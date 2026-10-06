@@ -32,25 +32,77 @@ export async function checksumTree(root: string, rels: string[]): Promise<string
   return hash.digest('hex');
 }
 
+/** sha256 of a file, or of its first `length` bytes. */
+export async function fileDigest(file: string, length?: number): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  if (length !== 0) {
+    const range = length === undefined ? {} : { start: 0, end: length - 1 };
+    for await (const chunk of fs.createReadStream(file, range)) hash.update(chunk as Buffer);
+  }
+  return hash.digest('hex');
+}
+
+/** A file the destination already holds from an earlier attempt, possibly cut off part way. */
+export interface HeldFile {
+  rel: string;
+  size: number;
+  sha256: string;
+}
+
 /**
  * Destination side. A received checkpoint is staged beside the server list, not in it, and
  * becomes the server only when its placement arrives (promoteStaged). A move that is rolled
  * back therefore leaves nothing in this node's server list.
+ *
+ * A new transfer starts from nothing. One that continues an interrupted move keeps what is
+ * staged and says what it holds (of `rels`, when given), so the source sends only the rest.
  */
-export function beginStage(serverId: string): void {
+export async function beginStage(serverId: string, options: { resume?: boolean; rels?: string[] } = {}): Promise<HeldFile[] | null> {
   const dir = stagedDir(serverId);
-  fs.rmSync(dir, { recursive: true, force: true });
+  if (!options.resume) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    return null;
+  }
   fs.mkdirSync(dir, { recursive: true });
+  const staged: string[] = [];
+  collect(dir, dir, staged);
+  const wanted = options.rels ? new Set(options.rels.map(checkedRel)) : null;
+  const held: HeldFile[] = [];
+  for (const rel of staged.sort(byCodePoint)) {
+    if (wanted && !wanted.has(rel)) continue;
+    const file = path.join(dir, rel);
+    held.push({ rel, size: fs.statSync(file).size, sha256: await fileDigest(file) });
+  }
+  return held;
 }
 
-export async function writeStagedFile(serverId: string, rel: string, source: NodeJS.ReadableStream): Promise<void> {
+/**
+ * Writes a streamed file, or carries one on from byte `offset`: what is there past that point
+ * is dropped first. It cannot start past the end of what it holds.
+ */
+export async function writeStagedFile(serverId: string, rel: string, source: NodeJS.ReadableStream, offset = 0): Promise<void> {
   const clean = checkedRel(rel);
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('A file can only be carried on from a whole byte.');
   const dest = path.join(stagedDir(serverId), clean);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  await pipeline(source, fs.createWriteStream(dest));
+  if (offset === 0) {
+    await pipeline(source, fs.createWriteStream(dest));
+    return;
+  }
+  const held = fs.existsSync(dest) ? fs.statSync(dest).size : 0;
+  if (held < offset) {
+    // 409: the source asks again what is here and carries on from that.
+    throw Object.assign(new Error(`Cannot carry on ${clean} from byte ${offset}: only ${held} bytes are here.`), { statusCode: 409 });
+  }
+  fs.truncateSync(dest, offset);
+  await pipeline(source, fs.createWriteStream(dest, { flags: 'a' }));
 }
 
-/** Checks that exactly the listed files arrived and returns their checksum. */
+/**
+ * Checks that every listed file arrived and returns their checksum. Files an earlier attempt
+ * left that this move does not list are dropped.
+ */
 export async function finishStage(serverId: string, rels: string[]): Promise<string> {
   const dir = stagedDir(serverId);
   const expected = new Set(rels.map(checkedRel));
@@ -58,8 +110,7 @@ export async function finishStage(serverId: string, rels: string[]): Promise<str
   collect(dir, dir, received);
   const missing = [...expected].filter(rel => !received.includes(rel));
   if (missing.length) throw new Error(`Files did not arrive: ${missing.join(', ')}`);
-  const extra = received.filter(rel => !expected.has(rel));
-  if (extra.length) throw new Error(`Files are not part of the move: ${extra.join(', ')}`);
+  for (const rel of received.filter(rel => !expected.has(rel))) fs.rmSync(path.join(dir, rel), { force: true });
   return checksumTree(dir, [...expected]);
 }
 
@@ -84,8 +135,11 @@ export function archiveInstance(serverId: string): string | null {
   return dest;
 }
 
-/** Longer than one move may take; a transfer still writing files is never this idle. */
-export const INCOMING_MAX_IDLE_MS = 2 * 60 * 60 * 1000;
+/**
+ * How long the files of a move that stopped arriving are kept, so the move can be carried on
+ * after an outage. A transfer still writing files is never this idle.
+ */
+export const INCOMING_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
 /** How long the copy a server left behind when it moved away is kept. */
 export const MOVED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
