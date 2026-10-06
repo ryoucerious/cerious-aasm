@@ -45,6 +45,14 @@ describe('LiveServersService', () => {
     expect(service.servers[1].state).toBe('running');
   });
 
+  it('times uptime from when the host says the server started, which another node sends', () => {
+    instances$.next([{ id: 'a', name: 'A', state: 'starting' }]);
+
+    channels['server-instance-state'].next({ instanceId: 'a', state: 'running', startedAt: 1_000 });
+
+    expect(service.find('a')?.startedAt).toBe(1_000);
+  });
+
   it('applies live state, player, memory and cpu updates', () => {
     instances$.next([{ id: 'a', name: 'A', state: 'stopped', maxPlayers: 10 }]);
     channels['server-instance-state'].next({ instanceId: 'a', state: 'running' });

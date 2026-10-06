@@ -73,4 +73,6 @@ export type MainToChildMessage =
   | { type: 'invalidate-sessions'; userId?: string; roleId?: string }
   | { type: 'messaging-response'; channel: string; data: unknown; cid?: string }
   | { type: 'broadcast-web'; channel: string; data: unknown; excludeCid?: string; audience?: BroadcastAudience }
-  | { type: 'update-auth-config'; authConfig: WebAuthConfigUpdate };
+  | { type: 'update-auth-config'; authConfig: WebAuthConfigUpdate }
+  /** Whether this node is in a mesh, where every web client has to sign in. */
+  | { type: 'mesh-sign-in'; required: boolean };

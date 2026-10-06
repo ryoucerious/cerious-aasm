@@ -11,7 +11,7 @@ import * as path from 'path';
 import { randomBytes } from 'crypto';
 import type { AddressInfo } from 'net';
 import { certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
-import { peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
+import { peerRequest, peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
 
 describe('peer server checkpoint uploads', () => {
   let dir: string;
@@ -27,6 +27,7 @@ describe('peer server checkpoint uploads', () => {
   /** What the server tells each new subscriber first. */
   let greeting: unknown[] = [];
   const received: Array<{ serverId: string; rel: string; bytes: Buffer }> = [];
+  const onHeartbeat = jest.fn();
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-peer-'));
@@ -49,7 +50,7 @@ describe('peer server checkpoint uploads', () => {
       onSubscribe: () => greeting,
       onJoin: jest.fn(),
       onCommand: jest.fn(),
-      onHeartbeat: jest.fn(),
+      onHeartbeat,
       onCheckpointFile: async (serverId, rel, body) => {
         const chunks: Buffer[] = [];
         for await (const chunk of body) chunks.push(chunk as Buffer);
@@ -171,6 +172,21 @@ describe('peer server checkpoint uploads', () => {
       expect(node.closed()).toBe(4001);
       expect(node.events).toEqual([]);
     });
+  });
+
+  it('takes a heartbeat as from the node its certificate names, with the resources it reports', async () => {
+    const resources = { cpuPercent: 12, memory: { used: 1, total: 2 }, disk: null };
+
+    const response = await peerRequest({
+      url: `https://127.0.0.1:${port}/v1/heartbeat`,
+      method: 'POST',
+      body: { nodeId: 'someone-else', sentAt: 5, resources },
+      ca: caPem,
+      ...client
+    });
+
+    expect(response.status).toBe(200);
+    expect(onHeartbeat).toHaveBeenCalledWith('client', 5, resources);
   });
 
   it('asks whether the certificate belongs to a member, by its serial and node id', async () => {

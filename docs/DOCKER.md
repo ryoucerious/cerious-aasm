@@ -183,6 +183,10 @@ Three things to get right:
 - **When the ports differ outside**, because of a port forward, a proxy or two containers on one machine, set the full addresses instead: `AASM_ADVERTISE_PEER_URL` (for example `https://mesh-a.example.com:443`) and `AASM_ADVERTISE_RAFT_ADDR` (for example `mesh-a.example.com:14002`). These are read when the container creates or joins a mesh and kept after that; to change them later, leave the mesh and join again.
 - **Pass TLS through; do not end it.** Members prove who they are with certificates, end to end. A proxy in front of these two ports must forward raw TCP (nginx `stream`, a Traefik TCP router with TLS passthrough, HAProxy in TCP mode) or be a plain port forward or VPN. A proxy that decrypts the traffic removes the certificates, and members refuse it; joining checks the mesh's certificate against the join token and stops before sending anything.
 
+**Sign-in is always on in a mesh.** A member's web interface controls servers on every member, so it asks for a mesh account even with `AASM_AUTH_ENABLED=false`; the single `AASM_USERNAME`/`AASM_PASSWORD` login only works where `AASM_AUTH_ENABLED=true`. Leaving the mesh puts the container's own setting back.
+
+A mesh of two needs both members running to get going again after one restarts: the restarted member waits, with its mesh page saying it is reconnecting, until the other is up.
+
 A minimal nginx `stream` block forwarding public 443 to the peer API:
 
 ```nginx

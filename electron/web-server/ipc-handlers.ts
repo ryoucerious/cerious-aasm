@@ -1,7 +1,7 @@
 import { messagingService } from '../services/messaging.service';
 import { resolveAuthVerify } from './user-bridge';
 import { invalidateSessionsFor } from '../utils/session-store.utils';
-import { AuthConfig, getAuthConfig, updateAuthConfig } from './auth-config';
+import { AuthConfig, getAuthConfig, setMeshSignInRequired, updateAuthConfig } from './auth-config';
 import { MainToChildMessage, SOCKET_CLOSE } from '../types/messaging.types';
 
 /** Handles what the main process sends this child. */
@@ -35,6 +35,15 @@ export function setupIPCHandlers(): void {
         updateAuthConfig({ enabled, username, passwordHash });
         // A socket keeps the rights it was opened with; one opened while authentication was off
         // would keep the owner's. Reconnecting makes every client pass the new handshake.
+        if (loginChanged(before, getAuthConfig())) {
+          messagingService.closeWebSockets(SOCKET_CLOSE.RECONNECT, 'Sign-in settings changed');
+        }
+        break;
+      }
+      case 'mesh-sign-in': {
+        // Joining a mesh closes the sockets opened while authentication was off, so they sign in.
+        const before = getAuthConfig();
+        setMeshSignInRequired(message.required);
         if (loginChanged(before, getAuthConfig())) {
           messagingService.closeWebSockets(SOCKET_CLOSE.RECONNECT, 'Sign-in settings changed');
         }

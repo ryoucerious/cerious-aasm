@@ -905,6 +905,80 @@ $server-card-detail-gap: 0.25rem;
   &.tone-success { background: var(--success); }
 }
 
+// System Resources in a mesh: one block per member.
+.dash-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.dash-node-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+
+  & + & {
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-muted);
+  }
+}
+
+.dash-node-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-bottom: 0.1rem;
+
+  .material-icons {
+    font-size: 16px;
+    color: var(--text-secondary);
+  }
+}
+
+.dash-node-name {
+  font-size: 0.85rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-node-tag,
+.dash-node-quiet {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dash-node-tag {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-muted);
+  border-radius: 999px;
+}
+
+.dash-node-meter {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(2rem, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dash-node-meter-name,
+.dash-node-meter-value {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dash-node-meter-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .dash-activity {
   display: flex;
   flex-direction: column;

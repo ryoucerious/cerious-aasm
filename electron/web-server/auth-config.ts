@@ -107,16 +107,29 @@ export function updateAuthConfig(config: AuthConfig): void {
   saveAuthConfig();
 }
 
+/**
+ * The login in force. In a mesh, sign-in is required even where this machine's own login is off,
+ * and then only mesh accounts sign in: the single login was never meant to be in force. The
+ * saved login is never changed for it, so leaving the mesh puts this machine's own back.
+ */
 export function getAuthConfig(): AuthConfig {
+  if (meshSignInRequired && !authConfig.enabled) return { enabled: true, username: '', passwordHash: '' };
   return { ...authConfig };
 }
 
+let meshSignInRequired = false;
+
+/** Set by main while this node is in a mesh. */
+export function setMeshSignInRequired(required: boolean): void {
+  meshSignInRequired = required;
+}
+
 /**
- * Identifies a legacy login's username and password hash (the current login's by default). A legacy
+ * Identifies a legacy login's username and password hash (the login in force by default). A legacy
  * session is stamped with it, so a login changed since (even while the server was down) no longer
  * honours the session.
  */
-export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'passwordHash'> = authConfig): string {
+export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'passwordHash'> = getAuthConfig()): string {
   return crypto.createHash('sha256').update(JSON.stringify([login.username, login.passwordHash])).digest('hex');
 }
 

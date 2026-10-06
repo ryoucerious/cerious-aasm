@@ -3,7 +3,7 @@ import * as path from 'path';
 import { messagingService } from './messaging.service';
 import { settingsService } from './settings.service';
 import { userDatabaseService } from './auth/user-database.service';
-import { meshAuth } from './mesh/mesh-hooks';
+import { meshAuth, meshSignInRequired, onMeshSignInChanged } from './mesh/mesh-hooks';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import { AuthenticatedUser, LEGACY_ADMIN_ID, ROLE_IDS, SessionUser } from '../types/auth.types';
 import type { ApiProcessSender, ChildToMainMessage, MainToChildMessage } from '../types/messaging.types';
@@ -29,6 +29,13 @@ export class WebServerService {
   private webServerStarting = false;
   private webServerPort = 3000;
   private commandLineLogin: WebServerAuthOptions | null = null;
+
+  constructor() {
+    // A child that is still starting hears it once it is ready.
+    onMeshSignInChanged(required => {
+      if (this.apiProcess && this.webServerRunning) sendToChild(this.apiProcess, { type: 'mesh-sign-in', required });
+    });
+  }
 
   /**
    * A headless run takes the web login from the command line for the rest of the process: every
@@ -105,6 +112,9 @@ export class WebServerService {
             this.broadcastStatus();
             if (!this.commandLineLogin) {
               void this.sendGlobalLogin(child);
+            }
+            if (meshSignInRequired()) {
+              sendToChild(child, { type: 'mesh-sign-in', required: true });
             }
             settle({ success: true, message: message.message, port: message.port });
             break;
@@ -203,7 +213,9 @@ export class WebServerService {
       void this.relayMesh(child, message, mesh);
       return;
     }
-    const { user, authEnabled, accountGone } = this.resolveLocal(message.user, message.authEnabled !== false);
+    // A member still reaching its mesh after a restart is checked against its own copy of the
+    // accounts, but sign-in stays on.
+    const { user, authEnabled, accountGone } = this.resolveLocal(message.user, meshSignInRequired() || message.authEnabled !== false);
     this.dispatch(child, message, user, authEnabled, accountGone);
   }
 
@@ -213,7 +225,9 @@ export class WebServerService {
     mesh: NonNullable<ReturnType<typeof meshAuth>>
   ): Promise<void> {
     const claimed = message.user;
-    const authEnabled = message.authEnabled !== false;
+    // Never off in a mesh: a child that has not yet heard that sign-in is required would
+    // otherwise hand an anonymous client the owner's rights over every node.
+    const authEnabled = true;
     if (!claimed?.id || claimed.id === LEGACY_ADMIN_ID) {
       const local = this.resolveLocal(claimed, authEnabled);
       this.dispatch(child, message, local.user, local.authEnabled, local.accountGone);

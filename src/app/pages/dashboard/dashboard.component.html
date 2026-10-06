@@ -64,7 +64,8 @@
                          [assigneeLabel]="poolDirectory.assigneeLabel(server)"
                          [operatorLabel]="poolDirectory.operatorLabel(server)"
                          [nodeLabel]="nodeLabel(server)"
-                         [hostMemoryTotalBytes]="hostMemoryTotal"
+                         [hostMemoryTotalBytes]="hostMemoryTotalFor(server)"
+                         [joinHost]="joinHost(server)"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
                          (forceStop)="forceStopServer($event)"
@@ -159,6 +160,35 @@
 
       <div class="dash-card">
         <div class="dash-card-header"><h3>System Resources</h3></div>
+        <!-- In a mesh, every member: a server here may run on any of them. -->
+        <div class="dash-node-list" *ngIf="resourceNodes.length; else thisMachine">
+          <div class="dash-node-resources" *ngFor="let node of resourceNodes; trackBy: trackNode">
+            <div class="dash-node-head">
+              <span class="material-icons">hub</span>
+              <span class="dash-node-name" [attr.data-tooltip]="node.name">{{ node.name }}</span>
+              <span class="dash-node-tag" *ngIf="node.local">This machine</span>
+              <span class="dash-node-quiet" *ngIf="!node.reporting">Not reporting</span>
+            </div>
+            <ng-container *ngIf="node.reporting">
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">CPU</span>
+                <span class="meter"><span class="meter-fill tone-primary" [style.width.%]="node.cpuPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.cpuLabel }}</span>
+              </div>
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">Memory</span>
+                <span class="meter"><span class="meter-fill tone-violet" [style.width.%]="node.memoryPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.memoryLabel }}</span>
+              </div>
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">Disk</span>
+                <span class="meter"><span class="meter-fill tone-success" [style.width.%]="node.diskPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.diskLabel }}</span>
+              </div>
+            </ng-container>
+          </div>
+        </div>
+        <ng-template #thisMachine>
         <div class="dash-resources">
           <div class="dash-resource">
             <span class="dash-resource-icon tone-primary"><span class="material-icons">memory</span></span>
@@ -182,6 +212,7 @@
             </div>
           </div>
         </div>
+        </ng-template>
       </div>
 
       <div class="dash-card" id="activity">

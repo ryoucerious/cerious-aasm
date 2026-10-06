@@ -17,6 +17,7 @@ import {
   loadAuthConfig,
   migrateAuthConfig,
   saveAuthConfig,
+  setMeshSignInRequired,
   updateAuthConfig,
   verifyPassword
 } from './auth-config';
@@ -261,6 +262,47 @@ describe('auth-config', () => {
 
       expect(legacyLoginFingerprint(snapshot)).toBe(original);
       expect(legacyLoginFingerprint()).not.toBe(original);
+    });
+  });
+
+  // A mesh member's web interface controls servers on every node.
+  describe('in a mesh', () => {
+    afterEach(() => setMeshSignInRequired(false));
+
+    it('requires sign-in, with mesh accounts only, while this machine\'s own login is off', () => {
+      updateAuthConfig({ enabled: false, username: 'admin', passwordHash: 'hash' });
+
+      setMeshSignInRequired(true);
+
+      expect(getAuthConfig()).toEqual({ enabled: true, username: '', passwordHash: '' });
+    });
+
+    it('keeps this machine\'s own login when it is on', () => {
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash' });
+
+      setMeshSignInRequired(true);
+
+      expect(getAuthConfig()).toEqual({ enabled: true, username: 'admin', passwordHash: 'hash' });
+    });
+
+    it('goes back to this machine\'s own login after leaving, having never saved over it', () => {
+      updateAuthConfig({ enabled: false, username: 'admin', passwordHash: 'hash' });
+      mockedWrite.mockClear();
+
+      setMeshSignInRequired(true);
+      setMeshSignInRequired(false);
+
+      expect(getAuthConfig()).toEqual({ enabled: false, username: 'admin', passwordHash: 'hash' });
+      expect(mockedWrite).not.toHaveBeenCalled();
+    });
+
+    it('stops honouring a session of the single login while only the mesh requires sign-in', () => {
+      updateAuthConfig({ enabled: false, username: 'admin', passwordHash: 'hash' });
+      const own = legacyLoginFingerprint();
+
+      setMeshSignInRequired(true);
+
+      expect(legacyLoginFingerprint()).not.toBe(own);
     });
   });
 

@@ -25,7 +25,7 @@ import { DropdownComponent, DropdownOption } from '../../components/dropdown/dro
 import { AnimateReflowDirective } from '../../core/directives/animate-reflow.directive';
 import { ACTIVITY_ICONS } from '../../core/utils/activity-icons';
 import { bucketSamples, seriesStats, toPoints, linePath, areaPath, PlayerHistorySample, ChartPoint } from '../../core/utils/chart.utils';
-import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel } from '../../core/utils/format.utils';
+import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel, isLocalPageHost } from '../../core/utils/format.utils';
 
 export interface HostResources {
   cpuPercent: number;
@@ -35,6 +35,40 @@ export interface HostResources {
 
 interface HostResourcesReply extends Partial<HostResources> {
   error?: string;
+}
+
+/** A mesh member as get-mesh-status and mesh-status describe it. */
+interface MeshNodeView {
+  nodeId: string;
+  name: string;
+  status?: string;
+  /** The address other machines reach it at. */
+  host?: string;
+  /** From its last heartbeat; null once that is stale. */
+  resources?: HostResources | null;
+}
+
+interface MeshStatusView {
+  enabled?: boolean;
+  degraded?: boolean;
+  warning?: string | null;
+  /** This machine. */
+  nodeId?: string | null;
+  nodes?: MeshNodeView[];
+}
+
+/** One machine in System Resources, in a mesh. */
+export interface NodeResourceRow {
+  nodeId: string;
+  name: string;
+  local: boolean;
+  reporting: boolean;
+  cpuPercent: number;
+  cpuLabel: string;
+  memoryPercent: number;
+  memoryLabel: string;
+  diskPercent: number;
+  diskLabel: string;
 }
 
 export type ServerFilter = 'all' | 'online' | 'offline';
@@ -122,6 +156,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   readonly heroBackground = `url("${HERO_IMAGE}")`;
   meshBanner = '';
   private nodeNames = new Map<string, string>();
+  /** Members of this machine's mesh, removed ones left out; empty when standalone. */
+  private meshNodes: MeshNodeView[] = [];
+  private localNodeId: string | null = null;
 
   private subs: Subscription[] = [];
 
@@ -158,12 +195,16 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.BACKUPS_VIEW);
   }
 
-  private applyMesh(status: { enabled?: boolean; degraded?: boolean; warning?: string | null; nodes?: Array<{ nodeId: string; name: string }> } | null | undefined): void {
+  private applyMesh(status: MeshStatusView | null | undefined): void {
     if (!status?.enabled) {
       this.meshBanner = '';
       this.nodeNames.clear();
+      this.meshNodes = [];
+      this.localNodeId = null;
     } else {
       this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
+      this.meshNodes = (status.nodes || []).filter(node => node.status !== 'removed');
+      this.localNodeId = status.nodeId || null;
       this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
     }
     this.cdr.markForCheck();
@@ -171,14 +212,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.readViewPreferences();
-    this.subs.push(this.messaging.sendMessage<{
-      enabled?: boolean; degraded?: boolean; warning?: string | null;
-      nodes?: Array<{ nodeId: string; name: string }>;
-    }>('get-mesh-status', {}).subscribe(status => this.applyMesh(status)));
-    this.subs.push(this.messaging.receiveMessage<{
-      enabled?: boolean; degraded?: boolean; warning?: string | null;
-      nodes?: Array<{ nodeId: string; name: string }>;
-    }>('mesh-status').subscribe(status => this.applyMesh(status)));
+    this.subs.push(this.messaging.sendMessage<MeshStatusView>('get-mesh-status', {}).subscribe(status => this.applyMesh(status)));
+    // Sent again after each heartbeat, which carries the sender's resources.
+    this.subs.push(this.messaging.receiveMessage<MeshStatusView>('mesh-status').subscribe(status => this.applyMesh(status)));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
@@ -287,6 +323,49 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   get hostMemoryTotal(): number | null {
     return this.hostResources?.memory?.total || null;
+  }
+
+  /** The memory of the machine a server runs on: this one, or the member hosting it. */
+  hostMemoryTotalFor(server: ServerInstance): number | null {
+    const node = this.hostNodeOf(server);
+    if (!node || node.nodeId === this.localNodeId) return this.hostMemoryTotal;
+    return node.resources?.memory?.total || null;
+  }
+
+  /**
+   * The address players use for a server in a mesh: that of the member hosting it. A server on
+   * this machine keeps the name the page was opened on, unless that is localhost or the desktop
+   * app, which other machines cannot use. Null outside a mesh.
+   */
+  joinHost(server: ServerInstance): string | null {
+    const node = this.hostNodeOf(server);
+    if (!node?.host) return null;
+    if (node.nodeId === this.localNodeId && !isLocalPageHost(this.pageHostname())) return null;
+    return node.host;
+  }
+
+  /** Every member's CPU, memory and disk, this machine's as it is polled here. Empty unless the mesh has another member. */
+  get resourceNodes(): NodeResourceRow[] {
+    if (this.meshNodes.length < 2) return [];
+    return this.meshNodes.map(node => {
+      const local = node.nodeId === this.localNodeId;
+      return resourceRow(node.nodeId, node.name, local, local ? this.hostResources : node.resources || null);
+    });
+  }
+
+  trackNode(_index: number, node: NodeResourceRow): string {
+    return node.nodeId;
+  }
+
+  private hostNodeOf(server: ServerInstance): MeshNodeView | null {
+    if (!this.meshNodes.length) return null;
+    const nodeId = server.nodeId || this.localNodeId;
+    return this.meshNodes.find(node => node.nodeId === nodeId) || null;
+  }
+
+  /** The host in the address bar; empty in the desktop app. Separate so tests can set it. */
+  protected pageHostname(): string {
+    return typeof window === 'undefined' ? '' : window.location.hostname;
   }
 
   startServer(server: ServerInstance): void {
@@ -431,7 +510,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get cpuPercent(): number {
-    return this.hostResources ? Math.max(0, Math.min(100, this.hostResources.cpuPercent)) : 0;
+    return cpuPercentOf(this.hostResources);
   }
 
   get memoryPercent(): number {
@@ -443,17 +522,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get cpuLabel(): string {
-    return this.hostResources ? formatPercent(this.hostResources.cpuPercent) : '--';
+    return cpuLabelOf(this.hostResources);
   }
 
   get memoryLabel(): string {
-    const memory = this.hostResources?.memory;
-    return memory ? `${formatBytes(memory.used)} / ${formatBytes(memory.total, 0)}` : '--';
+    return memoryLabelOf(this.hostResources);
   }
 
   get diskLabel(): string {
-    const disk = this.hostResources?.disk;
-    return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
+    return diskLabelOf(this.hostResources);
   }
 
   private fetchPlayerHistory(): Observable<unknown> {
@@ -581,4 +658,37 @@ export class DashboardComponent implements OnInit, OnDestroy {
       // Unavailable storage: the choice lasts for this visit only.
     }
   }
+}
+
+function cpuPercentOf(resources: HostResources | null | undefined): number {
+  return resources ? Math.max(0, Math.min(100, resources.cpuPercent)) : 0;
+}
+
+function cpuLabelOf(resources: HostResources | null | undefined): string {
+  return resources ? formatPercent(resources.cpuPercent) : '--';
+}
+
+function memoryLabelOf(resources: HostResources | null | undefined): string {
+  const memory = resources?.memory;
+  return memory ? `${formatBytes(memory.used)} / ${formatBytes(memory.total, 0)}` : '--';
+}
+
+function diskLabelOf(resources: HostResources | null | undefined): string {
+  const disk = resources?.disk;
+  return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
+}
+
+function resourceRow(nodeId: string, name: string, local: boolean, resources: HostResources | null): NodeResourceRow {
+  return {
+    nodeId,
+    name,
+    local,
+    reporting: !!resources,
+    cpuPercent: cpuPercentOf(resources),
+    cpuLabel: cpuLabelOf(resources),
+    memoryPercent: toPercent(resources?.memory?.used, resources?.memory?.total),
+    memoryLabel: memoryLabelOf(resources),
+    diskPercent: toPercent(resources?.disk?.used, resources?.disk?.total),
+    diskLabel: diskLabelOf(resources)
+  };
 }

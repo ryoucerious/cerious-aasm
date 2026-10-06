@@ -310,6 +310,37 @@ undone by the mirror while its copy to the mesh is under way.
 - When a machine joins a mesh, the mesh's accounts replace the ones it
   had; those are kept in `mesh/accounts-before-join-<time>.db`.
 - An account set from the command line stays local to its machine.
+- Every member's web interface requires sign-in, from the moment it
+  starts until it leaves, whatever its own login setting: it controls
+  servers on every node. Where that setting was off, only mesh accounts
+  sign in. Leaving the mesh puts the machine's own setting back; the
+  saved setting is never changed.
+
+### Live state of servers on other nodes
+
+The node hosting a server broadcasts its state, log, players, CPU and
+memory, and relays them to every member over `/v1/events`. A start
+made by a remote command or by the reconciler broadcasts like a start
+from the UI; a later stop reports through the callbacks that start
+registered. A running state carries the process start time, so every
+node shows the same uptime. Each node keeps what a host last reported
+about its servers, so a page opened later lists them as the host does;
+a stop clears uptime, players, CPU and memory.
+
+Each heartbeat carries the sender's CPU, memory and disk. The node is
+the one its certificate names, whatever the body says. Mesh status
+lists every member with these and the host other nodes reach it at,
+which the dashboard uses for each member's resources and for a
+server's join address and memory total.
+
+### Restarting a member
+
+Before its first snapshot, a restarted node's copy of the mesh is
+empty until a leader replays the log to it, and in a mesh of two that
+leader needs the restarted node's vote. So rqlited keeps running while
+the copy is empty; the node looks again every 5 s and attaches once it
+is filled in. Mesh status says it is reconnecting meanwhile, never
+standalone, so the mesh page does not offer to create or join one.
 
 ### RBAC
 

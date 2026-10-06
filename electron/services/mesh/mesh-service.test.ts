@@ -13,7 +13,7 @@ import { Readable } from 'stream';
 import { MeshRepository } from './mesh-repository';
 import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHandle } from './sql-executor';
 import { hashArgon2id, hashToken } from './passwords';
-import { meshServer } from './mesh-hooks';
+import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
 import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
@@ -48,6 +48,7 @@ jest.mock('../runtime/local-runtime', () => ({
     stop: jest.fn(),
     forceStop: jest.fn(),
     state: jest.fn(),
+    startedAt: jest.fn(),
     appliedRevision: jest.fn(),
     applyConfig: jest.fn(),
     applyCluster: jest.fn(),
@@ -71,6 +72,7 @@ jest.mock('../auth/user-database.service', () => ({
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn() }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
+jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
 
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import { RqliteSupervisor } from './rqlite-supervisor';
@@ -79,6 +81,8 @@ import { peerRequest, peerUpload, startPeerServer, subscribeEvents } from './pee
 import { messagingService } from '../messaging.service';
 import { localRuntime } from '../runtime/local-runtime';
 import { userDatabaseService } from '../auth/user-database.service';
+import { serverInstanceService } from '../server-instance/server-instance.service';
+import { sampleHostResources } from '../host-resources';
 import { MeshService } from './mesh-service';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
@@ -86,11 +90,17 @@ const LOCAL = '11111111-1111-4111-8111-111111111111';
 /** rqlited as the mesh sees it: strong writes need a leader, `none` reads come from the local copy. */
 class FakeRqlite {
   readonly executor: SqliteExecutor;
+  /** False for a restarted node whose copy no leader has filled in yet: it has no tables. */
+  loaded = true;
   constructor(db: SqliteHandle, readonly view: ExecutorStatus) {
     this.executor = new SqliteExecutor(db, view);
   }
-  exec(sql: string, params?: unknown[], consistency?: 'strong' | 'none') { return this.executor.exec(sql, params, consistency); }
+  exec(sql: string, params?: unknown[], consistency?: 'strong' | 'none') {
+    if (!this.loaded) return Promise.reject(new Error('no such table: nodes'));
+    return this.executor.exec(sql, params, consistency);
+  }
   query<T extends Record<string, unknown>>(sql: string, params?: unknown[], consistency?: 'strong' | 'none') {
+    if (!this.loaded) return /sqlite_master/.test(sql) ? Promise.resolve([] as T[]) : Promise.reject(new Error('no such table: nodes'));
     return this.executor.query<T>(sql, params, consistency);
   }
   status() { return this.executor.status(); }
@@ -137,12 +147,14 @@ describe('MeshService', () => {
     jest.mocked(localRuntime.listInstances).mockResolvedValue({ instances: [] });
     jest.mocked(localRuntime.state).mockReturnValue('stopped');
     jest.mocked(localRuntime.appliedRevision).mockReturnValue(1);
+    jest.mocked(sampleHostResources).mockResolvedValue({ cpuPercent: 0, memory: { used: 1, total: 2 }, disk: null });
 
     service = new MeshService();
   });
 
   afterEach(async () => {
     await service.stop();
+    setMeshMember(false);
     jest.useRealTimers();
     db.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -300,6 +312,15 @@ describe('MeshService', () => {
       await service.removeNode(LOCAL);
 
       expect(await repo.getClusterCredential()).toBeNull();
+    });
+
+    it('lets this machine\'s own sign-in setting apply again once it has left', async () => {
+      await service.resumeIfJoined();
+      expect(meshSignInRequired()).toBe(true);
+
+      await service.removeNode(LOCAL);
+
+      expect(meshSignInRequired()).toBe(false);
     });
   });
 
@@ -487,7 +508,7 @@ describe('MeshService', () => {
       });
     }
 
-    function command(operation: 'start' | 'stop', serverId: string, targetNode = LOCAL) {
+    function command(operation: 'start' | 'stop' | 'restart', serverId: string, targetNode = LOCAL) {
       return {
         commandId: `cmd-${operation}-${serverId}`, correlationId: 'c', actor: 'ada', targetNode, operation, serverId,
         expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: 1
@@ -510,6 +531,40 @@ describe('MeshService', () => {
       expect(localRuntime.stop).not.toHaveBeenCalled();
       expect(states.get('s1')).toBe('running');
       expect((await repo.getServer('s1'))?.desiredState).toBe('running');
+    });
+
+    // Without callbacks the runtime broadcasts the server's states and log; with its own it would
+    // keep them, and every client would show the server as starting until it was reloaded.
+    it('starts a server for a remote command the way a local start does', async () => {
+      await place('s1', 'stopped');
+      await service.resumeIfJoined();
+      await tick();
+
+      await service.executeLocalCommand(command('start', 's1'));
+
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
+    });
+
+    it('restarts a server for a remote command the way a local start does', async () => {
+      await place('s1', 'running');
+      states.set('s1', 'running');
+      await service.resumeIfJoined();
+      await tick();
+
+      await service.executeLocalCommand(command('restart', 's1'));
+
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
+    });
+
+    it('starts a server another node set running the way a local start does', async () => {
+      await place('s1', 'stopped');
+      await service.resumeIfJoined();
+      await tick();
+
+      await place('s1', 'running');
+      await tick();
+
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
     });
 
     it('does not restart a server that stopped outside the reconciler', async () => {
@@ -776,7 +831,7 @@ describe('MeshService', () => {
       expect(result.success).toBe(false);
       expect((await repo.getServer('isle'))?.nodeId).toBe(LOCAL);
       expect(fs.existsSync(path.join(servers, 'isle', 'config.json'))).toBe(true);
-      expect(localRuntime.start).toHaveBeenCalledWith('isle', expect.any(Function), expect.any(Function));
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['isle']]);
     });
 
     it('asks the node hosting a server to run its move', async () => {
@@ -811,7 +866,7 @@ describe('MeshService', () => {
       await jest.advanceTimersByTimeAsync(5_000);
 
       expect(fs.readFileSync(path.join(servers, 'isle', SAVE), 'utf8')).toBe('world');
-      expect(localRuntime.start).toHaveBeenCalledWith('isle', expect.any(Function), expect.any(Function));
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['isle']]);
     });
 
     it('clears out the files of a move that was abandoned hours ago', async () => {
@@ -1364,11 +1419,22 @@ describe('MeshService', () => {
 
     it('greets a node that subscribes with the state of each server it hosts', async () => {
       jest.mocked(localRuntime.state).mockImplementation(id => (id === 'isle' ? 'running' : 'stopped'));
+      jest.mocked(localRuntime.startedAt).mockImplementation(id => (id === 'isle' ? 1_000 : null));
       const peer = jest.mocked(startPeerServer).mock.calls[0][1];
 
       expect(peer.onSubscribe!()).toEqual([
-        { type: 'server-event', nodeId: LOCAL, channel: 'server-instance-state', data: { instanceId: 'isle', state: 'running' } }
+        { type: 'server-event', nodeId: LOCAL, channel: 'server-instance-state', data: { instanceId: 'isle', state: 'running', startedAt: 1_000 } }
       ]);
+    });
+
+    it('sends when a server it hosts started along with its running state, so other nodes show its uptime', async () => {
+      jest.mocked(localRuntime.startedAt).mockReturnValue(1_000);
+
+      messagingService.broadcastTap!('server-instance-state', { instanceId: 'isle', state: 'running' });
+
+      expect(await peerBroadcast()).toHaveBeenCalledWith({
+        type: 'server-event', nodeId: LOCAL, channel: 'server-instance-state', data: { instanceId: 'isle', state: 'running', startedAt: 1_000 }
+      });
     });
 
     it('lists a remote server with the state its host last reported', async () => {
@@ -1377,6 +1443,33 @@ describe('MeshService', () => {
       const listed = await service.withMeshServers([]);
 
       expect(listed.find(instance => instance.id === 'far')?.state).toBe('running');
+    });
+
+    it('lists a remote server with the uptime, players, CPU and memory its host last reported', async () => {
+      const event = (channel: string, data: Record<string, unknown>) =>
+        subscriptions[0].onEvent({ type: 'server-event', nodeId: REMOTE, channel, data: { instanceId: 'far', ...data } });
+      event('server-instance-state', { state: 'running', startedAt: 1_000 });
+      event('server-instance-players', { players: 5, count: 5 });
+      event('server-instance-cpu', { cpu: 12 });
+      event('server-instance-memory', { memory: 900 });
+
+      const far = (await service.withMeshServers([])).find(instance => instance.id === 'far');
+
+      expect(far).toMatchObject({ state: 'running', startedAt: 1_000, players: 5, cpu: 12, memory: 900 });
+    });
+
+    it('drops a remote server\'s figures once its host reports it stopped', async () => {
+      const event = (channel: string, data: Record<string, unknown>) =>
+        subscriptions[0].onEvent({ type: 'server-event', nodeId: REMOTE, channel, data: { instanceId: 'far', ...data } });
+      event('server-instance-state', { state: 'running', startedAt: 1_000 });
+      event('server-instance-players', { players: 5 });
+
+      event('server-instance-state', { state: 'stopped' });
+
+      const far = (await service.withMeshServers([])).find(instance => instance.id === 'far') as Record<string, unknown>;
+      expect(far.state).toBe('stopped');
+      expect(far.startedAt).toBeUndefined();
+      expect(far.players).toBeUndefined();
     });
 
     it('goes back to the stored state once it stops hearing from that node', async () => {
@@ -1396,6 +1489,56 @@ describe('MeshService', () => {
 
       expect(subscriptions[1].close).toHaveBeenCalled();
       expect(messagingService.broadcastTap).toBeNull();
+    });
+  });
+
+  describe('resources of each node', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+    const here = { cpuPercent: 10, memory: { used: 4, total: 16 }, disk: { used: 100, total: 500 } };
+    const there = { cpuPercent: 55, memory: { used: 20, total: 32 }, disk: null };
+
+    beforeEach(async () => {
+      jest.mocked(sampleHostResources).mockResolvedValue(here);
+      await repo.upsertNode(nodeRow(LOCAL, '1', 'https://127.0.0.1:4747'));
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+    });
+
+    function heartbeat(resources: unknown): void {
+      jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now(), resources);
+    }
+
+    async function listed(nodeId: string) {
+      return (await service.status()).nodes.find(node => node.nodeId === nodeId)!;
+    }
+
+    it('sends this machine\'s resources with each heartbeat', async () => {
+      const sent = jest.mocked(peerRequest).mock.calls.map(([options]) => options).find(options => options.url.endsWith('/v1/heartbeat'))!;
+
+      expect(sent.url).toBe('https://10.0.0.2:4747/v1/heartbeat');
+      expect(sent.body).toMatchObject({ nodeId: LOCAL, resources: here });
+    });
+
+    it('lists each node with its resources and the host other nodes reach it at', async () => {
+      heartbeat(there);
+
+      expect(await listed(LOCAL)).toMatchObject({ host: '127.0.0.1', resources: here });
+      expect(await listed(REMOTE)).toMatchObject({ host: '10.0.0.2', resources: there });
+    });
+
+    it('stops listing what a node reported once its heartbeats stop', async () => {
+      heartbeat(there);
+
+      await jest.advanceTimersByTimeAsync(30_000);
+
+      expect((await listed(REMOTE)).resources).toBeNull();
+    });
+
+    it('ignores resources that are not figures', async () => {
+      heartbeat({ cpuPercent: 'lots', memory: { used: 1, total: 2 }, disk: null });
+
+      expect((await listed(REMOTE)).resources).toBeNull();
     });
   });
 
@@ -1459,6 +1602,22 @@ describe('MeshService', () => {
       await service.stop();
       expect(meshServer('isle')).toBeNull();
     });
+
+    it('pushes the server list to open pages when a server on another node is edited there', async () => {
+      const row = {
+        serverId: 'isle', name: 'isle', nodeId: '22222222-2222-4222-8222-222222222222', mapName: '', desiredState: 'stopped' as const,
+        configRevision: 1, configJson: '{}', clusterId: null, operatorUserId: null, managerUserId: null
+      };
+      await repo.upsertServer(row);
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+      jest.mocked(serverInstanceService.broadcastInstances).mockClear();
+
+      await repo.upsertServer({ ...row, name: 'Renamed', configRevision: 2 });
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(serverInstanceService.broadcastInstances).toHaveBeenCalled();
+    });
   });
 
   describe('auto-select', () => {
@@ -1487,6 +1646,61 @@ describe('MeshService', () => {
   });
 
   describe('resume after a restart', () => {
+    function supervisorCalls(method: 'start' | 'stop'): number {
+      return jest.mocked(RqliteSupervisor).mock.results
+        .reduce((sum, result) => sum + jest.mocked((result.value as Record<string, jest.Mock>)[method]).mock.calls.length, 0);
+    }
+
+    // Before its first snapshot a restarted node's copy stays empty until a leader replays the
+    // log, and in a mesh of two that leader cannot be elected without this node's vote.
+    it('keeps rqlited running while its copy is empty, so the members can elect a leader to fill it', async () => {
+      rqlite.loaded = false;
+      view.hasQuorum = false;
+      view.leaderNodeId = null;
+
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(service.isEnabled()).toBe(false);
+
+      rqlite.loaded = true;
+      view.hasQuorum = true;
+      view.leaderNodeId = LOCAL;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(service.isEnabled()).toBe(true);
+      expect(supervisorCalls('start')).toBe(1);
+      expect(supervisorCalls('stop')).toBe(0);
+    });
+
+    it('says it is reconnecting, not standalone, while it waits for its copy', async () => {
+      rqlite.loaded = false;
+
+      await service.resumeIfJoined();
+
+      expect(await service.status()).toMatchObject({ enabled: false, reconnecting: true, meshId: 'mesh-1', nodeId: LOCAL });
+    });
+
+    it('stops waiting for its copy, and stops rqlited, when the app stops the mesh', async () => {
+      rqlite.loaded = false;
+      await service.resumeIfJoined();
+
+      await service.stop();
+      rqlite.loaded = true;
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(service.isEnabled()).toBe(false);
+      expect(supervisorCalls('start')).toBe(1);
+    });
+
+    // A member's web interface reaches every node, so it needs a mesh account from the start.
+    it('requires a mesh account on the web from the start, before it reaches the mesh', async () => {
+      rqlite.loaded = false;
+
+      await service.resumeIfJoined();
+
+      expect(meshSignInRequired()).toBe(true);
+    });
+
     it('rejoins and signs in a known user while it cannot see a leader', async () => {
       await addUser('ada', 'correct horse');
       view.hasQuorum = false;

@@ -28,12 +28,39 @@ export interface MeshServerSummary {
 let meshServerList = new Map<string, MeshServerSummary>();
 const meshServerListeners = new Set<() => void>();
 
+const signInListeners = new Set<(required: boolean) => void>();
+let member = false;
+
 export function registerMeshAuth(next: MeshAuthApi | null): void {
   auth = next;
   if (!next) {
     securityVersions.clear();
     noteMeshServers([]);
   }
+}
+
+/**
+ * Set from the moment this node knows it belongs to a mesh, before it reaches the others after a
+ * restart, until it leaves. Stopping the app leaves it set.
+ */
+export function setMeshMember(next: boolean): void {
+  if (member === next) return;
+  member = next;
+  for (const listener of signInListeners) listener(next);
+}
+
+/**
+ * True while this node is in a mesh. Its web interface then controls servers on every node, so
+ * a web client needs a mesh account even where this machine's own login is off.
+ */
+export function meshSignInRequired(): boolean {
+  return member;
+}
+
+/** Hears when this node joins or leaves a mesh. Returns a function that stops listening. */
+export function onMeshSignInChanged(listener: (required: boolean) => void): () => void {
+  signInListeners.add(listener);
+  return () => signInListeners.delete(listener);
 }
 
 /**

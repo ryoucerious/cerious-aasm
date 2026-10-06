@@ -81,6 +81,11 @@ export function formatHourLabel(timestamp: number): string {
 /** Hosts the desktop app and a local dev server load from; useless in a join address. */
 const LOCAL_JOIN_HOSTS = new Set(['', 'localhost', '127.0.0.1', '[::1]', '::1']);
 
+/** True for the desktop app and a page opened on this machine, rather than by a name others can reach. */
+export function isLocalPageHost(host: string): boolean {
+  return LOCAL_JOIN_HOSTS.has(host.trim());
+}
+
 /**
  * What a player pastes into the game: the host this panel was opened on and the game port.
  * On localhost, a MultiHome address is the one players can use. Without one, the page host

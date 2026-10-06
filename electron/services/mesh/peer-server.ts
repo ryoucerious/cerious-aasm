@@ -40,7 +40,8 @@ export interface PeerHandlers {
   /** A node whose join could not finish asks to be taken back out. The id comes from its certificate. */
   onAbortJoin?(nodeId: string): Promise<void>;
   onCommand(body: ControlCommand): Promise<CommandResult>;
-  onHeartbeat(nodeId: string, sentAt: number): void;
+  /** `resources` is as the sender reported it, unchecked. */
+  onHeartbeat(nodeId: string, sentAt: number, resources?: unknown): void;
   /** The frames a node that has just subscribed to /v1/events gets first: how things stand now. */
   onSubscribe?(): unknown[];
   /** A read-only question about a server this node hosts. */
@@ -96,9 +97,10 @@ export function startPeerServer(port: number, handlers: PeerHandlers): Promise<P
     socket.on('close', () => sockets.delete(socket));
     socket.on('message', raw => {
       try {
-        const body = JSON.parse(raw.toString()) as { type?: string; nodeId?: string; sentAt?: number };
-        if (body.type === 'heartbeat' && body.nodeId && typeof body.sentAt === 'number') {
-          handlers.onHeartbeat(body.nodeId, body.sentAt);
+        const body = JSON.parse(raw.toString()) as { type?: string; sentAt?: number };
+        // A frame on a socket counts only once the certificate is known to be a member's.
+        if (body.type === 'heartbeat' && typeof body.sentAt === 'number' && sockets.has(socket)) {
+          handlers.onHeartbeat(nodeId, body.sentAt);
         }
       } catch {
         /* ignore a malformed status frame */
@@ -158,8 +160,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/heartbeat') {
-      const body = await readJson<{ nodeId: string; sentAt: number }>(req);
-      handlers.onHeartbeat(body.nodeId, body.sentAt);
+      // From the node its certificate names, whatever the body says: one member must not be
+      // able to report another as up, or report its resources.
+      const body = await readJson<{ sentAt: number; resources?: unknown }>(req);
+      handlers.onHeartbeat(nodeId, body.sentAt, body.resources);
       send(res, 200, { ok: true, now: Date.now() });
       return;
     }

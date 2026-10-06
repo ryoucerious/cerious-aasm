@@ -306,6 +306,8 @@ export interface SaveInstanceResult {
 export interface InstanceStateEvent {
   instanceId?: string;
   state?: string;
+  /** Sent with a running state by the node hosting a server elsewhere in a mesh. */
+  startedAt?: number;
 }
 
 export interface InstancePlayersEvent {

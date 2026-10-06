@@ -1,4 +1,5 @@
 import type { InstanceConfig, ServerInstanceResult, StartServerResult } from '../../types/server-instance.types';
+import { getStandardEventCallbacks } from '../server-instance/instance-events';
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { serverLifecycleService } from '../server-instance/server-lifecycle.service';
 import { serverManagementService } from '../server-instance/server-management.service';
@@ -33,8 +34,14 @@ export class LocalRuntime {
     return serverInstanceService.deleteInstance(id);
   }
 
-  start(id: string, onLog: (line: string) => void, onState: (state: string) => void): Promise<StartServerResult> {
-    return serverInstanceService.startServerInstance(id, onLog, onState);
+  /**
+   * Without callbacks the server's log lines and state changes are broadcast as for a start from
+   * the UI: a later stop reports through the callbacks a start registered, so a start that kept
+   * them to itself leaves every client, and every other node, showing it as starting.
+   */
+  start(id: string, onLog?: (line: string) => void, onState?: (state: string) => void): Promise<StartServerResult> {
+    const standard = !onLog || !onState ? getStandardEventCallbacks(id) : null;
+    return serverInstanceService.startServerInstance(id, onLog || standard!.onLog, onState || standard!.onState);
   }
 
   stop(id: string) {
@@ -126,6 +133,11 @@ export class LocalRuntime {
 
   state(id: string): string {
     return getNormalizedInstanceState(id);
+  }
+
+  /** When the running process started; null when it is not running. */
+  startedAt(id: string): number | null {
+    return serverProcessService.getProcessStartTime(id);
   }
 
   logs(id: string, maxLines?: number) {

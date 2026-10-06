@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { ALL_PERMISSIONS, AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
 import {
   COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ClusterRecord, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
-  type NodeRecord, type ServerRecord, type StorageProfileRecord, type UserRecord
+  type NodeRecord, type NodeResources, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
 import { getInstanceDir } from '../../utils/ark/instance.utils';
@@ -16,6 +16,7 @@ import { messagingService } from '../messaging.service';
 import { autoUpdateService } from '../auto-update.service';
 import { beginClusterUpdate } from '../ark-update.service';
 import { relaunchInPlace } from '../docker-runtime-update';
+import { sampleHostResources } from '../host-resources';
 import { setMeshDesktopMode, setMeshDesktopUser } from '../auth/desktop-session';
 import type { SenderIdentity } from '../auth/permission-gate';
 import { collectCapabilities, ensureNodeIdentity, nodeIdentityPath, readNodeIdentity, writeNodeIdentity, type NodeIdentityFile } from '../runtime/node-identity';
@@ -27,7 +28,7 @@ import { executeCommand } from './command-router';
 import { meshTransferStore } from './managed-storage';
 import { providerForProfile } from './cluster-storage';
 import { clockSkewMs, probeTcp, wgInstalled, wireguardConfig, wireguardPrivateKey, applyWireguard } from './diagnostics';
-import { meshServer, meshServers, registerMeshAuth, setMeshWriteBlock, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
+import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
 import { MeshRepository } from './mesh-repository';
 import { hashArgon2id, hashToken, newEnrollmentToken, verifyArgon2id, verifyBcrypt } from './passwords';
 import {
@@ -47,6 +48,8 @@ const PEER_PORT = envPort('AASM_PEER_PORT', 4747);
 const HTTP_PORT = envPort('AASM_HTTP_PORT', 4001);
 const RAFT_PORT = envPort('AASM_RAFT_PORT', 4002);
 const RESUME_RETRY_MS = 30_000;
+/** How often a restarted node looks again for its copy of the mesh while rqlited runs. */
+const COPY_RETRY_MS = 5_000;
 /** A move copies saves over the network; a large world takes a while. */
 const MOVE_TIMEOUT_MS = 60 * 60_000;
 /** Start All staggers its starts, so a node with many servers takes a while to answer. */
@@ -62,9 +65,23 @@ const RELAY_CHANNELS = new Set([
 const SERVER_COMMANDS = new Set<ControlCommand['operation']>([
   'start', 'stop', 'force-stop', 'restart', 'delete', 'move', 'rcon', 'connect-rcon', 'disconnect-rcon', 'save-ini', 'set-ownership'
 ]);
+/** The figure each live channel reports, kept for a server on another node. */
+const LIVE_FIGURES: Record<string, 'players' | 'cpu' | 'memory'> = {
+  'server-instance-players': 'players', 'server-instance-cpu': 'cpu', 'server-instance-memory': 'memory'
+};
 const UP_STATES = new Set(['running', 'starting']);
 /** A node that has not answered or sent a heartbeat for this long shows as unreachable. */
 const HEARTBEAT_FRESH_MS = 25_000;
+
+/** What the node hosting a server last reported about it. */
+interface LiveServer {
+  nodeId: string;
+  state?: string;
+  startedAt?: number;
+  players?: number;
+  cpu?: number;
+  memory?: number;
+}
 
 interface LocalSecrets {
   httpUser: string;
@@ -100,8 +117,12 @@ export class MeshService {
   private localNodeId: string | null = null;
   /** One live-event subscription to each other member, by node id. */
   private readonly subscriptions = new Map<string, { close(): void }>();
-  /** The state each other node last reported for its servers, while its subscription is open. */
-  private readonly liveStates = new Map<string, { nodeId: string; state: string }>();
+  /** What each other node last reported about its servers, while its subscription is open. */
+  private readonly liveStates = new Map<string, LiveServer>();
+  /** This machine's CPU, memory and disk as of the last tick, sent with each heartbeat. */
+  private localResources: NodeResources | null = null;
+  /** What each other node sent with its last heartbeat. */
+  private readonly nodeResources = new Map<string, { resources: NodeResources; at: number }>();
 
   /**
    * Who this node is. Read once while attached and kept in memory: it is consulted on every tick
@@ -132,6 +153,7 @@ export class MeshService {
       return;
     }
     if (!identity.meshId) return;
+    setMeshMember(true);
     const secrets = readSecrets();
     if (!secrets) {
       if (fs.existsSync(secretsPath())) this.scheduleResume();
@@ -145,9 +167,17 @@ export class MeshService {
     }
     warnIfAdvertiseChanged(secrets);
     try {
-      await this.startRqlite(identity.nodeId, secrets);
-      const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, identity.nodeId);
-      if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+      const client = this.waitingCopy ?? await this.startLocalCopy(identity.nodeId, secrets);
+      // Before its first snapshot a restarted node's copy is empty until a leader replays the
+      // log to it. rqlited keeps running meanwhile: in a mesh of two, that leader cannot be
+      // elected without this node's vote.
+      if (!await new MeshRepository(client).hasCopy()) {
+        if (!this.waitingCopy) console.log('[mesh] Waiting for the other members to bring this node\'s copy of the mesh up to date.');
+        this.waitingCopy = client;
+        this.scheduleResume(COPY_RETRY_MS);
+        return;
+      }
+      this.waitingCopy = null;
       this.repo = new MeshRepository(client);
       this.rqlite = client;
       this.secrets = secrets;
@@ -171,10 +201,20 @@ export class MeshService {
   }
 
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** rqlited, started and ready, while this node waits for its copy of the mesh to be filled in. */
+  private waitingCopy: RqliteClient | null = null;
 
-  private scheduleResume(): void {
+  private scheduleResume(delayMs = RESUME_RETRY_MS): void {
     if (this.resumeTimer) return;
-    this.resumeTimer = setTimeout(() => { void this.resumeIfJoined(); }, RESUME_RETRY_MS);
+    this.resumeTimer = setTimeout(() => { void this.resumeIfJoined(); }, delayMs);
+  }
+
+  /** Starts this node's rqlited and waits until it answers, with or without a leader. */
+  private async startLocalCopy(nodeId: string, secrets: LocalSecrets): Promise<RqliteClient> {
+    await this.startRqlite(nodeId, secrets);
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
+    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    return client;
   }
 
   /** A write that can wait for quorum. Without a leader it fails; the node carries on. */
@@ -661,7 +701,7 @@ export class MeshService {
         return { success: true, detail: { instance: patched.instance } };
       }
       if (current.operation === 'start') {
-        const started = await localRuntime.start(current.serverId, () => undefined, () => undefined);
+        const started = await localRuntime.start(current.serverId);
         if (started.started) await this.noteDesired(current.serverId, 'running');
         return { success: started.started, error: started.portError };
       }
@@ -679,7 +719,7 @@ export class MeshService {
         return { success: stopped.success, error: stopped.error };
       }
       if (current.operation === 'restart') {
-        const started = await localRuntime.start(current.serverId, () => undefined, () => undefined);
+        const started = await localRuntime.start(current.serverId);
         if (started.started) await this.noteDesired(current.serverId, 'running');
         return { success: started.started, error: started.portError };
       }
@@ -744,10 +784,12 @@ export class MeshService {
     const remote = servers
       .filter(server => server.nodeId && server.nodeId !== localId && !known.has(server.serverId) && !removed.has(server.nodeId))
       .map(server => {
-        // The state its host last reported; the stored desired state until it reports one.
+        // What its host last reported; the stored desired state until it reports one.
         const instance = instanceFromMeshServer(server);
         const live = this.liveStates.get(server.serverId);
-        return live ? { ...instance, state: live.state } as InstanceConfig : instance;
+        if (!live) return instance;
+        const reported = Object.fromEntries(Object.entries(live).filter(([key, value]) => key !== 'nodeId' && value !== undefined));
+        return { ...instance, ...reported } as InstanceConfig;
       });
     return [...tagged, ...remote];
   }
@@ -1071,7 +1113,7 @@ export class MeshService {
         archiveInstance(id);
         void serverInstanceService.broadcastInstances();
       },
-      restart: async id => { await localRuntime.start(id, () => undefined, () => undefined); }
+      restart: async id => { await localRuntime.start(id); }
     });
     return { success: result.success, error: result.error, detail: result.warning ? { warning: result.warning } : undefined };
   }
@@ -1204,6 +1246,14 @@ export class MeshService {
 
   async status(): Promise<MeshStatus> {
     const identity = this.identity();
+    if (!this.repo && identity?.meshId) {
+      return {
+        ...emptyStatus(identity.nodeId, identity.name),
+        meshId: identity.meshId,
+        reconnecting: true,
+        warning: 'This machine is in a mesh and is reconnecting to the other members. A mesh of two needs both machines running to get going again.'
+      };
+    }
     if (!this.repo || !identity?.meshId) {
       return emptyStatus(identity?.nodeId || null, identity?.name || null);
     }
@@ -1238,7 +1288,9 @@ export class MeshService {
         connected: node.status !== 'removed' && (
           node.nodeId === identity.nodeId
           || this.reachable(node.nodeId)
-        )
+        ),
+        host: hostOf(node.endpoints.peerUrl),
+        resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId)
       })),
       clusters,
       storage
@@ -1248,6 +1300,7 @@ export class MeshService {
   async stop(): Promise<void> {
     if (this.resumeTimer) clearTimeout(this.resumeTimer);
     this.resumeTimer = null;
+    this.waitingCopy = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (this.statusTimer) clearTimeout(this.statusTimer);
@@ -1260,6 +1313,8 @@ export class MeshService {
     for (const subscription of this.subscriptions.values()) subscription.close();
     this.subscriptions.clear();
     this.liveStates.clear();
+    this.localResources = null;
+    this.nodeResources.clear();
     this.accountsFingerprint = '';
     messagingService.broadcastTap = null;
     this.localNodeId = null;
@@ -1278,6 +1333,7 @@ export class MeshService {
     const identity = this.identity();
     if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
     await this.stop();
+    setMeshMember(false);
     this.publishStatus();
     void serverInstanceService.broadcastInstances();
   }
@@ -1370,8 +1426,10 @@ export class MeshService {
         onCommand: body => this.executeLocalCommand(body),
         onQuery: body => this.answerQuery(body),
         onSubscribe: () => this.greeting(),
-        onHeartbeat: (id, sentAt) => {
+        onHeartbeat: (id, sentAt, resources) => {
           this.seenHeartbeats.set(id, { at: Date.now(), skewMs: clockSkewMs(sentAt) });
+          const reported = nodeResourcesOf(resources);
+          if (reported) this.nodeResources.set(id, { resources: reported, at: Date.now() });
           this.publishStatus();
         },
         // A move's destination stages the streamed files; they become the server when its placement arrives.
@@ -1391,6 +1449,7 @@ export class MeshService {
     this.intents = new DesiredIntents(intentsPath());
     this.pendingConfigs = new PendingConfigs(path.join(meshRoot(), 'pending-configs.json'));
     setMeshWriteBlock(op => this.writeBlock(op));
+    setMeshMember(true);
     setMeshDesktopMode(true);
     this.noteDesktopAuth();
     if (this.timer) clearInterval(this.timer);
@@ -1400,13 +1459,13 @@ export class MeshService {
 
   private inventoryFingerprint = '';
 
-  /** Pushes the combined server list when a machine's servers join or leave the mesh. */
+  /** Pushes the combined server list when a server joins, leaves, moves, changes state or is edited on its node. */
   private async publishInventoryIfChanged(): Promise<void> {
     if (!this.isEnabled()) return;
     const { instances } = await localRuntime.listInstances();
     const merged = await this.withMeshServers(instances);
     const fingerprint = merged
-      .map(instance => `${instance.id}:${instance.nodeId || ''}:${String((instance as { state?: string }).state || '')}`)
+      .map(instance => `${instance.id}:${instance.nodeId || ''}:${String((instance as { state?: string }).state || '')}:${instance.configRevision ?? ''}`)
       .sort()
       .join('|');
     if (fingerprint === this.inventoryFingerprint) return;
@@ -1453,6 +1512,7 @@ export class MeshService {
     if (this.announcing || !this.repo) return;
     this.announcing = true;
     try {
+      this.localResources = await sampleHostResources().catch(() => null);
       const self = await this.repo.getNode(nodeId);
       const version = appVersion();
       const certs = readCertPaths();
@@ -1473,7 +1533,8 @@ export class MeshService {
           const response = await peerRequest({
             url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/heartbeat`,
             method: 'POST',
-            body: { nodeId, sentAt: Date.now() },
+            // nodeId is for an older receiver; a current one takes it from the certificate.
+            body: { nodeId, sentAt: Date.now(), resources: this.localResources },
             ca: fs.readFileSync(certs.caCert, 'utf8'),
             cert: fs.readFileSync(certs.nodeCert, 'utf8'),
             key: fs.readFileSync(certs.nodeKey, 'utf8'),
@@ -1535,7 +1596,14 @@ export class MeshService {
     if (!RELAY_CHANNELS.has(channel) || !this.peer || !this.localNodeId) return;
     const serverId = (data as { instanceId?: unknown } | null)?.instanceId;
     if (typeof serverId !== 'string' || meshServer(serverId)?.nodeId !== this.localNodeId) return;
-    this.peer.broadcast({ type: 'server-event', nodeId: this.localNodeId, channel, data });
+    this.peer.broadcast({ type: 'server-event', nodeId: this.localNodeId, channel, data: this.withStartTime(channel, data, serverId) });
+  }
+
+  /** A running state carries when the process started, so other nodes show the same uptime as this one. */
+  private withStartTime(channel: string, data: unknown, serverId: string): unknown {
+    if (channel !== 'server-instance-state' || (data as { state?: unknown }).state !== 'running') return data;
+    const startedAt = localRuntime.startedAt(serverId);
+    return startedAt == null ? data : { ...(data as object), startedAt };
   }
 
   /** An event from another node, shown here only if that node hosts the server it is about. */
@@ -1545,9 +1613,28 @@ export class MeshService {
     if (!RELAY_CHANNELS.has(frame.channel)) return;
     const serverId = frame.data?.instanceId;
     if (typeof serverId !== 'string' || meshServer(serverId)?.nodeId !== fromNodeId) return;
-    const state = (frame.data as { state?: unknown }).state;
-    if (frame.channel === 'server-instance-state' && typeof state === 'string') this.liveStates.set(serverId, { nodeId: fromNodeId, state });
+    this.noteLive(fromNodeId, serverId, frame.channel, frame.data as Record<string, unknown>);
     messagingService.sendToAll(frame.channel, frame.data);
+  }
+
+  /**
+   * Keeps what a host reports about a server, so a page opened here later lists it as the host
+   * does. Uptime, players, CPU and memory are dropped when it stops running.
+   */
+  private noteLive(nodeId: string, serverId: string, channel: string, data: Record<string, unknown>): void {
+    const known = this.liveStates.get(serverId);
+    const current: LiveServer = known?.nodeId === nodeId ? known : { nodeId };
+    if (channel === 'server-instance-state') {
+      if (typeof data.state !== 'string') return;
+      const { state: _state, startedAt, ...figures } = current;
+      this.liveStates.set(serverId, data.state === 'running'
+        ? { ...figures, state: data.state, startedAt: typeof data.startedAt === 'number' ? data.startedAt : startedAt }
+        : { nodeId, state: data.state });
+      return;
+    }
+    const field = LIVE_FIGURES[channel];
+    const value = field ? data[field] : undefined;
+    if (field && typeof value === 'number') this.liveStates.set(serverId, { ...current, [field]: value });
   }
 
   /** A node that cannot be heard from: its servers show their stored state again. */
@@ -1561,7 +1648,7 @@ export class MeshService {
     if (!localId) return [];
     return meshServers().filter(server => server.nodeId === localId).map(server => ({
       type: 'server-event', nodeId: localId, channel: 'server-instance-state',
-      data: { instanceId: server.serverId, state: localRuntime.state(server.serverId) }
+      data: this.withStartTime('server-instance-state', { instanceId: server.serverId, state: localRuntime.state(server.serverId) }, server.serverId)
     }));
   }
 
@@ -1720,7 +1807,7 @@ export class MeshService {
         ...clusterByServer.get(server.serverId)
       })), {
         state: id => localRuntime.state(id),
-        start: async id => { await localRuntime.start(id, () => undefined, () => undefined); },
+        start: async id => { await localRuntime.start(id); },
         stop: async id => { await localRuntime.stop(id); },
         appliedRevision: id => localRuntime.appliedRevision(id),
         applyConfig: (id, revision, configJson) => localRuntime.applyConfig(id, revision, JSON.parse(configJson)),
@@ -1870,6 +1957,12 @@ export class MeshService {
     messagingService.sendToAll('mesh-auth-changed', {});
   }
 
+  /** What a node sent with its last heartbeat; null once that is too old to show. */
+  private reportedResources(nodeId: string): NodeResources | null {
+    const reported = this.nodeResources.get(nodeId);
+    return reported && reported.at >= Date.now() - HEARTBEAT_FRESH_MS ? reported.resources : null;
+  }
+
   /** This machine, or a node that answered or sent a heartbeat recently. */
   private reachable(nodeId: string): boolean {
     return nodeId === this.identity()?.nodeId
@@ -1923,6 +2016,30 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
     configRevision: server.configRevision,
     state: server.desiredState
   } as InstanceConfig;
+}
+
+/** The host in a peer URL, which is the machine's address as other nodes know it. */
+function hostOf(peerUrl: string): string {
+  try {
+    return new URL(peerUrl).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/** Resources another node reported, or null unless every figure is a number. */
+function nodeResourcesOf(value: unknown): NodeResources | null {
+  const figure = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+  const pair = (x: unknown): x is { used: number; total: number } =>
+    !!x && typeof x === 'object' && figure((x as { used?: unknown }).used) && figure((x as { total?: unknown }).total);
+  const reported = value as { cpuPercent?: unknown; memory?: unknown; disk?: unknown } | null;
+  if (!reported || typeof reported !== 'object' || !figure(reported.cpuPercent) || !pair(reported.memory)) return null;
+  if (reported.disk !== null && !pair(reported.disk)) return null;
+  return {
+    cpuPercent: reported.cpuPercent,
+    memory: { used: reported.memory.used, total: reported.memory.total },
+    disk: reported.disk ? { used: reported.disk.used, total: reported.disk.total } : null
+  };
 }
 
 /** A stored password hash names its algorithm in its prefix. */

@@ -121,6 +121,15 @@ export class MeshRepository {
     return rows.map(toNode);
   }
 
+  /**
+   * False while this node's copy is empty: after a restart before the first snapshot, until a
+   * leader replays the log to it.
+   */
+  async hasCopy(): Promise<boolean> {
+    const rows = await this.db.query<Record<string, unknown>>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'nodes'", [], 'none');
+    return rows.length > 0;
+  }
+
   async getNode(nodeId: string): Promise<NodeRecord | null> {
     const rows = await this.db.query<Record<string, unknown>>('SELECT * FROM nodes WHERE node_id = ?', [nodeId], 'none');
     return rows[0] ? toNode(rows[0]) : null;

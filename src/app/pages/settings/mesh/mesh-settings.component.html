@@ -1,5 +1,5 @@
 <div class="mesh-settings settings-pane" *ngIf="status">
-  <div class="ark-install-notice" *ngIf="!status.enabled">
+  <div class="ark-install-notice" *ngIf="standalone">
     <i class="material-icons">info</i>
     <span>This install is standalone. Create a mesh on this machine, or join one with a token from a member.</span>
   </div>
@@ -12,7 +12,7 @@
     <span>{{ status.warning }}</span>
   </div>
 
-  <section class="settings-card" *ngIf="!status.enabled">
+  <section class="settings-card" *ngIf="standalone">
     <h3 class="settings-card-title">Create a mesh</h3>
     <p class="settings-card-hint">This machine becomes the first member. Other machines join it with an enrollment token.</p>
     <div class="form-group">
@@ -35,7 +35,7 @@
     </div>
   </section>
 
-  <section class="settings-card" *ngIf="!status.enabled">
+  <section class="settings-card" *ngIf="standalone">
     <h3 class="settings-card-title">Join a mesh</h3>
     <p class="settings-card-hint">Use the address of a machine that is already a member, and a one-time token from that machine.</p>
     <div class="form-group">

@@ -71,6 +71,17 @@ export interface NodeRecord {
   weight: number;
   /** Set when a status snapshot is built. A recent heartbeat or this machine itself. */
   connected?: boolean;
+  /** Set when a status snapshot is built: the host other nodes dial, from the peer URL. */
+  host?: string;
+  /** Set when a status snapshot is built: from its last heartbeat, null once that is stale. */
+  resources?: NodeResources | null;
+}
+
+/** CPU, memory and disk of a machine. Disk is the volume holding the app's data; null when it cannot be read. */
+export interface NodeResources {
+  cpuPercent: number;
+  memory: { used: number; total: number };
+  disk: { used: number; total: number } | null;
 }
 
 export interface NodeEndpoints {
@@ -215,6 +226,8 @@ export interface MeshStatus {
   warning: string | null;
   /** False when the mesh has no accounts yet, so the desktop can create the first one. */
   hasAccounts: boolean;
+  /** In a mesh, but not yet back in touch with it after a restart. Not standalone: it must not offer to create or join one. */
+  reconnecting?: boolean;
   nodes: NodeRecord[];
   clusters: ClusterRecord[];
   storage: StorageProfileRecord[];

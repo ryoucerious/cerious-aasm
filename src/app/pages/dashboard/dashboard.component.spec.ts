@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed, discardPeriodicTasks, fakeAsync, tick } from '@angular/core/testing';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { Router } from '@angular/router';
-import { BehaviorSubject, Subject, of } from 'rxjs';
+import { BehaviorSubject, NEVER, Subject, of } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
@@ -35,6 +35,8 @@ describe('DashboardComponent', () => {
   let displayName$: BehaviorSubject<string>;
   /** Permissions the stubbed identity lacks; empty means an admin. */
   let denied: Set<string>;
+  /** What get-mesh-status answers; standalone unless a test sets it before creating the page. */
+  let meshStatus: any;
 
   const now = Date.now();
   const alpha = { id: 'a', name: 'Alpha', state: 'running', players: 4, maxPlayers: 10, startedAt: now - 3600_000, sortOrder: 0 };
@@ -43,12 +45,14 @@ describe('DashboardComponent', () => {
   beforeEach(async () => {
     servers$ = new BehaviorSubject<any[]>([alpha, beta]);
     items$ = new BehaviorSubject<any[]>([]);
+    meshStatus = { enabled: false };
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
     messaging = {
       sendMessage: jasmine.createSpy('sendMessage').and.callFake((channel: string) => {
         if (channel === 'get-host-resources') return of({ cpuPercent: 18, memory: { used: 13.4 * 1024 ** 3, total: 32 * 1024 ** 3 }, disk: { used: 84 * 1024 ** 3, total: 232 * 1024 ** 3 } });
         if (channel === 'get-player-history') return of({ samples: [{ t: now - 60_000, counts: { a: 4, b: 0 } }, { t: now - 120_000, counts: { a: 6 } }] });
+        if (channel === 'get-mesh-status') return of(meshStatus);
         return of({ success: true });
       }),
       receiveMessage: () => of(null)
@@ -122,6 +126,64 @@ describe('DashboardComponent', () => {
     expect(component.playerChartLine).toContain('M');
     expect(component.historyFor(alpha as any).length).toBe(48);
     expect(component.hostMemoryTotal).toBe(32 * 1024 ** 3);
+  });
+
+  it('shows only this machine\'s resources, and the cards as the page sees them, outside a mesh', () => {
+    expect(component.resourceNodes).toEqual([]);
+    expect(component.joinHost(alpha as any)).toBeNull();
+    expect(component.hostMemoryTotalFor(alpha as any)).toBe(32 * 1024 ** 3);
+  });
+
+  describe('in a mesh', () => {
+    const GB = 1024 ** 3;
+    const desk = { nodeId: 'desk', name: 'Jareds-PC', host: '192.168.1.155', status: 'alive', resources: { cpuPercent: 3, memory: { used: 1 * GB, total: 32 * GB }, disk: null } };
+    const box = { nodeId: 'box', name: 'b3e6', host: '10.0.0.2', status: 'alive', resources: { cpuPercent: 50, memory: { used: 8 * GB, total: 16 * GB }, disk: { used: 150 * GB, total: 1000 * GB } } };
+    const gone = { nodeId: 'gone', name: 'Old', host: '10.0.0.9', status: 'removed', resources: null };
+    let pageHost: string;
+
+    function open(nodes: any[]): void {
+      meshStatus = { enabled: true, nodeId: 'desk', nodes };
+      // Nothing broadcast yet; the default stub's null would stand for an empty mesh-status.
+      messaging.receiveMessage = () => NEVER;
+      servers$.next([{ ...alpha, nodeId: 'box' }, { ...beta, nodeId: 'desk' }]);
+      fixture = TestBed.createComponent(DashboardComponent);
+      component = fixture.componentInstance;
+      pageHost = 'localhost';
+      spyOn(component as any, 'pageHostname').and.callFake(() => pageHost);
+      fixture.detectChanges();
+    }
+
+    it('shows the resources of every member, this machine\'s as it polls them', () => {
+      open([desk, box, gone]);
+
+      expect(component.resourceNodes.map(node => [node.name, node.local, node.cpuLabel, node.memoryLabel, node.diskLabel])).toEqual([
+        ['Jareds-PC', true, '18%', '13.4 GB / 32 GB', '84 GB / 232 GB'],
+        ['b3e6', false, '50%', '8 GB / 16 GB', '150 GB / 1000 GB']
+      ]);
+      expect(fixture.nativeElement.querySelectorAll('.dash-node-resources').length).toBe(2);
+    });
+
+    it('shows a member that has stopped reporting as not reporting', () => {
+      open([desk, { ...box, resources: null }]);
+
+      expect(component.resourceNodes[1]).toEqual(jasmine.objectContaining({ name: 'b3e6', reporting: false }));
+    });
+
+    it('gives a card the memory and address of the machine hosting its server', () => {
+      open([desk, box]);
+
+      expect(component.hostMemoryTotalFor({ ...alpha, nodeId: 'box' } as any)).toBe(16 * GB);
+      expect(component.joinHost({ ...alpha, nodeId: 'box' } as any)).toBe('10.0.0.2');
+      expect(component.joinHost({ ...beta, nodeId: 'desk' } as any)).toBe('192.168.1.155');
+    });
+
+    it('keeps the name the page was opened on for servers on this machine', () => {
+      open([desk, box]);
+      pageHost = 'ark.example.org';
+
+      expect(component.joinHost({ ...beta, nodeId: 'desk' } as any)).toBeNull();
+      expect(component.joinHost({ ...alpha, nodeId: 'box' } as any)).toBe('10.0.0.2');
+    });
   });
 
   it('filters and sorts the visible servers', () => {

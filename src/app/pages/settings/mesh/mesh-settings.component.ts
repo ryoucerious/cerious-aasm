@@ -26,6 +26,8 @@ interface MeshStatus {
   voterCount: number;
   warning: string | null;
   nodes: MeshNode[];
+  /** In a mesh, not yet back in touch with it after a restart. */
+  reconnecting?: boolean;
 }
 
 /**
@@ -227,6 +229,14 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     this.notification[ok ? 'success' : 'error'](message);
     this.refresh();
     void this.auth.refresh();
+  }
+
+  /**
+   * Not in any mesh. A member reconnecting after a restart is not: creating or joining one there
+   * would split it from the mesh it is still in.
+   */
+  get standalone(): boolean {
+    return !!this.status && !this.status.enabled && !this.status.reconnecting;
   }
 
   /** A machine with no accounts has to choose the mesh admin while creating it. */

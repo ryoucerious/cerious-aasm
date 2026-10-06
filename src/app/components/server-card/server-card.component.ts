@@ -48,6 +48,11 @@ export class ServerCardComponent implements OnDestroy {
   @Input() assigneeLabel = '';
   /** Hosting node display name. Empty on a standalone install. */
   @Input() nodeLabel = '';
+  /**
+   * The address of the machine hosting the server, in a mesh. Null keeps the host this page was
+   * opened on, which is right only for a server on that machine.
+   */
+  @Input() joinHost: string | null = null;
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();
@@ -196,11 +201,12 @@ export class ServerCardComponent implements OnDestroy {
   }
 
   /**
-   * The host this panel was opened on and the game port. The desktop app loads from localhost,
-   * so a MultiHome address replaces that when one is set. The password is never part of it.
+   * The host this panel was opened on, or the machine hosting the server, and the game port. The
+   * desktop app loads from localhost, so a MultiHome address replaces that when one is set. The
+   * password is never part of it.
    */
   get connectAddress(): string {
-    return joinAddress(this.server, this.pageHostname());
+    return joinAddress(this.server, this.joinHost ?? this.pageHostname());
   }
 
   /** A named operator. The admin pool is not a person, so it is not printed as "Admin". */

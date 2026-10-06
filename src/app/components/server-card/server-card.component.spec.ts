@@ -120,6 +120,14 @@ describe('ServerCardComponent', () => {
       expect(component.connectAddress).toBe('ark.example.org:7787');
     });
 
+    // In a mesh the server can run on another machine than the one this page came from.
+    it('is the address of the machine hosting the server, when the page says which', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('localhost');
+      component.server = { ...component.server, gamePort: 7787 } as any;
+      component.joinHost = '192.168.1.155';
+      expect(component.connectAddress).toBe('192.168.1.155:7787');
+    });
+
     it('falls back to the MultiHome address when the panel runs on localhost', () => {
       spyOn(component as any, 'pageHostname').and.returnValue('localhost');
       component.server = { ...component.server, gamePort: 7777, multiHome: '203.0.113.5' } as any;
