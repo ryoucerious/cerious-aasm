@@ -16,6 +16,7 @@ import { hashArgon2id, hashToken } from './passwords';
 import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
 import { meshDesktopIdentity, setMeshDesktopMode } from '../auth/desktop-session';
 import { isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
+import { knownClusters, rememberClusters } from '../clusters/cluster-registry';
 import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
@@ -27,7 +28,7 @@ jest.mock('../../utils/platform.utils', () => ({
 }));
 jest.mock('./rqlite-supervisor', () => ({ RqliteSupervisor: jest.fn() }));
 jest.mock('./rqlite-client', () => ({ RqliteClient: jest.fn() }));
-jest.mock('./peer-server', () => ({ startPeerServer: jest.fn(), peerRequest: jest.fn(), peerUpload: jest.fn(), subscribeEvents: jest.fn() }));
+jest.mock('./peer-server', () => ({ startPeerServer: jest.fn(), peerRequest: jest.fn(), peerUpload: jest.fn(), peerDownload: jest.fn(), subscribeEvents: jest.fn() }));
 jest.mock('../runtime/local-runtime', () => ({
   localRuntime: {
     listInstances: jest.fn(),
@@ -53,7 +54,6 @@ jest.mock('../runtime/local-runtime', () => ({
     startedAt: jest.fn(),
     appliedRevision: jest.fn(),
     applyConfig: jest.fn(),
-    applyCluster: jest.fn(),
     deleteInstance: jest.fn(),
     rcon: jest.fn()
   }
@@ -80,7 +80,7 @@ jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import { RqliteSupervisor } from './rqlite-supervisor';
 import { RqliteClient } from './rqlite-client';
-import { peerRequest, peerUpload, startPeerServer, subscribeEvents } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
 import { localRuntime } from '../runtime/local-runtime';
 import { userDatabaseService } from '../auth/user-database.service';
@@ -1758,6 +1758,265 @@ describe('MeshService', () => {
 
       expect(subscriptions[1].close).toHaveBeenCalled();
       expect(messagingService.broadcastTap).toBeNull();
+    });
+  });
+
+  describe('clusters', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+    const PLAYER = 'clusters/Islands/0002a1b2c3d4e5f60718293a4b5c6d7e';
+
+    async function place(serverId: string, nodeId = LOCAL): Promise<void> {
+      await repo.upsertServer({
+        serverId, name: serverId === 'isle' ? 'The Isle' : serverId, nodeId, mapName: '', desiredState: 'stopped',
+        configRevision: 1, configJson: '{}', clusterId: null, operatorUserId: null, managerUserId: null
+      });
+    }
+
+    function folderOf(clusterId: string): string {
+      return path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'AASMClusters', clusterId);
+    }
+
+    /** Fake time for the sync's timer, with real time between steps for its file reads. */
+    async function letTimePass(ms: number): Promise<void> {
+      const realImmediate = jest.requireActual<typeof import('timers')>('timers').setImmediate;
+      for (let passed = 0; passed < ms; passed += 100) {
+        await new Promise(resolve => realImmediate(resolve));
+        await jest.advanceTimersByTimeAsync(100);
+      }
+      for (let turn = 0; turn < 20; turn++) await new Promise(resolve => realImmediate(resolve));
+    }
+
+    /**
+     * Steps fake time, with real time between steps for the sync's file reads, until `check` holds.
+     * With `advance` off only real time passes: whatever happens is not the sync's timer.
+     */
+    async function waitFor(check: () => boolean | Promise<boolean>, { advance = true, maxSteps = 400 } = {}): Promise<void> {
+      const realImmediate = jest.requireActual<typeof import('timers')>('timers').setImmediate;
+      for (let step = 0; step < maxSteps; step++) {
+        if (await check()) return;
+        await new Promise(resolve => realImmediate(resolve));
+        if (advance) await jest.advanceTimersByTimeAsync(50);
+      }
+    }
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL, '1', 'https://127.0.0.1:4747'));
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await place('isle');
+      await place('ragnarok', REMOTE);
+    });
+
+    describe('managing them', () => {
+      beforeEach(async () => {
+        await service.resumeIfJoined();
+      });
+
+      it('creates a cluster whose files the app keeps on every machine', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+
+        expect(await repo.getCluster(created.clusterId)).toMatchObject({ name: 'Islands', arkClusterId: 'Islands' });
+        expect(await repo.getStorage(created.storageProfileId!)).toMatchObject({ mode: 'managed' });
+        expect(await service.listClusters()).toEqual([expect.objectContaining({ clusterId: created.clusterId, managed: true })]);
+      });
+
+      it('has no shared folder to check for a cluster whose files the app keeps', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+
+        const storage = await service.validateCluster(created.clusterId);
+
+        expect(storage?.health).toMatchObject({ ok: true, degraded: false });
+        expect((await repo.getStorage(created.storageProfileId!))?.health).toMatchObject({ ok: true, degraded: false });
+      });
+
+      it('holds more than one cluster', async () => {
+        await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        await service.createCluster({ name: 'Wilds', arkClusterId: 'Wilds' });
+
+        expect((await repo.listClusters()).map(cluster => cluster.name)).toEqual(['Islands', 'Wilds']);
+      });
+
+      it('refuses a name or a cluster ID ARK and every machine\'s folders cannot take, or one already used', async () => {
+        await expect(service.createCluster({ name: '  ', arkClusterId: 'Islands' })).rejects.toThrow('Enter a name for the cluster.');
+        await expect(service.createCluster({ name: 'Islands', arkClusterId: 'my cluster' }))
+          .rejects.toThrow('A cluster ID can use letters, digits, dots, dashes and underscores');
+        await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        await expect(service.createCluster({ name: 'Other', arkClusterId: 'Islands' }))
+          .rejects.toThrow('Another cluster already uses the ID Islands.');
+      });
+
+      it('renames a cluster, keeping its ID', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+
+        await service.renameCluster(created.clusterId, 'Isles');
+
+        expect(await repo.getCluster(created.clusterId)).toMatchObject({ name: 'Isles', arkClusterId: 'Islands' });
+      });
+
+      it('removes a cluster, and keeps its files on every machine', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        fs.mkdirSync(path.join(folderOf(created.clusterId), 'clusters', 'Islands'), { recursive: true });
+        fs.writeFileSync(path.join(folderOf(created.clusterId), PLAYER), 'kept');
+
+        await service.deleteCluster(created.clusterId);
+
+        expect(await repo.getCluster(created.clusterId)).toBeNull();
+        expect(fs.readFileSync(path.join(folderOf(created.clusterId), PLAYER), 'utf8')).toBe('kept');
+      });
+
+      it('needs quorum to change clusters', async () => {
+        view.hasQuorum = false;
+        view.leaderNodeId = null;
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        await expect(service.createCluster({ name: 'Islands', arkClusterId: 'Islands' })).rejects.toThrow();
+      });
+
+      it('keeps a copy of the mesh\'s clusters on this machine, which its servers start with', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(knownClusters()).toEqual([{ clusterId: created.clusterId, name: 'Islands', arkClusterId: 'Islands' }]);
+      });
+
+      it('tells this machine\'s screens when another machine changes the clusters', async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+        jest.mocked(messagingService.sendToAll).mockClear();
+        await repo.upsertCluster({ clusterId: 'c-remote', name: 'Wilds', arkClusterId: 'Wilds', storageProfileId: null, members: [] });
+
+        await jest.advanceTimersByTimeAsync(5_000);
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(jest.mocked(messagingService.sendToAll).mock.calls.filter(([channel]) => channel === 'clusters-changed')).toHaveLength(1);
+      });
+
+      it('brings a mesh made by an older version up to date', async () => {
+        db.exec('DROP TABLE cluster_files');
+        db.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
+
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(await repo.listClusterFiles('any')).toEqual([]);
+        expect(await repo.schemaVersion()).toBe(2);
+      });
+    });
+
+    describe('this machine\'s own clusters, when it creates or joins a mesh', () => {
+      const marker = () => path.join(root, 'mesh', 'adopt-clusters');
+
+      it('are brought into the mesh', async () => {
+        rememberClusters([{ clusterId: 'c-local', name: 'Local', arkClusterId: 'LocalCluster' }]);
+        fs.writeFileSync(marker(), '');
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(await repo.getCluster('c-local')).toMatchObject({ name: 'Local', arkClusterId: 'LocalCluster' });
+        expect(fs.existsSync(marker())).toBe(false);
+        expect(knownClusters().map(cluster => cluster.clusterId)).toEqual(['c-local']);
+      });
+
+      it('link to the mesh\'s cluster with the same ID, bringing their servers and files', async () => {
+        await repo.upsertStorage({
+          storageProfileId: 'p-mesh', mode: 'managed', authorityNodeId: null, metadata: {},
+          health: { ok: true, degraded: false, detail: '', checkedAt: 0, perNode: {} }
+        });
+        await repo.upsertCluster({ clusterId: 'c-mesh', name: 'Islands', arkClusterId: 'Islands', storageProfileId: 'p-mesh', members: [] });
+        rememberClusters([{ clusterId: 'c-local', name: 'My Islands', arkClusterId: 'Islands' }]);
+        fs.mkdirSync(path.join(folderOf('c-local'), 'clusters', 'Islands'), { recursive: true });
+        fs.writeFileSync(path.join(folderOf('c-local'), PLAYER), 'uploaded before joining');
+        jest.mocked(localRuntime.listInstances).mockResolvedValue({ instances: [{ id: 'isle', clusterRef: 'c-local' }] } as never);
+        jest.mocked(localRuntime.patchConfig).mockResolvedValue({} as never);
+        fs.writeFileSync(marker(), '');
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(localRuntime.patchConfig).toHaveBeenCalledWith('isle', { clusterRef: 'c-mesh' });
+        expect(fs.readFileSync(path.join(folderOf('c-mesh'), PLAYER), 'utf8')).toBe('uploaded before joining');
+        expect(await repo.getCluster('c-local')).toBeNull();
+      });
+
+      it('never bring back a cluster removed from the mesh while this machine was away', async () => {
+        rememberClusters([{ clusterId: 'c-old', name: 'Old', arkClusterId: 'Old' }]);
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(await repo.getCluster('c-old')).toBeNull();
+        expect(knownClusters()).toEqual([]);
+      });
+    });
+
+    describe('keeping their files in step', () => {
+      beforeEach(async () => {
+        await service.resumeIfJoined();
+      });
+
+      it('records a finished change to a cluster file on its own, and tells the other machines', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        fs.mkdirSync(path.join(folderOf(created.clusterId), 'clusters', 'Islands'), { recursive: true });
+        fs.writeFileSync(path.join(folderOf(created.clusterId), PLAYER), 'uploaded here');
+
+        await waitFor(async () => (await repo.listClusterFiles(created.clusterId)).length > 0);
+
+        expect(await repo.listClusterFiles(created.clusterId)).toEqual([expect.objectContaining({ path: PLAYER, originNode: LOCAL })]);
+        const broadcast = (await jest.mocked(startPeerServer).mock.results[0].value as { broadcast: jest.Mock }).broadcast;
+        expect(broadcast).toHaveBeenCalledWith({ type: 'cluster-changed', nodeId: LOCAL, clusterId: created.clusterId });
+      });
+
+      it('fetches what another machine recorded from that machine, and places it here', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        const contents = 'uploaded on the other machine';
+        const hash = createHash('sha256').update(contents).digest('hex');
+        await repo.commitClusterFile({ clusterId: created.clusterId, path: PLAYER, sha256: hash, size: contents.length, deleted: false, originNode: REMOTE }, 0);
+        jest.mocked(peerDownload).mockImplementation(async options => { fs.writeFileSync(options.dest, contents); return true; });
+
+        await waitFor(() => fs.existsSync(path.join(folderOf(created.clusterId), PLAYER)));
+
+        expect(jest.mocked(peerDownload).mock.calls[0][0].url).toBe(`https://10.0.0.2:4747/v1/cluster-object?sha256=${hash}`);
+        expect(fs.readFileSync(path.join(folderOf(created.clusterId), PLAYER), 'utf8')).toBe(contents);
+      });
+
+      it('hands another machine the contents of what it recorded', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        fs.mkdirSync(path.join(folderOf(created.clusterId), 'clusters', 'Islands'), { recursive: true });
+        fs.writeFileSync(path.join(folderOf(created.clusterId), PLAYER), 'served');
+        await waitFor(async () => (await repo.listClusterFiles(created.clusterId)).length > 0);
+        const [row] = await repo.listClusterFiles(created.clusterId);
+
+        const served = jest.mocked(startPeerServer).mock.calls[0][1].onClusterObject!(row.sha256);
+
+        expect(served && fs.readFileSync(served, 'utf8')).toBe('served');
+      });
+
+      it('looks at once when another machine says it recorded a change', async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+        const subscription = jest.mocked(subscribeEvents).mock.calls.at(-1)![0];
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        const contents = 'just uploaded';
+        const hash = createHash('sha256').update(contents).digest('hex');
+        await repo.commitClusterFile({ clusterId: created.clusterId, path: PLAYER, sha256: hash, size: contents.length, deleted: false, originNode: REMOTE }, 0);
+        jest.mocked(peerDownload).mockImplementation(async options => { fs.writeFileSync(options.dest, contents); return true; });
+
+        subscription.onEvent({ type: 'cluster-changed', nodeId: REMOTE, clusterId: created.clusterId });
+        await waitFor(() => fs.existsSync(path.join(folderOf(created.clusterId), PLAYER)), { advance: false });
+
+        expect(fs.readFileSync(path.join(folderOf(created.clusterId), PLAYER), 'utf8')).toBe(contents);
+      });
+
+      it('reports how each machine\'s copy stands', async () => {
+        const created = await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' });
+        await waitFor(async () => !!(await service.status()).nodes.find(node => node.nodeId === LOCAL)?.clusterSync?.[created.clusterId]);
+        jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now(), undefined, {
+          [created.clusterId]: { files: 3, pendingSend: 1, pendingReceive: 0, conflicts: 0, lastSyncAt: 5, error: null }
+        });
+
+        const nodes = (await service.status()).nodes;
+
+        expect(nodes.find(node => node.nodeId === LOCAL)?.clusterSync?.[created.clusterId]).toMatchObject({ files: 0, pendingSend: 0 });
+        expect(nodes.find(node => node.nodeId === REMOTE)?.clusterSync?.[created.clusterId]).toMatchObject({ files: 3, pendingSend: 1 });
+      });
     });
   });
 

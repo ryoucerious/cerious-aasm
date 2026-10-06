@@ -18,6 +18,7 @@ jest.mock('../../utils/ark/ark-server/ark-server-isolation.utils', () => ({
   linkSharedWin64Subdirs: jest.fn(async () => [])
 }));
 jest.mock('../ark-config.service', () => ({ arkConfigService: { writeArkConfigFiles: jest.fn() } }));
+jest.mock('../clusters/cluster-import', () => ({ carryClusterData: jest.fn() }));
 jest.mock('../backup/backup.service', () => ({
   backupService: {
     importBackupAsNewServer: jest.fn(),
@@ -54,6 +55,7 @@ import { generateRandomPassword } from '../../utils/crypto.utils';
 import { getProcessMemoryUsage } from '../../utils/platform.utils';
 import { linkInstanceSaveDir } from '../../utils/ark/ark-server/ark-server-isolation.utils';
 import { arkConfigService } from '../ark-config.service';
+import { carryClusterData } from '../clusters/cluster-import';
 import { backupService } from '../backup/backup.service';
 import { schedulerService } from '../scheduler.service';
 import { whitelistService } from '../whitelist.service';
@@ -335,6 +337,14 @@ describe('ServerManagementService', () => {
 
       expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalledWith('/instances/a1', instance, 'a1');
       expect(whitelistService.copyWhitelistToMainDir).toHaveBeenCalledWith('a1');
+    });
+
+    it('brings the transfer data the server had under its own cluster ID into the cluster it chose', async () => {
+      const instance = { id: 'a1', rconPassword: 'pw', clusterRef: 'c1', clusterId: 'Old' };
+
+      await serverManagementService.prepareInstanceConfiguration('a1', instance);
+
+      expect(carryClusterData).toHaveBeenCalledWith(instance, { instanceDir: '/instances/a1', runtimeRoot: '/instances/a1' });
     });
 
     // A copied SavedArks takes ARK's writes while backups keep reading the canonical folder.

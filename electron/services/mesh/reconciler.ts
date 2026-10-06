@@ -6,9 +6,6 @@ export interface DesiredServer {
   desiredState: DesiredState;
   configRevision: number;
   configJson?: string;
-  /** ARK `-ClusterId` string from the logical mesh cluster. Absent when this server is not a member. */
-  arkClusterId?: string | null;
-  clusterDirOverride?: string | null;
 }
 
 /**
@@ -21,8 +18,6 @@ export interface RuntimePort {
   stop(id: string): Promise<void>;
   appliedRevision(id: string): number;
   applyConfig(id: string, revision: number, configJson: string): Promise<void>;
-  /** Writes the ARK cluster flags. Must not start or stop the process. */
-  applyCluster?(id: string, arkClusterId: string, clusterDirOverride: string): Promise<void>;
 }
 
 /** The desired state this node last acted on, per server placed here. Empty after a restart. */
@@ -51,9 +46,6 @@ export async function reconcile(
     try {
       if (server.configJson && server.configRevision > runtime.appliedRevision(server.serverId)) {
         await runtime.applyConfig(server.serverId, server.configRevision, server.configJson);
-      }
-      if (server.arkClusterId && runtime.applyCluster) {
-        await runtime.applyCluster(server.serverId, server.arkClusterId, server.clusterDirOverride || '');
       }
     } catch (error) {
       console.error(`[mesh] Could not apply the configuration for ${server.serverId}:`, error);

@@ -23,6 +23,7 @@ import type {
 } from '../../types/server-instance.types';
 import { arkConfigService } from '../ark-config.service';
 import { backupService } from '../backup/backup.service';
+import { carryClusterData } from '../clusters/cluster-import';
 import { validateDiscordConfig } from '../discord.service';
 import { schedulerService } from '../scheduler.service';
 import { whitelistService } from '../whitelist.service';
@@ -223,9 +224,13 @@ export class ServerManagementService {
     }
 
     // Keeps an isolated instance writing its worlds where backups and restore expect them.
-    if (await linkInstanceSaveDir(instanceDir, getInstanceRuntimeRoot(instanceId))) {
+    const runtimeRoot = getInstanceRuntimeRoot(instanceId);
+    if (await linkInstanceSaveDir(instanceDir, runtimeRoot)) {
       console.log(`[server-management] Linked the runtime save directory for ${instanceId}`);
     }
+
+    // Before ARK reads the cluster: what its players uploaded under an ID of its own goes with it.
+    carryClusterData(instance, { instanceDir, runtimeRoot });
 
     if (!instance.rconPassword) {
       instance.rconPassword = generateRandomPassword(16);

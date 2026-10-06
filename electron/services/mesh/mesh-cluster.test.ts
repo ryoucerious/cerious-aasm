@@ -46,7 +46,6 @@ class FakeRuntime implements RuntimePort {
     return this.revisions.get(id) || 0;
   }
 
-  applyCluster?: (id: string, arkClusterId: string, clusterDirOverride: string) => Promise<void>;
 
   async applyConfig(id: string, revision: number): Promise<void> {
     this.revisions.set(id, revision);
@@ -243,20 +242,6 @@ describe('mesh control plane', () => {
     const drained = { ...quiet, nodeId: 'drained', maintenance: true };
     expect(scoreNode(drained)).toBeNull();
     expect(chooseNode([busy, drained, quiet])).toBe('quiet');
-  });
-
-  it('writes cluster flags without starting or stopping a server that is already in the desired state', async () => {
-    const runtime = new FakeRuntime();
-    runtime.states.set('s1', 'running');
-    const clusters: string[] = [];
-    runtime.applyCluster = async (id, ark) => { clusters.push(`${id}:${ark}`); };
-    await reconcile('C', [{
-      serverId: 's1', nodeId: 'C', desiredState: 'running', configRevision: 1,
-      arkClusterId: 'IslandCluster', clusterDirOverride: '/data/cluster'
-    }], runtime);
-    expect(clusters).toEqual(['s1:IslandCluster']);
-    expect(runtime.starts).toEqual([]);
-    expect(runtime.stops).toEqual([]);
   });
 
   it('keeps a managed transfer degraded when storage authority is lost and does not stop a game', async () => {

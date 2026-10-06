@@ -187,6 +187,8 @@ Three things to get right:
 
 A mesh of two needs both members running to get going again after one restarts: the restarted member waits, with its mesh page saying it is reconnecting, until the other is up.
 
+**Clusters work across members with no shared folder.** Make a cluster in Settings → Clusters, then choose it on each server's Cluster tab. The app keeps the cluster's transfer files on every member over the same peer port, so a player can upload on a server here and download on one elsewhere. In the container they live in the data volume, in `AASMServer/ShooterGame/Saved/AASMClusters/` next to the servers. There is nothing to mount.
+
 A minimal nginx `stream` block forwarding public 443 to the peer API:
 
 ```nginx

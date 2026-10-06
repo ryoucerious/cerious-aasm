@@ -1,4 +1,10 @@
 import { buildArkServerArgs, getArkMapName, getArkLaunchParameters, getMultiHomeAddress } from './ark-args.utils';
+import { knownCluster } from '../../services/clusters/cluster-registry';
+
+jest.mock('../../services/clusters/cluster-registry', () => ({
+  knownCluster: jest.fn(() => null),
+  clusterFolder: jest.fn((clusterId: string) => `/data/AASMServer/ShooterGame/Saved/AASMClusters/${clusterId}`)
+}));
 
 describe('ark-args.utils', () => {
   describe('buildArkServerArgs', () => {
@@ -228,6 +234,26 @@ describe('ark-args.utils', () => {
 
       it('keeps a valid cluster id', () => {
         expect(buildArkServerArgs({ clusterId: 'cluster-1' })).toContain('-ClusterId=cluster-1');
+      });
+
+      // The server stores only which cluster it chose; the rest is this machine's.
+      it('gives a server in a cluster that cluster\'s ID and this machine\'s folder for it, over anything typed before', () => {
+        jest.mocked(knownCluster).mockReturnValueOnce({ clusterId: 'c1', name: 'Islands', arkClusterId: 'Islands' });
+
+        const args = buildArkServerArgs({ clusterRef: 'c1', clusterId: 'Typed', clusterDirOverride: 'C:\\Old' } as never);
+
+        expect(args).toContain('-ClusterId=Islands');
+        expect(args).toContain('-ClusterDirOverride=/data/AASMServer/ShooterGame/Saved/AASMClusters/c1');
+        expect(args.join(' ')).not.toContain('Typed');
+        expect(args.join(' ')).not.toContain('Old');
+      });
+
+      it('starts a server whose cluster was removed in no cluster', () => {
+        const args = buildArkServerArgs({ clusterRef: 'gone', clusterId: 'Typed', clusterDirOverride: 'C:\\Old' } as never);
+
+        expect(args.join(' ')).not.toContain('-ClusterId');
+        expect(args.join(' ')).not.toContain('-ClusterDirOverride');
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('cluster'));
       });
 
       it.each([

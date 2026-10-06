@@ -188,6 +188,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'rename-mesh-node': PERMISSIONS.NODES_MANAGE,
   'create-cluster': PERMISSIONS.CLUSTERS_MANAGE,
   'get-clusters': PERMISSIONS.CLUSTERS_VIEW,
+  'rename-cluster': PERMISSIONS.CLUSTERS_MANAGE,
+  'delete-cluster': PERMISSIONS.CLUSTERS_MANAGE,
   'validate-cluster-storage': PERMISSIONS.CLUSTERS_STORAGE_MANAGE,
   'move-server': byServerId(PERMISSIONS.SERVERS_MOVE),
   'suggest-placement': PERMISSIONS.SERVERS_CREATE,

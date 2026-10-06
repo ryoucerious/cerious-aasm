@@ -90,7 +90,7 @@ describe('SettingsPageComponent', () => {
   it('groups the rail by area, keeping tab order', () => {
     expect(component.tabGroups.map(g => g.name)).toEqual(['Server', 'Access', 'Application']);
     expect(component.tabGroups[0].tabs.map(t => t.id))
-      .toEqual(['server-installation', 'servers', 'updates', 'storage']);
+      .toEqual(['server-installation', 'servers', 'updates', 'storage', 'clusters']);
   });
 
   it('should set activeTab on selectTab()', () => {

@@ -11,7 +11,7 @@ import * as path from 'path';
 import { randomBytes } from 'crypto';
 import type { AddressInfo } from 'net';
 import { certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
-import { peerRequest, peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
 
 describe('peer server checkpoint uploads', () => {
   let dir: string;
@@ -29,6 +29,8 @@ describe('peer server checkpoint uploads', () => {
   const received: Array<{ serverId: string; rel: string; bytes: Buffer; offset: number }> = [];
   /** What the destination says it already holds when a move begins. */
   let held: unknown = null;
+  /** Cluster file contents this node keeps, by sha256. */
+  const clusterObjects = new Map<string, string>();
   const onHeartbeat = jest.fn();
 
   beforeAll(async () => {
@@ -54,6 +56,7 @@ describe('peer server checkpoint uploads', () => {
       onCommand: jest.fn(),
       onHeartbeat,
       onCheckpointBegin: async () => held as never,
+      onClusterObject: sha256 => clusterObjects.get(sha256) ?? null,
       onCheckpointFile: async (serverId, rel, body, offset) => {
         const chunks: Buffer[] = [];
         for await (const chunk of body) chunks.push(chunk as Buffer);
@@ -127,6 +130,38 @@ describe('peer server checkpoint uploads', () => {
 
     expect(response.status).toBe(400);
     expect(received).toEqual([]);
+  });
+
+  describe('cluster file contents', () => {
+    const url = (sha256: string) => `https://127.0.0.1:${port}/v1/cluster-object?sha256=${sha256}`;
+
+    it('hands a member the contents with the sha256 it asks for', async () => {
+      const kept = path.join(dir, 'kept-object');
+      fs.writeFileSync(kept, 'player transfer data');
+      clusterObjects.set('a'.repeat(64), kept);
+      const dest = path.join(dir, 'fetched');
+
+      expect(await peerDownload({ url: url('a'.repeat(64)), dest, ca: caPem, ...client })).toBe(true);
+
+      expect(fs.readFileSync(dest, 'utf8')).toBe('player transfer data');
+    });
+
+    it('says it does not have contents it was never given', async () => {
+      const dest = path.join(dir, 'never');
+
+      expect(await peerDownload({ url: url('b'.repeat(64)), dest, ca: caPem, ...client })).toBe(false);
+      expect(fs.existsSync(dest)).toBe(false);
+    });
+
+    it('gives nothing to a machine that is not a member', async () => {
+      const kept = path.join(dir, 'secret-object');
+      fs.writeFileSync(kept, 'x');
+      clusterObjects.set('c'.repeat(64), kept);
+      const dest = path.join(dir, 'stolen');
+
+      expect(await peerDownload({ url: url('c'.repeat(64)), dest, ca: caPem })).toBe(false);
+      expect(fs.existsSync(dest)).toBe(false);
+    });
   });
 
   it('answers the start of a move with what this node already holds of it', async () => {
@@ -217,19 +252,20 @@ describe('peer server checkpoint uploads', () => {
     });
   });
 
-  it('takes a heartbeat as from the node its certificate names, with the resources it reports', async () => {
+  it('takes a heartbeat as from the node its certificate names, with the resources and cluster sync it reports', async () => {
     const resources = { cpuPercent: 12, memory: { used: 1, total: 2 }, disk: null };
+    const clusterSync = { c1: { files: 1, pendingSend: 0, pendingReceive: 0, conflicts: 0, lastSyncAt: 1, error: null } };
 
     const response = await peerRequest({
       url: `https://127.0.0.1:${port}/v1/heartbeat`,
       method: 'POST',
-      body: { nodeId: 'someone-else', sentAt: 5, resources },
+      body: { nodeId: 'someone-else', sentAt: 5, resources, clusterSync },
       ca: caPem,
       ...client
     });
 
     expect(response.status).toBe(200);
-    expect(onHeartbeat).toHaveBeenCalledWith('client', 5, resources);
+    expect(onHeartbeat).toHaveBeenCalledWith('client', 5, resources, clusterSync);
   });
 
   it('asks whether the certificate belongs to a member, by its serial and node id', async () => {

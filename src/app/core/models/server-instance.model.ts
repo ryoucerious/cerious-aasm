@@ -212,6 +212,11 @@ export interface ServerInstance {
   disableImprinting?: boolean;
 
   // Cluster functionality
+  /**
+   * The cluster chosen in Settings → Clusters. When set, its ID and this machine's folder for it
+   * are used, and clusterId and clusterDirOverride are not.
+   */
+  clusterRef?: string | null;
   clusterId?: string; // ARK cluster id string passed as -ClusterId
   /** Monotonic configuration revision. */
   configRevision?: number;

@@ -41,8 +41,8 @@ export interface PeerHandlers {
   /** A node whose join could not finish asks to be taken back out. The id comes from its certificate. */
   onAbortJoin?(nodeId: string): Promise<void>;
   onCommand(body: ControlCommand): Promise<CommandResult>;
-  /** `resources` is as the sender reported it, unchecked. */
-  onHeartbeat(nodeId: string, sentAt: number, resources?: unknown): void;
+  /** `resources` and `clusterSync` are as the sender reported them, unchecked. */
+  onHeartbeat(nodeId: string, sentAt: number, resources?: unknown, clusterSync?: unknown): void;
   /** The frames a node that has just subscribed to /v1/events gets first: how things stand now. */
   onSubscribe?(): unknown[];
   /** A read-only question about a server this node hosts. */
@@ -54,6 +54,8 @@ export interface PeerHandlers {
   onCheckpointBegin?(body: { serverId: string; resume?: boolean; rels?: string[] }): Promise<HeldFile[] | null | void> | void;
   /** One file of a move, streamed, from byte `offset` of the file. The request body is the rest of it. */
   onCheckpointFile?(serverId: string, rel: string, body: NodeJS.ReadableStream, offset: number): Promise<void>;
+  /** Where this node keeps the cluster file contents with this sha256, for another member to fetch. Null when it has none. */
+  onClusterObject?(sha256: string): string | null;
   /** All files sent: check them against the list and return their checksum. */
   onCheckpointFinish?(body: { serverId: string; rels: string[] }): Promise<{ checksum: string }>;
 }
@@ -166,8 +168,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
     if (req.method === 'POST' && url.pathname === '/v1/heartbeat') {
       // From the node its certificate names, whatever the body says: one member must not be
       // able to report another as up, or report its resources.
-      const body = await readJson<{ sentAt: number; resources?: unknown }>(req);
-      handlers.onHeartbeat(nodeId, body.sentAt, body.resources);
+      const body = await readJson<{ sentAt: number; resources?: unknown; clusterSync?: unknown }>(req);
+      handlers.onHeartbeat(nodeId, body.sentAt, body.resources, body.clusterSync);
       send(res, 200, { ok: true, now: Date.now() });
       return;
     }
@@ -186,6 +188,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       }
       await handlers.onCheckpointFile(url.searchParams.get('serverId') || '', url.searchParams.get('rel') || '', req, offset);
       send(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/cluster-object' && handlers.onClusterObject) {
+      const file = handlers.onClusterObject(url.searchParams.get('sha256') || '');
+      if (!file || !fs.existsSync(file)) {
+        send(res, 404, { error: 'Not here' });
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
+      fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/checkpoint/finish' && handlers.onCheckpointFinish) {
@@ -329,6 +341,54 @@ export function peerUpload(options: {
     source.on('error', error => req.destroy(error));
     if (options.onProgress) source.on('data', chunk => options.onProgress!(chunk.length));
     source.pipe(req);
+  });
+}
+
+/**
+ * Fetches a file from a peer with GET, over the same mTLS as peerRequest, streaming it to `dest`.
+ * True once it is all there; false, with nothing at `dest`, when the peer did not have it.
+ */
+export function peerDownload(options: {
+  url: string;
+  dest: string;
+  ca?: string;
+  cert?: string;
+  key?: string;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const target = new URL(options.url);
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (!ok) fs.rmSync(options.dest, { force: true });
+      resolve(ok);
+    };
+    const req = https.request({
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method: 'GET',
+      ca: options.ca,
+      cert: options.cert,
+      key: options.key
+    }, res => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        finish(false);
+        return;
+      }
+      const out = fs.createWriteStream(options.dest);
+      res.pipe(out);
+      out.on('finish', () => finish(true));
+      out.on('error', () => finish(false));
+      res.on('error', () => finish(false));
+    });
+    req.on('error', () => finish(false));
+    req.setTimeout(options.timeoutMs ?? 60_000, () => req.destroy(new Error('The node did not answer in time.')));
+    req.end();
   });
 }
 

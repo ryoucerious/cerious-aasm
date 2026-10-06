@@ -15,6 +15,7 @@ import { DrawerComponent } from '../../components/drawer/drawer.component';
 import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
 import { MeshSettingsComponent } from './mesh/mesh-settings.component';
+import { ClustersSettingsComponent } from './clusters/clusters-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { environment } from '../../../environments/environment';
@@ -91,7 +92,7 @@ interface SystemInfoReply {
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent],
+  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent, ClustersSettingsComponent],
   templateUrl: './settings.component.html'
 })
 export class SettingsPageComponent implements OnInit {
@@ -179,6 +180,7 @@ export class SettingsPageComponent implements OnInit {
       { id: 'servers', label: 'Server Defaults', icon: 'tune', group: 'Server' },
       { id: 'updates', label: 'Updates', icon: 'system_update_alt', group: 'Server' },
       { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
+      { id: 'clusters', label: 'Clusters', icon: 'device_hub', group: 'Server' },
       { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
       { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
       { id: 'mesh', label: 'Mesh', icon: 'hub', group: 'Access' },

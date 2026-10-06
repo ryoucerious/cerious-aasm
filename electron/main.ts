@@ -100,6 +100,7 @@ import './handlers/user-handler';
 import './handlers/activity-handler';
 import './handlers/player-history-handler';
 import './handlers/mesh-handler';
+import './handlers/cluster-handler';
 
 const DEV_SERVER_URL = 'http://localhost:4200';
 const CLOSE_RESPONSE_TIMEOUT_MS = 10000;

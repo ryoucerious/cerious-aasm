@@ -148,21 +148,6 @@ export class LocalRuntime {
     return serverOperationsService.executeRconCommand(id, command);
   }
 
-  /**
-   * Writes the ARK cluster id and directory when the mesh cluster revision changes.
-   * Skips the write when the instance already has those flags, so the reconciler does not loop.
-   * Does not start or stop the process.
-   */
-  async applyCluster(id: string, arkClusterId: string, clusterDirOverride: string): Promise<void> {
-    const existing = instanceUtils.getInstance(id);
-    if (!existing) return;
-    if (existing.clusterId === arkClusterId && (existing.clusterDirOverride || '') === clusterDirOverride) return;
-    await this.applyConfig(id, Number(existing.configRevision) || 1, {
-      clusterId: arkClusterId,
-      clusterDirOverride
-    });
-  }
-
   /** Writes a desired config onto this node. Does not start or stop the process. */
   async applyConfig(id: string, revision: number, config: Partial<InstanceConfig>): Promise<void> {
     const existing = instanceUtils.getInstance(id);

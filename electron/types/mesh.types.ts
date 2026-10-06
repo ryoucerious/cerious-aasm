@@ -75,6 +75,18 @@ export interface NodeRecord {
   host?: string;
   /** Set when a status snapshot is built: from its last heartbeat, null once that is stale. */
   resources?: NodeResources | null;
+  /** Set when a status snapshot is built: how its copy of each cluster's files stands. Null once stale. */
+  clusterSync?: Record<string, ClusterSyncStatus> | null;
+}
+
+/** How one machine's copy of a cluster's transfer files stands. */
+export interface ClusterSyncStatus {
+  files: number;
+  pendingSend: number;
+  pendingReceive: number;
+  conflicts: number;
+  lastSyncAt: number;
+  error: string | null;
 }
 
 /** CPU, memory and disk of a machine. Disk is the volume holding the app's data; null when it cannot be read. */
@@ -172,6 +184,21 @@ export interface ClusterRecord {
   arkClusterId: string;
   storageProfileId: string | null;
   members: string[];
+}
+
+/** One transfer file of a cluster whose files the app keeps on every machine, at its latest version. */
+export interface ClusterFileRecord {
+  clusterId: string;
+  /** Relative to the cluster's folder, with forward slashes. */
+  path: string;
+  version: number;
+  sha256: string;
+  size: number;
+  /** Removed: no machine may bring it back from an older copy. */
+  deleted: boolean;
+  /** The machine that recorded this version, which holds its contents. */
+  originNode: string;
+  updatedAt: number;
 }
 
 export interface StorageProfileRecord {

@@ -426,26 +426,38 @@ Aberration       → Node B
 Extinction       → Node C
 ```
 
-All members share the ARK cluster identifier and compatible storage
-profile.
+Clusters are defined in Settings → Clusters: a name, and the ARK
+cluster ID, which is fixed once the cluster is created. A mesh can hold
+any number of them. Each server chooses one with `clusterRef` on its
+Cluster tab. At launch the server gets the cluster's ARK ID and this
+machine's folder for it,
+`AASMServer/ShooterGame/Saved/AASMClusters/<cluster id>`, next to
+the `Servers` folder. The
+folder is chosen per machine, so Windows, Linux and Docker members need
+no matching paths.
+
+Outside a mesh, clusters live in `data/clusters.json`. In a mesh they
+live in the mesh database, and each machine keeps a copy in that file,
+so its servers start in their cluster even while the mesh cannot be
+reached. Creating or joining a mesh brings this machine's clusters
+into it.
 
 ### Transfer storage
 
-Control leadership and storage authority are separate roles. Losing
-either must not stop game processes.
+The app keeps each cluster's transfer files on every machine itself,
+over the mesh's mTLS peer API. No shared folder or VPN is needed. See
+[MANAGED-STORAGE.md](MANAGED-STORAGE.md). In short:
 
-First production implementation: shared SMB/NFS/appropriate filesystem,
-optionally over a private overlay. Validate reachability, read/write
-access, atomic rename behavior, directory identity, latency, and
-required semantics from every cluster member.
+- Only finished writes are recorded.
+- Commits are compare-and-set through Raft. The first change wins and
+  a clashing copy is set aside, never merged or silently lost.
+- Tombstones stop a deleted transfer from coming back.
+- Copies are fetched by hash, verified, and placed with a rename.
 
-Future AASM Managed Storage must **not** be generic eventual folder
-sync. It must detect completed writes, commit objects with
-hash/size/version, require durable acknowledgement, expose only
-committed data, atomically materialize destination files, track
-consumption/deletion with versions or tombstones, prevent stale
-resurrection, checksum transfers, and define
-duplicate/interruption/authority-failure recovery.
+Losing quorum delays new commits but never stops game processes.
+
+Shared-path storage profiles (SMB/NFS) from earlier versions still
+validate through `validate-cluster-storage`.
 
 ## Models
 

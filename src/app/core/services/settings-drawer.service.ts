@@ -3,7 +3,7 @@ import { BehaviorSubject, Observable } from 'rxjs';
 
 /** The sections of the settings drawer, grouped in the rail by area. */
 export type SettingsSection =
-  | 'server-installation' | 'servers' | 'updates' | 'storage'
+  | 'server-installation' | 'servers' | 'updates' | 'storage' | 'clusters'
   | 'profile' | 'users' | 'mesh' | 'web-server'
   | 'appearance' | 'about';
 

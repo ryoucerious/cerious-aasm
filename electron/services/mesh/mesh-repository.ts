@@ -1,7 +1,7 @@
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 import type {
-  AuditRecord, ClusterRecord, CommandRecord, CommandResult, DesiredState, MeshRecord, NodeCapabilities,
+  AuditRecord, ClusterFileRecord, ClusterRecord, CommandRecord, CommandResult, DesiredState, MeshRecord, NodeCapabilities,
   NodeEndpoints, NodeRecord, RoleRecord, ServerRecord, StorageHealth, StorageProfileRecord, UserRecord
 } from '../../types/mesh.types';
 
@@ -376,6 +376,65 @@ export class MeshRepository {
       storageProfileId: row.storage_profile_id ? String(row.storage_profile_id) : null,
       members: json<string[]>(String(row.members), [])
     }));
+  }
+
+  async getCluster(clusterId: string): Promise<ClusterRecord | null> {
+    return (await this.listClusters()).find(cluster => cluster.clusterId === clusterId) ?? null;
+  }
+
+  /** Removes a cluster, its storage profile and the record of its files. The files on each machine stay. */
+  async deleteCluster(clusterId: string): Promise<void> {
+    const cluster = await this.getCluster(clusterId);
+    await this.db.exec('DELETE FROM cluster_files WHERE cluster_id = ?', [clusterId]);
+    if (cluster?.storageProfileId) await this.db.exec('DELETE FROM storage_profiles WHERE storage_profile_id = ?', [cluster.storageProfileId]);
+    await this.db.exec('DELETE FROM asa_clusters WHERE cluster_id = ?', [clusterId]);
+  }
+
+  async listClusterFiles(clusterId: string): Promise<ClusterFileRecord[]> {
+    const rows = await this.db.query<Record<string, unknown>>(
+      'SELECT * FROM cluster_files WHERE cluster_id = ? ORDER BY path', [clusterId], 'none'
+    );
+    return rows.map(row => ({
+      clusterId: String(row.cluster_id),
+      path: String(row.path),
+      version: Number(row.version),
+      sha256: String(row.sha256),
+      size: Number(row.size),
+      deleted: Number(row.deleted) === 1,
+      originNode: String(row.origin_node),
+      updatedAt: Number(row.updated_at)
+    }));
+  }
+
+  /**
+   * Records a new version of a cluster file, only on top of `baseVersion`: 0 for a file the mesh
+   * has never recorded. Returns the new version, or null when another machine got there first.
+   */
+  async commitClusterFile(
+    file: Pick<ClusterFileRecord, 'clusterId' | 'path' | 'sha256' | 'size' | 'deleted' | 'originNode'>,
+    baseVersion: number
+  ): Promise<number | null> {
+    const values = [file.sha256, file.size, file.deleted ? 1 : 0, file.originNode, Date.now()];
+    if (baseVersion === 0) {
+      const added = await this.db.exec(
+        `INSERT INTO cluster_files (cluster_id, path, version, sha256, size, deleted, origin_node, updated_at)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?) ON CONFLICT(cluster_id, path) DO NOTHING`,
+        [file.clusterId, file.path, ...values]
+      );
+      return added === 1 ? 1 : null;
+    }
+    const changed = await this.db.exec(
+      `UPDATE cluster_files SET version = version + 1, sha256 = ?, size = ?, deleted = ?, origin_node = ?, updated_at = ?
+       WHERE cluster_id = ? AND path = ? AND version = ?`,
+      [...values, file.clusterId, file.path, baseVersion]
+    );
+    return changed === 1 ? baseVersion + 1 : null;
+  }
+
+  /** The schema version the mesh was last brought up to; 0 when it was never recorded. */
+  async schemaVersion(): Promise<number> {
+    const rows = await this.db.query<Record<string, unknown>>('SELECT value FROM meta WHERE key = ?', ['schema_version'], 'none');
+    return Number(rows[0]?.value) || 0;
   }
 
   async upsertStorage(profile: StorageProfileRecord): Promise<void> {

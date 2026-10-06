@@ -8,7 +8,9 @@ import {
   type NodeRecord, type NodeResources, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
-import { getInstanceDir } from '../../utils/ark/instance.utils';
+import { getInstanceDir, getInstancesBaseDir } from '../../utils/ark/instance.utils';
+import { ClusterSync, importClusterData, type ClusterSyncSummary } from './cluster-sync';
+import { arkClusterIdOf, assertArkClusterIdFree, clusterFolder, clusterNameOf, knownClusters, rememberClusters } from '../clusters/cluster-registry';
 import { isServerMoving, whileServerMoves } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { appVersion } from '../../utils/app-version';
 import { userDatabaseService } from '../auth/user-database.service';
@@ -26,11 +28,11 @@ import { localRuntime } from '../runtime/local-runtime';
 import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
 import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateFingerprint, certificateIssuedBy, certificateSerial, normalizeSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
-import { meshTransferStore } from './managed-storage';
 import { providerForProfile } from './cluster-storage';
 import { clockSkewMs, probeTcp, wgInstalled, wireguardConfig, wireguardPrivateKey, applyWireguard } from './diagnostics';
 import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
 import { MeshRepository } from './mesh-repository';
+import { SCHEMA_VERSION } from './schema';
 import { hashArgon2id, hashToken, newEnrollmentToken, verifyArgon2id, verifyBcrypt } from './passwords';
 import {
   archiveInstance, beginStage, checkpointManifest, checksumTree, fileDigest, finishStage, promoteStaged, pruneMeshFolders, writeStagedFile,
@@ -38,7 +40,7 @@ import {
 } from './checkpoint';
 import { chooseNode, moveServer, type PlacementInput } from './placement';
 import { partitionDecision } from './partition-policy';
-import { peerRequest, peerUpload, startPeerServer, subscribeEvents, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
+import { peerDownload, peerRequest, peerUpload, startPeerServer, subscribeEvents, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
 import { reconcile, type ReconcileMemory } from './reconciler';
 import { DesiredIntents } from './desired-intent';
 import { PendingConfigs } from './pending-configs';
@@ -127,6 +129,8 @@ export class MeshService {
   private localResources: NodeResources | null = null;
   /** What each other node sent with its last heartbeat. */
   private readonly nodeResources = new Map<string, { resources: NodeResources; at: number }>();
+  /** How each other node's copy of the cluster files stands, from its last heartbeat. */
+  private readonly nodeClusterSync = new Map<string, { summary: Record<string, ClusterSyncSummary>; at: number }>();
 
   /**
    * Who this node is. Read once while attached and kept in memory: it is consulted on every tick
@@ -270,6 +274,8 @@ export class MeshService {
     await this.repo.upsertNode(this.nodeRow(identity.nodeId, identity.name, meshId, signed.serial));
     writeNodeIdentity({ ...identity, meshId });
     await this.importLocalServers(identity.nodeId);
+    // This machine's clusters go into the new mesh at its first check.
+    fs.writeFileSync(adoptClustersMarker(), '');
     await this.attach({ ...identity, meshId });
     if (input.adminPassword) {
       const user = await this.verifyLogin(input.adminUsername || 'admin', input.adminPassword);
@@ -352,6 +358,8 @@ export class MeshService {
     }
     const joinedIdentity = { ...identity, nodeId, meshId: joined.meshId, name: input.name || identity.name };
     writeNodeIdentity(joinedIdentity);
+    // This machine's clusters join the mesh's at its first check with quorum.
+    fs.writeFileSync(adoptClustersMarker(), '');
     await this.attach(joinedIdentity);
     await this.importLocalServers(nodeId);
     if (input.adminPassword) {
@@ -1023,28 +1031,109 @@ export class MeshService {
     return this.placementInputs().then(chooseNode);
   }
 
-  async createCluster(input: { name: string; arkClusterId: string; members: string[]; path?: string }): Promise<ClusterRecord> {
+  /**
+   * A cluster: a name and the ID ARK is given. Each server chooses whether it is in one. Without a
+   * path its transfer files are kept by the app on every machine (storage mode 'managed'); with
+   * one, every member is expected to reach that shared folder.
+   */
+  async createCluster(input: { name: string; arkClusterId: string; path?: string; clusterId?: string }): Promise<ClusterRecord> {
     this.requireQuorum('placement');
-    const cluster: ClusterRecord = {
-      clusterId: randomUUID(),
-      name: input.name,
-      arkClusterId: input.arkClusterId,
-      storageProfileId: null,
-      members: input.members
-    };
-    if (input.path) {
-      const profile: StorageProfileRecord = {
+    const name = clusterNameOf(input.name);
+    const arkClusterId = arkClusterIdOf(input.arkClusterId);
+    assertArkClusterIdFree(await this.repo!.listClusters(), arkClusterId);
+    const profile: StorageProfileRecord = input.path
+      ? {
         storageProfileId: randomUUID(),
         mode: 'shared-path',
         authorityNodeId: null,
         metadata: { path: input.path },
         health: { ok: false, degraded: true, detail: 'Not validated yet', checkedAt: 0, perNode: {} }
+      }
+      : {
+        storageProfileId: randomUUID(),
+        mode: 'managed',
+        authorityNodeId: null,
+        metadata: {},
+        health: { ok: true, degraded: false, detail: 'Kept on every machine by Cerious AASM', checkedAt: Date.now(), perNode: {} }
       };
-      await this.repo!.upsertStorage(profile);
-      cluster.storageProfileId = profile.storageProfileId;
-    }
+    await this.repo!.upsertStorage(profile);
+    const cluster: ClusterRecord = {
+      clusterId: input.clusterId || randomUUID(), name, arkClusterId, storageProfileId: profile.storageProfileId, members: []
+    };
     await this.repo!.upsertCluster(cluster);
+    this.publishStatus();
     return cluster;
+  }
+
+  /** Brings a mesh created by an older version up to this one's tables. Every statement can run twice. */
+  private async ensureSchema(): Promise<void> {
+    if (!this.repo || await this.repo.schemaVersion() >= SCHEMA_VERSION) return;
+    await this.repo.migrate();
+  }
+
+  /** The mesh's clusters, with whether the app keeps their files on every machine. */
+  async listClusters(): Promise<Array<ClusterRecord & { managed: boolean }>> {
+    if (!this.repo) return [];
+    const [clusters, storage] = await Promise.all([this.repo.listClusters(), this.repo.listStorage()]);
+    return clusters.map(cluster => ({
+      ...cluster,
+      managed: storage.some(profile => profile.storageProfileId === cluster.storageProfileId && profile.mode === 'managed')
+    }));
+  }
+
+  /** Renames a cluster. Its ARK cluster ID stays: it names its folder on every machine. */
+  async renameCluster(clusterId: string, name: string): Promise<ClusterRecord> {
+    this.requireQuorum('placement');
+    const cluster = await this.repo!.getCluster(clusterId);
+    if (!cluster) throw new Error('That cluster was not found.');
+    const next: ClusterRecord = { ...cluster, name: clusterNameOf(name) };
+    await this.repo!.upsertCluster(next);
+    this.publishStatus();
+    return next;
+  }
+
+  /**
+   * Brings this machine's clusters into the mesh it has just created or joined, so its servers
+   * stay in them. A cluster with the same ARK ID already in the mesh is used instead: this
+   * machine's servers are pointed at it and their transfer files are copied into its folder.
+   * Done once, after a create or a join, never on a restart: a cluster removed from the mesh
+   * while this machine was away must not come back from its copy here.
+   */
+  private async adoptLocalClusters(): Promise<void> {
+    const marker = adoptClustersMarker();
+    if (!fs.existsSync(marker) || !this.repo) return;
+    const meshClusters = await this.repo.listClusters();
+    const remap = new Map<string, string>();
+    for (const cluster of knownClusters()) {
+      const same = meshClusters.find(item => item.arkClusterId === cluster.arkClusterId);
+      if (same) {
+        if (same.clusterId !== cluster.clusterId) {
+          remap.set(cluster.clusterId, same.clusterId);
+          importClusterData(clusterFolder(cluster.clusterId), cluster.arkClusterId, clusterFolder(same.clusterId), same.arkClusterId);
+        }
+        continue;
+      }
+      await this.createCluster({ name: cluster.name, arkClusterId: cluster.arkClusterId, clusterId: cluster.clusterId });
+    }
+    if (remap.size) {
+      const { instances } = await localRuntime.listInstances();
+      for (const instance of instances) {
+        const next = instance.clusterRef ? remap.get(instance.clusterRef) : undefined;
+        if (next) await localRuntime.patchConfig(instance.id, { clusterRef: next });
+      }
+    }
+    fs.rmSync(marker, { force: true });
+  }
+
+  /**
+   * Removes a cluster. Its servers leave it at their host's next check; the transfer files stay
+   * on every machine, no longer synced.
+   */
+  async deleteCluster(clusterId: string): Promise<void> {
+    this.requireQuorum('placement');
+    if (!await this.repo!.getCluster(clusterId)) throw new Error('That cluster was not found.');
+    await this.repo!.deleteCluster(clusterId);
+    this.publishStatus();
   }
 
   async validateCluster(clusterId: string): Promise<StorageProfileRecord | null> {
@@ -1054,13 +1143,11 @@ export class MeshService {
     if (!cluster?.storageProfileId) return null;
     const profile = await this.repo.getStorage(cluster.storageProfileId);
     if (!profile) return null;
+    // The app keeps a managed cluster's files in step on every machine (ClusterSync), and each
+    // machine reports how its copy stands in its heartbeat: there is no shared folder to check.
+    if (profile.mode === 'managed') return profile;
     const dir = String(profile.metadata.path || '');
     const localId = this.identity()?.nodeId || '';
-    if (profile.mode === 'managed') {
-      const authorityHere = !profile.authorityNodeId || profile.authorityNodeId === localId;
-      const authoritySeen = !!profile.authorityNodeId && this.seenHeartbeats.has(profile.authorityNodeId);
-      meshTransferStore.authorityAvailable = authorityHere || authoritySeen;
-    }
     const result = dir
       ? await providerForProfile(profile.mode, dir).validate(dir)
       : { ok: false, latencyMs: 0, identity: '', error: 'No path configured' };
@@ -1430,7 +1517,8 @@ export class MeshService {
           || this.reachable(node.nodeId)
         ),
         host: hostOf(node.endpoints.peerUrl),
-        resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId)
+        resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId),
+        clusterSync: node.nodeId === identity.nodeId ? this.clusterSync?.summary() ?? {} : this.reportedClusterSync(node.nodeId)
       })),
       clusters,
       storage
@@ -1455,6 +1543,10 @@ export class MeshService {
     this.liveStates.clear();
     this.localResources = null;
     this.nodeResources.clear();
+    this.nodeClusterSync.clear();
+    if (this.clusterTimer) clearInterval(this.clusterTimer);
+    this.clusterTimer = null;
+    this.clusterSync = null;
     this.accountsFingerprint = '';
     messagingService.broadcastTap = null;
     this.localNodeId = null;
@@ -1568,12 +1660,16 @@ export class MeshService {
         onCommand: body => this.executeLocalCommand(body),
         onQuery: body => this.answerQuery(body),
         onSubscribe: () => this.greeting(),
-        onHeartbeat: (id, sentAt, resources) => {
+        onHeartbeat: (id, sentAt, resources, clusterSync) => {
           this.seenHeartbeats.set(id, { at: Date.now(), skewMs: clockSkewMs(sentAt) });
           const reported = nodeResourcesOf(resources);
           if (reported) this.nodeResources.set(id, { resources: reported, at: Date.now() });
+          const syncing = clusterSyncOf(clusterSync);
+          if (syncing) this.nodeClusterSync.set(id, { summary: syncing, at: Date.now() });
           this.publishStatus();
         },
+        // Cluster file contents, for another member that has to place a version this one recorded.
+        onClusterObject: sha256 => this.clusterSync?.objectPath(sha256) ?? null,
         // A move's destination stages the streamed files; they become the server when its placement arrives.
         onCheckpointBegin: body => beginStage(String(body.serverId || ''), {
           resume: body.resume === true,
@@ -1599,7 +1695,57 @@ export class MeshService {
     this.noteDesktopAuth();
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => { void this.reconcileLocal(nodeId); }, 5000);
+    this.startClusterSync(nodeId);
     void this.reconcileLocal(nodeId);
+  }
+
+  private clusterSync: ClusterSync | null = null;
+  private clusterTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Keeps the transfer files of every cluster the app keeps the same on this machine as on the others. */
+  private startClusterSync(nodeId: string): void {
+    // Always the current repository: it is replaced when the database password changes.
+    const repo = {
+      listClusters: () => this.repo!.listClusters(),
+      listStorage: () => this.repo!.listStorage(),
+      listClusterFiles: (clusterId: string) => this.repo!.listClusterFiles(clusterId),
+      commitClusterFile: (file: Parameters<MeshRepository['commitClusterFile']>[0], base: number) => this.repo!.commitClusterFile(file, base)
+    };
+    this.clusterSync = new ClusterSync({
+      nodeId,
+      repo,
+      rootOf: clusterFolder,
+      workDir: path.join(meshRoot(), 'cluster-sync'),
+      fetch: (sha256, originNode, dest) => this.fetchClusterObject(sha256, originNode, dest),
+      announce: clusterId => this.peer?.broadcast({ type: 'cluster-changed', nodeId, clusterId })
+    });
+    if (this.clusterTimer) clearInterval(this.clusterTimer);
+    this.clusterTimer = setInterval(() => this.syncClusters(), CLUSTER_SYNC_MS);
+  }
+
+  private syncClusters(): void {
+    if (!this.repo || !this.clusterSync) return;
+    void this.clusterSync.syncOnce().catch(error => console.warn('[mesh] Could not sync cluster files:', messageOf(error)));
+  }
+
+  /** Fetches cluster file contents from the machine that recorded them, or from any other member that has them. */
+  private async fetchClusterObject(sha256: string, originNode: string, dest: string): Promise<boolean> {
+    const certs = readCertPaths();
+    if (!certs || !this.repo) return false;
+    const localId = this.identity()?.nodeId;
+    const nodes = (await this.repo.listNodes(this.identity()?.meshId))
+      .filter(node => node.nodeId !== localId && node.status !== 'removed')
+      .sort((a, b) => Number(b.nodeId === originNode) - Number(a.nodeId === originNode));
+    const tls = {
+      ca: fs.readFileSync(certs.caCert, 'utf8'),
+      cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+      key: fs.readFileSync(certs.nodeKey, 'utf8')
+    };
+    for (const node of nodes) {
+      const url = `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/cluster-object?sha256=${sha256}`;
+      if (await peerDownload({ url, dest, ...tls, timeoutMs: 60_000 })) return true;
+    }
+    return false;
   }
 
   private inventoryFingerprint = '';
@@ -1679,7 +1825,7 @@ export class MeshService {
             url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/heartbeat`,
             method: 'POST',
             // nodeId is for an older receiver; a current one takes it from the certificate.
-            body: { nodeId, sentAt: Date.now(), resources: this.localResources },
+            body: { nodeId, sentAt: Date.now(), resources: this.localResources, clusterSync: this.clusterSync?.summary() ?? {} },
             ca: fs.readFileSync(certs.caCert, 'utf8'),
             cert: fs.readFileSync(certs.nodeCert, 'utf8'),
             key: fs.readFileSync(certs.nodeKey, 'utf8'),
@@ -1754,6 +1900,11 @@ export class MeshService {
   /** An event from another node, shown here only if that node hosts the server it is about. */
   private relayIn(fromNodeId: string, event: unknown): void {
     const frame = event as { type?: unknown; nodeId?: unknown; channel?: unknown; data?: { instanceId?: unknown } } | null;
+    // Another member recorded a change to a cluster file: look now rather than at the next check.
+    if (frame?.type === 'cluster-changed' && frame.nodeId === fromNodeId) {
+      this.syncClusters();
+      return;
+    }
     if (frame?.type !== 'server-event' || frame.nodeId !== fromNodeId || typeof frame.channel !== 'string') return;
     if (!RELAY_CHANNELS.has(frame.channel)) return;
     const serverId = frame.data?.instanceId;
@@ -1906,8 +2057,10 @@ export class MeshService {
       if (await this.adoptClusterCredential(nodeId)) return;
       this.quorum = await this.repo.hasQuorum();
       if (this.quorum) {
+        await this.ensureSchema();
         await this.flushIntents(nodeId);
         await this.flushPendingConfigs();
+        await this.adoptLocalClusters();
       }
       const [servers, users, clusters, storage, nodes] = await Promise.all([
         this.repo.listServers(),
@@ -1938,28 +2091,27 @@ export class MeshService {
       noteMeshServers(servers.map(server => ({
         serverId: server.serverId, nodeId: server.nodeId, operatorUserId: server.operatorUserId, managerUserId: server.managerUserId
       })));
-      const clusterByServer = new Map<string, { arkClusterId: string; clusterDirOverride: string }>();
-      for (const cluster of clusters) {
-        const profile = storage.find(item => item.storageProfileId === cluster.storageProfileId);
-        const clusterDirOverride = String(profile?.metadata?.path || '');
-        for (const member of cluster.members) {
-          clusterByServer.set(member, { arkClusterId: cluster.arkClusterId, clusterDirOverride });
-        }
+      // This machine's copy of the mesh's clusters: what its servers start with, even out of touch.
+      // Not before its own clusters are in the mesh, or they would be forgotten here. A change made
+      // on another machine reaches this machine's screens here.
+      try {
+        const copy = clusters.map(cluster => ({ clusterId: cluster.clusterId, name: cluster.name, arkClusterId: cluster.arkClusterId }));
+        if (!fs.existsSync(adoptClustersMarker()) && rememberClusters(copy)) messagingService.sendToAll('clusters-changed', {});
+      } catch (error) {
+        console.warn('[mesh] Could not keep a copy of the clusters here:', messageOf(error));
       }
       await reconcile(nodeId, servers.map(server => ({
         serverId: server.serverId,
         nodeId: server.nodeId,
         desiredState: this.intents?.get(server.serverId) ?? server.desiredState,
         configRevision: server.configRevision,
-        configJson: server.configJson,
-        ...clusterByServer.get(server.serverId)
+        configJson: server.configJson
       })), {
         state: id => localRuntime.state(id),
         start: async id => { await localRuntime.start(id); },
         stop: async id => { await localRuntime.stop(id); },
         appliedRevision: id => localRuntime.appliedRevision(id),
-        applyConfig: (id, revision, configJson) => localRuntime.applyConfig(id, revision, JSON.parse(configJson)),
-        applyCluster: (id, arkClusterId, clusterDirOverride) => localRuntime.applyCluster(id, arkClusterId, clusterDirOverride)
+        applyConfig: (id, revision, configJson) => localRuntime.applyConfig(id, revision, JSON.parse(configJson))
       }, this.reconcileMemory);
       this.peer?.broadcast({ type: 'status', nodeId, at: Date.now(), quorum: this.quorum });
       await this.announce(nodeId);
@@ -2105,6 +2257,12 @@ export class MeshService {
     messagingService.sendToAll('mesh-auth-changed', {});
   }
 
+  /** How a node said its copy of the cluster files stood at its last heartbeat; null once that is too old to show. */
+  private reportedClusterSync(nodeId: string): Record<string, ClusterSyncSummary> | null {
+    const reported = this.nodeClusterSync.get(nodeId);
+    return reported && reported.at >= Date.now() - HEARTBEAT_FRESH_MS ? reported.summary : null;
+  }
+
   /** What a node sent with its last heartbeat; null once that is too old to show. */
   private reportedResources(nodeId: string): NodeResources | null {
     const reported = this.nodeResources.get(nodeId);
@@ -2166,6 +2324,8 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
   } as InstanceConfig;
 }
 
+/** How often each machine compares its cluster files with the mesh record. */
+const CLUSTER_SYNC_MS = 2_000;
 /** A file of a move is tried again after each of these, so a brief drop does not end the move. */
 const MOVE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 /** How often a move says how far it has got. */
@@ -2255,6 +2415,30 @@ function hostOf(peerUrl: string): string {
   }
 }
 
+/** A cluster sync summary another node reported, keeping only well-formed entries; null when there are none. */
+function clusterSyncOf(value: unknown): Record<string, ClusterSyncSummary> | null {
+  if (!value || typeof value !== 'object') return null;
+  const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0);
+  const out: Record<string, ClusterSyncSummary> = {};
+  for (const [clusterId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    out[clusterId] = {
+      files: count(entry.files),
+      pendingSend: count(entry.pendingSend),
+      pendingReceive: count(entry.pendingReceive),
+      conflicts: count(entry.conflicts),
+      lastSyncAt: count(entry.lastSyncAt),
+      error: typeof entry.error === 'string' ? entry.error.slice(0, 300) : null
+    };
+  }
+  return out;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Resources another node reported, or null unless every figure is a number. */
 function nodeResourcesOf(value: unknown): NodeResources | null {
   const figure = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
@@ -2311,6 +2495,11 @@ function meshRoot(): string {
 
 function rqliteDir(): string {
   return path.join(meshRoot(), 'rqlite');
+}
+
+/** Present from a create or join until this machine's own clusters are in the mesh. */
+function adoptClustersMarker(): string {
+  return path.join(meshRoot(), 'adopt-clusters');
 }
 
 function intentsPath(): string {

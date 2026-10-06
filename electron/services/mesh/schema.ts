@@ -1,5 +1,9 @@
-/** Applied once on the Raft leader. Followers receive the statements through the log. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Applied on the Raft leader when a mesh is created, and again by any member that finds the
+ * mesh on an older version. Every statement can run more than once. Followers receive them
+ * through the log.
+ */
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -116,5 +120,19 @@ export const SCHEMA_STATEMENTS: string[] = [
     committed INTEGER NOT NULL,
     tombstone INTEGER NOT NULL,
     PRIMARY KEY (object_key, version)
+  )`,
+  // Version 2: the transfer files of each cluster whose files the app keeps on every machine.
+  // One row per file, at its latest version; a deleted file keeps its row so an old copy
+  // cannot bring it back.
+  `CREATE TABLE IF NOT EXISTS cluster_files (
+    cluster_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    deleted INTEGER NOT NULL,
+    origin_node TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (cluster_id, path)
   )`
 ];

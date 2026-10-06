@@ -1,0 +1,89 @@
+<div class="clusters-settings settings-pane">
+  <div class="ark-install-notice" *ngIf="inMesh">
+    <i class="material-icons">sync</i>
+    <span>The app keeps each cluster's transfer files on every machine in the mesh, over the mesh's own connection. No shared folder is needed. Choose a server's cluster on its Cluster tab.</span>
+  </div>
+  <div class="ark-install-notice" *ngIf="mesh && !inMesh">
+    <i class="material-icons">info</i>
+    <span>These clusters are for servers on this machine. Choose a server's cluster on its Cluster tab. If this machine joins a mesh, its clusters go with it.</span>
+  </div>
+  <div class="ark-install-notice warning" *ngIf="held">
+    <i class="material-icons">warning</i>
+    <span><strong>Mesh Degraded.</strong> Clusters keep working. Creating, renaming and removing them waits until the mesh has quorum again.</span>
+  </div>
+
+  <section class="settings-card" *ngIf="canManage">
+    <h3 class="settings-card-title">New cluster</h3>
+    <p class="settings-card-hint">Servers in one cluster share character, item and dino transfers.</p>
+    <div class="cluster-create-fields">
+      <div class="form-group">
+        <label class="form-control-label" for="cluster-create-name">Name</label>
+        <input id="cluster-create-name" class="form-control" name="createName" maxlength="64" placeholder="e.g. PvE Cluster"
+               [ngModel]="createName" (ngModelChange)="onCreateName($event)" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label" for="cluster-create-id">Cluster ID</label>
+        <input id="cluster-create-id" class="form-control" name="createId" maxlength="64" placeholder="e.g. PvECluster"
+               [ngModel]="createId" (ngModelChange)="onCreateId($event)" />
+        <label class="form-control-label desc">What ARK is given as -ClusterId. Letters, digits, dots, dashes and underscores. It cannot be changed later.</label>
+      </div>
+    </div>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="create()" [disabled]="busy || held || !createName.trim() || !createId.trim()">Create cluster</button>
+    </div>
+  </section>
+
+  <section class="settings-card">
+    <h3 class="settings-card-title">Clusters</h3>
+    <p class="settings-card-hint" *ngIf="!clusters.length">No clusters yet. Create one, then choose it on each server's Cluster tab.</p>
+
+    <div class="cluster-list" *ngIf="clusters.length">
+      <article class="cluster-card" *ngFor="let cluster of clusters; trackBy: trackByClusterId">
+        <div class="cluster-top">
+          <div class="cluster-identity">
+            <h4 class="cluster-name" *ngIf="renamingId !== cluster.clusterId">{{ cluster.name }}</h4>
+            <div class="cluster-rename-row" *ngIf="renamingId === cluster.clusterId">
+              <input class="form-control cluster-rename-input" [(ngModel)]="renameText" name="renameText" maxlength="64"
+                     aria-label="Cluster name" (keydown.enter)="saveRename(cluster)" (keydown.escape)="cancelRename()" />
+              <button type="button" class="btn btn-primary btn-sm" (click)="saveRename(cluster)">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRename()">Cancel</button>
+            </div>
+            <p class="cluster-meta">Cluster ID <code>{{ cluster.arkClusterId }}</code></p>
+          </div>
+        </div>
+
+        <div class="cluster-servers">
+          <span class="cluster-label">Servers</span>
+          <span class="cluster-empty" *ngIf="!(members[cluster.clusterId] || []).length">No servers yet</span>
+          <span class="cluster-server" *ngFor="let server of members[cluster.clusterId] || []">
+            {{ server.name }}<span class="cluster-server-machine" *ngIf="machineOf(server)"> on {{ machineOf(server) }}</span>
+          </span>
+        </div>
+
+        <div class="cluster-sync" *ngIf="syncOf(cluster).length">
+          <span class="cluster-label">Transfer files on each machine</span>
+          <div class="cluster-sync-row" *ngFor="let machine of syncOf(cluster)">
+            <span class="cluster-sync-machine">{{ machine.name }}</span>
+            <span class="cluster-sync-pill" [ngClass]="machine.tone">{{ machine.text }}</span>
+          </div>
+          <p class="settings-card-hint cluster-sync-hint" *ngIf="hasConflicts(cluster)">
+            A copy is set aside when two machines change the same player's file at once. The first change is kept everywhere. Set-aside copies stay in that machine's mesh/cluster-sync/conflicts folder.
+          </p>
+        </div>
+
+        <div class="cluster-actions" *ngIf="canManage && renamingId !== cluster.clusterId">
+          <button type="button" class="btn btn-ghost btn-sm" (click)="startRename(cluster)" [disabled]="held">Rename</button>
+          <button type="button" class="btn btn-danger btn-sm" (click)="askRemove(cluster)" [disabled]="held">Remove</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <app-modal [title]="'Remove cluster'" [show]="!!removing" (close)="cancelRemove()">
+    <div class="modal-confirmation">{{ removeSummary }}</div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelRemove()">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmRemove()">Remove</button>
+    </div>
+  </app-modal>
+</div>

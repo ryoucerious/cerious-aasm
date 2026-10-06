@@ -6,9 +6,40 @@
   </div>
 
   <div class="settings-section">
-    <h5>Cluster Settings</h5>
-    <p class="section-desc">Configure cluster directory, ID, and basic cluster properties.</p>
+    <h5>Cluster</h5>
+    <p class="section-desc">Players can transfer characters, items and dinos between the servers of one cluster. Clusters are made in Settings → Clusters.</p>
 
+  <div class="form-group span-all">
+    <label class="form-control-label" for="cluster-choice">Cluster</label>
+    <div class="cluster-choice-row">
+      <select id="cluster-choice" class="form-control input" [ngModel]="choice" (ngModelChange)="onChoose($event)" [disabled]="isLocked">
+        <option [value]="NONE">None</option>
+        <option *ngFor="let cluster of clusters" [value]="cluster.clusterId">{{ cluster.name }} ({{ cluster.arkClusterId }})</option>
+        <option *ngIf="removed" [value]="serverInstance.clusterRef">Removed cluster</option>
+        <option [value]="OWN">Own folder (advanced)</option>
+      </select>
+      <button type="button" class="btn btn-ghost" (click)="manageClusters()">
+        <i class="material-icons">device_hub</i> Manage clusters
+      </button>
+    </div>
+    <div class="form-control-label desc" *ngIf="!clusters.length && !removed">No clusters yet. Create one in Settings → Clusters, then choose it here.</div>
+    <div class="form-control-label desc" *ngIf="chosen">
+      Players can transfer between every server in {{ chosen.name }}.
+      <span *ngIf="chosen.managed">The app keeps its transfer files on every machine in the mesh, so its servers can run on any of them.</span>
+      A change takes effect when the server next starts.
+    </div>
+    <div class="form-control-label desc" *ngIf="earlierId">
+      What players uploaded under this server's earlier cluster ID {{ earlierId }} is copied into {{ chosen?.name }} once, at its next start.
+    </div>
+    <div class="form-control-label desc" *ngIf="removed">
+      This server's cluster was removed. It starts in no cluster until another is chosen.
+    </div>
+    <div class="form-control-label desc" *ngIf="choice === OWN">
+      A cluster ID and folder for this server alone. Use a cluster from Settings → Clusters instead to have the app keep the files in step across machines.
+    </div>
+  </div>
+
+  <ng-container *ngIf="choice === OWN">
   <div class="form-group span-all">
     <label class="form-control-label">Cluster Directory Path</label>
     <input
@@ -68,6 +99,7 @@
       </div>
     </div>
   </div>
+  </ng-container>
 </div>
 
 

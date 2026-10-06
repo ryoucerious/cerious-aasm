@@ -96,20 +96,6 @@ onRequest('rename-mesh-node', async payload => {
 
 onRequest('suggest-placement', async () => ({ nodeId: await meshService.suggestPlacement() }));
 
-onRequest('create-cluster', async payload => {
-  try {
-    const cluster = await meshService.createCluster({
-      name: String(payload.name || ''),
-      arkClusterId: String(payload.arkClusterId || payload.name || ''),
-      members: Array.isArray(payload.members) ? payload.members.map(String) : [],
-      path: payload.path ? String(payload.path) : undefined
-    });
-    return { success: true, cluster };
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : 'Could not create that cluster.' };
-  }
-});
-
 onRequest('validate-cluster-storage', async payload => {
   const storage = await meshService.validateCluster(String(payload.clusterId || ''));
   return { success: !!storage?.health.ok, storage };
