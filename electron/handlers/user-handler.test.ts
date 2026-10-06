@@ -3,6 +3,7 @@ import { userDatabaseService } from '../services/auth/user-database.service';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES, Permission, Role } from '../types/auth.types';
 import type { ApiProcessSender } from '../types/messaging.types';
 import { getAllInstances } from '../utils/ark/instance.utils';
+import { meshService } from '../services/mesh/mesh-service';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn(), invalidateWebSessions: jest.fn() }
@@ -28,7 +29,12 @@ jest.mock('../services/auth/user-database.service', () => ({
 jest.mock('../utils/ark/instance.utils', () => ({ getAllInstances: jest.fn() }));
 // A standalone install: the mesh is off, so these sync calls do nothing.
 jest.mock('../services/mesh/mesh-service', () => ({
-  meshService: { syncUser: jest.fn(async () => undefined), forgetUser: jest.fn(async () => undefined), syncRole: jest.fn(async () => undefined) }
+  meshService: {
+    syncUser: jest.fn(async () => undefined),
+    forgetUser: jest.fn(async () => undefined),
+    syncRole: jest.fn(async () => undefined),
+    forgetRole: jest.fn(async () => undefined)
+  }
 }));
 
 const mockMessaging = jest.mocked(messagingService);
@@ -191,6 +197,7 @@ describe('user-handler', () => {
       db.deleteRole.mockReturnValue({ success: true, data: { id: 'viewer' } });
 
       expect(await call('delete-role', { id: 'viewer' })).toEqual({ success: true, id: 'viewer', requestId: 'r1' });
+      expect(meshService.forgetRole).toHaveBeenCalledWith('viewer');
     });
 
     it('can rename a role that keeps permissions it lacks, since nothing is granted', async () => {

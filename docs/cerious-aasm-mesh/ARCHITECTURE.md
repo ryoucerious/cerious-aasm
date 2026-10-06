@@ -231,6 +231,45 @@ Different networks should use a private routable overlay. Add
 WireGuard-style assistance later; keep AASM protocol independent from
 the VPN. Never recommend public SMB/NFS exposure.
 
+### How this build does it
+
+Two TCP ports carry everything between members: the peer API (4747) and
+Raft (4002). Both use mutual TLS with node certificates signed by the
+mesh CA. rqlite's HTTP API (4001) listens on loopback only; nodes never
+use it to reach each other. A proxy in front of 4747 or 4002 must pass
+TLS through as raw TCP; one that ends TLS removes the certificates.
+
+- **Join tokens name the CA.** A token is `<secret>.<fingerprint>`, the
+  fingerprint being sha256 of the mesh CA certificate. The joining node
+  fetches the member's CA (`GET /v1/ca`), refuses a mismatch, and sends
+  the token only over a connection that trusts that CA alone. If the
+  join cannot finish, it asks the member to take it back out
+  (`POST /v1/abort-join`, with its new certificate).
+- **Only members' certificates are trusted.** The peer API accepts a
+  certificate when the member its common name names is recorded with
+  exactly that serial and is not removed or revoked. A certificate
+  minted with the CA key for anyone else is refused.
+- **Removing another node rotates the database password.** It is taken
+  out of Raft first, then a new password is written to the replicated
+  `meta` table, so it never sees it; rqlite refuses joins with the old
+  one. Every member restarts its rqlited with the new password on its
+  next tick, since rqlited reads credentials only at start. Writes
+  forwarded between members can fail for those few seconds. A node
+  leaving on its own does not rotate it.
+- **Advertised addresses can differ from listen ports.** A node listens
+  on `AASM_PEER_PORT` and `AASM_RAFT_PORT` and tells others to dial
+  `AASM_ADVERTISE_PEER_URL` and `AASM_ADVERTISE_RAFT_ADDR` (defaults:
+  `AASM_ADVERTISE_HOST` with those ports). They are read when the node
+  creates or joins a mesh and kept; its certificate covers their hosts.
+
+The mesh CA key is in the replicated state, so every member can enroll
+a node. A removed node may still hold it, which the rules above make
+insufficient: it cannot reach the database, rejoin Raft, or be trusted
+on the peer API.
+
+The web interface is separate. Behind a reverse proxy, `AASM_TRUST_PROXY`
+names the proxies whose `X-Forwarded-*` headers it believes.
+
 ## Mesh identity
 
 Users belong to the Mesh. Replicate password verifiers and security
@@ -249,6 +288,28 @@ every login to call the leader.
 Increment `SecurityVersion` when password, MFA, enabled state, roles,
 scoped permissions, or security/session reset changes. Tokens carry the
 observed version and become invalid when stale.
+
+### How accounts are kept
+
+The mesh's `users` and `roles` tables are the accounts. Each node keeps
+its own account database as a mirror of them, refreshed on every tick
+it changes, so the Users page, pools and lookups on any node see every
+account. Creating, editing or deleting an account on any node writes
+that node's database, then the mesh (quorum required); the others follow
+within a tick. An account made or changed in the last minute is not
+undone by the mirror while its copy to the mesh is under way.
+
+- Logins check the mesh row: Argon2id, or bcrypt for accounts made on
+  one machine, upgraded to Argon2id at the first login. A hash is
+  labelled by what it is.
+- `SecurityVersion` rises for a new password, enabling or disabling, a
+  new role or a new pool; a display name change or the hash upgrade
+  signs no one out.
+- Deleting an account or a custom role removes it from the mesh, so its
+  name can be used again. Built-in roles are the same everywhere.
+- When a machine joins a mesh, the mesh's accounts replace the ones it
+  had; those are kept in `mesh/accounts-before-join-<time>.db`.
+- An account set from the command line stays local to its machine.
 
 ### RBAC
 

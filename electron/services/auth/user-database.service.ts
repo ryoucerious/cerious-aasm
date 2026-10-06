@@ -9,6 +9,7 @@ import {
   UNMATCHABLE_BCRYPT_HASH, effectivePermissions
 } from '../../types/auth.types';
 import type { ActivityEntry, ActivityKind } from '../activity-log.service';
+import { verifyArgon2id } from '../mesh/passwords';
 
 const SALT_ROUNDS = 12;
 const SCHEMA_VERSION = 1;
@@ -46,6 +47,29 @@ interface RoleRow {
   built_in: number;
   created_at: number;
   updated_at: number;
+}
+
+/** An account as the mesh stores it. In a mesh this database mirrors those. */
+export interface MeshAccount {
+  userId: string;
+  username: string;
+  displayName: string;
+  /** bcrypt or Argon2id; the hash itself says which. */
+  passwordHash: string;
+  enabled: boolean;
+  roleId: string;
+  ownerUserId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** How long an account made or changed here is kept while its copy to the mesh is under way. */
+const UNSYNCED_GRACE_MS = 60_000;
+
+export interface MeshAccountRole {
+  roleId: string;
+  name: string;
+  permissions: string[];
 }
 
 export interface CreateUserInput {
@@ -618,13 +642,7 @@ export class UserDatabaseService {
       ? this.queryOne<UserRow>('SELECT * FROM users WHERE username = ? COLLATE NOCASE', [name])
       : undefined;
 
-    const hash = row?.password_hash || UNMATCHABLE_BCRYPT_HASH;
-    let ok = false;
-    try {
-      ok = await bcrypt.compare(password || '', hash);
-    } catch {
-      ok = false;
-    }
+    const ok = await this.passwordMatches(password || '', row?.password_hash || UNMATCHABLE_BCRYPT_HASH);
 
     if (!row || !ok || !row.active) return null;
 
@@ -642,7 +660,7 @@ export class UserDatabaseService {
       return { success: false, error: 'This password is set on the command line and cannot be changed in the app.' };
     }
 
-    const ok = await bcrypt.compare(currentPassword || '', row.password_hash).catch(() => false);
+    const ok = await this.passwordMatches(currentPassword || '', row.password_hash);
     if (!ok) return { success: false, error: 'Current password is incorrect.' };
 
     const validation = this.validateCredentials(row.username, newPassword);
@@ -736,6 +754,104 @@ export class UserDatabaseService {
   private slugify(name: string): string {
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     return base || `role-${Date.now()}`;
+  }
+
+  /**
+   * Makes this database match the mesh's accounts and custom roles. Accounts and roles the mesh
+   * no longer has are removed; built-in roles keep their fixed permissions; an account set from
+   * the command line stays local and is left alone. The last sign-in time is this machine's
+   * own and is kept. Returns the ids that changed.
+   */
+  applyMeshAccounts(input: { users: MeshAccount[]; roles: MeshAccountRole[] }, now = Date.now()): { changedUserIds: string[]; changedRoleIds: string[] } {
+    this.ensureOpen();
+    const changedUserIds: string[] = [];
+    const changedRoleIds: string[] = [];
+    const meshUsers = new Map(input.users.map(user => [user.userId, user]));
+    const meshRoles = new Map(input.roles.map(role => [role.roleId, role]));
+    const meshNames = new Set(input.users.map(user => user.username.toLowerCase()));
+    this.conn.exec('BEGIN');
+    try {
+      const localUsers = this.queryAll<UserRow>('SELECT * FROM users');
+      const cliNames = new Set(localUsers.filter(row => row.cli_locked).map(row => row.username.toLowerCase()));
+      // Removed first, so a name the mesh now uses for another account or role is free.
+      for (const row of localUsers) {
+        if (meshUsers.has(row.id) || row.cli_locked) continue;
+        // Made or changed here moments ago: its copy to the mesh is on the way. A mesh account
+        // with the same name wins, though; the mesh would refuse this one.
+        if (now - row.updated_at < UNSYNCED_GRACE_MS && !meshNames.has(row.username.toLowerCase())) continue;
+        this.conn.run('DELETE FROM users WHERE id = ?', [row.id]);
+        changedUserIds.push(row.id);
+      }
+      for (const row of this.queryAll<RoleRow>('SELECT * FROM roles WHERE built_in = 0')) {
+        if (meshRoles.has(row.id)) continue;
+        const inUse = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ?', [row.id])?.count ?? 0;
+        if (inUse > 0) continue;
+        this.conn.run('DELETE FROM roles WHERE id = ?', [row.id]);
+        changedRoleIds.push(row.id);
+      }
+      for (const role of input.roles) {
+        const existing = this.queryOne<RoleRow>('SELECT * FROM roles WHERE id = ?', [role.roleId]);
+        if (existing?.built_in) continue;
+        const permissions = JSON.stringify(this.sanitizePermissions(role.permissions as Permission[]));
+        if (existing && existing.name === role.name && existing.permissions === permissions) continue;
+        if (existing) {
+          this.conn.run('UPDATE roles SET name = ?, permissions = ?, updated_at = ? WHERE id = ?', [role.name, permissions, now, role.roleId]);
+        } else {
+          this.conn.run('DELETE FROM roles WHERE name = ? COLLATE NOCASE AND built_in = 0', [role.name]);
+          this.conn.run(
+            'INSERT INTO roles (id, name, description, permissions, built_in, created_at, updated_at) VALUES (?, ?, \'\', ?, 0, ?, ?)',
+            [role.roleId, role.name, permissions, now, now]
+          );
+        }
+        changedRoleIds.push(role.roleId);
+      }
+      for (const user of input.users) {
+        const existing = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [user.userId]);
+        if (existing?.cli_locked || (!existing && cliNames.has(user.username.toLowerCase()))) continue;
+        // Changed here moments ago, after the mesh's copy was written: that change is on its way.
+        // Only for that minute, so a node whose clock runs behind cannot be ignored for good.
+        if (existing && existing.updated_at > user.updatedAt && now - existing.updated_at < UNSYNCED_GRACE_MS) continue;
+        const values = [user.username, user.passwordHash, user.displayName, user.roleId, user.enabled ? 1 : 0, user.ownerUserId, user.createdAt, user.updatedAt];
+        if (existing && existing.username === user.username && existing.password_hash === user.passwordHash
+          && existing.display_name === user.displayName && existing.role_id === user.roleId && !!existing.active === user.enabled
+          && (existing.owner_user_id || null) === user.ownerUserId) continue;
+        if (existing) {
+          this.conn.run(
+            'UPDATE users SET username = ?, password_hash = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, created_at = ?, updated_at = ? WHERE id = ?',
+            [...values, user.userId]
+          );
+        } else {
+          this.conn.run(
+            `INSERT INTO users (username, password_hash, display_name, role_id, active, owner_user_id, created_at, updated_at, id, cli_locked, last_login_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+            [...values, user.userId]
+          );
+        }
+        changedUserIds.push(user.userId);
+      }
+      this.conn.exec('COMMIT');
+    } catch (error) {
+      this.conn.exec('ROLLBACK');
+      throw error;
+    }
+    return { changedUserIds, changedRoleIds };
+  }
+
+  /** A consistent copy of the whole database in `dest`, which must not exist yet. */
+  snapshotTo(dest: string): void {
+    this.ensureOpen();
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    this.conn.run('VACUUM INTO ?', [dest]);
+  }
+
+  /** bcrypt for accounts made on this machine, Argon2id for accounts the mesh has re-hashed. */
+  private async passwordMatches(password: string, hash: string): Promise<boolean> {
+    if (hash.startsWith('$argon2')) return verifyArgon2id(password, hash);
+    try {
+      return await bcrypt.compare(password, hash);
+    } catch {
+      return false;
+    }
   }
 
   private toRole(row: RoleRow): Role {

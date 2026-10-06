@@ -35,6 +35,23 @@ export class MeshRepository {
     );
   }
 
+  /**
+   * The rqlite credential every member uses, once it has been changed from the one the mesh was
+   * created with. Null until the first change.
+   */
+  async getClusterCredential(): Promise<{ user: string; pass: string } | null> {
+    const rows = await this.db.query<Record<string, unknown>>('SELECT value FROM meta WHERE key = ?', ['cluster_credential'], 'none');
+    const value = rows[0] ? json<{ user?: unknown; pass?: unknown } | null>(String(rows[0].value), null) : null;
+    return value && typeof value.user === 'string' && typeof value.pass === 'string' ? { user: value.user, pass: value.pass } : null;
+  }
+
+  async setClusterCredential(credential: { user: string; pass: string }): Promise<void> {
+    await this.db.exec(
+      'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      ['cluster_credential', JSON.stringify(credential)]
+    );
+  }
+
   async hasQuorum(): Promise<boolean> {
     return (await this.db.status()).hasQuorum;
   }
@@ -170,6 +187,14 @@ export class MeshRepository {
   async listUsers(): Promise<UserRecord[]> {
     const rows = await this.db.query<Record<string, unknown>>('SELECT * FROM users ORDER BY username', [], 'none');
     return rows.map(toUser);
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    await this.db.exec('DELETE FROM users WHERE user_id = ?', [userId]);
+  }
+
+  async deleteRole(roleId: string): Promise<void> {
+    await this.db.exec('DELETE FROM roles WHERE role_id = ?', [roleId]);
   }
 
   async upsertRole(role: RoleRecord): Promise<void> {

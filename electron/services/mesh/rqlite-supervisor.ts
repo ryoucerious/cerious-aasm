@@ -5,8 +5,12 @@ import * as path from 'path';
 export interface RqliteStartOptions {
   nodeId: string;
   dataDir: string;
+  /** Where the HTTP API listens. Loopback: only this machine's AASM uses it. */
   httpAddr: string;
+  /** The Raft address other nodes dial. Behind a port forward or proxy its port can differ from raftBind. */
   raftAddr: string;
+  /** Where Raft listens on this machine. */
+  raftBind: string;
   authUser: string;
   authPass: string;
   join?: string;
@@ -31,11 +35,10 @@ export class RqliteSupervisor {
     this.exited = false;
     fs.mkdirSync(options.dataDir, { recursive: true });
     const httpAdv = advertisedHttp(options.httpAddr, options.raftAddr);
-    const raftBind = `0.0.0.0:${options.raftAddr.slice(options.raftAddr.lastIndexOf(':') + 1)}`;
     const args = [
       '-node-id', options.nodeId,
       '-http-addr', options.httpAddr,
-      '-raft-addr', raftBind,
+      '-raft-addr', options.raftBind,
       '-http-adv-addr', httpAdv,
       '-raft-adv-addr', options.raftAddr
     ];

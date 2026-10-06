@@ -47,6 +47,9 @@ services:
       - "${AASM_GAME_PORTS:-7777-7900}:${AASM_GAME_PORTS:-7777-7900}/udp"
       - "${AASM_QUERY_PORTS:-27015-27030}:${AASM_QUERY_PORTS:-27015-27030}/udp"
       - "${AASM_RCON_PORTS:-27020-27050}:${AASM_RCON_PORTS:-27020-27050}/tcp"
+      # Mesh peer API and Raft. Nothing listens on them until this install joins a mesh.
+      - "${AASM_PEER_PORT:-4747}:${AASM_PEER_PORT:-4747}/tcp"
+      - "${AASM_RAFT_PORT:-4002}:${AASM_RAFT_PORT:-4002}/tcp"
     shm_size: "2gb"
     cap_add:
       - SYS_PTRACE   # Proton's wineserver attaches to its own child processes
@@ -67,6 +70,14 @@ services:
       AASM_GAME_PORTS: ${AASM_GAME_PORTS:-7777-7900}
       AASM_QUERY_PORTS: ${AASM_QUERY_PORTS:-27015-27030}
       AASM_RCON_PORTS: ${AASM_RCON_PORTS:-27020-27050}
+      # Behind a reverse proxy: the proxies whose X-Forwarded-* headers are believed.
+      AASM_TRUST_PROXY: ${AASM_TRUST_PROXY:-}
+      # Mesh. The ports this container listens on, and the addresses other members dial.
+      AASM_PEER_PORT: ${AASM_PEER_PORT:-4747}
+      AASM_RAFT_PORT: ${AASM_RAFT_PORT:-4002}
+      AASM_ADVERTISE_HOST: ${AASM_ADVERTISE_HOST:-}
+      AASM_ADVERTISE_PEER_URL: ${AASM_ADVERTISE_PEER_URL:-}
+      AASM_ADVERTISE_RAFT_ADDR: ${AASM_ADVERTISE_RAFT_ADDR:-}
       # Only needed when the volumes above are swapped for host folders.
       PUID: ${PUID:-}
       PGID: ${PGID:-}

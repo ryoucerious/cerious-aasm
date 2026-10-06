@@ -12,7 +12,7 @@ import { createHash, X509Certificate } from 'crypto';
 import { Readable } from 'stream';
 import { MeshRepository } from './mesh-repository';
 import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHandle } from './sql-executor';
-import { hashArgon2id } from './passwords';
+import { hashArgon2id, hashToken } from './passwords';
 import { meshServer } from './mesh-hooks';
 import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
@@ -59,9 +59,14 @@ jest.mock('../server-instance/server-instance.service', () => ({
   serverInstanceService: { broadcastInstances: jest.fn(async () => undefined) },
   setInventoryMerge: jest.fn()
 }));
-jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn() } }));
+jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn(), invalidateWebSessions: jest.fn() } }));
 jest.mock('../auth/user-database.service', () => ({
-  userDatabaseService: { exportCredentialRows: jest.fn(() => []), listRoles: jest.fn(() => []) }
+  userDatabaseService: {
+    exportCredentialRows: jest.fn(() => []),
+    listRoles: jest.fn(() => []),
+    applyMeshAccounts: jest.fn(() => ({ changedUserIds: [], changedRoleIds: [] })),
+    snapshotTo: jest.fn()
+  }
 }));
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn() }));
@@ -73,6 +78,7 @@ import { RqliteClient } from './rqlite-client';
 import { peerRequest, peerUpload, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
 import { localRuntime } from '../runtime/local-runtime';
+import { userDatabaseService } from '../auth/user-database.service';
 import { MeshService } from './mesh-service';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
@@ -159,6 +165,304 @@ describe('MeshService', () => {
       hashAlg: 'argon2id', enabled: true, securityVersion: 1, roleId: 'admin', ownerUserId: null, createdAt: 1, updatedAt: 1
     });
   }
+
+  describe('mesh accounts', () => {
+    const verifier = '$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g';
+
+    async function meshUser(overrides: Partial<Parameters<MeshRepository['upsertUser']>[0]> = {}): Promise<void> {
+      await repo.upsertUser({
+        userId: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, passwordParameters: 'argon2id', hashAlg: 'argon2id',
+        enabled: true, securityVersion: 3, roleId: 'moderators', ownerUserId: null, createdAt: 1, updatedAt: 2, ...overrides
+      });
+    }
+
+    function localRow(overrides: Partial<ReturnType<typeof userDatabaseService.exportCredentialRows>[number]> = {}) {
+      return { id: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, roleId: 'moderators', active: true, ownerUserId: null, ...overrides };
+    }
+
+    it('mirrors the mesh\'s accounts and roles into this machine\'s account database', async () => {
+      await repo.upsertRole({ roleId: 'moderators', name: 'Moderators', permissions: ['servers.view'], securityVersion: 1 });
+      await meshUser();
+      jest.mocked(userDatabaseService.applyMeshAccounts).mockReturnValue({ changedUserIds: ['u1'], changedRoleIds: [] });
+
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(userDatabaseService.applyMeshAccounts).toHaveBeenCalledWith({
+        users: [{ userId: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, enabled: true, roleId: 'moderators', ownerUserId: null, createdAt: 1, updatedAt: 2 }],
+        roles: [{ roleId: 'moderators', name: 'Moderators', permissions: ['servers.view'] }]
+      });
+      expect(messagingService.invalidateWebSessions).toHaveBeenCalledWith({ userId: 'u1', roleId: undefined });
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('users-changed', { userId: 'u1', roleId: undefined });
+    });
+
+    it('rewrites the account database only when the mesh accounts change', async () => {
+      await meshUser();
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(userDatabaseService.applyMeshAccounts).toHaveBeenCalledTimes(1);
+
+      await meshUser({ displayName: 'Ada L.', updatedAt: 3 });
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(userDatabaseService.applyMeshAccounts).toHaveBeenCalledTimes(2);
+    });
+
+    it('labels a stored password by the algorithm its hash names', async () => {
+      await meshUser();
+      await service.resumeIfJoined();
+      // Changed on this machine: a fresh bcrypt hash replaces the Argon2id one the mesh held.
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ passwordHash: '$2b$10$abcdefghijklmnopqrstuuMx1XQYZ6EyuX5w0rBgk0gbtV2tNxk7i' })]);
+
+      await service.syncUser('u1');
+
+      expect(await repo.getUser('u1')).toMatchObject({ hashAlg: 'bcrypt', passwordHash: '$2b$10$abcdefghijklmnopqrstuuMx1XQYZ6EyuX5w0rBgk0gbtV2tNxk7i' });
+    });
+
+    it('signs a user out everywhere only for a change to their password, access or pool', async () => {
+      await meshUser();
+      await service.resumeIfJoined();
+
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ displayName: 'Ada L.' })]);
+      await service.syncUser('u1');
+      expect(await repo.getUser('u1')).toMatchObject({ displayName: 'Ada L.', securityVersion: 3 });
+
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ displayName: 'Ada L.', roleId: 'viewer' })]);
+      await service.syncUser('u1');
+      expect(await repo.getUser('u1')).toMatchObject({ roleId: 'viewer', securityVersion: 4 });
+    });
+
+    it('deletes a deleted user or role from the mesh, so the name is free again', async () => {
+      await meshUser();
+      await repo.upsertRole({ roleId: 'moderators', name: 'Moderators', permissions: [], securityVersion: 1 });
+      await service.resumeIfJoined();
+
+      await service.forgetUser('u1');
+      await service.forgetRole('moderators');
+
+      expect(await repo.getUser('u1')).toBeNull();
+      expect(await repo.getRole('moderators')).toBeNull();
+    });
+
+    it('does not sign a user out elsewhere when it upgrades their stored hash at login', async () => {
+      await repo.upsertRole({ roleId: 'moderators', name: 'Moderators', permissions: [], securityVersion: 1 });
+      await meshUser({ passwordHash: '$2b$10$abcdefghijklmnopqrstuuMx1XQYZ6EyuX5w0rBgk0gbtV2tNxk7i', hashAlg: 'bcrypt', passwordParameters: 'bcrypt' });
+      await service.resumeIfJoined();
+
+      expect(await service.verifyLogin('ada', 'correct horse')).not.toBeNull();
+
+      expect(await repo.getUser('u1')).toMatchObject({ hashAlg: 'argon2id', securityVersion: 3 });
+    });
+  });
+
+  describe('the shared database password', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+
+    function supervisorStarts() {
+      return jest.mocked(RqliteSupervisor).mock.results
+        .flatMap(result => jest.mocked((result.value as { start: jest.Mock }).start).mock.calls.map(([options]) => options));
+    }
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+    });
+
+    it('gets a new value once a removed node is out of Raft, so that node never learns it', async () => {
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await service.resumeIfJoined();
+      const seenWhenRemoved: Array<string | null> = [];
+      jest.spyOn(rqlite, 'removeMember').mockImplementation(async () => {
+        seenWhenRemoved.push((await repo.getClusterCredential())?.pass ?? null);
+      });
+
+      await service.removeNode(REMOTE);
+
+      expect(seenWhenRemoved).toEqual([null]);
+      const credential = await repo.getClusterCredential();
+      expect(credential?.pass).toBeTruthy();
+      expect(credential?.pass).not.toBe('p');
+    });
+
+    it('is picked up by every node on its next tick', async () => {
+      await service.resumeIfJoined();
+      await repo.setClusterCredential({ user: 'aasm', pass: 'rotated' });
+
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(supervisorStarts().at(-1)).toMatchObject({ authUser: 'aasm', authPass: 'rotated' });
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'mesh', 'rqlite-auth.json'), 'utf8')).httpPass).toBe('rotated');
+      expect(service.isEnabled()).toBe(true);
+    });
+
+    it('stays as it is when this node leaves on its own', async () => {
+      await service.resumeIfJoined();
+
+      await service.removeNode(LOCAL);
+
+      expect(await repo.getClusterCredential()).toBeNull();
+    });
+  });
+
+  describe('which certificates it trusts', () => {
+    it('trusts only the certificate a current member is recorded with', async () => {
+      const MEMBER = '22222222-2222-4222-8222-222222222222';
+      const GONE = '33333333-3333-4333-8333-333333333333';
+      const REVOKED = '44444444-4444-4444-8444-444444444444';
+      await repo.upsertNode(nodeRow(MEMBER, 'abc123'));
+      await repo.upsertNode({ ...nodeRow(GONE, 'def456'), status: 'removed' });
+      await repo.upsertNode(nodeRow(REVOKED, 'f0f'));
+      await repo.revokeSerial('f0f', Date.now());
+      await service.resumeIfJoined();
+      const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+
+      expect(await peer.isTrusted('abc123', MEMBER)).toBe(true);
+      expect(await peer.isTrusted('999999', MEMBER)).toBe(false); // minted with the CA key
+      expect(await peer.isTrusted('abc123', 'someone-else')).toBe(false); // another member's serial
+      expect(await peer.isTrusted('def456', GONE)).toBe(false); // removed from the mesh
+      expect(await peer.isTrusted('f0f', REVOKED)).toBe(false); // revoked
+    });
+  });
+
+  describe('joining', () => {
+    const MEMBER = 'https://10.0.0.9:4747';
+    let ca: ReturnType<typeof createMeshCa>;
+    let token: string;
+
+    /** The CA fingerprint worked out here: sha256 of the certificate's DER bytes, base64url. */
+    function fingerprintOf(certPem: string): string {
+      return createHash('sha256').update(new X509Certificate(certPem).raw).digest('base64url');
+    }
+
+    function calls(suffix: string) {
+      return jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith(suffix));
+    }
+
+    beforeAll(() => {
+      ca = createMeshCa('member mesh');
+    });
+
+    beforeEach(() => {
+      token = `${'ab'.repeat(32)}.${fingerprintOf(ca.certPem)}`;
+      // A member: it shows its CA, then signs the joiner's key.
+      jest.mocked(peerRequest).mockImplementation(async options => {
+        if (options.url.endsWith('/v1/ca')) return { status: 200, body: { caCert: ca.certPem } };
+        if (options.url.endsWith('/v1/join')) {
+          const body = options.body as { publicKeyPem: string };
+          return {
+            status: 200,
+            body: {
+              meshId: 'mesh-2', nodeId: LOCAL, caCert: ca.certPem,
+              nodeCert: signNodeCertificate(ca.certPem, ca.keyPem, body.publicKeyPem, LOCAL, ['127.0.0.1']).certPem,
+              httpAuthUser: 'aasm', httpAuthPass: 'p2', raftAddr: '10.0.0.9:4002'
+            }
+          };
+        }
+        return { status: 200, body: { ok: true } };
+      });
+    });
+
+    it('checks the member\'s CA against the token before sending the token, then verifies against that CA', async () => {
+      await service.joinMesh({ memberUrl: MEMBER, token });
+
+      const [shown] = calls('/v1/ca');
+      const [join] = calls('/v1/join');
+      expect(jest.mocked(peerRequest).mock.calls[0][0].url).toBe(`${MEMBER}/v1/ca`);
+      expect(shown.method).toBe('GET');
+      expect(join.pinnedCa).toBe(ca.certPem);
+      expect(join.insecure).toBeFalsy();
+      expect((join.body as { token: string }).token).toBe('ab'.repeat(32));
+      expect(service.isEnabled()).toBe(true);
+    }, 30_000);
+
+    it('will not send the token to a member whose CA does not match it', async () => {
+      const impostor = createMeshCa('impostor');
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { caCert: impostor.certPem } });
+
+      await expect(service.joinMesh({ memberUrl: MEMBER, token })).rejects.toThrow(/does not match/);
+      expect(calls('/v1/join')).toEqual([]);
+    }, 30_000);
+
+    it('refuses a token that does not name the mesh CA', async () => {
+      await expect(service.joinMesh({ memberUrl: MEMBER, token: 'ab'.repeat(32) })).rejects.toThrow(/new token/);
+      expect(peerRequest).not.toHaveBeenCalled();
+    });
+
+    it('asks the member to take it back out when the join cannot finish', async () => {
+      supervisorFailure = 'failed to join cluster';
+
+      await expect(service.joinMesh({ memberUrl: MEMBER, token })).rejects.toThrow(/failed to join/);
+
+      const [abort] = calls('/v1/abort-join');
+      expect(abort.url).toBe(`${MEMBER}/v1/abort-join`);
+      expect(abort.pinnedCa).toBe(ca.certPem);
+      expect(abort.cert).toContain('BEGIN CERTIFICATE');
+    }, 30_000);
+
+    it('keeps a copy of this machine\'s accounts before the mesh\'s replace them', async () => {
+      await service.joinMesh({ memberUrl: MEMBER, token });
+
+      const [dest] = jest.mocked(userDatabaseService.snapshotTo).mock.calls[0] ?? [''];
+      expect(path.dirname(dest)).toBe(path.join(root, 'mesh'));
+      expect(path.basename(dest)).toMatch(/^accounts-before-join-\d+\.db$/);
+    }, 30_000);
+
+    it('creates tokens that name the mesh CA', async () => {
+      fs.writeFileSync(path.join(root, 'mesh', 'ca.crt'), ca.certPem);
+      await service.resumeIfJoined();
+
+      const { token: issued } = await service.createEnrollmentToken();
+      const [secret, named] = issued.split('.');
+
+      expect(named).toBe(fingerprintOf(ca.certPem));
+      expect(await repo.consumeToken(hashToken(secret), Date.now())).toBe(true);
+    });
+
+    it('will not join a second mesh while it is in one', async () => {
+      await service.resumeIfJoined();
+
+      await expect(service.joinMesh({ memberUrl: MEMBER, token })).rejects.toThrow(/already in a mesh/);
+      expect(peerRequest).not.toHaveBeenCalledWith(expect.objectContaining({ url: `${MEMBER}/v1/ca` }));
+    });
+  });
+
+  describe('addresses behind a proxy or port forward', () => {
+    afterEach(() => {
+      delete process.env.AASM_ADVERTISE_PEER_URL;
+      delete process.env.AASM_ADVERTISE_RAFT_ADDR;
+    });
+
+    function supervisorStarts() {
+      return jest.mocked(RqliteSupervisor).mock.results
+        .flatMap(result => jest.mocked((result.value as { start: jest.Mock }).start).mock.calls.map(([options]) => options));
+    }
+
+    it('advertises the configured peer URL and Raft address while listening on its own ports', async () => {
+      process.env.AASM_ADVERTISE_PEER_URL = 'https://mesh-a.example.com';
+      process.env.AASM_ADVERTISE_RAFT_ADDR = 'mesh-a.example.com:14002';
+
+      await service.createMesh({ name: 'Proxied' });
+
+      expect((await repo.getNode(LOCAL))?.endpoints).toMatchObject({
+        peerUrl: 'https://mesh-a.example.com', raftAddr: 'mesh-a.example.com:14002'
+      });
+      expect(supervisorStarts()[0]).toMatchObject({
+        raftAddr: 'mesh-a.example.com:14002', raftBind: '0.0.0.0:4002', httpAddr: '127.0.0.1:4001'
+      });
+      expect(certificateCoversHost(fs.readFileSync(path.join(root, 'mesh', 'node.crt'), 'utf8'), 'mesh-a.example.com')).toBe(true);
+      expect(startPeerServer).toHaveBeenCalledWith(4747, expect.anything());
+    }, 30_000);
+
+    it('keeps the addresses it joined with when it restarts', async () => {
+      fs.writeFileSync(path.join(root, 'mesh', 'rqlite-auth.json'), JSON.stringify({
+        httpUser: 'aasm', httpPass: 'p', peerPort: 4747, advertiseHost: '127.0.0.1',
+        peerUrl: 'https://mesh-a.example.com', raftAddr: 'mesh-a.example.com:14002'
+      }));
+
+      await service.resumeIfJoined();
+
+      expect(supervisorStarts()[0]).toMatchObject({ raftAddr: 'mesh-a.example.com:14002', raftBind: '0.0.0.0:4002', httpAddr: '127.0.0.1:4001' });
+    });
+  });
 
   describe('desired state', () => {
     let states: Map<string, string>;

@@ -1,17 +1,17 @@
 import * as fs from 'fs';
-import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ALL_PERMISSIONS, AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
 import {
   COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ClusterRecord, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
-  type NodeRecord, type ServerRecord, type StorageProfileRecord
+  type NodeRecord, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
 import { getInstanceDir } from '../../utils/ark/instance.utils';
 import { appVersion } from '../../utils/app-version';
 import { userDatabaseService } from '../auth/user-database.service';
+import { poolDirectory } from '../auth/pool-directory';
 import { messagingService } from '../messaging.service';
 import { autoUpdateService } from '../auto-update.service';
 import { beginClusterUpdate } from '../ark-update.service';
@@ -22,7 +22,7 @@ import { collectCapabilities, ensureNodeIdentity, nodeIdentityPath, readNodeIden
 import type { InstanceConfig } from '../../types/server-instance.types';
 import { localRuntime } from '../runtime/local-runtime';
 import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
-import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateIssuedBy, certificateSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
+import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateFingerprint, certificateIssuedBy, certificateSerial, normalizeSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
 import { meshTransferStore } from './managed-storage';
 import { providerForProfile } from './cluster-storage';
@@ -69,8 +69,13 @@ const HEARTBEAT_FRESH_MS = 25_000;
 interface LocalSecrets {
   httpUser: string;
   httpPass: string;
+  /** Where this node's peer API listens. */
   peerPort: number;
   advertiseHost: string;
+  /** The URL other nodes use for this node's peer API. Behind a proxy or port forward its port differs from peerPort. */
+  peerUrl?: string;
+  /** The Raft address other nodes dial. */
+  raftAddr?: string;
 }
 
 /**
@@ -138,16 +143,9 @@ export class MeshService {
       console.error('[mesh] This node is in a mesh but its certificate files are missing.');
       return;
     }
+    warnIfAdvertiseChanged(secrets);
     try {
-      await this.supervisor.start({
-        nodeId: identity.nodeId,
-        dataDir: rqliteDir(),
-        httpAddr: `0.0.0.0:${HTTP_PORT}`,
-        raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
-        authUser: secrets.httpUser,
-        authPass: secrets.httpPass,
-        cert: certs
-      });
+      await this.startRqlite(identity.nodeId, secrets);
       const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, identity.nodeId);
       if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
       this.repo = new MeshRepository(client);
@@ -193,20 +191,12 @@ export class MeshService {
     const identity = ensureNodeIdentity();
     const ca = createMeshCa(input.name || 'cerious-aasm-mesh');
     const keys = generateKeyPair();
-    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, identity.nodeId, [advertiseHost()]);
-    writeCerts(keys.privateKeyPem, signed.certPem, ca.certPem);
     const secrets = freshSecrets();
+    const signed = signNodeCertificate(ca.certPem, ca.keyPem, keys.publicKeyPem, identity.nodeId, advertisedHosts(secrets));
+    writeCerts(keys.privateKeyPem, signed.certPem, ca.certPem);
     writeSecrets(secrets);
     fs.rmSync(rqliteDir(), { recursive: true, force: true });
-    await this.supervisor.start({
-      nodeId: identity.nodeId,
-      dataDir: rqliteDir(),
-      httpAddr: `0.0.0.0:${HTTP_PORT}`,
-      raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
-      authUser: secrets.httpUser,
-      authPass: secrets.httpPass,
-      cert: readCertPaths() || undefined
-    });
+    await this.startRqlite(identity.nodeId, secrets);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, identity.nodeId);
     if (!await waitReady(client, this.supervisor)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
     this.repo = new MeshRepository(client);
@@ -231,19 +221,36 @@ export class MeshService {
     return this.status();
   }
 
+  /**
+   * Joins through a member. The token names the mesh CA, so the member's CA is checked against
+   * it before the token is sent, and the join itself only trusts that CA: nothing in between
+   * (a proxy that ends TLS, an impostor) can read the token or the credentials that come back.
+   */
   async joinMesh(input: { memberUrl: string; token: string; name?: string; adminPassword?: string; adminUsername?: string }): Promise<MeshStatus> {
+    if (this.isEnabled()) throw new Error('This node is already in a mesh. Leave it before joining another.');
+    const [secret, pinned] = String(input.token || '').trim().split('.');
+    if (!secret || !pinned) throw new Error('This token does not name the mesh it is for. Create a new token on a member.');
+    const memberUrl = input.memberUrl.replace(/\/$/, '');
+    const shown = await peerRequest({ url: `${memberUrl}/v1/ca`, method: 'GET', insecure: true, timeoutMs: 15_000 });
+    const caCert = (shown.body as { caCert?: string })?.caCert || '';
+    let matches = false;
+    try { matches = !!caCert && certificateFingerprint(caCert) === pinned; } catch { matches = false; }
+    if (!matches) {
+      throw new Error('That member\'s certificate authority does not match the token. Check the address; if it is right, something between here and there is answering in its place.');
+    }
     const identity = ensureNodeIdentity(input.name);
     const keys = generateKeyPair();
     const response = await peerRequest({
-      url: `${input.memberUrl.replace(/\/$/, '')}/v1/join`,
+      url: `${memberUrl}/v1/join`,
       method: 'POST',
-      insecure: true,
+      pinnedCa: caCert,
+      timeoutMs: 60_000,
       body: {
-        token: input.token,
+        token: secret,
         nodeName: identity.name,
         publicKeyPem: keys.publicKeyPem,
-        raftAddr: `${advertiseHost()}:${RAFT_PORT}`,
-        peerUrl: `https://${advertiseHost()}:${PEER_PORT}`,
+        raftAddr: advertisedRaftAddr(),
+        peerUrl: advertisedPeerUrl(),
         protocolVersion: PROTOCOL_VERSION,
         nodeId: identity.nodeId
       } satisfies JoinRequest
@@ -253,30 +260,25 @@ export class MeshService {
       throw new Error(message);
     }
     const joined = response.body as JoinResponse;
+    if (joined.caCert?.trim() !== caCert.trim()) throw new Error('The member answered with a different certificate authority.');
     const nodeId = joined.nodeId || identity.nodeId;
     writeCerts(keys.privateKeyPem, joined.nodeCert, joined.caCert);
     const secrets: LocalSecrets = {
+      ...freshSecrets(),
       httpUser: joined.httpAuthUser,
-      httpPass: joined.httpAuthPass,
-      peerPort: PEER_PORT,
-      advertiseHost: advertiseHost()
+      httpPass: joined.httpAuthPass
     };
     writeSecrets(secrets);
     await this.supervisor.stop();
     fs.rmSync(rqliteDir(), { recursive: true, force: true });
-    await this.supervisor.start({
-      nodeId,
-      dataDir: rqliteDir(),
-      httpAddr: `0.0.0.0:${HTTP_PORT}`,
-      raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
-      authUser: secrets.httpUser,
-      authPass: secrets.httpPass,
-      join: joined.raftAddr,
-      cert: readCertPaths() || undefined
-    });
+    await this.startRqlite(nodeId, secrets, joined.raftAddr);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
     if (!await waitReady(client, this.supervisor, 120)) {
-      await removeJoinedNode(joined.joinUrl, secrets.httpUser, secrets.httpPass, nodeId);
+      // The member recorded this node and handed it credentials; it takes both back.
+      await peerRequest({
+        url: `${memberUrl}/v1/abort-join`, method: 'POST', body: {}, pinnedCa: caCert,
+        cert: joined.nodeCert, key: keys.privateKeyPem, timeoutMs: 15_000
+      }).catch(error => console.warn('[mesh] Could not withdraw the unfinished join:', error instanceof Error ? error.message : error));
       await this.supervisor.stop();
       fs.rmSync(rqliteDir(), { recursive: true, force: true });
       throw new Error(this.supervisor.detail() || this.supervisor.failure() || 'Joined, but rqlite did not become ready');
@@ -284,6 +286,12 @@ export class MeshService {
     this.repo = new MeshRepository(client);
     this.rqlite = client;
     this.secrets = secrets;
+    // The mesh's accounts replace the ones this machine had; those are kept in a copy.
+    try {
+      userDatabaseService.snapshotTo(path.join(meshRoot(), `accounts-before-join-${Date.now()}.db`));
+    } catch (error) {
+      console.warn('[mesh] Could not keep a copy of the accounts on this machine:', error instanceof Error ? error.message : error);
+    }
     const joinedIdentity = { ...identity, nodeId, meshId: joined.meshId, name: input.name || identity.name };
     writeNodeIdentity(joinedIdentity);
     await this.attach(joinedIdentity);
@@ -298,10 +306,13 @@ export class MeshService {
 
   async createEnrollmentToken(): Promise<{ token: string; expiresAt: number }> {
     this.requireQuorum('enroll');
+    const certs = readCertPaths();
+    if (!certs) throw new Error('This node has no mesh certificate.');
     const created = newEnrollmentToken();
     const expiresAt = Date.now() + 15 * 60 * 1000;
     await this.repo!.insertToken(created.hash, expiresAt);
-    return { token: created.token, expiresAt };
+    // The secret, then the CA fingerprint the joining node checks the member against.
+    return { token: `${created.token}.${certificateFingerprint(fs.readFileSync(certs.caCert, 'utf8'))}`, expiresAt };
   }
 
   async acceptJoin(request: JoinRequest): Promise<JoinResponse> {
@@ -351,8 +362,7 @@ export class MeshService {
       nodeCert: signed.certPem,
       httpAuthUser: secrets.httpUser,
       httpAuthPass: secrets.httpPass,
-      joinUrl: `http://${secrets.advertiseHost}:${HTTP_PORT}`,
-      raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`
+      raftAddr: raftAddrOf(secrets)
     };
   }
 
@@ -365,7 +375,15 @@ export class MeshService {
     const localId = this.identity()?.nodeId;
     const others = (await this.repo!.listNodes(this.identity()?.meshId)).filter(item => item.status !== 'removed' && item.nodeId !== nodeId);
     const leaving = nodeId === localId || others.length === 0;
-    try { await this.rqlite?.removeMember(nodeId); } catch { /* the cert denylist still rejects the node */ }
+    try {
+      await this.rqlite?.removeMember(nodeId);
+    } catch (error) {
+      // The peer API still refuses its certificate; the new password below keeps it out of Raft.
+      console.warn('[mesh] Could not take the node out of Raft:', error instanceof Error ? error.message : error);
+    }
+    // The removed node knew the database password; it is out of Raft now, so it never sees the
+    // new one, and rqlite refuses its old one. A node leaving on its own is trusted to go.
+    if (!leaving) await this.repo!.setClusterCredential({ user: HTTP_USER, pass: randomUUID() });
     // Leaving, or removing the last member, drops this install back to standalone.
     // The servers on this machine stay where they are.
     if (leaving) await this.leaveLocally();
@@ -383,11 +401,11 @@ export class MeshService {
       : await verifyArgon2id(password, row.passwordHash);
     if (!ok) return null;
     if (row.hashAlg === 'bcrypt') {
+      // The same password, stored better: not a change of access, so no session ends over it.
       const upgraded = await hashArgon2id(password);
       row.passwordHash = upgraded.hash;
       row.passwordParameters = upgraded.parameters;
       row.hashAlg = 'argon2id';
-      row.securityVersion += 1;
       row.updatedAt = Date.now();
       try { await this.repo.upsertUser(row); } catch { /* partitioned upgrade waits for quorum */ }
     }
@@ -1133,20 +1151,28 @@ export class MeshService {
     fs.writeFileSync(dest, await this.rqlite.backup());
   }
 
+  /**
+   * Writes an account changed on this machine to the mesh, which every node mirrors. The hash is
+   * labelled by what it is, not by what the mesh held before. Sessions everywhere end only when
+   * something that decides access changed: the password, enabled, role or pool.
+   */
   async syncUser(userId: string): Promise<void> {
     if (!this.repo) return;
     const row = userDatabaseService.exportCredentialRows().find(user => user.id === userId);
     if (!row) return;
     const existing = await this.repo.getUser(userId);
+    const hashAlg = hashAlgOf(row.passwordHash);
+    const accessChanged = !existing || existing.passwordHash !== row.passwordHash || existing.enabled !== row.active
+      || existing.roleId !== row.roleId || (existing.ownerUserId || null) !== (row.ownerUserId || null);
     await this.repo.upsertUser({
       userId: row.id,
       username: row.username,
       displayName: row.displayName,
       passwordHash: row.passwordHash,
-      passwordParameters: existing?.passwordParameters || 'bcrypt',
-      hashAlg: existing?.hashAlg === 'argon2id' ? 'argon2id' : 'bcrypt',
+      passwordParameters: existing?.passwordHash === row.passwordHash ? existing.passwordParameters : hashAlg,
+      hashAlg,
       enabled: row.active,
-      securityVersion: (existing?.securityVersion || 1) + 1,
+      securityVersion: (existing?.securityVersion || 0) + (accessChanged ? 1 : 0),
       roleId: row.roleId,
       ownerUserId: row.ownerUserId,
       createdAt: existing?.createdAt || Date.now(),
@@ -1154,11 +1180,15 @@ export class MeshService {
     });
   }
 
+  /** A deleted account leaves the mesh, so every node removes it and the name can be used again. */
   async forgetUser(userId: string): Promise<void> {
     if (!this.repo) return;
-    const existing = await this.repo.getUser(userId);
-    if (!existing) return;
-    await this.repo.upsertUser({ ...existing, enabled: false, securityVersion: existing.securityVersion + 1, updatedAt: Date.now() });
+    await this.repo.deleteUser(userId);
+  }
+
+  async forgetRole(roleId: string): Promise<void> {
+    if (!this.repo) return;
+    await this.repo.deleteRole(roleId);
   }
 
   async syncRole(roleId: string, name: string, permissions: string[]): Promise<void> {
@@ -1230,6 +1260,7 @@ export class MeshService {
     for (const subscription of this.subscriptions.values()) subscription.close();
     this.subscriptions.clear();
     this.liveStates.clear();
+    this.accountsFingerprint = '';
     messagingService.broadcastTap = null;
     this.localNodeId = null;
     this.attachedIdentity = null;
@@ -1259,16 +1290,16 @@ export class MeshService {
    */
   private async ensurePresentedCertificate(nodeId: string): Promise<void> {
     const certs = readCertPaths();
-    const host = this.secrets?.advertiseHost || advertiseHost();
     const meshId = this.identity()?.meshId;
     if (!certs || !this.repo || !this.secrets || !meshId) return;
+    const hosts = advertisedHosts(this.secrets);
     const mesh = await this.repo.getMesh(meshId);
     if (!mesh?.caCert || !mesh.caKey) return;
     const nodePem = fs.readFileSync(certs.nodeCert, 'utf8');
     const caOnDisk = fs.readFileSync(certs.caCert, 'utf8');
     const caMatches = caOnDisk.trim() === mesh.caCert.trim();
     const issued = certificateIssuedBy(nodePem, mesh.caCert);
-    const covers = certificateCoversHost(nodePem, host);
+    const covers = hosts.every(host => certificateCoversHost(nodePem, host));
     if (caMatches && issued && covers) return;
     if (!caMatches) fs.writeFileSync(certs.caCert, mesh.caCert);
     if (!issued || !covers) {
@@ -1277,29 +1308,51 @@ export class MeshService {
         mesh.caKey,
         publicKeyFromPrivatePem(fs.readFileSync(certs.nodeKey, 'utf8')),
         nodeId,
-        [host]
+        hosts
       );
       fs.writeFileSync(certs.nodeCert, signed.certPem);
       const row = await this.repo.getNode(nodeId);
       // Without quorum the new serial is recorded later, by announce().
       if (row) await this.bestEffort('record the new certificate serial', () => this.repo!.upsertNode({ ...row, certSerial: signed.serial }));
     }
-    console.log(`[mesh] Reloaded the mesh certificate for ${host}.`);
+    console.log(`[mesh] Reloaded the mesh certificate for ${hosts.join(', ')}.`);
     const secrets = this.secrets;
     await this.supervisor.stop();
-    await this.supervisor.start({
-      nodeId,
-      dataDir: rqliteDir(),
-      httpAddr: `0.0.0.0:${HTTP_PORT}`,
-      raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
-      authUser: secrets.httpUser,
-      authPass: secrets.httpPass,
-      cert: readCertPaths() || undefined
-    });
+    await this.startRqlite(nodeId, secrets);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
     if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
     this.repo = new MeshRepository(client);
     this.rqlite = client;
+  }
+
+  /**
+   * A peer is trusted when its certificate names a current member and that member is recorded
+   * with exactly this serial. A certificate minted with the CA key for anyone else, or one that
+   * was replaced or revoked, is refused, whoever signed it.
+   */
+  private async isTrusted(serial: string, nodeId: string): Promise<boolean> {
+    if (!this.repo) return false;
+    const node = await this.repo.getNode(nodeId);
+    if (!node || node.status === 'removed' || normalizeSerial(node.certSerial) !== serial) return false;
+    return !(await this.repo.isRevoked(serial));
+  }
+
+  /**
+   * Starts this node's rqlited. Raft listens on this machine's port and advertises the address
+   * other nodes dial; the HTTP API listens on loopback only, since nodes talk over Raft.
+   */
+  private startRqlite(nodeId: string, secrets: LocalSecrets, join?: string): Promise<void> {
+    return this.supervisor.start({
+      nodeId,
+      dataDir: rqliteDir(),
+      httpAddr: `127.0.0.1:${HTTP_PORT}`,
+      raftAddr: raftAddrOf(secrets),
+      raftBind: `0.0.0.0:${RAFT_PORT}`,
+      authUser: secrets.httpUser,
+      authPass: secrets.httpPass,
+      join,
+      cert: readCertPaths() || undefined
+    });
   }
 
   private async attach(identity: NodeIdentityFile): Promise<void> {
@@ -1311,8 +1364,9 @@ export class MeshService {
         certPem: fs.readFileSync(certs.nodeCert, 'utf8'),
         keyPem: fs.readFileSync(certs.nodeKey, 'utf8'),
         caPem: fs.readFileSync(certs.caCert, 'utf8'),
-        isRevoked: serial => this.repo?.isRevoked(serial) ?? Promise.resolve(false),
+        isTrusted: (serial, nodeId) => this.isTrusted(serial, nodeId),
         onJoin: body => this.acceptJoin(body),
+        onAbortJoin: nodeId => this.removeNode(nodeId),
         onCommand: body => this.executeLocalCommand(body),
         onQuery: body => this.answerQuery(body),
         onSubscribe: () => this.greeting(),
@@ -1541,6 +1595,42 @@ export class MeshService {
     }
   }
 
+  private accountsFingerprint = '';
+
+  /**
+   * Makes this machine's account database match the mesh's accounts and custom roles, so the
+   * Users page, pools and lookups here see every account in the mesh. Skipped while the mesh has
+   * no account at all (before its first admin exists), so local accounts are never wiped for that.
+   */
+  private async mirrorAccounts(users: UserRecord[]): Promise<void> {
+    if (!this.repo || users.length === 0) return;
+    try {
+      const roles = await this.repo.listRoles();
+      const accounts = {
+        users: users.map(user => ({
+          userId: user.userId, username: user.username, displayName: user.displayName, passwordHash: user.passwordHash,
+          enabled: user.enabled, roleId: user.roleId, ownerUserId: user.ownerUserId, createdAt: user.createdAt, updatedAt: user.updatedAt
+        })),
+        roles: roles.map(role => ({ roleId: role.roleId, name: role.name, permissions: role.permissions }))
+      };
+      const fingerprint = JSON.stringify(accounts);
+      if (fingerprint === this.accountsFingerprint) return;
+      const { changedUserIds, changedRoleIds } = userDatabaseService.applyMeshAccounts(accounts);
+      this.accountsFingerprint = fingerprint;
+      if (changedUserIds.length || changedRoleIds.length) poolDirectory.invalidate();
+      const changes = [
+        ...changedUserIds.map(userId => ({ userId, roleId: undefined })),
+        ...changedRoleIds.map(roleId => ({ userId: undefined, roleId }))
+      ];
+      for (const change of changes) {
+        messagingService.sendToAll('users-changed', change);
+        messagingService.invalidateWebSessions(change);
+      }
+    } catch (error) {
+      console.error('[mesh] Could not bring the accounts on this machine up to date with the mesh:', error);
+    }
+  }
+
   private prunedAt = 0;
 
   /** At most hourly: abandoned move transfers, and copies set aside after MOVED_MAX_AGE_MS. */
@@ -1554,9 +1644,34 @@ export class MeshService {
     }
   }
 
+  /**
+   * Restarts this node's rqlited with the mesh's database password when it has changed, after a
+   * node was removed. rqlited reads its credentials only at start. True when it restarted; the
+   * rest of that tick is skipped. Writes forwarded between nodes can fail for the few seconds
+   * the members take to switch; Raft itself does not use the password.
+   */
+  private async adoptClusterCredential(nodeId: string): Promise<boolean> {
+    const credential = await this.repo?.getClusterCredential();
+    const secrets = this.secrets;
+    if (!credential || !secrets || (credential.user === secrets.httpUser && credential.pass === secrets.httpPass)) return false;
+    const next: LocalSecrets = { ...secrets, httpUser: credential.user, httpPass: credential.pass };
+    await this.supervisor.stop();
+    await this.startRqlite(nodeId, next);
+    // From here only the new password works against this node's rqlited.
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, next.httpUser, next.httpPass, nodeId);
+    this.repo = new MeshRepository(client);
+    this.rqlite = client;
+    this.secrets = next;
+    writeSecrets(next);
+    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    console.log('[mesh] Switched to the database password set when a node was removed.');
+    return true;
+  }
+
   private async reconcileLocal(nodeId: string): Promise<void> {
     if (!this.repo) return;
     try {
+      if (await this.adoptClusterCredential(nodeId)) return;
       this.quorum = await this.repo.hasQuorum();
       if (this.quorum) {
         await this.flushIntents(nodeId);
@@ -1584,6 +1699,7 @@ export class MeshService {
       if (this.quorum) await this.publishLocalConfigs(nodeId, servers, instances);
       this.pruneMoveFolders();
       for (const user of users) noteSecurityVersion(user.userId, user.securityVersion);
+      await this.mirrorAccounts(users);
       noteMeshServers(servers.map(server => ({
         serverId: server.serverId, nodeId: server.nodeId, operatorUserId: server.operatorUserId, managerUserId: server.managerUserId
       })));
@@ -1642,8 +1758,8 @@ export class MeshService {
         username: row.username,
         displayName: row.displayName,
         passwordHash: row.passwordHash,
-        passwordParameters: 'bcrypt',
-        hashAlg: 'bcrypt',
+        passwordParameters: hashAlgOf(row.passwordHash),
+        hashAlg: hashAlgOf(row.passwordHash),
         enabled: row.active,
         securityVersion: 1,
         roleId: row.roleId,
@@ -1698,8 +1814,8 @@ export class MeshService {
       meshId,
       name,
       endpoints: {
-        peerUrl: `https://${secrets.advertiseHost}:${secrets.peerPort}`,
-        raftAddr: `${secrets.advertiseHost}:${RAFT_PORT}`,
+        peerUrl: peerUrlOf(secrets),
+        raftAddr: raftAddrOf(secrets),
         httpAddr: `127.0.0.1:${HTTP_PORT}`
       },
       capabilities: collectCapabilities(),
@@ -1809,6 +1925,11 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
   } as InstanceConfig;
 }
 
+/** A stored password hash names its algorithm in its prefix. */
+function hashAlgOf(hash: string): 'argon2id' | 'bcrypt' {
+  return hash.startsWith('$argon2') ? 'argon2id' : 'bcrypt';
+}
+
 /** The serial of the certificate this node presents, or null when the file cannot be read. */
 function presentedSerial(certFile: string): string | null {
   try {
@@ -1869,7 +1990,46 @@ function writeSecrets(secrets: LocalSecrets): void {
 }
 
 function freshSecrets(): LocalSecrets {
-  return { httpUser: HTTP_USER, httpPass: randomUUID(), peerPort: PEER_PORT, advertiseHost: advertiseHost() };
+  return {
+    httpUser: HTTP_USER, httpPass: randomUUID(), peerPort: PEER_PORT, advertiseHost: advertiseHost(),
+    peerUrl: advertisedPeerUrl(), raftAddr: advertisedRaftAddr()
+  };
+}
+
+/**
+ * What other nodes dial. AASM_ADVERTISE_PEER_URL and AASM_ADVERTISE_RAFT_ADDR set them when the
+ * node is reached through a proxy, a port forward or an overlay under another name or port;
+ * otherwise the advertise host and this node's own ports. Read when the node creates or joins
+ * a mesh, and kept with it after that.
+ */
+function advertisedPeerUrl(): string {
+  return process.env.AASM_ADVERTISE_PEER_URL?.trim().replace(/\/$/, '') || `https://${advertiseHost()}:${PEER_PORT}`;
+}
+
+function advertisedRaftAddr(): string {
+  return process.env.AASM_ADVERTISE_RAFT_ADDR?.trim() || `${advertiseHost()}:${RAFT_PORT}`;
+}
+
+/** Older installs stored only the advertise host; their ports were the defaults of that time. */
+function peerUrlOf(secrets: LocalSecrets): string {
+  return secrets.peerUrl || `https://${secrets.advertiseHost}:${secrets.peerPort}`;
+}
+
+function raftAddrOf(secrets: LocalSecrets): string {
+  return secrets.raftAddr || `${secrets.advertiseHost}:${RAFT_PORT}`;
+}
+
+/** The names this node's certificate has to cover: the hosts other nodes dial. */
+function advertisedHosts(secrets: LocalSecrets): string[] {
+  return [...new Set([...hostsFromEndpoint(peerUrlOf(secrets)), ...hostsFromEndpoint(raftAddrOf(secrets))])];
+}
+
+/** The addresses are fixed when the node joins; a later change needs leaving and joining again. */
+function warnIfAdvertiseChanged(secrets: LocalSecrets): void {
+  const wanted = [process.env.AASM_ADVERTISE_PEER_URL ? advertisedPeerUrl() : null, process.env.AASM_ADVERTISE_RAFT_ADDR ? advertisedRaftAddr() : null];
+  if ((wanted[0] && wanted[0] !== peerUrlOf(secrets)) || (wanted[1] && wanted[1] !== raftAddrOf(secrets))) {
+    console.warn(`[mesh] This node joined advertising ${peerUrlOf(secrets)} and ${raftAddrOf(secrets)}. New advertise settings take effect after leaving the mesh and joining again.`);
+  }
 }
 
 function certPaths(): { nodeKey: string; nodeCert: string; caCert: string } {
@@ -1907,39 +2067,6 @@ function envPort(name: string, fallback: number): number {
   const parsed = Number(process.env[name]);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) return fallback;
   return parsed;
-}
-
-function removeJoinedNode(joinUrl: string, user: string, pass: string, nodeId: string): Promise<void> {
-  return new Promise(resolve => {
-    let url: URL;
-    try {
-      url = new URL('/remove', joinUrl.endsWith('/') ? joinUrl : `${joinUrl}/`);
-    } catch {
-      resolve();
-      return;
-    }
-    const payload = JSON.stringify({ id: nodeId });
-    const req = http.request({
-      protocol: url.protocol,
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      timeout: 3000,
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-      }
-    }, res => {
-      res.resume();
-      res.on('end', () => resolve());
-    });
-    req.on('error', () => resolve());
-    req.on('timeout', () => { req.destroy(); resolve(); });
-    req.write(payload);
-    req.end();
-  });
 }
 
 async function waitReady(client: RqliteClient, supervisor: RqliteSupervisor, attempts = 40, requireLeader = true): Promise<boolean> {

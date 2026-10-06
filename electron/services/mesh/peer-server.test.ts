@@ -10,7 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import type { AddressInfo } from 'net';
-import { createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
+import { certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { peerUpload, startPeerServer, subscribeEvents, type PeerServer } from './peer-server';
 
 describe('peer server checkpoint uploads', () => {
@@ -20,6 +20,8 @@ describe('peer server checkpoint uploads', () => {
   let caPem = '';
   let client: { cert: string; key: string };
   let revoked = false;
+  let ca: ReturnType<typeof createMeshCa>;
+  const trustChecks: Array<{ serial: string; nodeId: string }> = [];
   /** How long the revocation lookup takes; a slow one opens the window the server must not leak through. */
   let revocationDelayMs = 0;
   /** What the server tells each new subscriber first. */
@@ -28,7 +30,7 @@ describe('peer server checkpoint uploads', () => {
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-peer-'));
-    const ca = createMeshCa('mesh');
+    ca = createMeshCa('mesh');
     caPem = ca.certPem;
     const serverKeys = generateKeyPair();
     const serverCert = signNodeCertificate(ca.certPem, ca.keyPem, serverKeys.publicKeyPem, 'server', ['127.0.0.1']);
@@ -38,9 +40,11 @@ describe('peer server checkpoint uploads', () => {
       certPem: serverCert.certPem,
       keyPem: serverKeys.privateKeyPem,
       caPem: ca.certPem,
-      isRevoked: async () => {
+      // The mesh decides; here only 'client' is a member, and only until it is revoked.
+      isTrusted: async (serial, nodeId) => {
+        trustChecks.push({ serial, nodeId });
         if (revocationDelayMs) await new Promise(resolve => setTimeout(resolve, revocationDelayMs));
-        return revoked;
+        return !revoked && nodeId === 'client';
       },
       onSubscribe: () => greeting,
       onJoin: jest.fn(),
@@ -64,6 +68,7 @@ describe('peer server checkpoint uploads', () => {
   beforeEach(() => {
     received.length = 0;
     revoked = false;
+    trustChecks.length = 0;
     revocationDelayMs = 0;
     greeting = [];
   });
@@ -167,6 +172,27 @@ describe('peer server checkpoint uploads', () => {
       expect(node.events).toEqual([]);
     });
   });
+
+  it('asks whether the certificate belongs to a member, by its serial and node id', async () => {
+    const file = path.join(dir, 'small.bin');
+    fs.writeFileSync(file, 'x');
+
+    await upload(file, 'config.json');
+
+    expect(trustChecks).toEqual([{ serial: certificateSerial(client.cert), nodeId: 'client' }]);
+  });
+
+  it('refuses a certificate the mesh CA signed for a node that is not a member', async () => {
+    const strangerKeys = generateKeyPair();
+    const stranger = signNodeCertificate(ca.certPem, ca.keyPem, strangerKeys.publicKeyPem, 'stranger', ['127.0.0.1']).certPem;
+    const file = path.join(dir, 'small.bin');
+    fs.writeFileSync(file, 'x');
+
+    const response = await upload(file, 'config.json', { cert: stranger, key: strangerKeys.privateKeyPem });
+
+    expect(response.status).toBe(401);
+    expect(received).toEqual([]);
+  }, 30_000);
 
   it('refuses an upload from a revoked node', async () => {
     const file = path.join(dir, 'small.bin');

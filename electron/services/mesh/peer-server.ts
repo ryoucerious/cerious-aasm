@@ -23,7 +23,6 @@ export interface JoinResponse {
   nodeCert: string;
   httpAuthUser: string;
   httpAuthPass: string;
-  joinUrl: string;
   raftAddr: string;
 }
 
@@ -31,8 +30,15 @@ export interface PeerHandlers {
   certPem: string;
   keyPem: string;
   caPem: string;
-  isRevoked(serial: string): Promise<boolean>;
+  /**
+   * Whether a certificate the mesh CA signed belongs to a current member: the member named by
+   * its node id is recorded with this serial. A certificate minted with the CA key for anyone
+   * else, or one that was revoked or replaced, is refused.
+   */
+  isTrusted(serial: string, nodeId: string): Promise<boolean>;
   onJoin(body: JoinRequest): Promise<JoinResponse>;
+  /** A node whose join could not finish asks to be taken back out. The id comes from its certificate. */
+  onAbortJoin?(nodeId: string): Promise<void>;
   onCommand(body: ControlCommand): Promise<CommandResult>;
   onHeartbeat(nodeId: string, sentAt: number): void;
   /** The frames a node that has just subscribed to /v1/events gets first: how things stand now. */
@@ -71,15 +77,16 @@ export function startPeerServer(port: number, handlers: PeerHandlers): Promise<P
   const events = new WebSocketServer({ server, path: '/v1/events' });
   events.on('connection', (socket, req) => {
     const serial = peerSerial(req);
+    const nodeId = peerCommonName(req);
     const tls = req.socket as import('tls').TLSSocket;
-    if (!serial || !tls.authorized) {
+    if (!serial || !nodeId || !tls.authorized) {
       socket.close(4001, 'A mesh client certificate is required.');
       return;
     }
-    // Joins the broadcast list only once the certificate is known not to be revoked.
-    void handlers.isRevoked(serial).then(revoked => {
-      if (revoked) {
-        socket.close(4001, 'This node certificate has been revoked.');
+    // Joins the broadcast list only once the certificate is known to be a member's.
+    void handlers.isTrusted(serial, nodeId).then(trusted => {
+      if (!trusted) {
+        socket.close(4001, 'This certificate does not belong to a member of the mesh.');
         return;
       }
       if (socket.readyState !== WebSocket.OPEN) return;
@@ -113,6 +120,11 @@ export function startPeerServer(port: number, handlers: PeerHandlers): Promise<P
 async function handle(req: http.IncomingMessage, res: http.ServerResponse, handlers: PeerHandlers): Promise<void> {
   try {
     const url = new URL(req.url || '/', 'https://mesh.local');
+    // Public: a joining node compares this CA with the fingerprint in its token before it sends the token.
+    if (req.method === 'GET' && url.pathname === '/v1/ca') {
+      send(res, 200, { caCert: handlers.caPem });
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/v1/join') {
       const body = await readJson<JoinRequest>(req);
       const result = await handlers.onJoin(body);
@@ -120,13 +132,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       return;
     }
     const serial = peerSerial(req);
+    const nodeId = peerCommonName(req);
     const socket = req.socket as import('tls').TLSSocket;
-    if (!serial || !socket.authorized) {
+    if (!serial || !nodeId || !socket.authorized) {
       refuse(req, res, 'A mesh client certificate is required.');
       return;
     }
-    if (await handlers.isRevoked(serial)) {
-      refuse(req, res, 'This node certificate has been revoked.');
+    if (!await handlers.isTrusted(serial, nodeId)) {
+      refuse(req, res, 'This certificate does not belong to a member of the mesh.');
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/abort-join' && handlers.onAbortJoin) {
+      req.resume();
+      await handlers.onAbortJoin(nodeId);
+      send(res, 200, { ok: true });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/command') {
@@ -174,6 +193,13 @@ function refuse(req: http.IncomingMessage, res: http.ServerResponse, error: stri
   send(res, 401, { error });
 }
 
+/** The node id a peer's certificate names. Mesh certificates carry it as the common name. */
+function peerCommonName(req: http.IncomingMessage): string | null {
+  const cert = (req.socket as import('tls').TLSSocket).getPeerCertificate?.();
+  const name = cert?.subject?.CN;
+  return typeof name === 'string' && name ? name : null;
+}
+
 function peerSerial(req: http.IncomingMessage): string | null {
   const cert = (req.socket as import('tls').TLSSocket).getPeerCertificate?.();
   if (!cert || !cert.serialNumber) return null;
@@ -209,8 +235,13 @@ export function peerRequest(options: {
   cert?: string;
   key?: string;
   timeoutMs?: number;
-  /** Join only: the joiner does not yet have a certificate to present. */
+  /** Only to fetch a member's CA before joining; nothing secret is sent that way. */
   insecure?: boolean;
+  /**
+   * Trust only this CA, and accept any host name it signed for: a member may be reached under
+   * a proxy's name or an overlay address its certificate does not list.
+   */
+  pinnedCa?: string;
 }): Promise<{ status: number; body: unknown }> {
   const target = new URL(options.url);
   const payload = options.body === undefined ? undefined : JSON.stringify(options.body);
@@ -221,10 +252,11 @@ export function peerRequest(options: {
       port: target.port,
       path: `${target.pathname}${target.search}`,
       method: options.method,
-      ca: options.ca,
+      ca: options.pinnedCa ?? options.ca,
       cert: options.cert,
       key: options.key,
       rejectUnauthorized: !options.insecure,
+      ...(options.pinnedCa ? { checkServerIdentity: () => undefined } : {}),
       headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : undefined
     }, res => readResponse(res, resolve));
     req.on('error', reject);

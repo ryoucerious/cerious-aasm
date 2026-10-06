@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes, X509Certificate } from 'crypto';
 
 /**
  * Mesh CA and node certificates. The joining node generates its own key; a member signs
@@ -161,6 +161,14 @@ export function certificateCoversHost(certPem: string, host: string): boolean {
   const altNames = cert.getExtension('subjectAltName')?.altNames || [];
   const want = host.toLowerCase();
   return altNames.some(name => name.ip === host || (name.value || '').toLowerCase() === want);
+}
+
+/**
+ * sha256 of the certificate's DER bytes, base64url. An enrollment token carries the mesh CA's,
+ * so a joining node can tell the real mesh from anything in between before it sends the token.
+ */
+export function certificateFingerprint(certPem: string): string {
+  return createHash('sha256').update(new X509Certificate(certPem).raw).digest('base64url');
 }
 
 /** The serial a peer sees when this certificate is presented, as stored in `nodes.cert_serial`. */

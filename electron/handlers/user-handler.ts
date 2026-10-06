@@ -252,7 +252,7 @@ onRequest('delete-role', async (payload, { sender, afterReply }) => {
 
   const result = userDatabaseService.deleteRole(id);
   if (!result.success) return { success: false, error: result.error };
-  await meshService.syncRole(id, '', []);
+  await meshService.forgetRole(id);
   afterReply(() => broadcastUsersChanged());
   return { success: true, id };
 });

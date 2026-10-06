@@ -14,6 +14,12 @@ const DEFAULT_PORT = 3000;
 export function createApp(): express.Express {
   const app = express();
 
+  // Behind a reverse proxy, AASM_TRUST_PROXY names the proxies whose X-Forwarded-* headers are
+  // believed, so the login limiter sees each client's address and the session cookie is marked
+  // Secure when the proxy took HTTPS. Unset, the headers are ignored: any client could send them.
+  const trustProxy = trustProxySetting(process.env.AASM_TRUST_PROXY);
+  if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
+
   // A CSP would need tuning to the Angular build, and HSTS and COEP break plain-HTTP LAN
   // access. The remaining helmet defaults suit the app as is.
   app.use(helmet({ contentSecurityPolicy: false, hsts: false, crossOriginEmbedderPolicy: false }));
@@ -30,6 +36,19 @@ export function createApp(): express.Express {
   });
 
   return app;
+}
+
+/**
+ * Express's 'trust proxy' value: a hop count, true, or a list of addresses, subnets and the
+ * names loopback, linklocal and uniquelocal. Undefined leaves forwarded headers untrusted.
+ */
+function trustProxySetting(raw: string | undefined): boolean | number | string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (value === 'true') return true;
+  if (value === 'false') return undefined;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
 }
 
 /** --port, then PORT, then 3000. Main passes both when it forks this process. */
