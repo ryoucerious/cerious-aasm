@@ -71,6 +71,11 @@ describe('channel-permissions', () => {
     expect(instanceKeyForChannel('auto-start-on-app-launch')).toBeUndefined();
   });
 
+  it('lets whoever manages nodes rename a member', () => {
+    expect(isChannelAllowed('rename-mesh-node', ['nodes.manage'], false)).toBe(true);
+    expect(isChannelAllowed('rename-mesh-node', ['nodes.view'], false)).toBe(false);
+  });
+
   it('leaves set-server-operator to admins and opens list-pool-labels to anyone who can view servers', () => {
     expect(permissionForChannel('set-server-operator')).toBeUndefined();
     expect(instanceKeyForChannel('set-server-operator')).toBeUndefined();

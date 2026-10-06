@@ -136,6 +136,9 @@ export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'pas
 /** Applies AUTH_ENABLED / AUTH_USERNAME / AUTH_PASSWORD, which main sets when it forks this process. */
 export async function initializeAuthFromEnv(): Promise<void> {
   loadAuthConfig();
+  // Set by main for a mesh member, so sign-in is on from the first request rather than from
+  // the message main sends once this process is ready.
+  setMeshSignInRequired(process.env.AASM_MESH_SIGN_IN === '1');
 
   const authEnabled = process.env.AUTH_ENABLED === 'true';
   const authUsername = process.env.AUTH_USERNAME || 'admin';

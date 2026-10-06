@@ -42,7 +42,8 @@ export function ensureNodeIdentity(name?: string): NodeIdentityFile {
   if (existing) return existing;
   const identity: NodeIdentityFile = {
     nodeId: randomUUID(),
-    name: (name || os.hostname() || 'aasm-node').slice(0, 80),
+    // AASM_NODE_NAME, since a container's host name is its container id. Renamed in the mesh later.
+    name: (name || process.env.AASM_NODE_NAME?.trim() || os.hostname() || 'aasm-node').slice(0, 80),
     meshId: '',
     createdAt: Date.now()
   };

@@ -512,6 +512,9 @@ app.on('ready', async () => {
   }
   console.info(`[main] Cerious AASM starting, log: ${getLogFilePath()}`);
 
+  // Before the web server starts and the window opens: on a mesh member both ask for a mesh
+  // account from their first moment, not once the mesh is reached.
+  meshService.noteMembership();
   LogService.clearArkLogFiles();
   await applicationService.initializeApplication();
 

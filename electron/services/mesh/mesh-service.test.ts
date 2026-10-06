@@ -14,6 +14,7 @@ import { MeshRepository } from './mesh-repository';
 import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHandle } from './sql-executor';
 import { hashArgon2id, hashToken } from './passwords';
 import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
+import { meshDesktopIdentity, setMeshDesktopMode } from '../auth/desktop-session';
 import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
@@ -66,7 +67,8 @@ jest.mock('../auth/user-database.service', () => ({
     exportCredentialRows: jest.fn(() => []),
     listRoles: jest.fn(() => []),
     applyMeshAccounts: jest.fn(() => ({ changedUserIds: [], changedRoleIds: [] })),
-    snapshotTo: jest.fn()
+    snapshotTo: jest.fn(),
+    verifyCredentials: jest.fn(async () => null)
   }
 }));
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
@@ -155,6 +157,7 @@ describe('MeshService', () => {
   afterEach(async () => {
     await service.stop();
     setMeshMember(false);
+    setMeshDesktopMode(false);
     jest.useRealTimers();
     db.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -321,6 +324,7 @@ describe('MeshService', () => {
       await service.removeNode(LOCAL);
 
       expect(meshSignInRequired()).toBe(false);
+      expect(meshDesktopIdentity()).toBe('standalone');
     });
   });
 
@@ -1492,6 +1496,54 @@ describe('MeshService', () => {
     });
   });
 
+  // A container goes by its container id until someone names it.
+  describe('naming machines', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL, '1', 'https://127.0.0.1:4747'));
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await service.resumeIfJoined();
+    });
+
+    function identityName(): string {
+      return JSON.parse(fs.readFileSync(path.join(root, 'mesh', 'node.json'), 'utf8')).name;
+    }
+
+    it('renames another member for every member', async () => {
+      await service.renameNode(REMOTE, '  Game   Box  ');
+
+      expect((await repo.getNode(REMOTE))?.name).toBe('Game Box');
+      expect((await service.status()).nodes.find(node => node.nodeId === REMOTE)?.name).toBe('Game Box');
+    });
+
+    it('renames this machine, and keeps the name for when it joins a mesh again', async () => {
+      await service.renameNode(LOCAL, 'Desk');
+
+      expect((await service.status()).nodeName).toBe('Desk');
+      expect(identityName()).toBe('Desk');
+    });
+
+    it('takes the name another member gave it', async () => {
+      await repo.upsertNode({ ...nodeRow(LOCAL, '1', 'https://127.0.0.1:4747'), name: 'Given' });
+
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(identityName()).toBe('Given');
+      expect((await service.status()).nodeName).toBe('Given');
+    });
+
+    it('refuses an empty name and one that is too long', async () => {
+      await expect(service.renameNode(REMOTE, '   ')).rejects.toThrow('Enter a name for the machine.');
+      await expect(service.renameNode(REMOTE, 'x'.repeat(65))).rejects.toThrow('64 characters');
+      expect((await repo.getNode(REMOTE))?.name).toBe(REMOTE.slice(0, 4));
+    });
+
+    it('refuses a machine that is not a member', async () => {
+      await expect(service.renameNode('33333333-3333-4333-8333-333333333333', 'Ghost')).rejects.toThrow('That node was not found.');
+    });
+  });
+
   describe('resources of each node', () => {
     const REMOTE = '22222222-2222-4222-8222-222222222222';
     const here = { cpuPercent: 10, memory: { used: 4, total: 16 }, disk: { used: 100, total: 500 } };
@@ -1699,6 +1751,59 @@ describe('MeshService', () => {
       await service.resumeIfJoined();
 
       expect(meshSignInRequired()).toBe(true);
+    });
+
+    it('knows it is a member before anything is served, from its identity file alone', () => {
+      service.noteMembership();
+
+      expect(meshSignInRequired()).toBe(true);
+      expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: null, isAdmin: false }));
+    });
+
+    it('keeps the desktop signed out, not the local owner, while a failed resume is retried', async () => {
+      supervisorFailure = 'rqlited exited before it was ready';
+
+      await service.resumeIfJoined();
+
+      expect(service.isEnabled()).toBe(false);
+      expect(meshDesktopIdentity()).not.toBe('standalone');
+    });
+
+    describe('signing in on the desktop while it reconnects', () => {
+      const ada = {
+        id: 'u1', username: 'ada', displayName: 'Ada', roleId: 'admin', roleName: 'Admin', permissions: [],
+        active: true, ownerUserId: null, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null
+      };
+
+      beforeEach(async () => {
+        rqlite.loaded = false;
+        await service.resumeIfJoined();
+      });
+
+      it('checks this machine\'s copy of the mesh accounts', async () => {
+        jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(ada as never);
+
+        expect(await service.loginDesktop('ada', 'pw')).toEqual(ada);
+
+        expect(userDatabaseService.verifyCredentials).toHaveBeenCalledWith('ada', 'pw');
+        expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: ada }));
+      });
+
+      it('refuses an account set from the command line, which is not a mesh account', async () => {
+        jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue({ ...ada, cliLocked: true } as never);
+
+        expect(await service.loginDesktop('ada', 'pw')).toBeNull();
+        expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: null }));
+      });
+
+      it('signs the desktop out again', async () => {
+        jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(ada as never);
+        await service.loginDesktop('ada', 'pw');
+
+        service.logoutDesktop();
+
+        expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: null }));
+      });
     });
 
     it('rejoins and signs in a known user while it cannot see a leader', async () => {

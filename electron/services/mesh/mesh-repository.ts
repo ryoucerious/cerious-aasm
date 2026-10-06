@@ -95,6 +95,11 @@ export class MeshRepository {
     };
   }
 
+  /** Only the name, so nothing else a member is writing about itself at the same time is lost. */
+  async setNodeName(nodeId: string, name: string): Promise<void> {
+    await this.db.exec('UPDATE nodes SET name = ? WHERE node_id = ?', [name, nodeId]);
+  }
+
   async upsertNode(node: NodeRecord): Promise<void> {
     await this.db.exec(
       `INSERT INTO nodes (node_id, mesh_id, name, endpoints, capabilities, leader_eligible, status, last_seen,

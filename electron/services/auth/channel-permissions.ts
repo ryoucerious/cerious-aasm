@@ -185,6 +185,7 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'remove-mesh-node': PERMISSIONS.NODES_REMOVE,
   'get-mesh-nodes': PERMISSIONS.NODES_VIEW,
   'set-node-maintenance': PERMISSIONS.NODES_MANAGE,
+  'rename-mesh-node': PERMISSIONS.NODES_MANAGE,
   'create-cluster': PERMISSIONS.CLUSTERS_MANAGE,
   'get-clusters': PERMISSIONS.CLUSTERS_VIEW,
   'validate-cluster-storage': PERMISSIONS.CLUSTERS_STORAGE_MANAGE,

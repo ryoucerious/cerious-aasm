@@ -277,6 +277,14 @@ describe('auth-config', () => {
       expect(getAuthConfig()).toEqual({ enabled: true, username: '', passwordHash: '' });
     });
 
+    it('requires sign-in from the first request when main forks it for a member', async () => {
+      process.env.AASM_MESH_SIGN_IN = '1';
+
+      await initializeAuthFromEnv();
+
+      expect(getAuthConfig().enabled).toBe(true);
+    });
+
     it('keeps this machine\'s own login when it is on', () => {
       updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash' });
 

@@ -1565,6 +1565,52 @@ app-dropdown {
   }
 }
 
+// Shown in place of the app until access is confirmed.
+.app-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 100vh;
+  padding: 1rem;
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-raised) 100%);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.app-loading-logo {
+  width: 72px;
+  height: 72px;
+}
+
+.app-loading-title {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--primary);
+  letter-spacing: 0.03em;
+}
+
+.app-loading-spinner {
+  width: 28px;
+  height: 28px;
+  margin-top: 0.5rem;
+  border: 3px solid var(--border-muted);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.app-loading-text {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-loading-spinner { animation-duration: 2.5s; }
+}
+
 .connection-lost-container {
   display: flex;
   align-items: center;

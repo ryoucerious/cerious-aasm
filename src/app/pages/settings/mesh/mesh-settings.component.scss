@@ -29,6 +29,18 @@
 
 .mesh-node-identity { min-width: 0; }
 
+.mesh-node-rename-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+
+  .mesh-node-rename-input {
+    flex: 1 1 10rem;
+    min-width: 0;
+  }
+}
+
 .mesh-node-name {
   margin: 0;
   font-size: 0.95rem;

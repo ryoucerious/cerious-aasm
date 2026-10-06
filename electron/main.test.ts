@@ -90,7 +90,7 @@ jest.mock('./handlers/activity-handler', () => ({}));
 jest.mock('./handlers/player-history-handler', () => ({}));
 jest.mock('./handlers/mesh-handler', () => ({}));
 jest.mock('./services/mesh/mesh-service', () => ({
-  meshService: { resumeIfJoined: jest.fn(async () => undefined), stop: jest.fn(async () => undefined) },
+  meshService: { noteMembership: jest.fn(), resumeIfJoined: jest.fn(async () => undefined), stop: jest.fn(async () => undefined) },
 }));
 
 class FakeWebContents extends EventEmitter {
@@ -172,6 +172,7 @@ function loadMain({ lockGranted = true } = {}) {
     automationService: jest.mocked(jest.requireMock<typeof import('./services/automation/automation.service')>('./services/automation/automation.service').automationService),
     autoUpdateService: jest.mocked(jest.requireMock<typeof import('./services/auto-update.service')>('./services/auto-update.service').autoUpdateService),
     webServerService: jest.mocked(jest.requireMock<typeof import('./services/web-server.service')>('./services/web-server.service').webServerService),
+    meshService: jest.mocked(jest.requireMock<typeof import('./services/mesh/mesh-service')>('./services/mesh/mesh-service').meshService),
     cleanupAllRconConnections: jest.mocked(jest.requireMock<typeof import('./utils/rcon.utils')>('./utils/rcon.utils').cleanupAllRconConnections),
     stopSteamCmdQuery: jest.mocked(jest.requireMock<typeof import('./services/ark-update.service')>('./services/ark-update.service').stopSteamCmdQuery),
     releaseInstallLockIfHeld: jest.mocked(jest.requireMock<typeof import('./utils/installer.utils')>('./utils/installer.utils').releaseInstallLockIfHeld),
@@ -216,6 +217,17 @@ describe('main', () => {
       const main = loadMain();
 
       expect(main.cleanupOrphanedArkProcesses).toHaveBeenCalled();
+    });
+
+    // The web server starts with the application and the window asks who is signed in as soon as
+    // it opens; a mesh member must already be asking for a mesh account by then.
+    it('notes mesh membership before the web server or the window can start', async () => {
+      const main = loadMain();
+
+      await emitReady(main);
+
+      expect(main.meshService.noteMembership.mock.invocationCallOrder[0])
+        .toBeLessThan(main.applicationService.initializeApplication.mock.invocationCallOrder[0]);
     });
 
     it('takes the single-instance lock before looking for orphaned ARK processes', () => {

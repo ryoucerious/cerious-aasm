@@ -78,6 +78,8 @@ services:
       AASM_ADVERTISE_HOST: ${AASM_ADVERTISE_HOST:-}
       AASM_ADVERTISE_PEER_URL: ${AASM_ADVERTISE_PEER_URL:-}
       AASM_ADVERTISE_RAFT_ADDR: ${AASM_ADVERTISE_RAFT_ADDR:-}
+      # The name other members show for this container, instead of its container id.
+      AASM_NODE_NAME: ${AASM_NODE_NAME:-}
       # Only needed when the volumes above are swapped for host folders.
       PUID: ${PUID:-}
       PGID: ${PGID:-}

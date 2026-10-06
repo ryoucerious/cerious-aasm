@@ -55,6 +55,9 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   busy = false;
   updatingKey = '';
   showConfirmLeave = false;
+  /** The machine whose name is being edited, and the name typed so far. */
+  renamingNodeId: string | null = null;
+  renameText = '';
   private leavingNode: MeshNode | null = null;
   private statusSub?: Subscription;
 
@@ -152,6 +155,39 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
         this.notification.error('Update failed.');
         this.cdr.markForCheck();
       }
+    });
+  }
+
+  get canManageNodes(): boolean {
+    return this.auth.can(PERMISSIONS.NODES_MANAGE);
+  }
+
+  /** A container goes by its container id until someone names it. */
+  startRename(node: MeshNode): void {
+    this.renamingNodeId = node.nodeId;
+    this.renameText = node.name;
+    this.cdr.markForCheck();
+  }
+
+  cancelRename(): void {
+    this.renamingNodeId = null;
+    this.cdr.markForCheck();
+  }
+
+  saveRename(node: MeshNode): void {
+    this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus }>(
+      'rename-mesh-node', { nodeId: node.nodeId, name: this.renameText }
+    ).subscribe({
+      next: result => {
+        if (!result?.success) {
+          this.notification.error(result?.error || 'Could not rename that machine.');
+          return;
+        }
+        this.renamingNodeId = null;
+        this.apply(result.status);
+        this.cdr.markForCheck();
+      },
+      error: () => this.notification.error('Could not rename that machine.')
     });
   }
 

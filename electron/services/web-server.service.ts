@@ -70,6 +70,8 @@ export class WebServerService {
       // for every start: the GUI starts the server without authOptions and its logins use the
       // same database.
       AASM_USER_DB: '1',
+      // A mesh member's web interface needs a mesh account from its first request.
+      AASM_MESH_SIGN_IN: meshSignInRequired() ? '1' : '0',
       ELECTRON_RUN_AS_NODE: '1',
       PORT: String(port)
     };
@@ -315,6 +317,9 @@ export class WebServerService {
       user = mesh?.enabled()
         ? await mesh.verify(message.username, message.password)
         : await userDatabaseService.verifyCredentials(message.username, message.password);
+      // A member still reaching its mesh checks its own copy of the mesh accounts. An account set
+      // from the command line stays local to this machine, so it is not one of them.
+      if (user?.cliLocked && meshSignInRequired()) user = null;
     } catch (error) {
       console.error('[web-server] Credential check failed:', error);
     }

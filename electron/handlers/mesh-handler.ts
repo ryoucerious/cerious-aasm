@@ -85,6 +85,15 @@ onRequest('set-node-maintenance', async payload => {
   }
 });
 
+onRequest('rename-mesh-node', async payload => {
+  try {
+    await meshService.renameNode(String(payload.nodeId || ''), String(payload.name ?? ''));
+    return { success: true, status: await meshService.status() };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not rename that machine.' };
+  }
+});
+
 onRequest('suggest-placement', async () => ({ nodeId: await meshService.suggestPlacement() }));
 
 onRequest('create-cluster', async payload => {

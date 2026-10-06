@@ -2,7 +2,8 @@
   <router-outlet></router-outlet>
 </div>
 
-<ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
+<!-- Nothing of the app until access is confirmed: see showApp. -->
+<ng-container *ngIf="showApp; else notReady">
   <div class="app-root-wrapper">
     <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
@@ -41,13 +42,12 @@
 <!-- One tooltip for the whole app, in place of the browser's own -->
 <app-tooltip-host></app-tooltip-host>
 
-<ng-template #lostOrConnecting>
-  <div *ngIf="connecting" class="connection-lost-container">
-    <div class="connection-lost-content">
-      <div class="icon-glitch"><span>🛰️</span></div>
-      <h1>Connecting...</h1>
-      <p>Attempting to connect to the web server.</p>
-    </div>
+<ng-template #notReady>
+  <div *ngIf="showLoading" class="app-loading" role="status" aria-live="polite">
+    <img class="app-loading-logo" src="assets/logo-square-256.png" alt="" />
+    <h1 class="app-loading-title">Cerious AASM</h1>
+    <span class="app-loading-spinner" aria-hidden="true"></span>
+    <p class="app-loading-text">{{ isElectron ? 'Checking access…' : 'Connecting to the server…' }}</p>
   </div>
-  <app-connection-lost *ngIf="!connecting && connectionLost"></app-connection-lost>
+  <app-connection-lost *ngIf="!isElectron && !connecting && connectionLost"></app-connection-lost>
 </ng-template>

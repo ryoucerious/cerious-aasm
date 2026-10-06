@@ -69,7 +69,13 @@
       <article class="mesh-node-card" *ngFor="let node of nodes">
         <div class="mesh-node-top">
           <div class="mesh-node-identity">
-            <h4 class="mesh-node-name">{{ node.name }}</h4>
+            <h4 class="mesh-node-name" *ngIf="renamingNodeId !== node.nodeId">{{ node.name }}</h4>
+            <div class="mesh-node-rename-row" *ngIf="renamingNodeId === node.nodeId">
+              <input class="form-control mesh-node-rename-input" [(ngModel)]="renameText" name="renameText" maxlength="64"
+                     aria-label="Machine name" (keydown.enter)="saveRename(node)" (keydown.escape)="cancelRename()" />
+              <button type="button" class="btn btn-primary btn-sm mesh-node-rename-save" (click)="saveRename(node)">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRename()">Cancel</button>
+            </div>
             <p class="mesh-node-meta">
               <span *ngIf="node.nodeId === status.nodeId">This machine</span>
               <span>Version {{ node.version || 'unknown' }}</span>
@@ -78,6 +84,10 @@
           <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
         </div>
         <div class="mesh-node-actions">
+          <button type="button" class="btn btn-ghost btn-sm mesh-node-rename" *ngIf="canManageNodes && renamingNodeId !== node.nodeId"
+                  (click)="startRename(node)" [disabled]="status.degraded">
+            Rename
+          </button>
           <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'ark')" [disabled]="!canUpdate || !!updatingKey">
             Update ARK
           </button>

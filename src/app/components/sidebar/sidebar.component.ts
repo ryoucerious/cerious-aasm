@@ -11,6 +11,7 @@ import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus, isBusyStatus } from '../../core/utils/server-status';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { ServerNavService, ServerTabDef, ServerTabId } from '../../core/services/server-nav.service';
 import { ModalComponent } from '../modal/modal.component';
 import { AddServerModalComponent } from '../add-server-modal/add-server-modal.component';
@@ -89,6 +90,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private ipc: IpcService,
     private auth: AuthService,
     private poolDirectory: PoolDirectoryService,
+    private meshNodes: MeshNodesService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -134,6 +136,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     }));
 
     this.subs.push(this.poolDirectory.changed$.subscribe(() => this.cdr.markForCheck()));
+    this.subs.push(this.meshNodes.changed$.subscribe(() => this.cdr.markForCheck()));
     this.subs.push(this.auth.identity$.subscribe(() => this.cdr.markForCheck()));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
@@ -363,6 +366,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
    * Admin sees the operator and the assignee. Anyone else sees the assignee.
    * "Admin" and "Not assigned" are not names, and the join address stays on the card.
    */
+  /** The machine a server runs on in a mesh, then who it is assigned to. */
+  subtitle(server: ServerInstance): string {
+    return [this.meshNodes.nameOf(server.nodeId), this.listLabel(server)].filter(Boolean).join(' · ');
+  }
+
   listLabel(server: ServerInstance): string {
     const assignee = this.poolDirectory.assigneeLabel(server);
     const hasAssignee = !!server.managerUserId && assignee !== 'Not assigned';

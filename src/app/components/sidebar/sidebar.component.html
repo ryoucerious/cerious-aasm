@@ -37,7 +37,7 @@
                   (dblclick)="onServerNameDoubleClick(server, $event)">
               {{ server.name }}
             </span>
-            <span class="server-item-manager" *ngIf="listLabel(server) as label" [title]="label">{{ label }}</span>
+            <span class="server-item-manager" *ngIf="subtitle(server) as label" [title]="label">{{ label }}</span>
           </span>
           <input *ngIf="editingServerId === server.id"
                  type="text"

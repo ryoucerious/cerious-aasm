@@ -421,6 +421,26 @@ describe('WebServerService', () => {
       expect(child.send).toHaveBeenCalledWith({ type: 'mesh-sign-in', required: true });
     });
 
+    // Told only once ready, the child would serve its first requests as authentication left them.
+    it('starts the child already requiring sign-in', async () => {
+      setMeshMember(true);
+
+      await startReady();
+
+      expect(mockedFork.mock.calls[0][2]!.env).toMatchObject({ AASM_MESH_SIGN_IN: '1' });
+    });
+
+    it('refuses an account set from the command line while this node reconnects to its mesh', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+      jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(account('admin', { cliLocked: true }));
+
+      child.receive({ type: 'auth-verify', requestId: 'auth-1', username: 'sam', password: 'pw' });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(child.send).toHaveBeenCalledWith({ type: 'auth-verify-result', requestId: 'auth-1', user: null });
+    });
+
     it('tells the running child when this node joins and when it leaves', async () => {
       const child = await startReady();
 

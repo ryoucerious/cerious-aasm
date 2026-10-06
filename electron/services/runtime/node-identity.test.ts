@@ -38,4 +38,25 @@ describe('node identity', () => {
     expect(ensureNodeIdentity('Other').nodeId).toBe(created.nodeId);
     expect(fs.existsSync(path.join(dir, 'mesh', 'rqlite'))).toBe(false);
   });
+
+  // A container's host name is its container id.
+  describe('its first name', () => {
+    const saved = process.env.AASM_NODE_NAME;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.AASM_NODE_NAME;
+      else process.env.AASM_NODE_NAME = saved;
+    });
+
+    it('comes from AASM_NODE_NAME when it is set', () => {
+      process.env.AASM_NODE_NAME = '  Basement Box ';
+
+      expect(ensureNodeIdentity().name).toBe('Basement Box');
+    });
+
+    it('is the host name otherwise', () => {
+      delete process.env.AASM_NODE_NAME;
+
+      expect(ensureNodeIdentity().name).toBe(os.hostname());
+    });
+  });
 });

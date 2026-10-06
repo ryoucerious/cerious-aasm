@@ -16,6 +16,7 @@ import { WebSocketService } from '../../core/services/web-socket.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
@@ -35,6 +36,9 @@ describe('SidebarComponent', () => {
   /** Permissions the stubbed identity lacks; empty means an admin. */
   let denied: Set<string>;
   let identity: { isAdmin: boolean };
+  /** Mesh machine names by node id; empty outside a mesh. */
+  let machineNames: Record<string, string>;
+  let meshNodesChanged$: Subject<void>;
 
   const stopped = { id: '1', name: 'Alpha', state: 'stopped' };
   const running = { id: '2', name: 'Beta', state: 'running', players: 3 };
@@ -78,6 +82,8 @@ describe('SidebarComponent', () => {
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
     denied = new Set();
     identity = { isAdmin: false };
+    machineNames = {};
+    meshNodesChanged$ = new Subject<void>();
 
     await TestBed.configureTestingModule({
       imports: [SidebarComponent, HttpClientTestingModule],
@@ -94,7 +100,8 @@ describe('SidebarComponent', () => {
         { provide: WebSocketService, useValue: { connected$: of(false) } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
         { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission), identity, identity$: of(identity) } },
-        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } }
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
+        { provide: MeshNodesService, useValue: { changed$: meshNodesChanged$.asObservable(), nameOf: (id?: string) => (id && machineNames[id]) || '' } }
       ]
     }).compileComponents();
 
@@ -123,6 +130,26 @@ describe('SidebarComponent', () => {
 
   it('leaves the subtitle blank when a server has no operator or assignee', () => {
     expect(component.listLabel({ id: '1', name: 'Alpha', gamePort: 7777, multiHome: '203.0.113.5' } as any)).toBe('');
+  });
+
+  // In a mesh a server can run on any member.
+  it('names the machine a server runs on, ahead of who it is assigned to', () => {
+    machineNames = { desk: 'Jareds-PC', box: 'Basement Box' };
+    const directory = TestBed.inject(PoolDirectoryService) as unknown as { assigneeLabel: () => string };
+    directory.assigneeLabel = () => 'Server Manager · mia';
+
+    expect(component.subtitle({ id: '1', name: 'Alpha', nodeId: 'box' } as any)).toBe('Basement Box');
+    expect(component.subtitle({ id: '1', name: 'Alpha', nodeId: 'desk', managerUserId: 'm1' } as any)).toBe('Jareds-PC · Server Manager · mia');
+    expect(component.subtitle({ id: '1', name: 'Alpha' } as any)).toBe('');
+  });
+
+  it('shows the machine under the server in the list', () => {
+    machineNames = { box: 'Basement Box' };
+    servers$.next([{ ...stopped, nodeId: 'box' }]);
+    meshNodesChanged$.next();
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.server-item-manager')?.textContent).toContain('Basement Box');
   });
 
   it('groups the visible tabs into overview, configuration and features', () => {

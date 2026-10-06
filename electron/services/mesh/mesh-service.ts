@@ -153,7 +153,7 @@ export class MeshService {
       return;
     }
     if (!identity.meshId) return;
-    setMeshMember(true);
+    this.claimMembership();
     const secrets = readSecrets();
     if (!secrets) {
       if (fs.existsSync(secretsPath())) this.scheduleResume();
@@ -198,6 +198,20 @@ export class MeshService {
       await this.stop();
       this.scheduleResume();
     }
+  }
+
+  /**
+   * Called first at startup, before the web server or the window: a machine in a mesh asks for a
+   * mesh account from the start, not only once it reaches the others.
+   */
+  noteMembership(): void {
+    if (readNodeIdentity()?.meshId) this.claimMembership();
+  }
+
+  /** The web interface and the desktop window both need a mesh account from here on. */
+  private claimMembership(): void {
+    setMeshMember(true);
+    setMeshDesktopMode(true);
   }
 
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -453,9 +467,19 @@ export class MeshService {
   }
 
   async loginDesktop(username: string, password: string): Promise<AuthenticatedUser | null> {
-    const user = await this.verifyLogin(username, password);
+    const user = this.repo ? await this.verifyLogin(username, password) : await this.verifyMirroredLogin(username, password);
     if (user) this.adoptDesktop(user);
     return user;
+  }
+
+  /**
+   * While this node reconnects: its own copy of the mesh accounts, which the web interface uses
+   * then too. An account set from the command line stays local, so it is not a mesh account.
+   */
+  private async verifyMirroredLogin(username: string, password: string): Promise<AuthenticatedUser | null> {
+    if (!readNodeIdentity()?.meshId) return null;
+    const user = await userDatabaseService.verifyCredentials(username, password);
+    return user && !user.cliLocked ? user : null;
   }
 
   /**
@@ -493,7 +517,8 @@ export class MeshService {
   }
 
   logoutDesktop(): void {
-    if (this.isEnabled()) setMeshDesktopUser(null);
+    // A standalone desktop ignores it; a member, reconnecting or not, is signed out.
+    setMeshDesktopUser(null);
     this.noteDesktopAuth();
   }
 
@@ -1148,6 +1173,29 @@ export class MeshService {
     return checksum;
   }
 
+  /**
+   * A member's name, as every member shows it: otherwise a container goes by its container id.
+   * This machine keeps its own name for when it joins a mesh again.
+   */
+  async renameNode(nodeId: string, name: string): Promise<void> {
+    const clean = nodeNameOf(name);
+    this.requireQuorum('placement');
+    const node = await this.repo!.getNode(nodeId);
+    if (!node) throw new Error('That node was not found.');
+    await this.repo!.setNodeName(nodeId, clean);
+    if (nodeId === this.identity()?.nodeId) this.keepOwnName(clean);
+    this.publishStatus();
+  }
+
+  /** The name in this machine's identity file, which it joins a mesh with. */
+  private keepOwnName(name: string): void {
+    const identity = this.identity();
+    if (!identity || identity.name === name) return;
+    const renamed = { ...identity, name };
+    writeNodeIdentity(renamed);
+    if (this.attachedIdentity) this.attachedIdentity = renamed;
+  }
+
   async setMaintenance(nodeId: string, maintenance: boolean): Promise<void> {
     this.requireQuorum('placement');
     const node = await this.repo!.getNode(nodeId);
@@ -1276,7 +1324,8 @@ export class MeshService {
       meshId: mesh?.meshId || identity.meshId,
       meshName: mesh?.name || null,
       nodeId: identity.nodeId,
-      nodeName: identity.name,
+      // As the mesh names it: another member may have renamed it since this machine last synced.
+      nodeName: nodes.find(node => node.nodeId === identity.nodeId)?.name || identity.name,
       leaderNodeId: leader,
       voterCount: voters,
       hasQuorum: quorum,
@@ -1324,8 +1373,8 @@ export class MeshService {
     this.reconcileMemory.clear();
     registerMeshAuth(null);
     setMeshWriteBlock(() => null);
-    setMeshDesktopMode(false);
-    this.noteDesktopAuth();
+    // The desktop keeps asking for a mesh account: this machine is still a member while a resume
+    // is retried, and only leaving makes it standalone again.
   }
 
   /** Forgets mesh membership on this machine. Local servers and accounts stay. */
@@ -1334,6 +1383,8 @@ export class MeshService {
     if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
     await this.stop();
     setMeshMember(false);
+    setMeshDesktopMode(false);
+    this.noteDesktopAuth();
     this.publishStatus();
     void serverInstanceService.broadcastInstances();
   }
@@ -1781,6 +1832,9 @@ export class MeshService {
         }
       }
       this.syncSubscriptions(nodeId, nodes);
+      // A name another member gave this machine, kept for when it joins a mesh again.
+      const own = nodes.find(node => node.nodeId === nodeId);
+      if (own?.name) this.keepOwnName(own.name);
       const { instances } = await localRuntime.listInstances();
       this.setAsideStrayCopies(nodeId, servers, nodes, instances);
       if (this.quorum) await this.publishLocalConfigs(nodeId, servers, instances);
@@ -2016,6 +2070,16 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
     configRevision: server.configRevision,
     state: server.desiredState
   } as InstanceConfig;
+}
+
+const NODE_NAME_MAX = 64;
+
+/** A machine name as typed, with its spaces tidied. Throws when it is empty or too long. */
+function nodeNameOf(name: string): string {
+  const clean = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
+  if (!clean) throw new Error('Enter a name for the machine.');
+  if (clean.length > NODE_NAME_MAX) throw new Error(`A machine name can be at most ${NODE_NAME_MAX} characters.`);
+  return clean;
 }
 
 /** The host in a peer URL, which is the machine's address as other nodes know it. */

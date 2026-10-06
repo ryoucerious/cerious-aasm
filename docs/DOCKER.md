@@ -281,6 +281,7 @@ All of these go in the `.env` file next to `docker-compose.yml`. Run `docker com
 | `AASM_ADVERTISE_HOST` | first LAN address | The address other mesh members use for this machine |
 | `AASM_ADVERTISE_PEER_URL` | `https://` host and peer port | Full peer API address other members dial, when it differs outside |
 | `AASM_ADVERTISE_RAFT_ADDR` | host and Raft port | Full Raft address other members dial, when it differs outside |
+| `AASM_NODE_NAME` | container id | The name every member shows for this container. Read when the container first makes its identity; after that, rename it from Settings → Mesh |
 | `PUID` | none | User ID that owns the data folders when they're host folders (Unraid: `99`) |
 | `PGID` | none | Group ID that owns the data folders when they're host folders (Unraid: `100`) |
 | `UMASK` | none | Permissions mask for new files, such as `002` for group-writable |

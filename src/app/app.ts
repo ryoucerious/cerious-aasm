@@ -45,6 +45,8 @@ export class App implements OnInit, OnDestroy {
   private connectTimeout: ReturnType<typeof setTimeout> | undefined;
   private everConnected = false;
   private identitySub: Subscription | null = null;
+  /** The desktop app has heard who is signed in. */
+  private identityKnown = false;
 
   constructor(
     private cdr: ChangeDetectorRef,
@@ -78,8 +80,15 @@ export class App implements OnInit, OnDestroy {
     this.isLoginPage = this.router.url === '/login';
 
     if (this.isElectron) {
-      this.identitySub = this.auth.identity$.subscribe(() => this.routeForMeshSignIn());
-      void this.auth.whenReady().then(() => this.routeForMeshSignIn());
+      this.identitySub = this.auth.identity$.subscribe(() => {
+        this.routeForMeshSignIn();
+        this.cdr.markForCheck();
+      });
+      void this.auth.whenReady().then(() => {
+        this.identityKnown = true;
+        this.routeForMeshSignIn();
+        this.cdr.detectChanges();
+      });
       this.stopListeningForClose = this.ipc.on('app-close-request', () => this.onCloseRequested());
       return;
     }
@@ -140,6 +149,23 @@ export class App implements OnInit, OnDestroy {
     this.stopListeningForClose?.();
     clearTimeout(this.connectTimeout);
     window.removeEventListener('resize', this.onWindowResize);
+  }
+
+  /**
+   * The app itself, with its sidebar and settings, only once access is confirmed. The desktop
+   * waits to hear who is signed in: on a mesh member that is nobody until a mesh account signs
+   * in. The web UI waits for its socket, which the server opens only with a session it accepts.
+   */
+  get showApp(): boolean {
+    if (this.isLoginPage) return false;
+    if (this.isElectron) return this.identityKnown && !this.auth.needsMeshSignIn;
+    return !this.connecting && !this.connectionLost;
+  }
+
+  /** Until then, a loading page and nothing else. */
+  get showLoading(): boolean {
+    if (this.isLoginPage) return false;
+    return this.isElectron ? !this.showApp : this.connecting;
   }
 
   /** A joined mesh has no implicit desktop admin. Leave the shell until someone signs in. */

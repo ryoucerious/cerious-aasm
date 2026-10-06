@@ -310,11 +310,31 @@ undone by the mirror while its copy to the mesh is under way.
 - When a machine joins a mesh, the mesh's accounts replace the ones it
   had; those are kept in `mesh/accounts-before-join-<time>.db`.
 - An account set from the command line stays local to its machine.
-- Every member's web interface requires sign-in, from the moment it
-  starts until it leaves, whatever its own login setting: it controls
-  servers on every node. Where that setting was off, only mesh accounts
-  sign in. Leaving the mesh puts the machine's own setting back; the
-  saved setting is never changed.
+- Every member's web interface and desktop window require sign-in,
+  from the moment the app starts until the machine leaves, whatever its
+  own login setting: they control servers on every node. Membership is
+  read from the identity file before the web server or the window
+  starts, and the web server is started with sign-in already on. Where
+  the machine's own setting was off, only mesh accounts sign in.
+  Leaving the mesh puts that setting back; the saved setting is never
+  changed.
+- While a member reconnects after a restart, logins are checked against
+  its own copy of the mesh accounts, so it is never locked out. An
+  account set from the command line is not a mesh account and does not
+  sign in on a member.
+- The UI shows a loading page, and nothing of the app, until access is
+  confirmed: the desktop until it knows who is signed in, the web UI
+  until the server accepts its socket. A sign-in becoming necessary
+  hides the app at once.
+
+### Machine names
+
+A member is named by its identity file when it is first made: the host
+name, or `AASM_NODE_NAME`, since a container's host name is its
+container id. Anyone with `nodes.manage` can rename any member from the
+mesh page; the name is stored in the mesh, and the renamed machine
+keeps it in its identity file for when it joins a mesh again. The
+sidebar shows the machine each server runs on.
 
 ### Live state of servers on other nodes
 

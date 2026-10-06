@@ -1,7 +1,7 @@
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { NgForOf, NgIf } from '@angular/common';
-import { RouterOutlet } from '@angular/router';
-import { TestBed, fakeAsync, flushMicrotasks, tick } from '@angular/core/testing';
+import { Router, RouterOutlet } from '@angular/router';
+import { ComponentFixture, TestBed, fakeAsync, flushMicrotasks, tick } from '@angular/core/testing';
 import { BehaviorSubject, Subject } from 'rxjs';
 import { App } from './app';
 import { MessagingService } from './core/services/messaging/messaging.service';
@@ -10,6 +10,7 @@ import { ServerInstanceService } from './core/services/server-instance.service';
 import { IpcService } from './core/services/ipc.service';
 import { ServerLifecycleService } from './core/services/server-lifecycle.service';
 import { WebSocketService } from './core/services/web-socket.service';
+import { AuthService } from './core/services/auth.service';
 import { ServerInstance } from './core/models/server-instance.model';
 import type { ElectronListener } from './core/types/electron-api';
 import { MockMessagingService } from '../../test/mocks/mock-messaging.service';
@@ -183,8 +184,80 @@ describe('App', () => {
     });
   });
 
+  // A mesh member's desktop needs a mesh account; until the app knows, it shows nothing else.
+  describe('in the desktop app, until access is confirmed', () => {
+    let identity$: BehaviorSubject<unknown>;
+    let finishReady: () => void;
+    let signInNeeded: boolean;
+
+    beforeEach(async () => {
+      await setUp(true);
+      identity$ = new BehaviorSubject<unknown>({});
+      signInNeeded = false;
+      const ready = new Promise<void>(resolve => { finishReady = resolve; });
+      TestBed.overrideProvider(AuthService, {
+        useValue: { identity$, whenReady: () => ready, get needsMeshSignIn() { return signInNeeded; } }
+      });
+    });
+
+    function shown(fixture: ComponentFixture<App>): { loading: boolean; app: boolean } {
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+      return { loading: !!page.querySelector('.app-loading'), app: !!page.querySelector('.sidebar-container') };
+    }
+
+    it('shows only a loading page while it finds out who is signed in', () => {
+      const fixture = createApp();
+
+      expect(shown(fixture)).toEqual({ loading: true, app: false });
+    });
+
+    it('shows the app once access is confirmed', fakeAsync(() => {
+      const fixture = createApp();
+
+      finishReady();
+      flushMicrotasks();
+
+      expect(shown(fixture)).toEqual({ loading: false, app: true });
+    }));
+
+    it('never shows the app to a machine waiting for a mesh sign-in', fakeAsync(() => {
+      signInNeeded = true;
+      const navigate = spyOn(TestBed.inject(Router), 'navigate').and.resolveTo(true);
+      const fixture = createApp();
+
+      finishReady();
+      flushMicrotasks();
+
+      expect(shown(fixture).app).toBeFalse();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    }));
+
+    it('hides the app the moment a sign-in becomes necessary', fakeAsync(() => {
+      const fixture = createApp();
+      spyOn(fixture.componentInstance['router'], 'navigate').and.resolveTo(true);
+      finishReady();
+      flushMicrotasks();
+      expect(shown(fixture).app).toBeTrue();
+
+      signInNeeded = true; // joined a mesh, or signed out
+      identity$.next({});
+
+      expect(shown(fixture)).toEqual({ loading: true, app: false });
+    }));
+  });
+
   describe('in the web UI', () => {
     beforeEach(() => setUp(false));
+
+    it('shows only a loading page until the server accepts the connection', () => {
+      const fixture = createApp();
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+
+      expect(page.querySelector('.app-loading')).toBeTruthy();
+      expect(page.querySelector('.sidebar-container')).toBeNull();
+    });
 
     it('does not listen for window close requests', () => {
       const app = createApp().componentInstance;
