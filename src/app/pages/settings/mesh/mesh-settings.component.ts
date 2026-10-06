@@ -156,6 +156,14 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.APP_INSTALL);
   }
 
+  /**
+   * By machine: every heartbeat brings a new status, with new objects for the same machines.
+   * Rebuilt for each, the cards took away the box being typed in every few seconds.
+   */
+  trackByNodeId(_index: number, node: MeshNode): string {
+    return node.nodeId;
+  }
+
   get nodes(): MeshNode[] {
     return (this.status?.nodes || []).filter(node => node.status !== 'removed');
   }

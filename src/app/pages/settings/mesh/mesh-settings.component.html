@@ -85,7 +85,7 @@
     <p class="settings-card-hint mesh-token" *ngIf="issuedToken">Give this token to the joining machine once: {{ issuedToken }}</p>
     <p class="settings-card-hint" *ngIf="!nodes.length">No machines have joined yet.</p>
     <div class="mesh-node-list" *ngIf="nodes.length">
-      <article class="mesh-node-card" *ngFor="let node of nodes">
+      <article class="mesh-node-card" *ngFor="let node of nodes; trackBy: trackByNodeId">
         <div class="mesh-node-top">
           <div class="mesh-node-identity">
             <h4 class="mesh-node-name" *ngIf="renamingNodeId !== node.nodeId">{{ node.name }}</h4>

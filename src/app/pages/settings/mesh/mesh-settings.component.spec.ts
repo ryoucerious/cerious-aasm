@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { NEVER, of } from 'rxjs';
+import { NEVER, Subject, of } from 'rxjs';
 import { MeshSettingsComponent } from './mesh-settings.component';
 import { MessagingService } from '../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../core/services/notification.service';
@@ -15,11 +15,14 @@ describe('MeshSettingsComponent', () => {
   let renameReply: unknown;
   /** What other channels answer, by channel; get-mesh-status answers with the status opened. */
   let replies: Record<string, unknown>;
+  /** mesh-status as the backend pushes it: after every heartbeat, with new objects each time. */
+  let statusEvents: Subject<unknown>;
 
   beforeEach(() => {
     canManageNodes = true;
     renameReply = null;
     replies = {};
+    statusEvents = new Subject<unknown>();
     notification = new MockNotificationService();
   });
 
@@ -28,7 +31,7 @@ describe('MeshSettingsComponent', () => {
     await TestBed.configureTestingModule({
       imports: [MeshSettingsComponent],
       providers: [
-        { provide: MessagingService, useValue: { sendMessage, receiveMessage: () => NEVER } },
+        { provide: MessagingService, useValue: { sendMessage, receiveMessage: (channel: string) => (channel === 'mesh-status' ? statusEvents : NEVER) } },
         { provide: NotificationService, useValue: notification },
         { provide: AuthService, useValue: { can: (permission: string) => permission !== 'nodes.manage' || canManageNodes, identity: { accountsInUse: true }, refresh: async () => undefined } }
       ]
@@ -115,6 +118,47 @@ describe('MeshSettingsComponent', () => {
       const page = await open(inMesh);
 
       expect(page.querySelector('.mesh-node-rename')).toBeNull();
+    });
+  });
+
+  // Each heartbeat brings a new status, with new objects for the same machines. Rebuilding the
+  // cards for it took the box being typed in away every few seconds.
+  describe('typing while the status refreshes', () => {
+    const node = (nodeId: string, name: string) => ({
+      nodeId, name, status: 'alive', maintenance: false, version: '1.2.2', connected: true,
+      address: { host: '192.168.1.155', peerPort: 4747, raftPort: 4002 }
+    });
+    const inMesh = { ...standalone, enabled: true, meshName: 'Mesh', nodes: [node('n1', 'PC 1'), node('n2', 'Docker 1')] };
+
+    function refreshed(): void {
+      statusEvents.next(JSON.parse(JSON.stringify(inMesh)));
+      fixture.detectChanges();
+    }
+
+    it('keeps the name box', async () => {
+      const page = await open(inMesh);
+      page.querySelectorAll<HTMLButtonElement>('.mesh-node-rename')[1].click();
+      fixture.detectChanges();
+      const input = page.querySelector<HTMLInputElement>('.mesh-node-rename-input')!;
+      input.focus();
+
+      refreshed();
+
+      expect(page.querySelector('.mesh-node-rename-input')).toBe(input);
+      expect(document.activeElement).toBe(input);
+    });
+
+    it('keeps the address box', async () => {
+      const page = await open(inMesh);
+      Array.from(page.querySelectorAll<HTMLButtonElement>('.mesh-node-card button')).find(button => button.textContent?.includes('Change address'))!.click();
+      fixture.detectChanges();
+      const input = page.querySelector<HTMLInputElement>('.mesh-address-host')!;
+      input.focus();
+
+      refreshed();
+
+      expect(page.querySelector('.mesh-address-host')).toBe(input);
+      expect(document.activeElement).toBe(input);
     });
   });
 
