@@ -15,6 +15,7 @@ import { BackupUIService } from '../../core/services/backup-ui.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { EventSubscriptionService } from '../../core/services/event-subscription.service';
 import { AuthService } from '../../core/services/auth.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { SaveInstanceResult } from '../../core/models/server-instance.model';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
@@ -32,9 +33,14 @@ describe('ServerComponent', () => {
   let mockNotification: jasmine.SpyObj<NotificationService>;
   /** Permissions the stubbed identity lacks; empty means an admin. */
   let denied: Set<string>;
+  /** Where the mesh says a server could move to, and the server it was last asked about. */
+  let moveDestinations: Array<{ nodeId: string; name: string }>;
+  let destinationsAskedFor: unknown;
 
   beforeEach(async () => {
     denied = new Set();
+    moveDestinations = [];
+    destinationsAskedFor = null;
     mockMessaging = new MockMessagingService();
     mockMessaging.receiveMessage = jasmine.createSpy('receiveMessage').and.returnValue(of(null));
     mockMessaging.sendMessage = jasmine.createSpy('sendMessage').and.returnValue(of(null));
@@ -93,7 +99,14 @@ describe('ServerComponent', () => {
         { provide: EventSubscriptionService, useValue: mockEventSubscription },
         { provide: AutomationService, useValue: jasmine.createSpyObj('AutomationService', ['configureAutoStart']) },
         { provide: NotificationService, useValue: mockNotification },
-        { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission) } }
+        { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission) } },
+        {
+          provide: MeshNodesService,
+          useValue: {
+            changed$: of(undefined),
+            destinationsFor: (server: unknown) => { destinationsAskedFor = server; return moveDestinations; }
+          }
+        }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
@@ -439,6 +452,34 @@ describe('ServerComponent', () => {
       expect(component.canUseRcon).toBeTrue();
       denied = new Set(['rcon.use']);
       expect(component.canUseRcon).toBeFalse();
+    });
+  });
+
+  describe('moving the server', () => {
+    beforeEach(() => {
+      component.activeServerInstance = { id: 'isle', name: 'The Isle', nodeId: 'desk' } as any;
+    });
+
+    it('offers Move when the user may move servers and another machine can take it', () => {
+      moveDestinations = [{ nodeId: 'box', name: 'Basement Box' }];
+      expect(component.canMoveServer).toBeTrue();
+      expect(destinationsAskedFor).toEqual({ nodeId: 'desk' });
+
+      denied = new Set(['servers.move']);
+      expect(component.canMoveServer).toBeFalse();
+
+      denied = new Set();
+      moveDestinations = [];
+      expect(component.canMoveServer).toBeFalse();
+    });
+
+    it('opens the move dialog for the server shown, and closes it', () => {
+      component.openMove();
+      expect(component.movingServer).toEqual(jasmine.objectContaining({ id: 'isle', name: 'The Isle' }));
+
+      component.closeMove();
+
+      expect(component.movingServer).toBeNull();
     });
   });
 });

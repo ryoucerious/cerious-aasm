@@ -35,5 +35,8 @@
     <button type="button" class="btn btn-ghost" (click)="forceStopServer.emit()" [disabled]="!canForceStop" title="Force stop">
       <span class="material-icons">power_off</span> Force
     </button>
+    <button type="button" class="btn btn-ghost server-header-move" *ngIf="canMoveNow" (click)="moveServer.emit()" title="Move to another machine">
+      <span class="material-icons">drive_file_move</span> Move
+    </button>
   </div>
 </section>

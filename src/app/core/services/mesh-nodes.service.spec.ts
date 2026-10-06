@@ -73,6 +73,39 @@ describe('MeshNodesService', () => {
     expect(nodes.nameOf('n1')).toBe('Jareds-PC');
   });
 
+  describe('where a server can move to', () => {
+    const member = (nodeId: string, extra: object = {}) => ({ nodeId, name: nodeId.toUpperCase(), status: 'alive', maintenance: false, connected: true, ...extra });
+
+    it('offers the connected members that are not draining, other than the one hosting it', () => {
+      reply = {
+        enabled: true,
+        nodeId: 'here',
+        nodes: [
+          member('here'), member('box'),
+          member('draining', { maintenance: true, status: 'maintenance' }),
+          member('down', { connected: false }),
+          member('gone', { status: 'removed', connected: false })
+        ]
+      };
+      const nodes = create();
+
+      expect(nodes.destinationsFor({ nodeId: 'here' })).toEqual([{ nodeId: 'box', name: 'BOX' }]);
+      expect(nodes.destinationsFor({ nodeId: 'box' })).toEqual([{ nodeId: 'here', name: 'HERE' }]);
+    });
+
+    it('treats a server without a node as one on this machine', () => {
+      reply = { enabled: true, nodeId: 'here', nodes: [member('here'), member('box')] };
+
+      expect(create().destinationsFor({})).toEqual([{ nodeId: 'box', name: 'BOX' }]);
+    });
+
+    it('offers nowhere outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().destinationsFor({ nodeId: 'here' })).toEqual([]);
+    });
+  });
+
   it('asks again after a sign-in', () => {
     reply = { enabled: false };
     const nodes = create();

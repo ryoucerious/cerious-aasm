@@ -14,6 +14,7 @@ import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { ServerCardComponent } from '../../components/server-card/server-card.component';
 import { By } from '@angular/platform-browser';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
@@ -37,6 +38,8 @@ describe('DashboardComponent', () => {
   let denied: Set<string>;
   /** What get-mesh-status answers; standalone unless a test sets it before creating the page. */
   let meshStatus: any;
+  /** Where the mesh says a server could move to. */
+  let moveDestinations: Array<{ nodeId: string; name: string }>;
 
   const now = Date.now();
   const alpha = { id: 'a', name: 'Alpha', state: 'running', players: 4, maxPlayers: 10, startedAt: now - 3600_000, sortOrder: 0 };
@@ -46,6 +49,7 @@ describe('DashboardComponent', () => {
     servers$ = new BehaviorSubject<any[]>([alpha, beta]);
     items$ = new BehaviorSubject<any[]>([]);
     meshStatus = { enabled: false };
+    moveDestinations = [];
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
     messaging = {
@@ -90,7 +94,8 @@ describe('DashboardComponent', () => {
         { provide: AuthService, useValue: { displayName$: displayName$.asObservable(), can: (permission: string) => !denied.has(permission) } },
         { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
         { provide: ServerNavService, useValue: { rememberTab: jasmine.createSpy('rememberTab') } },
-        { provide: SettingsDrawerService, useValue: settingsDrawer }
+        { provide: SettingsDrawerService, useValue: settingsDrawer },
+        { provide: MeshNodesService, useValue: { changed$: of(undefined), destinationsFor: () => moveDestinations, nameOf: () => '' } }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
@@ -183,6 +188,31 @@ describe('DashboardComponent', () => {
 
       expect(component.joinHost({ ...beta, nodeId: 'desk' } as any)).toBeNull();
       expect(component.joinHost({ ...alpha, nodeId: 'box' } as any)).toBe('10.0.0.2');
+    });
+  });
+
+  describe('moving a server', () => {
+    it('lets a card offer Move when the user may move servers and another machine can take it', () => {
+      moveDestinations = [{ nodeId: 'box', name: 'Basement Box' }];
+      expect(component.canMoveServer(beta as any)).toBeTrue();
+
+      denied.add('servers.move');
+      expect(component.canMoveServer(beta as any)).toBeFalse();
+
+      denied.clear();
+      moveDestinations = [];
+      expect(component.canMoveServer(beta as any)).toBeFalse();
+    });
+
+    it('opens the move dialog for a card\'s server, and closes it', () => {
+      component.openMove(beta as any);
+      fixture.detectChanges();
+      expect(component.movingServer).toEqual(beta as any);
+      expect(fixture.debugElement.query(By.css('app-move-server-dialog')).componentInstance.server).toEqual(beta);
+
+      component.closeMove();
+
+      expect(component.movingServer).toBeNull();
     });
   });
 

@@ -17,6 +17,8 @@ import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { MoveServerDialogComponent } from '../../components/move-server-dialog/move-server-dialog.component';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { ServerCardComponent } from '../../components/server-card/server-card.component';
 import { AddServerModalComponent } from '../../components/add-server-modal/add-server-modal.component';
@@ -91,7 +93,7 @@ const CLOCK_TICK_MS = 30_000;
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [NgIf, NgFor, NgClass, DecimalPipe, FormsModule, DragDropModule, ServerCardComponent, AddServerModalComponent, ModalComponent, DropdownComponent, AnimateReflowDirective],
+  imports: [NgIf, NgFor, NgClass, DecimalPipe, FormsModule, DragDropModule, ServerCardComponent, AddServerModalComponent, ModalComponent, DropdownComponent, AnimateReflowDirective, MoveServerDialogComponent],
   templateUrl: './dashboard.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
@@ -144,6 +146,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   backupName = '';
   creatingBackup = false;
   serverToDelete: ServerInstance | null = null;
+  /** The server the move dialog is open for. */
+  movingServer: ServerInstance | null = null;
   private activeServerId: string | null = null;
 
   readonly chartWidth = CHART_WIDTH;
@@ -174,6 +178,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
     public poolDirectory: PoolDirectoryService,
+    private meshMachines: MeshNodesService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
@@ -216,6 +221,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // Sent again after each heartbeat, which carries the sender's resources.
     this.subs.push(this.messaging.receiveMessage<MeshStatusView>('mesh-status').subscribe(status => this.applyMesh(status)));
 
+    // Which machines can take a server follows who is reachable and draining.
+    this.subs.push(this.meshMachines.changed$.subscribe(() => this.cdr.markForCheck()));
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
       this.serverOptions = servers.map(server => ({ value: server.id, label: server.name }));
@@ -396,6 +403,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.serverInstanceService.setActiveServer(server);
     this.serverNav.rememberTab(tab);
     this.router.navigate(['/server', tab]);
+  }
+
+  /** The user may move servers, and another machine in the mesh can take this one. The card offers it only while the server is off. */
+  canMoveServer(server: ServerInstance): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_MOVE) && this.meshMachines.destinationsFor(server).length > 0;
+  }
+
+  openMove(server: ServerInstance): void {
+    this.movingServer = server;
+    this.cdr.markForCheck();
+  }
+
+  closeMove(): void {
+    this.movingServer = null;
+    this.cdr.markForCheck();
   }
 
   requestDelete(server: ServerInstance): void {

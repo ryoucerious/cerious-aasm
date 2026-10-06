@@ -19,6 +19,8 @@ import { BackupUIService } from '../../core/services/backup-ui.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { EventSubscriptionService, ServerPageState } from '../../core/services/event-subscription.service';
 import { AuthService } from '../../core/services/auth.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { MoveServerDialogComponent } from '../../components/move-server-dialog/move-server-dialog.component';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { ServerHeaderComponent } from '../../components/server-header/server-header.component';
 import { PlayerListComponent } from '../../components/player-list/player-list.component';
@@ -41,7 +43,7 @@ interface OpenDirectoryReply {
 @Component({
   selector: 'app-server',
   standalone: true,
-  imports: [NgIf, FormsModule, ModalComponent, ServerStateComponent, RconControlComponent, ServerSettingsComponent, ServerHeaderComponent, PlayerListComponent],
+  imports: [NgIf, FormsModule, ModalComponent, ServerStateComponent, RconControlComponent, ServerSettingsComponent, ServerHeaderComponent, PlayerListComponent, MoveServerDialogComponent],
   templateUrl: './server.component.html'
 })
 export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
@@ -81,6 +83,7 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   private readonly route = inject(ActivatedRoute, { optional: true });
   private readonly serverNav = inject(ServerNavService);
   private readonly liveServers = inject(LiveServersService);
+  private readonly meshNodes = inject(MeshNodesService);
   private activeServer: ServerInstanceDraft | null = null;
   private activeServerSub?: Subscription;
   private subscriptions: Subscription[] = [];
@@ -130,6 +133,27 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     private notificationService: NotificationService,
     private auth: AuthService
   ) {}
+
+  /** The server the move dialog is open for. */
+  movingServer: ServerInstance | null = null;
+
+  /** The user may move servers and another machine in the mesh can take this one. The header offers it only while it is off. */
+  get canMoveServer(): boolean {
+    const server = this.activeServerInstance;
+    if (!server || !this.auth.can(PERMISSIONS.SERVERS_MOVE)) return false;
+    return this.meshNodes.destinationsFor({ nodeId: this.liveServer?.nodeId ?? server.nodeId }).length > 0;
+  }
+
+  openMove(): void {
+    if (!this.activeServerInstance) return;
+    this.movingServer = (this.liveServer || this.activeServerInstance) as ServerInstance;
+    this.cdr.markForCheck();
+  }
+
+  closeMove(): void {
+    this.movingServer = null;
+    this.cdr.markForCheck();
+  }
 
   /** The backend refuses RCON for roles without the permission; the panel is simply not shown. */
   get canUseRcon(): boolean {

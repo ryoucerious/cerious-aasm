@@ -10,6 +10,8 @@ export const BACKUP_TIMEOUT_MS = 30 * 60_000;
 export const INSTALL_TIMEOUT_MS = 60 * 60_000;
 /** Fetching a plugin from the internet, or packing files into the reply for the browser to save. */
 export const FILE_TRANSFER_TIMEOUT_MS = 10 * 60_000;
+/** Moving a server copies its saves to another machine; the mesh allows a large world an hour. */
+export const MOVE_TIMEOUT_MS = 60 * 60_000;
 
 export interface RequestOptions {
   /** How long to wait for the reply before erroring with a TimeoutError. Defaults to 30 s. */

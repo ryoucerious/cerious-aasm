@@ -32,7 +32,7 @@ import { serverManagementService } from './server-management.service';
 import { serverProcessService } from './server-process.service';
 import { getStandardEventCallbacks } from './instance-events';
 import { serverLifecycleService } from './server-lifecycle.service';
-import { SERVER_FILES_UPDATING, whileServerFilesUpdate } from '../../utils/ark/ark-server/ark-server-state.utils';
+import { SERVER_BEING_MOVED, SERVER_FILES_UPDATING, whileServerFilesUpdate, whileServerMoves } from '../../utils/ark/ark-server/ark-server-state.utils';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
 const mockProcess = jest.mocked(serverProcessService);
@@ -85,6 +85,32 @@ describe('ServerLifecycleService', () => {
 
       expect(result).toEqual({ success: false, error: SERVER_FILES_UPDATING, instanceId: 'a1' });
       expect(mockManagement.prepareInstanceConfiguration).not.toHaveBeenCalled();
+      expect(mockProcess.startServerProcess).not.toHaveBeenCalled();
+    });
+
+    // Its files are being copied to another machine, which takes it over once they arrive.
+    it('refuses to start a server that is being moved, and only that server', async () => {
+      const result = await whileServerMoves('a1', () => serverLifecycleService.startServerInstance('a1', instance));
+
+      expect(result).toEqual({ success: false, error: SERVER_BEING_MOVED, instanceId: 'a1' });
+      expect(mockProcess.startServerProcess).not.toHaveBeenCalled();
+      await expect(whileServerMoves('b2', () => serverLifecycleService.startServerInstance('a1', instance)))
+        .resolves.toEqual({ success: true, instanceId: 'a1' });
+    });
+
+    it('refuses when a move begins while the ports are being checked', async () => {
+      let finishMove: () => void = () => undefined;
+      let move: Promise<void> = Promise.resolve();
+      mockUdp.mockImplementationOnce(async () => {
+        move = whileServerMoves('a1', () => new Promise<void>(resolve => { finishMove = resolve; }));
+        return false;
+      });
+
+      const result = await serverLifecycleService.startServerInstance('a1', instance);
+      finishMove();
+      await move;
+
+      expect(result).toEqual({ success: false, error: SERVER_BEING_MOVED, instanceId: 'a1' });
       expect(mockProcess.startServerProcess).not.toHaveBeenCalled();
     });
 

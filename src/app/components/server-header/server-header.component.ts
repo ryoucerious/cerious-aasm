@@ -29,10 +29,13 @@ export class ServerHeaderComponent {
   @Input() pageTitle = '';
   @Input() now = Date.now();
   @Input() rconConnected = false;
+  /** The user may move servers and another machine in the mesh can take this one. */
+  @Input() canMove = false;
 
   @Output() startServer = new EventEmitter<void>();
   @Output() stopServer = new EventEmitter<void>();
   @Output() forceStopServer = new EventEmitter<void>();
+  @Output() moveServer = new EventEmitter<void>();
 
   get visual(): MapVisual {
     return getMapVisual(this.server?.mapName || this.live?.mapName);
@@ -61,6 +64,11 @@ export class ServerHeaderComponent {
 
   get canStop(): boolean {
     return this.stateKey === 'running';
+  }
+
+  /** Only a server that is off moves; the machine hosting it refuses one that is not. */
+  get canMoveNow(): boolean {
+    return this.canMove && this.stateKey === 'stopped';
   }
 
   get canForceStop(): boolean {

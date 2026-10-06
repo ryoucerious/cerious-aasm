@@ -81,6 +81,45 @@ describe('ServerCardComponent', () => {
     expect(component.menuOpen).toBeFalse();
   });
 
+  describe('moving to another machine', () => {
+    function menuItems(): string[] {
+      component.toggleMenu({ stopPropagation: () => {} } as any);
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+      return Array.from(fixture.nativeElement.querySelectorAll('.card-menu-item') as NodeListOf<HTMLElement>)
+        .map(item => item.textContent?.trim() || '');
+    }
+
+    it('is offered for a server that is off, when it may be moved', () => {
+      component.server = { ...component.server, state: 'stopped' } as any;
+      component.canMove = true;
+      spyOn(component.move, 'emit');
+
+      expect(menuItems()).toContain('drive_file_move Move to…');
+      (Array.from(fixture.nativeElement.querySelectorAll('.card-menu-item') as NodeListOf<HTMLButtonElement>)
+        .find(item => item.textContent?.includes('Move to'))!).click();
+
+      expect(component.move.emit).toHaveBeenCalledWith(component.server);
+      expect(component.menuOpen).toBeFalse();
+    });
+
+    it('is not offered while the server is running or busy', () => {
+      component.canMove = true;
+      for (const state of ['running', 'starting', 'stopping', 'queued']) {
+        component.server = { ...component.server, state } as any;
+        component.menuOpen = false;
+        expect(menuItems().some(item => item.includes('Move to'))).withContext(state).toBeFalse();
+      }
+    });
+
+    it('is not offered when the server may not be moved, or there is nowhere to move it', () => {
+      component.server = { ...component.server, state: 'stopped' } as any;
+      component.canMove = false;
+
+      expect(menuItems().some(item => item.includes('Move to'))).toBeFalse();
+    });
+  });
+
   it('toggles the menu and closes it on outside clicks', () => {
     component.toggleMenu({ stopPropagation: () => {} } as any);
     expect(component.menuOpen).toBeTrue();

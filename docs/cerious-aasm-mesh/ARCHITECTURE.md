@@ -172,25 +172,32 @@ files cannot be deleted the row is put back. A server hosted elsewhere is
 deleted by its host through a `delete` command. A server whose host has
 been removed from the mesh can only be forgotten.
 
-A move runs as a `move` command on the node hosting the server:
+A move runs as a `move` command on the node hosting the server. Only a
+server that is off moves: the host refuses one that is running, starting,
+stopping or queued, and the UI (the card's "Move to…" and the server
+page's Move) offers it only then. While the files are copied the host
+refuses any start of that server, from the UI, another node, the
+reconciler or automation, and a second move of it. The server arrives
+off: the placement write sets its desired state to stopped.
 
 ``` text
-Source       SaveWorld → stop → list config + saves → checksum
+Source       check it is off and not already moving → mark it moving
+             → list config + saves → checksum
              → POST /v1/checkpoint/begin
              → PUT /v1/checkpoint/file, one streamed request per file
              → POST /v1/checkpoint/finish
 Destination  stage in Saved/MeshIncoming → check the file list → checksum
-Source       compare checksums → placement write, only if still on source
-             → set its own copy aside in Saved/MeshMoved
-Destination  reconciler sees the placement → promote staged files → start
+Source       compare checksums → placement write (desired: stopped), only
+             if still on source → set its own copy aside in Saved/MeshMoved
+Destination  reconciler sees the placement → promote staged files
 ```
 
 Files are streamed, so memory use does not grow with the size of the
 world. The checksum is sha256 over each relative path and its bytes, in
 code-point path order, so nodes with different locales agree.
 
-A failure before the placement write leaves the server where it was and
-starts it again if it was running. After the write there is no rollback.
+A failure before the placement write leaves the server where it was, off.
+After the write there is no rollback.
 
 Once an hour each node removes staged files that nothing has written to
 for 2 hours (a move that was abandoned), and copies in `Saved/MeshMoved`

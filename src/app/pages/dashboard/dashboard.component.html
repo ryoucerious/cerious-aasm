@@ -66,6 +66,8 @@
                          [nodeLabel]="nodeLabel(server)"
                          [hostMemoryTotalBytes]="hostMemoryTotalFor(server)"
                          [joinHost]="joinHost(server)"
+                         [canMove]="canMoveServer(server)"
+                         (move)="openMove($event)"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
                          (forceStop)="forceStopServer($event)"
@@ -272,6 +274,8 @@
     </button>
   </div>
 </app-modal>
+
+<app-move-server-dialog [server]="movingServer" (closed)="closeMove()"></app-move-server-dialog>
 
 <app-modal [title]="'Confirm Delete'" [show]="!!serverToDelete" (close)="cancelDelete()">
   <div class="modal-confirmation">

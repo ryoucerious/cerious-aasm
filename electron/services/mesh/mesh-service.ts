@@ -9,6 +9,7 @@ import {
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
 import { getInstanceDir } from '../../utils/ark/instance.utils';
+import { isServerMoving, whileServerMoves } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { appVersion } from '../../utils/app-version';
 import { userDatabaseService } from '../auth/user-database.service';
 import { poolDirectory } from '../auth/pool-directory';
@@ -70,6 +71,8 @@ const LIVE_FIGURES: Record<string, 'players' | 'cpu' | 'memory'> = {
   'server-instance-players': 'players', 'server-instance-cpu': 'cpu', 'server-instance-memory': 'memory'
 };
 const UP_STATES = new Set(['running', 'starting']);
+/** A server in one of these has no process: it can be moved. */
+const OFF_STATES = new Set(['stopped', 'crashed', 'error']);
 /** A node that has not answered or sent a heartbeat for this long shows as unreachable. */
 const HEARTBEAT_FRESH_MS = 25_000;
 
@@ -1116,6 +1119,15 @@ export class MeshService {
     const destination = destinationNodeId ? await this.repo!.getNode(destinationNodeId) : null;
     const refusal = destinationRefusal(destination);
     if (refusal || !destination) return { success: false, error: refusal || 'That node is not in the mesh.' };
+    // Checked and marked with no await between, so two moves, or a move and a start, cannot interleave.
+    if (isServerMoving(serverId)) return { success: false, error: 'That server is already being moved.' };
+    // Only a server that is off moves: nobody is playing on it and its saves are complete on disk.
+    if (!OFF_STATES.has(localRuntime.state(serverId))) return { success: false, error: 'Stop the server before moving it.' };
+    return whileServerMoves(serverId, () => this.copyAndHandOver(serverId, localId, destination));
+  }
+
+  /** The move itself, with starts of the server refused here until it settles. It arrives off. */
+  private async copyAndHandOver(serverId: string, localId: string, destination: NodeRecord): Promise<CommandResult> {
     let rels: string[] = [];
     const result = await moveServer(serverId, localId, destination.nodeId, {
       isRunning: id => UP_STATES.has(localRuntime.state(id)),
@@ -1131,7 +1143,8 @@ export class MeshService {
       },
       transfer: async id => this.deliverCheckpoint(id, destination, rels),
       commitPlacement: async (id, dest, keepRunning) => {
-        const moved = await this.repo!.commitPlacement(id, localId, dest, keepRunning ? 'running' : undefined);
+        // Off here, so off there, whatever desired state a crash or an outside stop left behind.
+        const moved = await this.repo!.commitPlacement(id, localId, dest, keepRunning ? 'running' : 'stopped');
         if (!moved) throw new Error('That server was moved or deleted while it was being packed.');
       },
       release: async id => {

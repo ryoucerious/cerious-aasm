@@ -15,6 +15,7 @@ import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHan
 import { hashArgon2id, hashToken } from './passwords';
 import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
 import { meshDesktopIdentity, setMeshDesktopMode } from '../auth/desktop-session';
+import { isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { certificateCoversHost, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
@@ -800,33 +801,48 @@ describe('MeshService', () => {
       return uploaded;
     }
 
-    it('moves a running server off this node: stops it, streams its files, commits, and sets its copy aside', async () => {
+    it('moves a server that is off: streams its files, commits, sets its copy aside, and it arrives off', async () => {
       await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
-      await place('isle', LOCAL);
+      await place('isle', LOCAL, 'stopped');
       writeInstance('isle');
-      states.set('isle', 'running');
       await service.resumeIfJoined();
       await jest.advanceTimersByTimeAsync(5_000);
       const uploaded = destination();
+      await repo.setDesiredState('isle', LOCAL, 'running'); // left over from a crash, say
 
       const result = await service.move('isle', REMOTE, 'ada');
       await jest.advanceTimersByTimeAsync(5_000);
 
       expect(result).toMatchObject({ success: true });
-      expect(localRuntime.stop).toHaveBeenCalledWith('isle');
       expect(checkpointCalls()[0]).toBe('https://10.0.0.2:4747/v1/checkpoint/begin');
       expect(checkpointCalls()).toContain('https://10.0.0.2:4747/v1/checkpoint/finish');
       expect(Object.fromEntries(uploaded)).toEqual({ 'config.json': '{"id":"isle"}', [SAVE]: 'world' });
-      expect(await repo.getServer('isle')).toMatchObject({ nodeId: REMOTE, desiredState: 'running' });
+      expect(await repo.getServer('isle')).toMatchObject({ nodeId: REMOTE, desiredState: 'stopped' });
       expect(fs.existsSync(path.join(servers, 'isle'))).toBe(false);
       expect(localRuntime.start).not.toHaveBeenCalled();
     });
 
-    it('keeps the server here and starts it again when the destination computes a different checksum', async () => {
+    it('refuses to move a server that is not off, and leaves it running', async () => {
       await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
       await place('isle', LOCAL);
       writeInstance('isle');
-      states.set('isle', 'running');
+      await service.resumeIfJoined();
+      destination();
+
+      for (const state of ['running', 'starting', 'stopping', 'queued']) {
+        states.set('isle', state);
+        expect(await service.move('isle', REMOTE, 'ada')).toEqual({ success: false, error: 'Stop the server before moving it.' });
+      }
+
+      expect(localRuntime.stop).not.toHaveBeenCalled();
+      expect(checkpointCalls()).toEqual([]);
+      expect((await repo.getServer('isle'))?.nodeId).toBe(LOCAL);
+    });
+
+    it('keeps the server here, and off, when the destination computes a different checksum', async () => {
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await place('isle', LOCAL, 'stopped');
+      writeInstance('isle');
       await service.resumeIfJoined();
       destination('not-the-same');
 
@@ -835,7 +851,54 @@ describe('MeshService', () => {
       expect(result.success).toBe(false);
       expect((await repo.getServer('isle'))?.nodeId).toBe(LOCAL);
       expect(fs.existsSync(path.join(servers, 'isle', 'config.json'))).toBe(true);
-      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['isle']]);
+      expect(localRuntime.start).not.toHaveBeenCalled();
+    });
+
+    // A start from anywhere while the files are on their way would leave two diverging copies.
+    it('marks the server as being moved while its files are copied, and not after', async () => {
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await place('isle', LOCAL, 'stopped');
+      writeInstance('isle');
+      await service.resumeIfJoined();
+      destination();
+      const duringCopy: boolean[] = [];
+      const upload = jest.mocked(peerUpload).getMockImplementation()!;
+      jest.mocked(peerUpload).mockImplementation(async options => {
+        duringCopy.push(isServerMoving('isle'));
+        return upload(options);
+      });
+
+      await service.move('isle', REMOTE, 'ada');
+
+      expect(duringCopy.length).toBeGreaterThan(0);
+      expect(duringCopy.every(Boolean)).toBe(true);
+      expect(isServerMoving('isle')).toBe(false);
+    });
+
+    it('refuses a second move of a server that is already being moved', async () => {
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      await repo.upsertNode(nodeRow(THIRD, '3', 'https://10.0.0.3:4747'));
+      await place('isle', LOCAL, 'stopped');
+      writeInstance('isle');
+      await service.resumeIfJoined();
+      destination();
+      let finishCopy: () => void = () => undefined;
+      const upload = jest.mocked(peerUpload).getMockImplementation()!;
+      jest.mocked(peerUpload).mockImplementation(async options => {
+        await new Promise<void>(resolve => { finishCopy = resolve; });
+        return upload(options);
+      });
+
+      const first = service.move('isle', REMOTE, 'ada');
+      await jest.advanceTimersByTimeAsync(0);
+      const second = await service.move('isle', THIRD, 'ada');
+      finishCopy();
+      await jest.advanceTimersByTimeAsync(0);
+      jest.mocked(peerUpload).mockImplementation(upload);
+      finishCopy();
+
+      expect(second).toEqual({ success: false, error: 'That server is already being moved.' });
+      expect(await first).toMatchObject({ success: true });
     });
 
     it('asks the node hosting a server to run its move', async () => {

@@ -105,6 +105,9 @@
           <button type="button" class="card-menu-item" role="menuitem" *ngIf="canBackups" (click)="onBackups()">
             <span class="material-icons">backup</span> Backups
           </button>
+          <button type="button" class="card-menu-item" role="menuitem" *ngIf="canMoveNow" (click)="onMove()">
+            <span class="material-icons">drive_file_move</span> Move to…
+          </button>
           <button type="button" class="card-menu-item" role="menuitem" *ngIf="isBusy" (click)="onForceStop()">
             <span class="material-icons">power_off</span> Force stop
           </button>

@@ -53,6 +53,8 @@ export class ServerCardComponent implements OnDestroy {
    * opened on, which is right only for a server on that machine.
    */
   @Input() joinHost: string | null = null;
+  /** The user may move servers and another machine in the mesh can take this one. */
+  @Input() canMove = false;
 
   @Output() start = new EventEmitter<ServerInstance>();
   @Output() stop = new EventEmitter<ServerInstance>();
@@ -61,6 +63,7 @@ export class ServerCardComponent implements OnDestroy {
   @Output() configure = new EventEmitter<ServerInstance>();
   @Output() openBackups = new EventEmitter<ServerInstance>();
   @Output() remove = new EventEmitter<ServerInstance>();
+  @Output() move = new EventEmitter<ServerInstance>();
 
   menuOpen = false;
   /** Where the actions menu sits, in viewport coordinates. */
@@ -289,5 +292,15 @@ export class ServerCardComponent implements OnDestroy {
   onRemove(): void {
     this.menuOpen = false;
     this.remove.emit(this.server);
+  }
+
+  /** Only a server that is off moves; the machine hosting it refuses one that is not. */
+  get canMoveNow(): boolean {
+    return this.canMove && this.stateKey === 'stopped';
+  }
+
+  onMove(): void {
+    this.menuOpen = false;
+    this.move.emit(this.server);
   }
 }

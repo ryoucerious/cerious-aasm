@@ -3,7 +3,7 @@ import { parsePort, validateInstanceId } from '../../utils/validation.utils';
 import { getMultiHomeAddress } from '../../utils/ark/ark-args.utils';
 import { getArkExecutablePath, validateInstanceRuntimeTree } from '../../utils/ark/ark-server/ark-server-paths.utils';
 import { waitForProcessSweeps } from '../../utils/ark/ark-server/ark-server-cleanup.utils';
-import { SERVER_FILES_UPDATING, areServerFilesUpdating } from '../../utils/ark/ark-server/ark-server-state.utils';
+import { SERVER_BEING_MOVED, SERVER_FILES_UPDATING, areServerFilesUpdating, isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { isTcpPortInUse, isUdpPortInUse } from '../../utils/network.utils';
 import { loadGlobalConfig } from '../../utils/global-config.utils';
 import type { InstanceConfig, ServerInstanceResult } from '../../types/server-instance.types';
@@ -64,6 +64,10 @@ export class ServerLifecycleService {
       // sweeps or preparation. Also ahead of the tree check, which would report files mid-replace.
       if (areServerFilesUpdating()) {
         return { success: false, error: SERVER_FILES_UPDATING, instanceId };
+      }
+      // Likewise a move of this server to another machine.
+      if (isServerMoving(instanceId)) {
+        return { success: false, error: SERVER_BEING_MOVED, instanceId };
       }
 
       // Preparation logs its own failures and carries on, so confirm the tree ARK launches from
@@ -126,6 +130,11 @@ export class ServerLifecycleService {
     // SteamCMD is replacing the files a new server would load.
     if (areServerFilesUpdating()) {
       return { success: false, error: SERVER_FILES_UPDATING, instanceId };
+    }
+
+    // Its files are being copied to another machine, which takes it over once they arrive.
+    if (isServerMoving(instanceId)) {
+      return { success: false, error: SERVER_BEING_MOVED, instanceId };
     }
 
     const state = serverProcessService.getNormalizedInstanceState(instanceId);

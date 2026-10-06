@@ -25,6 +25,40 @@ describe('ServerHeaderComponent', () => {
     expect(el.querySelector('.server-header-page')?.textContent).toContain('Rates');
   });
 
+  describe('moving to another machine', () => {
+    function moveButton(): HTMLButtonElement | null {
+      fixture.detectChanges();
+      return fixture.nativeElement.querySelector('.server-header-move');
+    }
+
+    function stopped(): void {
+      fixture.componentRef.setInput('server', { ...component.server, state: 'stopped' });
+      fixture.componentRef.setInput('live', { ...component.live, state: 'stopped' });
+    }
+
+    it('offers Move for a server that is off, when it may be moved', () => {
+      stopped();
+      fixture.componentRef.setInput('canMove', true);
+      spyOn(component.moveServer, 'emit');
+
+      moveButton()!.click();
+
+      expect(component.moveServer.emit).toHaveBeenCalled();
+    });
+
+    it('does not offer it while the server is running', () => {
+      fixture.componentRef.setInput('canMove', true);
+
+      expect(moveButton()).toBeNull();
+    });
+
+    it('does not offer it when the server may not be moved, or there is nowhere to move it', () => {
+      stopped();
+
+      expect(moveButton()).toBeNull();
+    });
+  });
+
   it('reads the mapped display state from the page copy', () => {
     expect(component.stateKey).toBe('running');
     expect(component.statusText).toBe('Online');

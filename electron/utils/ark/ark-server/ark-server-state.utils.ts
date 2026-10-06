@@ -31,3 +31,24 @@ export async function whileServerFilesUpdate<T>(work: () => Promise<T>): Promise
 export function areServerFilesUpdating(): boolean {
   return serverFilesUpdates > 0;
 }
+
+export const SERVER_BEING_MOVED = 'That server is being moved to another machine. Start it there once the move has finished.';
+
+const movingServers = new Set<string>();
+
+/**
+ * Runs `work` (copying a server to another machine) with starts of that server refused until it
+ * settles: a start meanwhile would leave the copy here and the one there to diverge.
+ */
+export async function whileServerMoves<T>(instanceId: string, work: () => Promise<T>): Promise<T> {
+  movingServers.add(instanceId);
+  try {
+    return await work();
+  } finally {
+    movingServers.delete(instanceId);
+  }
+}
+
+export function isServerMoving(instanceId: string): boolean {
+  return movingServers.has(instanceId);
+}

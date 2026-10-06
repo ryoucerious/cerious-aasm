@@ -16,8 +16,12 @@
     [rconConnected]="rconConnected"
     (startServer)="startServer()"
     (stopServer)="stopServer()"
-    (forceStopServer)="forceStopServer()">
+    [canMove]="canMoveServer"
+    (forceStopServer)="forceStopServer()"
+    (moveServer)="openMove()">
   </app-server-header>
+
+  <app-move-server-dialog [server]="movingServer" (closed)="closeMove()"></app-move-server-dialog>
 
   <div class="page-panel settings-panel" *ngIf="activeTab === 'console'">
     <div class="settings-toolbar">
