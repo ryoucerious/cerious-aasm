@@ -2,7 +2,7 @@ import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 import type {
   AuditRecord, ClusterFileRecord, ClusterRecord, CommandRecord, CommandResult, DesiredState, MeshRecord, NodeCapabilities,
-  NodeEndpoints, NodeRecord, RoleRecord, ServerRecord, StorageHealth, StorageProfileRecord, UserRecord
+  MachineAdminRecord, NodeEndpoints, NodeRecord, RoleRecord, ServerRecord, StorageHealth, StorageProfileRecord, UserRecord
 } from '../../types/mesh.types';
 
 function json<T>(value: string | null | undefined, fallback: T): T {
@@ -152,6 +152,16 @@ export class MeshRepository {
     return changed === 1;
   }
 
+  /** Why a token cannot be used: it was, it ran out, or this mesh never issued it. */
+  async tokenState(hash: string, now: number): Promise<'used' | 'expired' | 'unknown' | 'valid'> {
+    const [row] = await this.db.query<{ used: number; expires_at: number }>(
+      'SELECT used, expires_at FROM enrollment_tokens WHERE token_hash = ?', [hash], 'strong'
+    );
+    if (!row) return 'unknown';
+    if (Number(row.used) === 1) return 'used';
+    return Number(row.expires_at) <= now ? 'expired' : 'valid';
+  }
+
   async revokeSerial(serial: string, at: number): Promise<void> {
     await this.db.exec(
       'INSERT INTO revoked_certs (serial, revoked_at) VALUES (?, ?) ON CONFLICT(serial) DO NOTHING',
@@ -205,6 +215,35 @@ export class MeshRepository {
 
   async deleteUser(userId: string): Promise<void> {
     await this.db.exec('DELETE FROM users WHERE user_id = ?', [userId]);
+    await this.clearMachineAdmin(userId);
+  }
+
+  /** Empty on a mesh whose schema predates machine admins: nobody is one there yet. */
+  async listMachineAdmins(): Promise<MachineAdminRecord[]> {
+    let rows: Array<Record<string, unknown>>;
+    try {
+      rows = await this.db.query<Record<string, unknown>>('SELECT * FROM machine_admins ORDER BY user_id', [], 'none');
+    } catch (error) {
+      if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
+      throw error;
+    }
+    return rows.map(row => ({ userId: String(row.user_id), nodeId: String(row.node_id), updatesAny: bool(row.updates_any) }));
+  }
+
+  async setMachineAdmin(userId: string, nodeId: string, updatesAny: boolean): Promise<void> {
+    await this.db.exec(
+      `INSERT INTO machine_admins (user_id, node_id, updates_any) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET node_id = excluded.node_id, updates_any = excluded.updates_any`,
+      [userId, nodeId, updatesAny ? 1 : 0]
+    );
+  }
+
+  async clearMachineAdmin(userId: string): Promise<void> {
+    try {
+      await this.db.exec('DELETE FROM machine_admins WHERE user_id = ?', [userId]);
+    } catch (error) {
+      if (!/no such table/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
   }
 
   async deleteRole(roleId: string): Promise<void> {

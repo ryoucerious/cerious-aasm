@@ -3,10 +3,11 @@ import { NgIf, NgFor, NgClass, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../../core/services/auth.service';
 import { NotificationService } from '../../../core/services/notification.service';
+import { MeshNodesService } from '../../../core/services/mesh-nodes.service';
 import { ModalComponent } from '../../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../../components/dropdown/dropdown.component';
 import {
-  Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID, MIN_PASSWORD_LENGTH, OPERATOR_ROLE_ID, PERMISSIONS,
+  Permission, PermissionInfo, Role, User, ADMIN_ROLE_ID, MACHINE_ADMIN_ROLE_ID, MIN_PASSWORD_LENGTH, OPERATOR_ROLE_ID, PERMISSIONS,
   accountPermissionFor, isPoolRole
 } from '../../../core/models/auth.model';
 
@@ -46,12 +47,14 @@ export class UsersSettingsComponent implements OnInit {
   roleOptions: DropdownOption<string>[] = [];
   /** The admin pool first, then every active operator. */
   ownerOptions: DropdownOption<string>[] = [];
+  /** The mesh's machines, for the one a machine admin looks after. */
+  machineOptions: DropdownOption<string>[] = [];
   /** False when the current account may create no kind of account at all. */
   canAddUser = false;
 
   showUserModal = false;
   editingUser: User | null = null;
-  form = { username: '', displayName: '', password: '', roleId: '', active: true, ownerUserId: '' };
+  form = { username: '', displayName: '', password: '', roleId: '', active: true, ownerUserId: '', machineNodeId: '', updatesAnyMachine: false };
   saving = false;
 
   showRoleModal = false;
@@ -65,7 +68,8 @@ export class UsersSettingsComponent implements OnInit {
   constructor(
     private auth: AuthService,
     private notification: NotificationService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private meshNodes: MeshNodesService
   ) {}
 
   ngOnInit(): void {
@@ -89,6 +93,7 @@ export class UsersSettingsComponent implements OnInit {
         { value: '', label: 'Admin pool' },
         ...this.users.filter(user => user.roleId === OPERATOR_ROLE_ID && user.active).map(user => ({ value: user.id, label: user.displayName || user.username }))
       ];
+      this.machineOptions = this.meshNodes.machines().map(machine => ({ value: machine.nodeId, label: machine.name }));
       this.permissionGroups = this.buildPermissionGroups();
     } catch (error) {
       console.error('[users-settings] Could not load the accounts:', error);
@@ -117,6 +122,11 @@ export class UsersSettingsComponent implements OnInit {
     return this.canManageRoles && isPoolRole(this.form.roleId);
   }
 
+  /** Only an admin makes a machine admin, and picks its machine. */
+  get showMachineField(): boolean {
+    return this.isAdmin && this.form.roleId === MACHINE_ADMIN_ROLE_ID;
+  }
+
   canEditAccount(user: User): boolean {
     if (this.canManageRoles) return true;
     return this.holds(user.roleId, 'create');
@@ -130,6 +140,10 @@ export class UsersSettingsComponent implements OnInit {
   /** Where an account sits: "Admin", "Operators", "Admin pool", or the owning operator's name. */
   poolLabel(user: User): string {
     if (user.roleId === ADMIN_ROLE_ID) return 'Admin';
+    if (user.roleId === MACHINE_ADMIN_ROLE_ID) {
+      const machine = this.meshNodes.nameOf(user.machineNodeId) || 'Machine';
+      return user.updatesAnyMachine ? `${machine}, updates every machine` : machine;
+    }
     if (user.roleId === OPERATOR_ROLE_ID) return 'Operators';
     if (!user.ownerUserId) return 'Admin pool';
     const owner = this.users.find(account => account.id === user.ownerUserId);
@@ -154,7 +168,7 @@ export class UsersSettingsComponent implements OnInit {
 
   private canOfferRole(role: Role): boolean {
     if (this.isAdmin) return true;
-    if (role.id === ADMIN_ROLE_ID) return false;
+    if (role.id === ADMIN_ROLE_ID || role.id === MACHINE_ADMIN_ROLE_ID) return false;
     if (this.auth.can(PERMISSIONS.USERS_MANAGE)) return role.permissions.every(permission => this.auth.can(permission));
     return isPoolRole(role.id) && this.holds(role.id, 'create');
   }
@@ -199,7 +213,9 @@ export class UsersSettingsComponent implements OnInit {
       password: '',
       roleId: offered.find(id => id !== ADMIN_ROLE_ID) || offered[0] || '',
       active: true,
-      ownerUserId: ''
+      ownerUserId: '',
+      machineNodeId: '',
+      updatesAnyMachine: false
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -214,7 +230,9 @@ export class UsersSettingsComponent implements OnInit {
       password: '',
       roleId: user.roleId,
       active: user.active,
-      ownerUserId: user.ownerUserId || ''
+      ownerUserId: user.ownerUserId || '',
+      machineNodeId: user.machineNodeId || '',
+      updatesAnyMachine: !!user.updatesAnyMachine
     };
     this.showUserModal = true;
     this.cdr.markForCheck();
@@ -228,6 +246,7 @@ export class UsersSettingsComponent implements OnInit {
 
   get canSaveUser(): boolean {
     if (this.saving || !this.form.username.trim() || !this.form.roleId) return false;
+    if (this.showMachineField && !this.form.machineNodeId) return false;
     // A new account needs a password; an existing one only when changing it.
     if (this.editingUser && !this.form.password) return true;
     return this.form.password.length >= MIN_PASSWORD_LENGTH;
@@ -242,6 +261,13 @@ export class UsersSettingsComponent implements OnInit {
     const owner = this.canManageRoles
       ? { ownerUserId: isPoolRole(this.form.roleId) ? (this.form.ownerUserId || null) : null }
       : {};
+    // Only an admin may say which machine, or let one update every machine.
+    const machine = this.isAdmin
+      ? {
+          machineNodeId: this.showMachineField ? this.form.machineNodeId || null : null,
+          updatesAnyMachine: this.showMachineField && this.form.updatesAnyMachine
+        }
+      : {};
     const result = this.editingUser
       ? await this.auth.updateUser({
           id: this.editingUser.id,
@@ -250,6 +276,7 @@ export class UsersSettingsComponent implements OnInit {
           roleId: this.form.roleId,
           active: this.form.active,
           ...owner,
+          ...machine,
           ...(this.form.password ? { password: this.form.password } : {})
         })
       : await this.auth.createUser({
@@ -258,7 +285,8 @@ export class UsersSettingsComponent implements OnInit {
           password: this.form.password,
           roleId: this.form.roleId,
           active: this.form.active,
-          ...owner
+          ...owner,
+          ...machine
         });
 
     this.saving = false;

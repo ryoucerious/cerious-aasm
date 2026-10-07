@@ -11,13 +11,14 @@ import { identifySender, isDesktopWindow, SenderIdentity } from '../services/aut
 import { filterInstancesForUser } from '../services/auth/pool-access';
 import { applyServerOwnership, assigneeRefusal, canAssignFor, operatorRefusal } from '../services/auth/server-ownership';
 import { userDatabaseService } from '../services/auth/user-database.service';
-import { PERMISSIONS } from '../types/auth.types';
+import { PERMISSIONS, ROLE_IDS } from '../types/auth.types';
 import type { MessageSender } from '../types/messaging.types';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { validateInstanceId } from '../utils/validation.utils';
 import type { InstanceConfig } from '../types/server-instance.types';
 import { localRuntime } from '../services/runtime/local-runtime';
 import { meshService } from '../services/mesh/mesh-service';
+import { localNode } from '../services/mesh/mesh-hooks';
 import { onRequest } from './handler.utils';
 
 const UP_OR_QUEUED = new Set(['running', 'starting', 'queued']);
@@ -68,11 +69,22 @@ onRequest('save-ini-file', async (payload, { sender }) => {
 async function planAll(identity: SenderIdentity) {
   const { instances } = await serverManagementService.getAllInstances();
   const visible = visibleTo(identity, await meshService.withMeshServers(instances));
-  const { local, remote } = await meshService.hostsOf(visible.map(instance => instance.id));
+  const hosts = await meshService.hostsOf(visible.map(instance => instance.id));
+  const { local, remote } = onlyOwnMachine(identity, hosts);
   const hostedHere = new Set(local);
   const localVisible = visible.filter(instance => hostedHere.has(instance.id));
   const everyLocal = identity.isAdmin && instances.every(instance => hostedHere.has(instance.id));
   return { localVisible, onlyIds: everyLocal ? undefined : localVisible.map(instance => instance.id), remote };
+}
+
+/** A machine admin sees every server but starts and stops only those on its own machine. */
+function onlyOwnMachine(identity: SenderIdentity, hosts: { local: string[]; remote: Map<string, string[]> }) {
+  const user = identity.user;
+  if (user?.roleId !== ROLE_IDS.MACHINE_ADMIN) return hosts;
+  const machine = user.machineNodeId || '';
+  if (machine && machine === localNode()) return { local: hosts.local, remote: new Map<string, string[]>() };
+  const theirs = hosts.remote.get(machine);
+  return { local: [], remote: new Map(theirs ? [[machine, theirs]] : []) };
 }
 
 /** The reply went out before other nodes answered, so a node that failed is reported separately. */
@@ -283,6 +295,8 @@ onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
   if (instance && typeof instance === 'object') {
     const refusal = applyServerOwnership(instance, previous, identity, lookupUser);
     if (refusal) return { success: false, error: refusal };
+    // A machine admin adds servers to the machine it looks after.
+    if (!previous && identity.user?.roleId === ROLE_IDS.MACHINE_ADMIN) instance.nodeId = identity.user.machineNodeId;
   }
 
   const isConfig = !!instance && typeof instance === 'object';

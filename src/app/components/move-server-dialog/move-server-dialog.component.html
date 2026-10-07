@@ -11,7 +11,7 @@
                     placeholder="Choose a machine" ariaLabel="Move to" [disabled]="moving"></app-dropdown>
     </div>
     <ng-template #nowhere>
-      <p class="move-dialog-error">No other machine can take it right now: every other member is unreachable or draining.</p>
+      <p class="move-dialog-error">No other machine can take it right now: every other member is unreachable or skipping new servers.</p>
     </ng-template>
 
     <div class="move-dialog-progress" *ngIf="moving" role="status" aria-live="polite">

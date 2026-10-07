@@ -3,6 +3,10 @@
     <i class="material-icons">info</i>
     <span>This install is standalone. Create a mesh on this machine, or join one with a token from a member.</span>
   </div>
+  <div class="ark-install-notice warning mesh-blocker" *ngIf="standalone && status.blocker">
+    <i class="material-icons">error_outline</i>
+    <span><strong>This machine cannot run the mesh database, so it cannot create or join a mesh.</strong> {{ status.blocker }}</span>
+  </div>
   <div class="ark-install-notice warning" *ngIf="status.degraded">
     <i class="material-icons">warning</i>
     <span><strong>Mesh Degraded.</strong> Local servers can still be controlled. Security, enrollment, and placement changes wait for quorum.</span>
@@ -10,6 +14,13 @@
   <div class="ark-install-notice warning" *ngIf="status.warning">
     <i class="material-icons">info</i>
     <span>{{ status.warning }}</span>
+  </div>
+  <div class="ark-install-notice mesh-joined-as" *ngIf="joinedAs && status.enabled">
+    <i class="material-icons">key</i>
+    <span>
+      The mesh's accounts are now the way in. This machine's admin password signs in as
+      <strong class="mono">{{ joinedAs }}</strong>, the machine admin for this machine.
+    </span>
   </div>
 
   <section class="settings-card mesh-own-address" *ngIf="standalone">
@@ -48,7 +59,7 @@
       <label class="form-control-label desc">At least 8 characters. This machine has no accounts yet, so this becomes the mesh admin.</label>
     </div>
     <div class="settings-card-actions">
-      <button type="button" class="btn btn-primary" (click)="create()" [disabled]="busy">
+      <button type="button" class="btn btn-primary" (click)="create()" [disabled]="busy || !!status.blocker">
         <i class="material-icons">hub</i> Create mesh
       </button>
     </div>
@@ -56,17 +67,19 @@
 
   <section class="settings-card" *ngIf="standalone">
     <h3 class="settings-card-title">Join a mesh</h3>
-    <p class="settings-card-hint">Use the address of a machine that is already a member, and a one-time token from that machine.</p>
+    <p class="settings-card-hint">On a machine already in the mesh, open Settings → Mesh and choose <strong>Enrollment token</strong>. Copy its join address and token here. Each token adds one machine.</p>
     <div class="form-group">
-      <label class="form-control-label" for="mesh-member-url">Member URL</label>
-      <input id="mesh-member-url" class="form-control" [(ngModel)]="memberUrl" name="memberUrl" placeholder="https://member:4747" />
+      <label class="form-control-label" for="mesh-member-url">Join address</label>
+      <input id="mesh-member-url" class="form-control" [(ngModel)]="memberUrl" name="memberUrl" placeholder="https://ark.example.com:4747"
+             autocomplete="off" spellcheck="false" />
+      <label class="form-control-label desc">https:// and port 4747 are filled in when left out.</label>
     </div>
     <div class="form-group">
       <label class="form-control-label" for="mesh-token">Enrollment token</label>
-      <input id="mesh-token" class="form-control" [(ngModel)]="token" name="token" autocomplete="off" />
+      <input id="mesh-token" class="form-control" [(ngModel)]="token" name="token" autocomplete="off" spellcheck="false" />
     </div>
     <div class="settings-card-actions">
-      <button type="button" class="btn btn-primary" (click)="join()" [disabled]="busy">
+      <button type="button" class="btn btn-primary" (click)="join()" [disabled]="busy || !!status.blocker">
         <i class="material-icons">login</i> Join mesh
       </button>
     </div>
@@ -82,7 +95,26 @@
         <i class="material-icons">key</i> Enrollment token
       </button>
     </div>
-    <p class="settings-card-hint mesh-token" *ngIf="issuedToken">Give this token to the joining machine once: {{ issuedToken }}</p>
+    <div class="mesh-invite" *ngIf="issuedToken">
+      <p class="settings-card-hint">
+        On the machine joining, open Settings → Mesh, paste both into <strong>Join a mesh</strong>. This token adds <strong>one machine</strong>,
+        until {{ issuedUntil }}. Make another for each machine you add.
+      </p>
+      <div class="mesh-invite-row" *ngIf="joinAddress">
+        <span class="mesh-invite-label">Join address</span>
+        <code class="mesh-invite-value">{{ joinAddress }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="copy(joinAddress, 'Join address')">
+          <i class="material-icons">content_copy</i> Copy address
+        </button>
+      </div>
+      <div class="mesh-invite-row">
+        <span class="mesh-invite-label">Token</span>
+        <code class="mesh-invite-value">{{ issuedToken }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="copy(issuedToken, 'Token')">
+          <i class="material-icons">content_copy</i> Copy token
+        </button>
+      </div>
+    </div>
     <p class="settings-card-hint" *ngIf="!nodes.length">No machines have joined yet.</p>
     <div class="mesh-node-list" *ngIf="nodes.length">
       <article class="mesh-node-card" *ngFor="let node of nodes; trackBy: trackByNodeId">
@@ -99,6 +131,8 @@
               <span *ngIf="node.nodeId === status.nodeId">This machine</span>
               <span>Version {{ node.version || 'unknown' }}</span>
             </p>
+            <p class="mesh-node-meta mesh-node-skipping" *ngIf="node.maintenance">Skipping new servers: Auto-select and moves pass it over</p>
+            <p class="mesh-node-meta mesh-node-ark-update" *ngIf="arkUpdateText(node)">{{ arkUpdateText(node) }}</p>
             <p class="mesh-node-meta mesh-node-address" *ngIf="node.address">Reached at {{ addressText(node.address) }}</p>
           </div>
           <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
@@ -125,14 +159,16 @@
                   (click)="startAddress(node)" [disabled]="status.degraded || savingAddress || !node.connected">
             Change address
           </button>
-          <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'ark')" [disabled]="!canUpdate || !!updatingKey">
+          <button type="button" class="btn btn-ghost btn-sm" (click)="askArkUpdate(node)" [disabled]="!canUpdate || !!updatingKey || arkUpdateRunning"
+                  [title]="arkUpdateRunning ? 'A machine is updating ARK. Update one machine at a time.' : ''">
             Update ARK
           </button>
           <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'app')" [disabled]="!canUpdate || !!updatingKey">
             Update app
           </button>
-          <button type="button" class="btn btn-ghost btn-sm" (click)="maintenance(node)" [disabled]="status.degraded">
-            {{ node.maintenance ? 'Clear drain' : 'Drain' }}
+          <button type="button" class="btn btn-ghost btn-sm" (click)="maintenance(node)" [disabled]="status.degraded"
+                  [title]="node.maintenance ? 'Let Auto-select and moves put servers on this machine again' : 'Keep Auto-select and moves from putting servers on this machine. Its own servers keep running.'">
+            {{ node.maintenance ? 'Take new servers' : 'Skip new servers' }}
           </button>
           <button type="button" class="btn btn-danger btn-sm" (click)="askRemove(node)" [disabled]="status.degraded">
             {{ node.nodeId === status.nodeId ? 'Leave' : 'Remove' }}
@@ -166,6 +202,17 @@
     </div>
     <pre class="mesh-output" *ngIf="wireguardText">{{ wireguardText }}</pre>
   </section>
+
+  <app-modal [title]="'Update ARK'" [show]="!!confirmingArkUpdate" (close)="cancelArkUpdate()">
+    <div class="modal-confirmation">
+      Update ARK on {{ confirmingArkUpdate?.name }}? The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for 15 minutes (the warning time in Settings → Updates), then its servers stop, the new files go in, and they start again.
+      If none of its servers is running, the update starts at once.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelArkUpdate()">Cancel</button>
+      <button type="button" class="btn btn-primary" (click)="confirmArkUpdate()">Update ARK</button>
+    </div>
+  </app-modal>
 
   <app-modal [title]="'Leave mesh'" [show]="showConfirmLeave" (close)="cancelLeave()">
     <div class="modal-confirmation">

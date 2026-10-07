@@ -34,6 +34,22 @@ export interface ClusterSyncOptions {
   fetch(sha256: string, originNode: string, dest: string): Promise<boolean>;
   /** Tells the other machines this one recorded a change, so they look now rather than at their next check. */
   announce(clusterId: string): void;
+  /**
+   * A change made here was recorded. `previousSize` is what this machine had before, null for
+   * a new file: a file that grew is an upload, one that shrank or went is a download.
+   */
+  onRecorded?(change: RecordedChange): void;
+  /** This machine has a version another machine recorded: placed, or removed for a removal. */
+  onPlaced?(change: { clusterId: string; path: string; version: number }): void;
+}
+
+export interface RecordedChange {
+  clusterId: string;
+  path: string;
+  version: number;
+  size: number;
+  previousSize: number | null;
+  deleted: boolean;
 }
 
 export interface ClusterSyncSummary {
@@ -200,10 +216,15 @@ export class ClusterSync {
         if (exists) fs.rmSync(file, { force: true });
         this.seen.delete(key);
         held[row.path] = heldOf(row);
+        this.tell(() => this.options.onPlaced?.({ clusterId, path: row.path, version: row.version }));
         continue;
       }
-      if (await this.place(key, file, row)) held[row.path] = heldOf(row);
-      else pendingReceive++;
+      if (await this.place(key, file, row)) {
+        held[row.path] = heldOf(row);
+        this.tell(() => this.options.onPlaced?.({ clusterId, path: row.path, version: row.version }));
+      } else {
+        pendingReceive++;
+      }
     }
 
     const files = Object.values(held).filter(entry => !entry.deleted).length;
@@ -263,6 +284,8 @@ export class ClusterSync {
     if (version !== null) {
       held[rel] = { version, ...change };
       this.options.announce(clusterId);
+      const previousSize = base && !base.deleted ? base.size : null;
+      this.tell(() => this.options.onRecorded?.({ clusterId, path: rel, version, size: change.size, previousSize, deleted: change.deleted }));
       return { result: 'done' };
     }
     // Another machine recorded a change to this file first.
@@ -276,6 +299,15 @@ export class ClusterSync {
     delete held[rel];
     this.seen.delete(`${clusterId}\n${rel}`);
     return { result: 'conflict' };
+  }
+
+  /** A listener that throws never stops the sync. */
+  private tell(listener: () => void): void {
+    try {
+      listener();
+    } catch (error) {
+      console.warn('[cluster-sync] A listener failed:', messageOf(error));
+    }
   }
 
   /** Copies a file's contents into the store under their sha256, if they are still those contents. */

@@ -74,11 +74,11 @@ export function isArkServerInstalled(): boolean {
 /**
  * The installed build: the manifest's build id, else version.txt. The build id comes first
  * because it is what Steam reports. Read from the install under the Server Data Directory: with
- * the default dir the manifest was never found and an update always looked pending.
+ * the default dir the manifest was never found and an update always looked pending. An update
+ * reads the copy it downloaded into by passing its folder.
  */
-export async function getCurrentInstalledVersion(): Promise<string | null> {
+export async function getCurrentInstalledVersion(serverDir: string = getArkServerDir()): Promise<string | null> {
   try {
-    const serverDir = getArkServerDir();
     const manifest = manifestPath(serverDir);
     if (fs.existsSync(manifest)) {
       const buildId = /"buildid"\s+"(\d+)"/.exec(fs.readFileSync(manifest, 'utf8'))?.[1];
@@ -98,20 +98,21 @@ export async function getCurrentInstalledVersion(): Promise<string | null> {
 }
 
 /**
- * Installs or updates the shared ARK server with SteamCMD. The caller holds the install lock.
- * Aborting `signal` stops the running attempt and ends the install without another retry.
+ * Installs or updates the shared ARK server with SteamCMD, or the copy of it in `installDir` that
+ * an update downloads into while the servers run. The caller holds the install lock. Aborting
+ * `signal` stops the running attempt and ends the install without another retry.
  */
 export function installArkServer(
   callback: (err: Error | null) => void,
   onProgress?: (progress: InstallProgress) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  installDir: string = getArkServerDir()
 ): void {
   const steamCmd = getSteamCmdExecutable();
   if (!fs.existsSync(steamCmd)) {
     callback(new Error('SteamCMD not found. Please install SteamCMD first.'));
     return;
   }
-  const installDir = getArkServerDir();
   const report = reportSafely(onProgress);
   let attempt = 0;
 

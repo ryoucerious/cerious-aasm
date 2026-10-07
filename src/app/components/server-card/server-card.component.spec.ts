@@ -31,6 +31,22 @@ describe('ServerCardComponent', () => {
     expect(component.memoryTotal).toBe('/ 32 GB');
   });
 
+  // The icon font comes from Google Fonts. Until it loads, or where it is blocked, each icon is
+  // its ligature word ("schedule"), which took the value's room and cut "3d 14h" to "3d…".
+  it('shows every stat whole on the narrowest card', () => {
+    const host = fixture.nativeElement as HTMLElement;
+    host.style.display = 'block';
+    host.style.width = '300px';
+    component.hostMemoryTotalBytes = 128 * 1024 ** 3;
+    fixture.detectChanges();
+
+    const cut = Array.from(host.querySelectorAll<HTMLElement>('.server-stat-value, .server-stat-label'))
+      .filter(text => text.scrollWidth > text.clientWidth)
+      .map(text => text.textContent?.trim());
+
+    expect(cut).toEqual([]);
+  });
+
   it('shows dashes and zero players when offline', () => {
     component.server = { ...component.server, state: 'stopped', players: 5 } as any;
     expect(component.status.label).toBe('Offline');

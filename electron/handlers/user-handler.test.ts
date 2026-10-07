@@ -68,7 +68,8 @@ const accounts: Record<string, AuthenticatedUser> = {
   op2: account('op2', 'operator'),
   // In op's pool.
   m1: { ...account('m1', 'server-manager'), ownerUserId: 'op' },
-  view: account('view', 'viewer')
+  view: account('view', 'viewer'),
+  ma: { ...account('ma', 'machine-admin'), machineNodeId: 'n1' }
 };
 
 function web(user: AuthenticatedUser): ApiProcessSender {
@@ -204,6 +205,31 @@ describe('user-handler', () => {
       const reply = await call('update-role', { id: 'operator', name: 'Ops', permissions: roles.operator.permissions });
 
       expect(reply).toEqual({ success: true, role: roles.viewer, requestId: 'r1' });
+    });
+  });
+
+  // The mesh admin decides who looks after a machine, and who may update every machine.
+  describe('machine admins', () => {
+    it('are made by an admin, for a machine, and may be let update every machine', async () => {
+      await call('create-user', { username: 'x', password: 'password1', roleId: 'machine-admin', machineNodeId: 'n1', updatesAnyMachine: true }, web(accounts.boss));
+      await call('update-user', { id: 'ma', updatesAnyMachine: false, machineNodeId: 'n2' }, web(accounts.boss));
+
+      expect(db.createUser).toHaveBeenCalledWith(expect.objectContaining({ roleId: 'machine-admin', machineNodeId: 'n1', updatesAnyMachine: true }));
+      expect(db.updateUser).toHaveBeenCalledWith(expect.objectContaining({ id: 'ma', machineNodeId: 'n2', updatesAnyMachine: false }));
+    });
+
+    it('are made and changed by an admin only', async () => {
+      const everything = { ...accounts.manager, permissions: ALL_PERMISSIONS.filter(permission => permission !== 'nodes.enroll') };
+      const sender = web(everything);
+
+      expect(await call('create-user', { username: 'x', password: 'password1', roleId: 'machine-admin', machineNodeId: 'n1' }, sender))
+        .toMatchObject({ success: false, error: 'Only an admin can make or change a machine admin.' });
+      expect(await call('update-user', { id: 'ma', updatesAnyMachine: true }, sender))
+        .toMatchObject({ success: false, error: 'Only an admin can make or change a machine admin.' });
+      expect(await call('update-user', { id: 'view', roleId: 'machine-admin', machineNodeId: 'n1' }, sender))
+        .toMatchObject({ success: false, error: 'Only an admin can make or change a machine admin.' });
+      expect(db.createUser).not.toHaveBeenCalled();
+      expect(db.updateUser).not.toHaveBeenCalled();
     });
   });
 

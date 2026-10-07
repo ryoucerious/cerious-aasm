@@ -5,6 +5,7 @@ import { AddServerModalComponent } from './add-server-modal.component';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('AddServerModalComponent', () => {
@@ -14,9 +15,11 @@ describe('AddServerModalComponent', () => {
   let serverInstanceService: any;
   let notification: MockNotificationService;
   let ipc: { isElectron: boolean };
+  let machines: Array<{ nodeId: string; name: string; skipping: boolean }>;
 
   beforeEach(async () => {
     ipc = { isElectron: false };
+    machines = [];
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
     serverInstanceService = {
@@ -33,7 +36,8 @@ describe('AddServerModalComponent', () => {
         { provide: Router, useValue: router },
         { provide: ServerInstanceService, useValue: serverInstanceService },
         { provide: NotificationService, useValue: notification },
-        { provide: IpcService, useValue: ipc }
+        { provide: IpcService, useValue: ipc },
+        { provide: MeshNodesService, useValue: { placementChoices: () => machines, changed$: of(undefined) } }
       ]
     }).compileComponents();
 
@@ -78,14 +82,39 @@ describe('AddServerModalComponent', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/server', 'general']);
   });
 
-  it('places a new server on the chosen node', () => {
-    component.placementNodes = [{ nodeId: 'node-1', name: 'Jareds-PC' }];
-    component.ngOnChanges({ placementNodes: { currentValue: component.placementNodes } } as any);
-    expect(component.placementOptions.map(option => option.label)).toEqual(['Auto-select', 'Jareds-PC']);
-    component.serverName = 'Fresh';
-    component.selectedNodeId = 'node-1';
-    component.onAddServer();
-    expect(serverInstanceService.save).toHaveBeenCalledWith(jasmine.objectContaining({ nodeId: 'node-1' }));
+  // The sidebar's + opened this without the machines, so its picker never showed.
+  describe('choosing the machine', () => {
+    function opened(): HTMLElement {
+      fixture.componentRef.setInput('show', true);
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    it('offers Auto-select and each machine of the mesh, however the dialog was opened', () => {
+      machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }, { nodeId: 'node-2', name: 'Dallas01', skipping: true }];
+
+      const page = opened();
+
+      expect(page.textContent).toContain('Machine');
+      expect(component.placementOptions.map(option => option.label)).toEqual(['Auto-select', 'PC 1', 'Dallas01 (skipping new servers)']);
+    });
+
+    it('places a new server on the chosen machine', () => {
+      machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }];
+      opened();
+      component.serverName = 'Fresh';
+      component.selectedNodeId = 'node-1';
+
+      component.onAddServer();
+
+      expect(serverInstanceService.save).toHaveBeenCalledWith(jasmine.objectContaining({ nodeId: 'node-1' }));
+    });
+
+    it('has nothing to choose outside a mesh', () => {
+      const page = opened();
+
+      expect(page.textContent).not.toContain('Machine');
+    });
   });
 
   it('clones without carrying the source id', () => {

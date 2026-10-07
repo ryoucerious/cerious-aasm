@@ -14,11 +14,23 @@ import { serverInstanceService } from './server-instance/server-instance.service
 import { getStandardEventCallbacks } from './server-instance/instance-events';
 import { rconService } from './rcon.service';
 import { areServerFilesUpdating } from '../utils/ark/ark-server/ark-server-state.utils';
+import * as stagingUtils from '../utils/ark/ark-update-staging.utils';
 import type { InstanceConfig } from '../types/server-instance.types';
 
 jest.mock('../utils/ark/ark-install.utils', () => ({
   getCurrentInstalledVersion: jest.fn(),
   installArkServer: jest.fn()
+}));
+jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ ARK_APP_ID: '2430930', getArkServerDir: jest.fn(() => '/ark') }));
+jest.mock('../utils/ark/ark-update-staging.utils', () => ({
+  stagingDirFor: jest.fn((dir: string) => `${dir}-update`),
+  listGameFiles: jest.fn(async () => new Map()),
+  freeBytes: jest.fn(() => 1e12),
+  roomForStaging: jest.fn(),
+  seedStaging: jest.fn(),
+  changesBetween: jest.fn(),
+  putInPlace: jest.fn(),
+  removeStaging: jest.fn()
 }));
 jest.mock('../utils/installer.utils', () => ({
   ...jest.requireActual('../utils/installer.utils'),
@@ -64,10 +76,12 @@ const mockManagement = jest.mocked(serverManagementService);
 const mockProcess = jest.mocked(serverProcessService);
 const mockStart = jest.mocked(serverInstanceService.startServerInstance);
 const mockSpawn = jest.mocked(spawn);
+const mockStaging = jest.mocked(stagingUtils);
+/** What the download changed, as the staging utils report it. */
+const CHANGES = { changed: ['ShooterGame/Content/Paks/game.pak', 'steamapps/appmanifest_2430930.acf'], removed: [] };
 
 type PrivateApi = {
   getLatestServerVersion(): Promise<string | null>;
-  scheduleClusterUpdate(minutes: number): Promise<void>;
   installedBuildId: string | null;
   latestBuildId: string | null;
   updateScheduled: boolean;
@@ -147,6 +161,12 @@ describe('ArkUpdateService', () => {
     jest.mocked(rconService.executeRconCommand).mockReset().mockResolvedValue({ success: true, instanceId: 'x' });
     mockSpawn.mockReset();
     jest.mocked(getPlatform).mockReturnValue('windows');
+    mockStaging.listGameFiles.mockReset().mockResolvedValue(new Map());
+    mockStaging.roomForStaging.mockReset().mockReturnValue({ enough: true, needed: 1, free: 2 });
+    mockStaging.seedStaging.mockReset().mockResolvedValue([]);
+    mockStaging.changesBetween.mockReset().mockReturnValue(CHANGES);
+    mockStaging.putInPlace.mockReset().mockResolvedValue(undefined);
+    mockStaging.removeStaging.mockReset().mockResolvedValue(undefined);
   });
 
   describe('initialize', () => {
@@ -426,23 +446,25 @@ describe('ArkUpdateService', () => {
       internals.installedBuildId = '12345';
       internals.lastUpdateAttemptTime = Date.now();
       jest.spyOn(service, 'pollArkServerUpdates').mockResolvedValue('12346');
-      const schedule = jest.spyOn(internals, 'scheduleClusterUpdate').mockResolvedValue();
+      const update = jest.spyOn(service, 'performClusterUpdate').mockResolvedValue();
 
       await service.pollAndNotify();
 
-      expect(schedule).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
       expect(messaging.sendToAll).toHaveBeenCalledWith('ark-update-available', expect.objectContaining({ latest: '12346' }));
     });
 
-    it('schedules an auto-update once the cooldown has passed', async () => {
+    // The same update as one asked for by hand: it downloads first, then warns.
+    it('starts an auto-update once the cooldown has passed', async () => {
       mockConfig.mockReturnValue(config({ autoUpdateArkServer: true, updateWarningMinutes: 5 }));
       internals.lastUpdateAttemptTime = Date.now() - 2 * 60 * 60 * 1000;
       jest.spyOn(service, 'pollArkServerUpdates').mockResolvedValue('12346');
-      const schedule = jest.spyOn(internals, 'scheduleClusterUpdate').mockResolvedValue();
+      const update = jest.spyOn(service, 'performClusterUpdate').mockResolvedValue();
 
       await service.pollAndNotify();
 
-      expect(schedule).toHaveBeenCalledWith(5);
+      expect(update).toHaveBeenCalledWith();
+      expect(internals.updateScheduled).toBe(true);
     });
   });
 
@@ -502,252 +524,418 @@ describe('ArkUpdateService', () => {
     });
   });
 
-  describe('performClusterUpdate', () => {
-    it('stops the running servers, updates, prepares every instance and restarts the ones it stopped', async () => {
+  // The update downloads into a copy of the install while the servers keep running. Only once the
+  // new build is there are players warned, the servers stopped and the changed files moved in.
+  describe('an update', () => {
+    const STAGING = '/ark-update';
+    let installed: string;
+    let staged: string;
+    let running: Set<string>;
+    let events: string[];
+    let startedAt: number;
+
+    const minutesIn = () => Math.round((Date.now() - startedAt) / 60_000);
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      startedAt = Date.now();
+      installed = '12345';
+      staged = '12346';
+      running = new Set(['a']);
+      events = [];
+      mockConfig.mockReturnValue(config({ serverStartDelaySeconds: 0, updateWarningMinutes: 5 }));
+      mockInstalledVersion.mockImplementation(async dir => (dir === STAGING ? staged : installed));
       mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('a'), instance('b')] });
-      mockInstalledVersion.mockResolvedValue('12346');
-
-      await service.performClusterUpdate([instance('a')]);
-
-      expect(mockLifecycle.stopServerInstance).toHaveBeenCalledWith('a');
-      expect(mockInstall).toHaveBeenCalled();
-      expect(mockManagement.prepareInstanceConfiguration).toHaveBeenCalledWith('a', instance('a'));
-      expect(mockManagement.prepareInstanceConfiguration).toHaveBeenCalledWith('b', instance('b'));
-      expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
-      expect(mockStart).toHaveBeenCalledTimes(1);
-      expect(statuses()).toEqual(['stopping', 'updating', 'configuring', 'starting', 'complete']);
-    });
-
-    it('refuses server starts from the stop until the instances are prepared, then restarts them', async () => {
-      const seen: Array<[string, boolean]> = [];
-      mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('a')] });
-      mockLifecycle.stopServerInstance.mockImplementation(async () => {
-        seen.push(['stop', areServerFilesUpdating()]);
-        return { success: true };
-      });
-      mockInstall.mockImplementation(done => {
-        seen.push(['steamcmd', areServerFilesUpdating()]);
-        done(null);
-      });
-      mockManagement.prepareInstanceConfiguration.mockImplementation(async () => {
-        seen.push(['prepare', areServerFilesUpdating()]);
-      });
-      mockStart.mockImplementation(async () => {
-        seen.push(['restart', areServerFilesUpdating()]);
-        return { started: true, instanceId: 'a' };
-      });
-
-      await service.performClusterUpdate([instance('a')]);
-
-      expect(seen).toEqual([['stop', true], ['steamcmd', true], ['prepare', true], ['restart', false]]);
-    });
-
-    it('lets the servers start again when SteamCMD fails', async () => {
-      mockInstall.mockImplementation(done => done(new Error('Failed to download.')));
-      let startsRefused: boolean | undefined;
-      mockStart.mockImplementation(async () => {
-        startsRefused = areServerFilesUpdating();
-        return { started: true, instanceId: 'a' };
-      });
-
-      await service.performClusterUpdate([instance('a')]);
-
-      expect(startsRefused).toBe(false);
-      expect(areServerFilesUpdating()).toBe(false);
-    });
-
-    it('also stops, and restarts, servers started since the update was scheduled', async () => {
-      const stoppedIds = new Set<string>();
-      const states: Record<string, string> = { warned: 'running', late: 'starting', idle: 'stopped' };
-      mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('warned'), instance('late'), instance('idle')] });
-      mockProcess.getNormalizedInstanceState.mockImplementation(id => (stoppedIds.has(id) ? 'stopped' : states[id]));
+      mockProcess.getNormalizedInstanceState.mockImplementation(id => (running.has(id) ? 'running' : 'stopped'));
       mockLifecycle.stopServerInstance.mockImplementation(async id => {
-        stoppedIds.add(id);
+        events.push(`stop ${id} @${minutesIn()}`);
+        running.delete(id);
         return { success: true };
       });
-
-      await service.performClusterUpdate([instance('warned')]);
-
-      expect(mockLifecycle.stopServerInstance.mock.calls.map(([id]) => id)).toEqual(['warned', 'late']);
-      expect(mockStart.mock.calls.map(([id]) => id)).toEqual(['warned', 'late']);
-    });
-
-    it('runs SteamCMD under the install lock and releases it', async () => {
-      mockInstall.mockImplementation(done => {
-        expect(mockAcquire).toHaveBeenCalled();
-        expect(mockRelease).not.toHaveBeenCalled();
+      mockManagement.prepareInstanceConfiguration.mockImplementation(async id => { events.push(`prepare ${id}`); });
+      mockStart.mockImplementation(async id => {
+        events.push(`start ${id}`);
+        return { started: true, instanceId: id };
+      });
+      mockInstall.mockImplementation((done, _onProgress, _signal, dir) => {
+        events.push(`steamcmd ${dir ?? '(install)'}`);
         done(null);
       });
+      jest.mocked(rconService.executeRconCommand).mockImplementation(async (id, command) => {
+        events.push(`warn ${id} @${minutesIn()}: ${command}`);
+        return { success: true, instanceId: id };
+      });
+      mockStaging.seedStaging.mockImplementation(async () => {
+        events.push('copy install');
+        return [];
+      });
+      mockStaging.putInPlace.mockImplementation(async () => {
+        events.push('put in place');
+        installed = staged;
+      });
+      mockStaging.removeStaging.mockImplementation(async () => { events.push('remove copy'); });
+    });
 
-      await service.performClusterUpdate([]);
+    afterEach(() => {
+      service.stop();
+      jest.useRealTimers();
+    });
 
+    /** Runs an update through its warning, and the moment after the stop for the delays between starts. */
+    async function update(minutes = 5): Promise<void> {
+      const pending = service.performClusterUpdate();
+      await jest.advanceTimersByTimeAsync(minutes * 60_000 + 1000);
+      await pending;
+    }
+
+    it('downloads while the servers run, then warns, stops, puts the new files in place and starts them again', async () => {
+      await update();
+
+      expect(events).toEqual([
+        'copy install',
+        `steamcmd ${STAGING}`,
+        'warn a @0: Broadcast Server will restart for an update in 5 minutes!',
+        'warn a @1: Broadcast Server will restart for an update in 4 minutes!',
+        'warn a @2: Broadcast Server will restart for an update in 3 minutes!',
+        'warn a @3: Broadcast Server will restart for an update in 2 minutes!',
+        'warn a @4: Broadcast Server will restart for an update in 1 minute!',
+        'warn a @5: Broadcast Server restarting for an update now!',
+        'stop a @5',
+        'put in place',
+        'prepare a',
+        'prepare b',
+        // Removing the copy can take a while; the servers do not wait for it.
+        'start a',
+        'remove copy'
+      ]);
+      expect(mockStaging.seedStaging).toHaveBeenCalledWith('/ark', STAGING, expect.any(Function));
+      expect(mockStaging.putInPlace).toHaveBeenCalledWith(STAGING, '/ark', CHANGES);
+      expect(statuses()).toEqual(['copying', 'downloading', 'stopping', 'configuring', 'configuring', 'starting', 'complete']);
+      expect(service.progress()).toMatchObject({ phase: 'complete', message: 'ARK updated to build 12346.' });
+    });
+
+    it('counts the warning down on the same marks as a scheduled restart', async () => {
+      mockConfig.mockReturnValue(config({ serverStartDelaySeconds: 0, updateWarningMinutes: 15 }));
+
+      await update(15);
+
+      expect(events.filter(event => event.startsWith('warn')).map(event => event.split(':')[0]))
+        .toEqual(['warn a @0', 'warn a @5', 'warn a @10', 'warn a @11', 'warn a @12', 'warn a @13', 'warn a @14', 'warn a @15']);
+      expect(events).toContain('stop a @15');
+    });
+
+    it('warns whoever is running at each mark, and stops servers started since the download began', async () => {
+      const pending = service.performClusterUpdate();
+      await jest.advanceTimersByTimeAsync(2 * 60_000);
+      running.add('b');
+      await jest.advanceTimersByTimeAsync(3 * 60_000 + 1000);
+      await pending;
+
+      expect(events).toContain('warn b @3: Broadcast Server will restart for an update in 2 minutes!');
+      expect(events).not.toContain('warn b @0: Broadcast Server will restart for an update in 5 minutes!');
+      expect(events.filter(event => event.startsWith('stop'))).toEqual(['stop a @5', 'stop b @5']);
+      expect(events.filter(event => event.startsWith('start'))).toEqual(['start a', 'start b']);
+    });
+
+    it('warns nobody and puts the files in place at once when no server is running', async () => {
+      running.clear();
+
+      await service.performClusterUpdate();
+
+      expect(events).toEqual(['copy install', `steamcmd ${STAGING}`, 'put in place', 'prepare a', 'prepare b', 'remove copy']);
+      expect(statuses()).toContain('complete');
+    });
+
+    it('refuses server starts from the stop until the instances are prepared', async () => {
+      const seen: Array<[string, boolean]> = [];
+      mockInstall.mockImplementation((done, _onProgress, _signal, dir) => {
+        seen.push([`steamcmd ${dir}`, areServerFilesUpdating()]);
+        done(null);
+      });
+      mockLifecycle.stopServerInstance.mockImplementation(async id => {
+        seen.push(['stop', areServerFilesUpdating()]);
+        running.delete(id);
+        return { success: true };
+      });
+      mockStaging.putInPlace.mockImplementation(async () => { seen.push(['put in place', areServerFilesUpdating()]); });
+      mockManagement.prepareInstanceConfiguration.mockImplementation(async () => { seen.push(['prepare', areServerFilesUpdating()]); });
+      mockStart.mockImplementation(async id => {
+        seen.push(['start', areServerFilesUpdating()]);
+        return { started: true, instanceId: id };
+      });
+
+      await update();
+
+      expect(seen).toEqual([
+        [`steamcmd ${STAGING}`, false], ['stop', true], ['put in place', true], ['prepare', true], ['prepare', true], ['start', false]
+      ]);
+    });
+
+    describe('when the download does not bring a new build', () => {
+      it('stops nobody when SteamCMD fails', async () => {
+        mockInstall.mockImplementation(done => done(new Error('Failed to download.')));
+
+        await update();
+
+        expect(events).toEqual(['copy install', 'remove copy']);
+        expect(statuses()).toEqual(['copying', 'downloading', 'error']);
+        expect(service.progress()).toMatchObject({ phase: 'error', message: 'SteamCMD could not download the update: Failed to download. No server was stopped.' });
+        expect(mockRelease).toHaveBeenCalledTimes(1);
+      });
+
+      it('starts nobody when the update fails before anyone was stopped', async () => {
+        mockStaging.listGameFiles.mockRejectedValue(new Error('EIO'));
+
+        await update();
+
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(mockStart).not.toHaveBeenCalled();
+        expect(statuses()).toEqual(['error']);
+        expect(mockRelease).toHaveBeenCalledTimes(1);
+      });
+
+      it('stops nobody when the copy of the install cannot be made', async () => {
+        mockStaging.seedStaging.mockRejectedValue(new Error('EACCES'));
+
+        await update();
+
+        expect(mockInstall).not.toHaveBeenCalled();
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(mockStaging.removeStaging).toHaveBeenCalledWith(STAGING);
+        expect(service.progress()).toMatchObject({ phase: 'error' });
+      });
+
+      it('stops nobody when the build is the one already installed', async () => {
+        staged = installed;
+
+        await update();
+
+        expect(events).toEqual(['copy install', `steamcmd ${STAGING}`, 'remove copy']);
+        expect(service.progress()).toMatchObject({ phase: 'complete', message: 'ARK is already up to date (build 12345). No server was restarted.' });
+      });
+
+      it('takes Steam\'s build when SteamCMD finds nothing newer though Steam lists it', async () => {
+        staged = installed;
+        internals.installedBuildId = '12345';
+        internals.latestBuildId = '99999';
+
+        await update();
+
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(internals.installedBuildId).toBe('99999');
+        expect(service.progress()).toMatchObject({ phase: 'error' });
+      });
+
+      // A SteamCMD that never finishes would otherwise hold the install lock for good.
+      it('gives up on the download after two hours', async () => {
+        mockInstall.mockImplementation((done, _onProgress, signal) => {
+          signal?.addEventListener('abort', () => done(new InstallCancelledError()));
+        });
+
+        const pending = service.performClusterUpdate();
+        await jest.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+        await pending;
+
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(service.progress()?.message).toContain('SteamCMD did not finish the download within 120 minutes.');
+        expect(mockRelease).toHaveBeenCalled();
+      });
+    });
+
+    // Refusing would leave the servers on a build new game clients cannot join.
+    it('updates in place, as before, when there is no room for the copy', async () => {
+      mockStaging.roomForStaging.mockReturnValue({ enough: false, needed: 80e9, free: 10e9 });
+
+      await update();
+
+      expect(events.filter(event => !event.startsWith('warn'))).toEqual(['stop a @5', 'steamcmd /ark', 'prepare a', 'prepare b', 'start a', 'remove copy']);
+      expect(mockStaging.seedStaging).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Not enough free disk space'));
+    });
+
+    it('repairs the install with SteamCMD when the new files cannot be put in place, then starts the servers', async () => {
+      mockStaging.putInPlace.mockRejectedValue(new Error('EBUSY'));
+
+      await update();
+
+      expect(events.filter(event => !event.startsWith('warn'))).toEqual([
+        'copy install', `steamcmd ${STAGING}`, 'stop a @5', 'steamcmd /ark', 'prepare a', 'prepare b', 'start a', 'remove copy'
+      ]);
+      expect(statuses()).toContain('complete');
+    });
+
+    it('starts the servers again when the repair fails too', async () => {
+      mockStaging.putInPlace.mockRejectedValue(new Error('EBUSY'));
+      mockInstall.mockImplementation((done, _onProgress, _signal, dir) => done(dir === STAGING ? null : new Error('Failed to download.')));
+
+      await update();
+
+      expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
+      expect(statuses()).not.toContain('complete');
+      // The card adds "ARK update failed:" itself.
+      expect(service.progress()).toMatchObject({ phase: 'error', message: 'Failed to download. The servers were started again on the files they had.' });
       expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
-    it('stops nothing while an install holds the lock', async () => {
-      mockAcquire.mockReturnValue(false);
+    describe('app exit', () => {
+      it('during the warning ends the update without stopping anyone', async () => {
+        const pending = service.performClusterUpdate();
+        await jest.advanceTimersByTimeAsync(2 * 60_000);
 
-      await service.performClusterUpdate([instance('a')]);
+        service.stop();
+        await jest.advanceTimersByTimeAsync(10 * 60_000);
+        await pending;
 
-      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
-      expect(mockInstall).not.toHaveBeenCalled();
-      expect(mockRelease).not.toHaveBeenCalled();
-      expect(messaging.sendToAll).toHaveBeenCalledWith('cluster-update-status', { status: 'error', message: INSTALL_IN_PROGRESS });
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(mockStaging.removeStaging).toHaveBeenCalledWith(STAGING);
+        expect(mockRelease).toHaveBeenCalledTimes(1);
+        expect(internals.updateScheduled).toBe(false);
+        expect(jest.getTimerCount()).toBe(0);
+      });
+
+      it('during the download stops SteamCMD and stops nobody', async () => {
+        mockInstall.mockImplementation((done, _onProgress, signal) => {
+          signal?.addEventListener('abort', () => done(new InstallCancelledError()));
+        });
+
+        const pending = service.performClusterUpdate();
+        await jest.advanceTimersByTimeAsync(1000);
+        service.stop();
+        await pending;
+
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(mockStaging.removeStaging).toHaveBeenCalledWith(STAGING);
+        // Ended, not failed: nothing to report as an error.
+        expect(statuses()).toEqual(['copying', 'downloading']);
+      });
     });
 
-    it('clears the scheduled flag when the install lock cannot be taken at all', async () => {
-      internals.updateScheduled = true;
-      mockAcquire.mockImplementation(() => { throw new Error('EACCES'); });
+    describe('the install lock', () => {
+      it('is held from the copy until the copy is removed, then released', async () => {
+        mockStaging.seedStaging.mockImplementation(async () => {
+          expect(mockAcquire).toHaveBeenCalled();
+          return [];
+        });
+        mockStaging.removeStaging.mockImplementation(async () => {
+          expect(mockRelease).not.toHaveBeenCalled();
+        });
 
-      await expect(service.performClusterUpdate([instance('a')])).resolves.toBeUndefined();
+        await update();
 
-      expect(internals.updateScheduled).toBe(false);
-      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
-      expect(mockRelease).not.toHaveBeenCalled();
-    });
+        expect(mockRelease).toHaveBeenCalledTimes(1);
+      });
 
-    it('restarts the servers it stopped when SteamCMD fails', async () => {
-      mockInstall.mockImplementation(done => done(new Error('Failed to download.')));
+      it('stops nothing while an install holds it', async () => {
+        mockAcquire.mockReturnValue(false);
 
-      await service.performClusterUpdate([instance('a'), instance('b')]);
+        await update();
 
-      expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
-      expect(mockStart).toHaveBeenCalledWith('b', expect.any(Function), expect.any(Function));
-      expect(mockManagement.prepareInstanceConfiguration).not.toHaveBeenCalled();
-      expect(mockRelease).toHaveBeenCalled();
-      expect(statuses()).toEqual(['stopping', 'updating', 'error', 'starting']);
+        expect(mockStaging.seedStaging).not.toHaveBeenCalled();
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+        expect(mockRelease).not.toHaveBeenCalled();
+        expect(messaging.sendToAll).toHaveBeenCalledWith('cluster-update-status', { status: 'error', message: INSTALL_IN_PROGRESS });
+      });
+
+      it('clears the scheduled flag when it cannot be taken at all', async () => {
+        internals.updateScheduled = true;
+        mockAcquire.mockImplementation(() => { throw new Error('EACCES'); });
+
+        await expect(service.performClusterUpdate()).resolves.toBeUndefined();
+
+        expect(internals.updateScheduled).toBe(false);
+        expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+      });
     });
 
     it('sets the cooldown on a failed attempt too', async () => {
       mockInstall.mockImplementation(done => done(new Error('Failed to download.')));
 
-      await service.performClusterUpdate([]);
+      await update();
 
       expect(internals.lastUpdateAttemptTime).toBeGreaterThan(0);
     });
 
-    it('clears the scheduled flag and still restarts when stopping the servers throws', async () => {
-      internals.updateScheduled = true;
+    it('still starts the servers when stopping them throws', async () => {
       mockProcess.getServerProcess.mockReturnValue({ pid: 1 } as unknown as ChildProcess);
       mockProcess.forceKillServerProcess.mockRejectedValue(new Error('taskkill failed'));
 
-      await expect(service.performClusterUpdate([instance('a')])).resolves.toBeUndefined();
+      await update();
 
-      expect(internals.updateScheduled).toBe(false);
       expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
       expect(mockRelease).toHaveBeenCalled();
-    });
-
-    it('takes Steam\'s build when SteamCMD finds nothing to change', async () => {
-      internals.installedBuildId = '12345';
-      internals.latestBuildId = '99999';
-
-      await service.performClusterUpdate([]);
-
-      expect(internals.installedBuildId).toBe('99999');
-      expect(statuses()).toContain('warning');
+      expect(internals.updateScheduled).toBe(false);
     });
 
     // prepareInstanceConfiguration throws when an instance's save folder cannot be linked; that
     // used to abort the update and leave every server stopped.
     it('carries on past an instance it cannot prepare', async () => {
-      mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('broken'), instance('fine')] });
       mockManagement.prepareInstanceConfiguration.mockImplementation(async id => {
-        if (id === 'broken') throw new Error('Could not link SavedArks');
+        if (id === 'b') throw new Error('Could not link SavedArks');
       });
 
-      await service.performClusterUpdate([instance('fine')]);
+      await update();
 
-      expect(mockManagement.prepareInstanceConfiguration).toHaveBeenCalledWith('fine', instance('fine'));
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('[ark-update] Could not prepare broken'), expect.any(Error));
-      expect(mockStart).toHaveBeenCalledWith('fine', expect.any(Function), expect.any(Function));
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('[ark-update] Could not prepare b'), expect.any(Error));
+      expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
       expect(statuses()).toContain('complete');
     });
 
-    it('carries on restarting when one server fails to start', async () => {
+    it('carries on starting when one server fails to start', async () => {
+      running.add('b');
       mockStart.mockRejectedValueOnce(new Error('boom'));
 
-      await service.performClusterUpdate([instance('a'), instance('b')]);
+      await update();
 
       expect(mockStart).toHaveBeenCalledWith('b', expect.any(Function), expect.any(Function));
     });
 
-    describe('with fake timers', () => {
-      beforeEach(() => jest.useFakeTimers());
-      afterEach(() => jest.useRealTimers());
+    it('force-kills a server that has not stopped after five minutes', async () => {
+      mockLifecycle.stopServerInstance.mockReturnValue(new Promise(() => {}));
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
 
-      it('leaves no timer behind once the servers have stopped', async () => {
-        await service.performClusterUpdate([instance('a')]);
+      const pending = service.performClusterUpdate();
+      await jest.advanceTimersByTimeAsync(5 * 60_000 + 5 * 60_000 + 3000);
+      await pending;
 
-        expect(jest.getTimerCount()).toBe(0);
+      expect(mockProcess.forceKillServerProcess).toHaveBeenCalledWith('a');
+      expect(mockStaging.putInPlace).toHaveBeenCalled();
+    });
+
+    it('waits the configured delay between starts', async () => {
+      running.add('b');
+      mockConfig.mockReturnValue(config({ serverStartDelaySeconds: 30, updateWarningMinutes: 5 }));
+
+      const pending = service.performClusterUpdate();
+      await jest.advanceTimersByTimeAsync(5 * 60_000 + 29_000);
+      expect(mockStart).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(1000);
+      await pending;
+      expect(mockStart).toHaveBeenCalledTimes(2);
+    });
+
+    it('says how far the copy and the download have got', async () => {
+      mockStaging.seedStaging.mockImplementation(async (_from, _to, onProgress) => {
+        onProgress?.(30);
+        return [];
       });
-
-      it('force-kills the servers that have not stopped after five minutes', async () => {
-        mockLifecycle.stopServerInstance.mockReturnValue(new Promise(() => {}));
-        mockProcess.getNormalizedInstanceState.mockReturnValue('stopping');
-
-        const pending = service.performClusterUpdate([instance('a')]);
-        await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
-        await jest.advanceTimersByTimeAsync(2000);
-        await pending;
-
-        expect(mockProcess.forceKillServerProcess).toHaveBeenCalledWith('a');
-        expect(mockInstall).toHaveBeenCalled();
+      mockInstall.mockImplementation((done, onProgress) => {
+        onProgress?.({ percent: 42, step: 'downloading', message: 'Downloading' });
+        done(null);
       });
+      const seen: Array<ReturnType<ArkUpdateService['progress']>> = [];
+      messaging.sendToAll.mockImplementation(() => { seen.push(service.progress()); });
 
-      it('force-kills instances still tracked before SteamCMD, then gives the OS a moment', async () => {
-        mockProcess.getNormalizedInstanceState.mockReturnValue('stopping');
-        mockProcess.getServerProcess.mockReturnValue({ pid: 1234 } as unknown as ChildProcess);
+      await update();
 
-        const pending = service.performClusterUpdate([instance('stuck-1')]);
-        await jest.advanceTimersByTimeAsync(1999);
-        expect(mockInstall).not.toHaveBeenCalled();
-        await jest.advanceTimersByTimeAsync(1);
-        await pending;
+      expect(seen).toContainEqual(expect.objectContaining({ phase: 'copying', percent: 30 }));
+      expect(seen).toContainEqual(expect.objectContaining({ phase: 'downloading', percent: 42 }));
+    });
 
-        expect(mockProcess.forceKillServerProcess).toHaveBeenCalledWith('stuck-1');
-        expect(mockInstall).toHaveBeenCalled();
-      });
+    it('leaves no timer behind', async () => {
+      await update();
 
-      // A SteamCMD that never finishes would otherwise keep every server down.
-      it('gives up on SteamCMD after two hours and restarts the servers', async () => {
-        mockInstall.mockImplementation((done, _onProgress, signal) => {
-          signal?.addEventListener('abort', () => done(new InstallCancelledError()));
-        });
-
-        const pending = service.performClusterUpdate([instance('a')]);
-        await jest.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 - 1);
-        expect(mockStart).not.toHaveBeenCalled();
-
-        await jest.advanceTimersByTimeAsync(1);
-        await pending;
-
-        expect(mockStart).toHaveBeenCalledWith('a', expect.any(Function), expect.any(Function));
-        expect(statuses()).toContain('error');
-        expect(console.error).toHaveBeenCalledWith('[ark-update] Update failed:', expect.objectContaining({
-          message: 'SteamCMD did not finish the update within 120 minutes.'
-        }));
-        expect(mockRelease).toHaveBeenCalled();
-      });
-
-      it('leaves no timer behind once SteamCMD has finished', async () => {
-        await service.performClusterUpdate([]);
-
-        expect(mockInstall.mock.calls[0][2]).toBeInstanceOf(AbortSignal);
-        expect(jest.getTimerCount()).toBe(0);
-      });
-
-      it('waits the configured delay between restarts', async () => {
-        mockConfig.mockReturnValue(config({ serverStartDelaySeconds: 30 }));
-
-        const pending = service.performClusterUpdate([instance('a'), instance('b')]);
-        await jest.advanceTimersByTimeAsync(29 * 1000);
-        expect(mockStart).toHaveBeenCalledTimes(1);
-
-        await jest.advanceTimersByTimeAsync(1000);
-        await pending;
-        expect(mockStart).toHaveBeenCalledTimes(2);
-      });
+      expect(jest.getTimerCount()).toBe(0);
     });
   });
 
@@ -755,62 +943,55 @@ describe('ArkUpdateService', () => {
     beforeEach(() => jest.useFakeTimers());
     afterEach(() => jest.useRealTimers());
 
-    it('clears the poll and a pending update countdown', async () => {
+    it('clears the poll', async () => {
       jest.spyOn(service, 'pollAndNotify').mockResolvedValue(null);
-      const update = jest.spyOn(service, 'performClusterUpdate').mockResolvedValue();
       await service.initialize();
-      await internals.scheduleClusterUpdate(5);
-      expect(jest.getTimerCount()).toBe(2);
+      expect(jest.getTimerCount()).toBe(1);
 
       service.stop();
 
       expect(jest.getTimerCount()).toBe(0);
-      expect(internals.updateScheduled).toBe(false);
-      await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
-      expect(update).not.toHaveBeenCalled();
     });
 
-    it('never holds the process open with its timers', async () => {
+    it('never holds the process open with its poll', async () => {
       const setIntervalSpy = jest.spyOn(global, 'setInterval');
       jest.spyOn(service, 'pollAndNotify').mockResolvedValue(null);
 
       await service.initialize();
-      await internals.scheduleClusterUpdate(5);
 
-      expect(setIntervalSpy.mock.results.map(result => (result.value as NodeJS.Timeout).hasRef())).toEqual([false, false]);
+      expect(setIntervalSpy.mock.results.map(result => (result.value as NodeJS.Timeout).hasRef())).toEqual([false]);
       service.stop();
     });
   });
 
-  describe('scheduleClusterUpdate', () => {
-    beforeEach(() => jest.useFakeTimers());
-    afterEach(() => jest.useRealTimers());
-
-    it('clears the scheduled flag when the running servers cannot be listed', async () => {
-      mockManagement.getAllInstances.mockRejectedValue(new Error('boom'));
-
-      await expect(internals.scheduleClusterUpdate(5)).rejects.toThrow('boom');
-
-      expect(internals.updateScheduled).toBe(false);
-      expect(jest.getTimerCount()).toBe(0);
-    });
-
-    it('warns the running servers each minute, then runs the update', async () => {
-      mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('a'), instance('idle')] });
-      mockProcess.getNormalizedInstanceState.mockImplementation(id => (id === 'a' ? 'running' : 'stopped'));
+  // "Update ARK Server fires blind": it stopped every server at once, with no word to players and
+  // nothing to show how it was going.
+  describe('an update asked for on a machine', () => {
+    it('starts at once, and says how long players will be warned once it is downloaded', async () => {
+      mockConfig.mockReturnValue(config({ updateWarningMinutes: 15 }));
+      mockManagement.getAllInstances.mockResolvedValue({ instances: [instance('a')] });
+      mockProcess.getNormalizedInstanceState.mockReturnValue('running');
       const update = jest.spyOn(service, 'performClusterUpdate').mockResolvedValue();
 
-      await internals.scheduleClusterUpdate(2);
-      await jest.advanceTimersByTimeAsync(2 * 60 * 1000);
+      await expect(service.requestUpdate()).resolves.toEqual({ success: true, warningMinutes: 15 });
 
-      expect(rconService.executeRconCommand).toHaveBeenCalledWith('a', 'Broadcast Server will restart for update in 2 minute(s).');
-      expect(rconService.executeRconCommand).toHaveBeenCalledWith('a', 'Broadcast Server will restart for update in 1 minute(s).');
-      expect(rconService.executeRconCommand).not.toHaveBeenCalledWith('idle', expect.anything());
-      expect(update).not.toHaveBeenCalled();
+      expect(update).toHaveBeenCalled();
+      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+    });
 
-      await jest.advanceTimersByTimeAsync(60 * 1000);
-      expect(update).toHaveBeenCalledWith([instance('a')]);
-      expect(jest.getTimerCount()).toBe(0);
+    it('warns nobody when nothing is running', async () => {
+      const update = jest.spyOn(service, 'performClusterUpdate').mockResolvedValue();
+
+      await expect(service.requestUpdate()).resolves.toEqual({ success: true, warningMinutes: 0 });
+
+      expect(update).toHaveBeenCalled();
+    });
+
+    it('refuses a second update while one is under way', async () => {
+      jest.spyOn(service, 'performClusterUpdate').mockReturnValue(new Promise(() => {}));
+      await service.requestUpdate();
+
+      await expect(service.requestUpdate()).resolves.toEqual({ success: false, error: 'An ARK update is already under way on this machine.' });
     });
   });
 });

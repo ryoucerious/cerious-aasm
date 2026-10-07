@@ -15,6 +15,7 @@ import { userDatabaseService } from '../services/auth/user-database.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 import { meshService } from '../services/mesh/mesh-service';
+import { noteLocalNode } from '../services/mesh/mesh-hooks';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn(), sendToAllOthers: jest.fn() }
@@ -89,6 +90,18 @@ const DESKTOP: ReturnType<typeof identifySender> = { user: null, permissions: []
 function operatorIdentity(id: string, permissions: string[] = ['servers.view', 'servers.control', 'servers.create', 'servers.configure']): ReturnType<typeof identifySender> {
   return {
     user: { id, username: id, displayName: id, roleId: 'operator', roleName: 'Operator', ownerUserId: null, active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, permissions: permissions as never },
+    permissions: permissions as never, isAdmin: false, isLocalDesktop: false
+  };
+}
+
+/** Looks after machine n1; sees every server, changes only n1's. */
+function machineAdminIdentity(): ReturnType<typeof identifySender> {
+  const permissions = ['servers.view', 'servers.control', 'servers.create', 'servers.configure'];
+  return {
+    user: {
+      id: 'ma', username: 'ma', displayName: 'ma', roleId: 'machine-admin', roleName: 'Machine Admin', ownerUserId: null, machineNodeId: 'n1',
+      active: true, cliLocked: false, createdAt: 0, updatedAt: 0, lastLoginAt: null, permissions: permissions as never
+    },
     permissions: permissions as never, isAdmin: false, isLocalDesktop: false
   };
 }
@@ -299,6 +312,32 @@ describe('server-instance-handler', () => {
       await request('start-all-instances', { requestId: 'r1' });
 
       expect(mockMesh.noteDesired.mock.calls).toEqual([['b', 'running']]);
+    });
+
+    describe('for a machine admin', () => {
+      beforeEach(() => jest.mocked(identifySender).mockReturnValue(machineAdminIdentity()));
+      afterEach(() => noteLocalNode(null));
+
+      it('starts only the servers on its own machine, from that machine', async () => {
+        noteLocalNode('n1');
+        mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'b', 'c', 'd', 'e'], remote: new Map([['n2', ['r1']]]) });
+
+        await request('start-all-instances', { requestId: 'r1' });
+
+        expect(mockMesh.commandHosts).toHaveBeenCalledWith('start-all', new Map(), expect.any(String));
+        expect(replies('start-all-instances')).toEqual([{ success: true, starting: ['b', 'd'], requestId: 'r1' }]);
+      });
+
+      it('starts only the servers on its own machine, from another machine', async () => {
+        noteLocalNode('n2');
+        mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'b', 'c', 'd', 'e'], remote: new Map([['n1', ['x']], ['n3', ['y']]]) });
+
+        await request('start-all-instances', { requestId: 'r1' });
+
+        expect(mockMesh.commandHosts).toHaveBeenCalledWith('start-all', new Map([['n1', ['x']]]), expect.any(String));
+        expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, []);
+        expect(replies('start-all-instances')).toEqual([{ success: true, starting: [], requestId: 'r1' }]);
+      });
     });
 
     it('answers a request without a payload', async () => {
@@ -703,7 +742,7 @@ describe('server-instance-handler', () => {
 
   describe('get-online-players', () => {
     it('replies with the players', async () => {
-      const players = [{ name: 'Rex', steamId: '7656' }];
+      const players = [{ name: 'Rex', playerId: '0002a1b2c3d4e5f60718293a4b5c6d7e', steamId: '7656' }];
       jest.mocked(rconService.getOnlinePlayers).mockResolvedValue(players);
 
       await request('get-online-players', { id: 'a1', requestId: 'r1' });
@@ -978,6 +1017,15 @@ describe('server-instance-handler', () => {
       expect(mockInstance.broadcastInstances).toHaveBeenCalled();
       expect(notices()).toEqual([['notification', { type: 'info', message: 'Server "Alpha" added.', instanceId: 'a1' }, sender]]);
       expect(replyOrder('save-server-instance')).toBeLessThan(mockMessaging.sendToAll.mock.invocationCallOrder[0]);
+    });
+
+    it('places a server a machine admin adds on its own machine', async () => {
+      jest.mocked(identifySender).mockReturnValue(machineAdminIdentity());
+      mockMesh.saveElsewhere.mockResolvedValueOnce({ success: true, instance: { id: 'a1', name: 'New' } as never });
+
+      await request('save-server-instance', { instance: { name: 'New', nodeId: 'n3' }, requestId: 'r1' });
+
+      expect(mockMesh.saveElsewhere).toHaveBeenCalledWith(expect.objectContaining({ name: 'New', nodeId: 'n1' }), 'ma');
     });
 
     it('saves a server hosted on another node there and writes nothing here', async () => {

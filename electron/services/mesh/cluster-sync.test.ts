@@ -11,7 +11,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { MeshRepository } from './mesh-repository';
 import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHandle } from './sql-executor';
-import { ClusterSync, importClusterData } from './cluster-sync';
+import { ClusterSync, importClusterData, type ClusterSyncOptions } from './cluster-sync';
 
 const PLAYER = 'clusters/MyCluster/0002a1b2c3d4e5f60718293a4b5c6d7e';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -47,7 +47,7 @@ describe('cluster sync', () => {
   }
 
   /** A machine with its own cluster folders and file store, sharing the mesh record. */
-  function machine(nodeId: string): ClusterSync {
+  function machine(nodeId: string, hooks: Pick<ClusterSyncOptions, 'onRecorded' | 'onPlaced'> = {}): ClusterSync {
     const rootOf = (clusterId: string) => path.join(root, nodeId, 'MeshClusters', clusterId);
     const sync = new ClusterSync({
       nodeId,
@@ -66,7 +66,8 @@ describe('cluster sync', () => {
         }
         return false;
       },
-      announce: jest.fn()
+      announce: jest.fn(),
+      ...hooks
     });
     nodes.set(nodeId, { sync, root: rootOf, reachable: true });
     return sync;
@@ -340,6 +341,65 @@ describe('cluster sync', () => {
 
     expect(await repo.listClusterFiles('shared')).toEqual([]);
     expect(a.summary().shared).toBeUndefined();
+  });
+
+  // What a player's upload notice is built on: which machine recorded a change, and which have it.
+  describe('saying what happened to a file', () => {
+    it('says when it recorded a change made here, with the size before and after', async () => {
+      const onRecorded = jest.fn();
+      machine('A', { onRecorded });
+
+      write('A', PLAYER, 'one');
+      await settle('A');
+      write('A', PLAYER, 'one two');
+      await settle('A');
+
+      expect(onRecorded.mock.calls.map(([change]) => change)).toEqual([
+        { clusterId: 'c1', path: PLAYER, version: 1, size: 3, previousSize: null, deleted: false },
+        { clusterId: 'c1', path: PLAYER, version: 2, size: 7, previousSize: 3, deleted: false }
+      ]);
+    });
+
+    it('says when a file was removed here', async () => {
+      const onRecorded = jest.fn();
+      machine('A', { onRecorded });
+      write('A', PLAYER, 'one');
+      await settle('A');
+
+      fs.rmSync(path.join(nodes.get('A')!.root('c1'), PLAYER));
+      await settle('A');
+
+      expect(onRecorded).toHaveBeenLastCalledWith({ clusterId: 'c1', path: PLAYER, version: 2, size: 0, previousSize: 3, deleted: true });
+    });
+
+    it('says when it has a version another machine recorded, placed or removed', async () => {
+      const onPlaced = jest.fn();
+      machine('A');
+      machine('B', { onPlaced });
+
+      write('A', PLAYER, 'one');
+      await settle('A', 'B');
+      fs.rmSync(path.join(nodes.get('A')!.root('c1'), PLAYER));
+      await settle('A', 'B');
+
+      expect(onPlaced.mock.calls.map(([change]) => change)).toEqual([
+        { clusterId: 'c1', path: PLAYER, version: 1 },
+        { clusterId: 'c1', path: PLAYER, version: 2 }
+      ]);
+    });
+
+    it('says nothing of a version it could not get', async () => {
+      const onPlaced = jest.fn();
+      machine('A');
+      machine('B', { onPlaced });
+      write('A', PLAYER, 'one');
+      await settle('A');
+      nodes.get('A')!.reachable = false;
+
+      await settle('B');
+
+      expect(onPlaced).not.toHaveBeenCalled();
+    });
   });
 
   describe('bringing a server\'s earlier transfer data into a cluster', () => {

@@ -243,6 +243,64 @@ describe('UserDatabaseService', () => {
       { id: 1, kind: 'info', message: 'first', instanceId: null, username: null, createdAt: expect.any(Number) }
     ]);
   });
+  // A level above operator: one mesh machine's admin.
+  describe('machine admins', () => {
+    it('looks after the machine it was made for', async () => {
+      const result = await service.createUser({ username: 'admin2-germany01', password: 'password1', roleId: 'machine-admin', machineNodeId: 'n1' });
+
+      expect(result).toMatchObject({ success: true, data: { roleId: 'machine-admin', machineNodeId: 'n1', updatesAnyMachine: false } });
+      const signedIn = service.getAuthenticatedUser(result.success ? result.data.id : '')!;
+      expect(signedIn).toMatchObject({ roleName: 'Machine Admin', machineNodeId: 'n1' });
+      expect(signedIn.permissions).toEqual(expect.arrayContaining(['servers.move', 'app.install', 'servers.control']));
+      expect(signedIn.permissions).not.toContain('nodes.enroll');
+      expect(signedIn.permissions).not.toContain('users.manage');
+    });
+
+    it('needs a machine', async () => {
+      expect(await service.createUser({ username: 'ma', password: 'password1', roleId: 'machine-admin' }))
+        .toEqual({ success: false, error: 'Choose the machine this admin looks after.' });
+    });
+
+    it('may be allowed to update every machine, and loses its machine with the role', async () => {
+      const created = await service.createUser({ username: 'ma', password: 'password1', roleId: 'machine-admin', machineNodeId: 'n1' });
+      const id = created.success ? created.data.id : '';
+
+      expect(await service.updateUser({ id, updatesAnyMachine: true })).toMatchObject({ success: true, data: { machineNodeId: 'n1', updatesAnyMachine: true } });
+      expect(await service.updateUser({ id, machineNodeId: 'n2' })).toMatchObject({ success: true, data: { machineNodeId: 'n2', updatesAnyMachine: true } });
+      expect(await service.updateUser({ id, roleId: 'viewer' })).toMatchObject({ success: true, data: { machineNodeId: null, updatesAnyMachine: false } });
+    });
+
+    it('never gives a machine to another role', async () => {
+      const result = await service.createUser({ username: 'op', password: 'password1', roleId: 'operator', machineNodeId: 'n1', updatesAnyMachine: true });
+
+      expect(result).toMatchObject({ success: true, data: { machineNodeId: null, updatesAnyMachine: false } });
+    });
+
+    it('comes from the mesh with its machine', () => {
+      service.applyMeshAccounts({
+        users: [{
+          userId: 'u9', username: 'admin3-dallas01', displayName: 'Admin 3', passwordHash: '$2b$10$abcdefghijklmnopqrstuuMx1XQYZ6EyuX5w0rBgk0gbtV2tNxk7i',
+          enabled: true, roleId: 'machine-admin', ownerUserId: null, createdAt: 1, updatedAt: 2, machineNodeId: 'n3', updatesAnyMachine: true
+        }],
+        roles: []
+      });
+
+      expect(service.getUser('u9')).toMatchObject({ machineNodeId: 'n3', updatesAnyMachine: true });
+      expect(service.exportCredentialRows()).toEqual([expect.objectContaining({ id: 'u9', machineNodeId: 'n3', updatesAnyMachine: true, cliLocked: false })]);
+    });
+  });
+
+  // Only the mesh admin brings machines in or takes them out.
+  it('never lets a custom role add or remove machines', () => {
+    const role = service.createRole({ name: 'Mesh Helpers', permissions: ['servers.view', 'nodes.enroll', 'nodes.remove', 'nodes.manage'] });
+    if (!role.success) throw new Error(role.error);
+    const db = (service as unknown as { conn: { run(sql: string, params: unknown[]): void } }).conn;
+    db.run('INSERT INTO users (id, username, password_hash, display_name, role_id, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, 1)',
+      ['h1', 'helper', 'x', 'Helper', role.data.id]);
+
+    expect(service.getAuthenticatedUser('h1')!.permissions).toEqual(['servers.view', 'nodes.manage']);
+  });
+
   describe('pools', () => {
     it('opens again with the owner column already present', () => {
       const again = new UserDatabaseService();

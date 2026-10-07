@@ -1,10 +1,10 @@
-import { AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
+import { AuthenticatedUser, Permission, PERMISSIONS, ROLE_IDS } from '../../types/auth.types';
 import type { WebContents } from 'electron';
 import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
 import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
 import { meshDesktopIdentity } from './desktop-session';
-import { meshServer, securityVersionStale } from '../mesh/mesh-hooks';
-import { instanceVisibleTo } from './pool-access';
+import { localNode, meshServer, securityVersionStale } from '../mesh/mesh-hooks';
+import { instanceVisibleTo, machineScopeRefusal } from './pool-access';
 import { getInstance } from '../../utils/ark/instance.utils';
 
 /** Channels the desktop window may use after a mesh is on and before anyone has signed in. */
@@ -124,7 +124,58 @@ export function authorizeChannel(channel: string, sender: MessageSender, payload
     }
   }
 
+  const outsideMachine = machineAdminRefusal(channel, identity.user, payload);
+  if (outsideMachine) return { allowed: false, error: outsideMachine };
+
   return { allowed: true };
+}
+
+/** Reading these changes nothing, so a machine admin may read them about any machine. */
+const READ_PERMISSIONS = new Set<Permission>([
+  PERMISSIONS.SERVERS_VIEW, PERMISSIONS.PLAYERS_VIEW, PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.SETTINGS_VIEW,
+  PERMISSIONS.NODES_VIEW, PERMISSIONS.MESH_VIEW, PERMISSIONS.CLUSTERS_VIEW
+]);
+
+/**
+ * Channels that change the machine that receives them, not a server. The ones that install or
+ * update are allowed everywhere to a machine admin a mesh admin let update every machine.
+ */
+const MACHINE_CHANNELS = new Set([
+  'install', 'cancel-install', 'install-linux-deps', 'validate-sudo-password', 'download-app-update', 'install-app-update',
+  'setup-ark-server-firewall', 'setup-web-server-firewall', 'auto-start-on-app-launch', 'import-server-from-backup',
+  'select-directory', 'test-directory-access'
+]);
+
+/**
+ * Why a machine admin may not use a channel with this payload; null for anyone else, and for what
+ * it may do. It reads about every server, moves any server between machines, and changes only its
+ * own machine and the servers on it. Start All and Stop All cover only its servers (the handler
+ * narrows them); a server it adds is placed on its machine (the save handler).
+ */
+function machineAdminRefusal(channel: string, user: AuthenticatedUser | null, payload: unknown): string | null {
+  if (user?.roleId !== ROLE_IDS.MACHINE_ADMIN) return null;
+  const required = permissionForChannel(channel);
+  if (!required || READ_PERMISSIONS.has(required) || channel === 'move-server') return null;
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  if (channel === 'mesh-node-update') {
+    if (user.updatesAnyMachine || (!!user.machineNodeId && record.nodeId === user.machineNodeId)) return null;
+    return 'A machine admin updates only its own machine, unless a mesh admin allows it to update every machine.';
+  }
+  const key = instanceKeyForChannel(channel);
+  if (key) {
+    for (const id of instanceIdsFromPayload(payload, key)) {
+      // Where the mesh places it; a server it does not place is this machine's own.
+      const host = meshServer(id)?.nodeId ?? (getInstance(id) ? localNode() : null);
+      // A server nobody knows is left to the handler, which answers "not found".
+      if (host === null) continue;
+      const refusal = machineScopeRefusal(user, host);
+      if (refusal) return refusal;
+    }
+    return null;
+  }
+  if (!MACHINE_CHANNELS.has(channel)) return null;
+  if (user.updatesAnyMachine && required === PERMISSIONS.APP_INSTALL) return null;
+  return machineScopeRefusal(user, localNode()) ? 'That is not your machine. A machine admin changes only its own machine.' : null;
 }
 
 /** The server ids a payload carries under the channel's declared key; [] when it names none. */

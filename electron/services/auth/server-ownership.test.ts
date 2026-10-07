@@ -127,6 +127,19 @@ describe('server-ownership', () => {
       expect(leftover.managerUserId).toBeNull();
     });
 
+    // "Save failed: choose an operator" on a server made before operators, with no way out.
+    it('saves a server whose stored operator is no longer one, when an admin leaves the pool alone', () => {
+      const instance: Partial<InstanceConfig> = { operatorUserId: 'gone', gamePort: 7787 };
+
+      expect(applyServerOwnership(instance, { id: 's', operatorUserId: 'gone' }, admin, lookup)).toBeNull();
+      expect(instance.operatorUserId).toBe('gone');
+    });
+
+    it('still refuses an admin moving a server to someone who is not an operator', () => {
+      expect(applyServerOwnership({ operatorUserId: 'gone' }, { id: 's', operatorUserId: 'op1' }, admin, lookup))
+        .toBe('Choose an active operator for this server.');
+    });
+
     it('keeps a stale assignee id when the caller does not touch it', () => {
       const stale = { id: 's9', operatorUserId: 'op1', managerUserId: 'deleted' } as InstanceConfig;
       const instance: Partial<InstanceConfig> = { id: 's9', name: 'renamed' };

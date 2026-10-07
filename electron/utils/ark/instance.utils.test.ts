@@ -9,6 +9,7 @@ import {
   getAllInstances,
   getInstance,
   saveInstance,
+  takeFreePortsIfShared,
   deleteInstance,
   getInstanceSaveDir
 } from './instance.utils';
@@ -308,7 +309,7 @@ describe('instance.utils', () => {
     const one = { id: 'existing-1', name: 'One', gamePort: 7777, queryPort: 27015, rconPort: 27020 };
     const two = { id: 'existing-2', name: 'Two', gamePort: 7787, queryPort: 27025, rconPort: 27030 };
 
-    function onDisk(...instances: Array<{ id: string }>): void {
+    function onDisk(...instances: Array<{ id: string } & Record<string, unknown>>): void {
       const byPath = new Map(instances.map(inst => [`${mockInstancesBaseDir}/${inst.id}/config.json`, inst]));
       mockedFs.existsSync.mockImplementation(p => p === mockInstancesBaseDir || byPath.has(String(p)));
       mockedFs.readdirSync.mockReturnValue(instances.map(inst => inst.id) as any);
@@ -368,6 +369,26 @@ describe('instance.utils', () => {
       const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
       expect(result).toEqual(expect.objectContaining({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 }));
+    });
+
+    // A server moved onto a machine whose server already used 7777 kept 7777 and could not start.
+    describe('a server moved here', () => {
+      it('takes the next free port set when a server here uses its ports', async () => {
+        onDisk(one, { id: 'moved', name: 'Moved', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+
+        await expect(takeFreePortsIfShared('moved')).resolves.toEqual(expect.objectContaining({ gamePort: 7787, queryPort: 27025, rconPort: 27030 }));
+        expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
+          `${mockInstancesBaseDir}/moved/config.json`,
+          expect.objectContaining({ id: 'moved', gamePort: 7787, queryPort: 27025, rconPort: 27030 })
+        );
+      });
+
+      it('keeps its own ports when no server here uses them', async () => {
+        onDisk(one, { id: 'moved', name: 'Moved', gamePort: 7787, queryPort: 27025, rconPort: 27030 });
+
+        await expect(takeFreePortsIfShared('moved')).resolves.toBeNull();
+        expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
+      });
     });
 
     it('lets an existing server keep its own ports', async () => {

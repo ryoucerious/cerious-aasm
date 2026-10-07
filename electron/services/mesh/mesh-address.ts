@@ -37,6 +37,30 @@ function portOf(value: unknown, which: string): number {
   return port;
 }
 
+const MEMBER_URL_HELP = 'Enter the address of a machine already in the mesh, such as https://ark.example.com:4747.';
+const DEFAULT_PEER_PORT = 4747;
+
+/**
+ * The URL of a member to join through, from what was typed or pasted: https:// and port 4747
+ * are added when left out, and http:// becomes https://, since members only speak TLS.
+ */
+export function memberUrlOf(typed: string): string {
+  let text = String(typed ?? '').trim().replace(/\/+$/, '');
+  if (/^http:\/\//i.test(text)) text = text.replace(/^http:\/\//i, 'https://');
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `https://${text}`;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(MEMBER_URL_HELP);
+  }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:' || !host || (url.pathname && url.pathname !== '/') || /\s/.test(typed.trim())) {
+    throw new Error(MEMBER_URL_HELP);
+  }
+  return `https://${host}:${url.port || DEFAULT_PEER_PORT}`;
+}
+
 /** What other machines dial for the peer API. */
 export function peerUrlFor(address: MeshAddress): string {
   return `https://${address.host}:${address.peerPort}`;

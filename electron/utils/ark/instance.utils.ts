@@ -5,7 +5,7 @@ import { getDefaultInstallDir } from '../platform.utils';
 import { loadGlobalConfig } from '../global-config.utils';
 import { validateInstanceId } from '../validation.utils';
 import { writeJsonAtomic } from '../fs.utils';
-import { findPortConflict, nextFreePortSet } from './port-sets';
+import { findPortConflict, nextFreePortSet, type PortSet } from './port-sets';
 import { notifyInstancesChanged } from './instance-changes';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
@@ -89,6 +89,23 @@ export function getInstance(id: string) {
 
   if (!fs.existsSync(getInstanceConfigPath(id))) return null;
   return { ...readInstanceConfig(id), id };
+}
+
+/**
+ * A server moved here from another machine keeps its ports unless a server here already uses
+ * one: then it takes the next free set, as a new server would, so it can start. Returns the set
+ * it took, or null when it kept its own (or no set is free).
+ */
+export async function takeFreePortsIfShared(id: string): Promise<PortSet | null> {
+  const all = await getAllInstances();
+  const self = all.find(inst => inst.id === id);
+  if (!self) return null;
+  const others = all.filter(inst => inst.id !== id);
+  if (!findPortConflict(self, others)) return null;
+  const free = nextFreePortSet(others);
+  if (!free) return null;
+  const saved = await saveInstance({ ...self, gamePort: free.gamePort, queryPort: free.queryPort, rconPort: free.rconPort });
+  return saved.error !== undefined ? null : free;
 }
 
 export async function saveInstance(instance: Partial<InstanceConfig>): Promise<SaveOutcome> {

@@ -28,9 +28,10 @@
                placeholder="Enter server name"
                (keyup.enter)="onAddServer()" />
       </div>
-      <div class="form-group" *ngIf="placementNodes.length">
-        <label class="form-control-label">Place on</label>
-        <app-dropdown [options]="placementOptions" [(ngModel)]="selectedNodeId" name="placement" ariaLabel="Place on"></app-dropdown>
+      <div class="form-group" *ngIf="placementOptions.length">
+        <label class="form-control-label">Machine</label>
+        <app-dropdown [options]="placementOptions" [(ngModel)]="selectedNodeId" name="placement" ariaLabel="Machine"></app-dropdown>
+        <div class="form-control-label desc">Auto-select picks the machine with the most free memory, disk and CPU.</div>
       </div>
     </div>
 

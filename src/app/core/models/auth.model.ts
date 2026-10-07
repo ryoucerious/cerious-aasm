@@ -47,6 +47,8 @@ export const PERMISSIONS = {
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
 
 export const ADMIN_ROLE_ID = 'admin';
+/** Looks after one mesh machine. Made by an admin only. */
+export const MACHINE_ADMIN_ROLE_ID = 'machine-admin';
 export const OPERATOR_ROLE_ID = 'operator';
 export const SERVER_MANAGER_ROLE_ID = 'server-manager';
 export const ATTENDANT_ROLE_ID = 'attendant';
@@ -108,6 +110,10 @@ export interface User {
   ownerUserId?: string | null;
   /** Password is supplied on the command line and cannot be changed in the app. */
   cliLocked?: boolean;
+  /** For a machine admin: the mesh machine it looks after. */
+  machineNodeId?: string | null;
+  /** For a machine admin: an admin let it update ARK and the app on every machine. */
+  updatesAnyMachine?: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt: number | null;

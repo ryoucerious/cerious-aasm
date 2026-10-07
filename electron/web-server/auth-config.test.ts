@@ -285,10 +285,21 @@ describe('auth-config', () => {
       expect(getAuthConfig().enabled).toBe(true);
     });
 
-    it('keeps this machine\'s own login when it is on', () => {
+    // Dallas kept its own login after joining, as an admin of every machine, while Germany's
+    // stopped working. On joining, that password signs in as this machine's admin instead.
+    it('does not let this machine\'s own single login in, even when it is on', () => {
       updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash' });
 
       setMeshSignInRequired(true);
+
+      expect(getAuthConfig()).toEqual({ enabled: true, username: '', passwordHash: '' });
+    });
+
+    it('gives this machine its own login back after leaving', () => {
+      updateAuthConfig({ enabled: true, username: 'admin', passwordHash: 'hash' });
+
+      setMeshSignInRequired(true);
+      setMeshSignInRequired(false);
 
       expect(getAuthConfig()).toEqual({ enabled: true, username: 'admin', passwordHash: 'hash' });
     });

@@ -18,7 +18,7 @@ describe('ClustersSettingsComponent', () => {
   let failed: jasmine.Spy;
   let clusters$: BehaviorSubject<ClusterOption[]>;
   let servers$: BehaviorSubject<ServerInstance[]>;
-  let clustersService: jasmine.SpyObj<Pick<ClustersService, 'create' | 'rename' | 'remove' | 'refresh'>>;
+  let clustersService: jasmine.SpyObj<Pick<ClustersService, 'create' | 'rename' | 'remove' | 'refresh' | 'setUploadNotices'>>;
   let meshStatus: unknown;
   let canManage: boolean;
 
@@ -34,7 +34,7 @@ describe('ClustersSettingsComponent', () => {
     failed = spyOn(notification, 'error');
     clusters$ = new BehaviorSubject<ClusterOption[]>([islands, wilds]);
     servers$ = new BehaviorSubject<ServerInstance[]>([]);
-    clustersService = jasmine.createSpyObj('ClustersService', ['create', 'rename', 'remove', 'refresh']);
+    clustersService = jasmine.createSpyObj('ClustersService', ['create', 'rename', 'remove', 'refresh', 'setUploadNotices']);
     meshStatus = standalone;
     canManage = true;
   });
@@ -222,6 +222,27 @@ describe('ClustersSettingsComponent', () => {
       ]);
     });
 
+    it('tells a cluster\'s players when their upload is ready everywhere, unless turned off', async () => {
+      clustersService.setUploadNotices.and.returnValue(of({ success: true }));
+      meshStatus = { enabled: true, degraded: false, nodeId: 'n1', nodes: [node('n1', 'Desk', {})] };
+      await open();
+      const toggle = cardOf('Islands').querySelector<HTMLInputElement>('.cluster-notify-toggle')!;
+      expect(toggle.checked).toBeTrue();
+
+      toggle.click();
+      await settle();
+
+      expect(clustersService.setUploadNotices).toHaveBeenCalledWith('c1', false);
+    });
+
+    it('shows a cluster where it is turned off', async () => {
+      clusters$.next([{ ...islands, notifyUploads: false }]);
+      meshStatus = { enabled: true, degraded: false, nodeId: 'n1', nodes: [node('n1', 'Desk', {})] };
+      await open();
+
+      expect(cardOf('Islands').querySelector<HTMLInputElement>('.cluster-notify-toggle')!.checked).toBeFalse();
+    });
+
     it('holds changes while the mesh is degraded', async () => {
       meshStatus = { enabled: true, degraded: true, nodeId: 'n1', nodes: [node('n1', 'Desk', {})] };
       await open();
@@ -232,10 +253,11 @@ describe('ClustersSettingsComponent', () => {
     });
   });
 
-  it('shows no machine rows on a machine on its own', async () => {
+  it('shows no machine rows on a machine on its own, nor upload notices, which only a mesh needs', async () => {
     await open();
 
     expect(page.querySelector('.cluster-sync-row')).toBeNull();
+    expect(page.querySelector('.cluster-notify-toggle')).toBeNull();
     expect(page.textContent).toContain('servers on this machine');
   });
 });

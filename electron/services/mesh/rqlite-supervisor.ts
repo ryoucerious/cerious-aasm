@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -29,8 +29,9 @@ export class RqliteSupervisor {
   start(options: RqliteStartOptions): Promise<void> {
     const binary = findRqliteBinary();
     if (!binary) {
-      throw new Error('rqlited was not found. Run node scripts/fetch-rqlite.js, or set RQLITE_BIN.');
+      throw new Error(RQLITED_MISSING);
     }
+    ensureExecutable(binary);
     this.stderr = '';
     this.exited = false;
     fs.mkdirSync(options.dataDir, { recursive: true });
@@ -65,6 +66,14 @@ export class RqliteSupervisor {
 
     const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
+    // A binary that cannot be started (not executable, wrong architecture) reports here, not on
+    // exit. Without a listener Node throws it, and the whole app exited mid-join.
+    child.on('error', error => {
+      if (this.child === child) this.child = null;
+      this.exited = true;
+      this.stderr = `${this.stderr}\nerror: rqlited could not be started: ${error.message}`.slice(-4000);
+      console.error(`[mesh] rqlited could not be started: ${error.message}`);
+    });
     child.stderr?.on('data', chunk => { this.stderr = (this.stderr + chunk.toString()).slice(-4000); });
     child.on('exit', code => {
       if (this.child === child) this.child = null;
@@ -116,6 +125,54 @@ function advertisedHttp(httpAddr: string, raftAddr: string): string {
 
 function joinTarget(join: string): string {
   return join.replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+
+const RQLITED_MISSING = 'rqlited was not found. Run node scripts/fetch-rqlite.js, or set RQLITE_BIN.';
+
+/**
+ * On Linux and macOS, makes sure rqlited may be run, setting the executable bit when it was
+ * installed without one; throws, saying how to fix it, when it cannot. Windows has no such bit.
+ */
+export function ensureExecutable(binary: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') return;
+  const runnable = (): boolean => {
+    try {
+      fs.accessSync(binary, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (runnable()) return;
+  try {
+    fs.chmodSync(binary, 0o755);
+  } catch {
+    /* said below */
+  }
+  if (!runnable()) {
+    throw new Error(`rqlited at ${binary} is not executable, and this app could not make it so. Run: chmod +x "${binary}"`);
+  }
+  console.log(`[mesh] Made ${binary} executable.`);
+}
+
+/**
+ * Why this machine cannot run the mesh database, or null when it can: rqlited is missing, not
+ * executable, or does not run (built for another processor, say). Checked before creating or
+ * joining a mesh, so nothing is recorded on a member for a machine that could never take part.
+ */
+export function rqliteProblem(binary: string | null = findRqliteBinary()): string | null {
+  if (!binary) return RQLITED_MISSING;
+  try {
+    ensureExecutable(binary);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const run = spawnSync(binary, ['-version'], { timeout: 15_000, windowsHide: true });
+  if (run.error || run.status !== 0) {
+    const why = run.error?.message || String(run.stderr || '').trim() || `exit code ${run.status}`;
+    return `rqlited at ${binary} could not run: ${why}`;
+  }
+  return null;
 }
 
 export function findRqliteBinary(): string | null {

@@ -106,6 +106,61 @@ describe('MeshNodesService', () => {
     });
   });
 
+  // Players need a stable name to connect to, not whatever IP the panel was opened on.
+  describe('the host players connect to', () => {
+    const member = (nodeId: string, host: string) => ({ nodeId, name: nodeId, status: 'alive', maintenance: false, connected: true, host });
+
+    beforeEach(() => {
+      reply = { enabled: true, nodeId: 'here', nodes: [member('here', 'ark.example.com'), member('dallas', 'dallas.example.com')] };
+    });
+
+    it('is the address of the machine running the server', () => {
+      expect(create().joinHostFor({ nodeId: 'dallas' }, 'panel.example.com')).toBe('dallas.example.com');
+    });
+
+    it('is the name the page was opened by, for a server here, when other machines can use that name', () => {
+      expect(create().joinHostFor({ nodeId: 'here' }, 'panel.example.com')).toBeNull();
+    });
+
+    it('is this machine\'s address, for a server here, from the desktop app or localhost', () => {
+      expect(create().joinHostFor({ nodeId: 'here' }, 'localhost')).toBe('ark.example.com');
+    });
+
+    it('is not known outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().joinHostFor({}, 'localhost')).toBeNull();
+    });
+  });
+
+  describe('where a new server can go', () => {
+    const member = (nodeId: string, extra: object = {}) => ({ nodeId, name: nodeId.toUpperCase(), status: 'alive', maintenance: false, connected: true, ...extra });
+
+    it('offers each reachable member, saying which skip new servers', () => {
+      reply = {
+        enabled: true,
+        nodeId: 'here',
+        nodes: [
+          member('here'),
+          member('skipping', { maintenance: true, status: 'maintenance' }),
+          member('down', { connected: false }),
+          member('gone', { status: 'removed', connected: false })
+        ]
+      };
+
+      expect(create().placementChoices()).toEqual([
+        { nodeId: 'here', name: 'HERE', skipping: false },
+        { nodeId: 'skipping', name: 'SKIPPING', skipping: true }
+      ]);
+    });
+
+    it('offers no choice outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().placementChoices()).toEqual([]);
+    });
+  });
+
   it('asks again after a sign-in', () => {
     reply = { enabled: false };
     const nodes = create();

@@ -295,6 +295,8 @@ export class WebServerService {
       return { user: null, authEnabled, accountGone: false };
     }
     if (claimed.id === LEGACY_ADMIN_ID) {
+      // In a mesh only mesh accounts sign in; the single login is this machine's alone.
+      if (meshSignInRequired()) return { user: null, authEnabled: true, accountGone: true };
       return { user: legacyAdmin(claimed.username), authEnabled, accountGone: false };
     }
     // Below, signed out means authentication on, so the client never falls back to the owner's rights.

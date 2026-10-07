@@ -1,4 +1,4 @@
-import { addressFromEndpoints, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
+import { addressFromEndpoints, memberUrlOf, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
 
 describe('mesh addresses', () => {
   describe('an address typed in', () => {
@@ -30,6 +30,25 @@ describe('mesh addresses', () => {
       [{ peerPort: 'abc', raftPort: 4002 }, 'The connection port must be a whole number from 1 to 65535.']
     ])('refuses a port out of range: %p', (ports, error) => {
       expect(() => meshAddressOf({ host: 'mesh.example.org', ...ports })).toThrow(error);
+    });
+  });
+
+  // A member URL had to be typed exactly, https:// and all; a paste that lost a digit failed quietly.
+  describe('a member URL typed in to join', () => {
+    it.each([
+      ['https://ark.example.com:4747', 'https://ark.example.com:4747'],
+      ['  https://ark.example.com:4747/  ', 'https://ark.example.com:4747'],
+      ['ark.example.com:4747', 'https://ark.example.com:4747'],
+      ['ark.example.com', 'https://ark.example.com:4747'],
+      ['http://203.0.113.5:4747', 'https://203.0.113.5:4747'],
+      ['203.0.113.5:14747', 'https://203.0.113.5:14747'],
+      ['HTTPS://Ark.Example.com:4747', 'https://ark.example.com:4747']
+    ])('takes %p as %p', (typed, url) => {
+      expect(memberUrlOf(typed)).toBe(url);
+    });
+
+    it.each(['', 'not a url at all', 'https://ark.example.com:99999', 'ftp://ark.example.com'])('refuses %p, saying what it wants', typed => {
+      expect(() => memberUrlOf(typed)).toThrow('Enter the address of a machine already in the mesh, such as https://ark.example.com:4747.');
     });
   });
 

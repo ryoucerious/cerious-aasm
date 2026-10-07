@@ -25,6 +25,8 @@ interface UserRow {
   active: number;
   owner_user_id?: string | null;
   cli_locked: number;
+  machine_node_id?: string | null;
+  updates_any_machine?: number | null;
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
@@ -61,6 +63,9 @@ export interface MeshAccount {
   ownerUserId: string | null;
   createdAt: number;
   updatedAt: number;
+  /** For a machine admin: its machine, and whether it may update every machine. */
+  machineNodeId?: string | null;
+  updatesAnyMachine?: boolean;
 }
 
 /** How long an account made or changed here is kept while its copy to the mesh is under way. */
@@ -80,6 +85,10 @@ export interface CreateUserInput {
   active?: boolean;
   /** The operator whose pool this account joins. Null is the admin pool. Ignored for admins and operators. */
   ownerUserId?: string | null;
+  /** For a machine admin, the machine it looks after; required for one, ignored for every other role. */
+  machineNodeId?: string | null;
+  /** For a machine admin: it may update ARK and the app on every machine, not only its own. */
+  updatesAnyMachine?: boolean;
 }
 
 export interface UpdateUserInput {
@@ -92,6 +101,10 @@ export interface UpdateUserInput {
   password?: string;
   /** When present, moves the account to that operator's pool; null is the admin pool. */
   ownerUserId?: string | null;
+  /** When present, the machine a machine admin looks after. */
+  machineNodeId?: string | null;
+  /** When present, whether a machine admin may update every machine. */
+  updatesAnyMachine?: boolean;
 }
 
 export interface RoleInput {
@@ -300,6 +313,11 @@ export class UserDatabaseService {
     if (!columns.some(column => column.name === 'owner_user_id')) {
       this.conn.run('ALTER TABLE users ADD COLUMN owner_user_id TEXT');
     }
+    // Installs created before machine admins.
+    if (!columns.some(column => column.name === 'machine_node_id')) {
+      this.conn.run('ALTER TABLE users ADD COLUMN machine_node_id TEXT');
+      this.conn.run('ALTER TABLE users ADD COLUMN updates_any_machine INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   private seedBuiltInRoles(): void {
@@ -501,16 +519,23 @@ export class UserDatabaseService {
     roleId: string;
     active: boolean;
     ownerUserId: string | null;
+    cliLocked: boolean;
+    machineNodeId: string | null;
+    updatesAnyMachine: boolean;
   }> {
     this.ensureOpen();
-    return this.queryAll<UserRow>('SELECT * FROM users').map(row => ({
+    // Oldest first: the first admin is the one a machine joining a mesh takes with it.
+    return this.queryAll<UserRow>('SELECT * FROM users ORDER BY created_at ASC').map(row => ({
       id: row.id,
       username: row.username,
       displayName: row.display_name,
       passwordHash: row.password_hash,
       roleId: row.role_id,
       active: row.active === 1,
-      ownerUserId: row.owner_user_id || null
+      ownerUserId: row.owner_user_id || null,
+      cliLocked: !!row.cli_locked,
+      machineNodeId: row.machine_node_id || null,
+      updatesAnyMachine: !!row.updates_any_machine
     }));
   }
 
@@ -546,14 +571,18 @@ export class UserDatabaseService {
     }
     const owner = this.normalizeOwner(input.roleId, input.ownerUserId);
     if (owner.error) return { success: false, error: owner.error };
+    const machine = this.normalizeMachine(input.roleId, input.machineNodeId, input.updatesAnyMachine);
+    if (machine.error) return { success: false, error: machine.error };
 
     const now = Date.now();
     const id = randomUUID();
     const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
     this.conn.run(
-      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, owner_user_id, created_at, updated_at, last_login_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, owner.id, now, now]
+      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, owner_user_id, machine_node_id, updates_any_machine,
+         created_at, updated_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, owner.id,
+        machine.nodeId, machine.updatesAny ? 1 : 0, now, now]
     );
     return { success: true, data: this.getUser(id)! };
   }
@@ -578,6 +607,12 @@ export class UserDatabaseService {
       ? this.normalizeOwner(roleId, input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId)
       : { id: existing.ownerUserId };
     if (owner.error) return { success: false, error: owner.error };
+    const machine = this.normalizeMachine(
+      roleId,
+      input.machineNodeId !== undefined ? input.machineNodeId : existing.machineNodeId,
+      input.updatesAnyMachine ?? existing.updatesAnyMachine
+    );
+    if (machine.error) return { success: false, error: machine.error };
 
     const active = input.active ?? existing.active;
     // Never allow the last active admin to be demoted or disabled: that would lock everyone out.
@@ -604,12 +639,12 @@ export class UserDatabaseService {
       ? await bcrypt.hash(input.password, SALT_ROUNDS)
       : null;
 
+    const values = [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id,
+      machine.nodeId, machine.updatesAny ? 1 : 0, Date.now()];
     this.conn.run(
-      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, updated_at = ?
-       ${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
-      passwordHash
-        ? [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), passwordHash, input.id]
-        : [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), input.id]
+      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, machine_node_id = ?,
+         updates_any_machine = ?, updated_at = ?${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
+      passwordHash ? [...values, passwordHash, input.id] : [...values, input.id]
     );
     return { success: true, data: this.getUser(input.id)! };
   }
@@ -729,6 +764,18 @@ export class UserDatabaseService {
     return { id: owner.id };
   }
 
+  /** A machine admin must name its machine; every other role stores none. */
+  private normalizeMachine(
+    roleId: string,
+    machineNodeId: string | null | undefined,
+    updatesAny: boolean | undefined
+  ): { nodeId: string | null; updatesAny: boolean; error?: string } {
+    if (roleId !== ROLE_IDS.MACHINE_ADMIN) return { nodeId: null, updatesAny: false };
+    const nodeId = typeof machineNodeId === 'string' ? machineNodeId.trim() : '';
+    if (!nodeId) return { nodeId: null, updatesAny: false, error: 'Choose the machine this admin looks after.' };
+    return { nodeId, updatesAny: !!updatesAny };
+  }
+
   private countOtherActiveAdmins(excludeUserId: string): number {
     const row = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ? AND active = 1 AND id != ?', [ROLE_IDS.ADMIN, excludeUserId]);
     return row?.count ?? 0;
@@ -811,19 +858,25 @@ export class UserDatabaseService {
         // Changed here moments ago, after the mesh's copy was written: that change is on its way.
         // Only for that minute, so a node whose clock runs behind cannot be ignored for good.
         if (existing && existing.updated_at > user.updatedAt && now - existing.updated_at < UNSYNCED_GRACE_MS) continue;
-        const values = [user.username, user.passwordHash, user.displayName, user.roleId, user.enabled ? 1 : 0, user.ownerUserId, user.createdAt, user.updatedAt];
+        const machineNodeId = user.machineNodeId || null;
+        const updatesAny = user.updatesAnyMachine ? 1 : 0;
+        const values = [user.username, user.passwordHash, user.displayName, user.roleId, user.enabled ? 1 : 0, user.ownerUserId,
+          machineNodeId, updatesAny, user.createdAt, user.updatedAt];
         if (existing && existing.username === user.username && existing.password_hash === user.passwordHash
           && existing.display_name === user.displayName && existing.role_id === user.roleId && !!existing.active === user.enabled
-          && (existing.owner_user_id || null) === user.ownerUserId) continue;
+          && (existing.owner_user_id || null) === user.ownerUserId && (existing.machine_node_id || null) === machineNodeId
+          && (existing.updates_any_machine ? 1 : 0) === updatesAny) continue;
         if (existing) {
           this.conn.run(
-            'UPDATE users SET username = ?, password_hash = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, created_at = ?, updated_at = ? WHERE id = ?',
+            `UPDATE users SET username = ?, password_hash = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?,
+               machine_node_id = ?, updates_any_machine = ?, created_at = ?, updated_at = ? WHERE id = ?`,
             [...values, user.userId]
           );
         } else {
           this.conn.run(
-            `INSERT INTO users (username, password_hash, display_name, role_id, active, owner_user_id, created_at, updated_at, id, cli_locked, last_login_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+            `INSERT INTO users (username, password_hash, display_name, role_id, active, owner_user_id, machine_node_id, updates_any_machine,
+               created_at, updated_at, id, cli_locked, last_login_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
             [...values, user.userId]
           );
         }
@@ -882,6 +935,8 @@ export class UserDatabaseService {
       active: !!row.active,
       ownerUserId: row.owner_user_id || null,
       cliLocked: !!row.cli_locked,
+      machineNodeId: row.machine_node_id || null,
+      updatesAnyMachine: !!row.updates_any_machine,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       lastLoginAt: row.last_login_at

@@ -66,3 +66,21 @@ onRequest('delete-cluster', async payload => {
     return failure(error, 'Could not remove that cluster.');
   }
 });
+
+/**
+ * Whether players in a cluster are told, privately in chat, when what they uploaded has reached
+ * every machine hosting the cluster's servers. Only in a mesh: on one machine every server of a
+ * cluster reads the same folder, so an upload is ready at once.
+ */
+onRequest('set-cluster-upload-notices', async payload => {
+  if (!meshService.isEnabled()) {
+    return { success: false, error: 'Players are told their upload is ready only in a mesh, where the cluster spans machines.' };
+  }
+  try {
+    await meshService.setUploadNotices(String(payload.clusterId ?? ''), payload.enabled !== false);
+    changed();
+    return { success: true };
+  } catch (error) {
+    return failure(error, 'Could not change that cluster.');
+  }
+});

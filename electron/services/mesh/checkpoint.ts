@@ -13,11 +13,18 @@ import { getInstanceDir, getInstanceSaveDir, getInstancesBaseDir } from '../../u
  * both ends compute it the same way whatever their locale.
  */
 
+/**
+ * Files of the server's own that go with it besides its config and saves: the exclusive join
+ * list (copied next to the executable at every start), and the record of transfer data already
+ * brought into its cluster, so it is not brought in again on the destination.
+ */
+const CARRIED_FILES = ['config.json', 'PlayersExclusiveJoinList.txt', 'cluster-import.json'];
+
 /** The files a move sends, relative to the server directory, in checksum order. */
 export function checkpointManifest(serverId: string): string[] {
   const dir = getInstanceDir(serverId);
   const rels: string[] = [];
-  if (fs.existsSync(path.join(dir, 'config.json'))) rels.push('config.json');
+  for (const file of CARRIED_FILES) if (fs.existsSync(path.join(dir, file))) rels.push(file);
   collect(getInstanceSaveDir(dir), dir, rels);
   return rels.sort(byCodePoint);
 }

@@ -214,12 +214,14 @@ export class AuthService {
 
   createUser(input: {
     username: string; password: string; displayName?: string; roleId: string; active?: boolean; ownerUserId?: string | null;
+    machineNodeId?: string | null; updatesAnyMachine?: boolean;
   }): Promise<SaveResult<User>> {
     return this.mutate<User>('create-user', input, 'user');
   }
 
   updateUser(input: {
     id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string; ownerUserId?: string | null;
+    machineNodeId?: string | null; updatesAnyMachine?: boolean;
   }): Promise<SaveResult<User>> {
     return this.mutate<User>('update-user', input, 'user');
   }

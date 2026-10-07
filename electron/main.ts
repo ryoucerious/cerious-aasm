@@ -282,7 +282,9 @@ function confirmBeforeClosing(win: BrowserWindow): void {
       return;
     }
     awaitingResponse = true;
-    win.webContents.send('app-close-request');
+    // Only this machine's servers: in a mesh the window lists every machine's, and quitting here
+    // must neither ask about nor stop servers another machine runs.
+    win.webContents.send('app-close-request', { runningHere: serverProcessService.getActiveInstanceIds() });
     // A renderer that never answers must not leave closing disabled.
     responseTimeout = setTimeout(() => {
       awaitingResponse = false;

@@ -157,6 +157,18 @@
       <app-dropdown [options]="ownerOptions" [(ngModel)]="form.ownerUserId" [disabled]="saving" placeholder="Admin pool"></app-dropdown>
       <div class="form-control-label desc">The operator this account works for. An account in an operator's pool sees only that pool's servers.</div>
     </div>
+    <div class="form-group" *ngIf="showMachineField">
+      <label class="form-control-label">Machine</label>
+      <app-dropdown [options]="machineOptions" [(ngModel)]="form.machineNodeId" [disabled]="saving" placeholder="Choose a machine..."></app-dropdown>
+      <div class="form-control-label desc">
+        The mesh machine this admin looks after: it runs, configures and updates the servers there. It sees every server, can move
+        servers between machines, and cannot add or remove machines.
+      </div>
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="form.updatesAnyMachine" [disabled]="saving" />
+        <span class="toggle-text">May update ARK and the app on every machine</span>
+      </label>
+    </div>
     <div class="form-group">
       <label class="form-control-label toggle-label">
         <input type="checkbox" class="toggle-switch" [(ngModel)]="form.active" [disabled]="saving || !!editingUser?.cliLocked" />

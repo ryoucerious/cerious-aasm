@@ -43,8 +43,8 @@ export interface PeerHandlers {
   /** A node whose join could not finish asks to be taken back out. The id comes from its certificate. */
   onAbortJoin?(nodeId: string): Promise<void>;
   onCommand(body: ControlCommand): Promise<CommandResult>;
-  /** `resources` and `clusterSync` are as the sender reported them, unchecked. */
-  onHeartbeat(nodeId: string, sentAt: number, resources?: unknown, clusterSync?: unknown): void;
+  /** `resources`, `clusterSync` and `arkUpdate` are as the sender reported them, unchecked. */
+  onHeartbeat(nodeId: string, sentAt: number, resources?: unknown, clusterSync?: unknown, arkUpdate?: unknown): void;
   /** The frames a node that has just subscribed to /v1/events gets first: how things stand now. */
   onSubscribe?(): unknown[];
   /** A read-only question about a server this node hosts. */
@@ -187,8 +187,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
     if (req.method === 'POST' && url.pathname === '/v1/heartbeat') {
       // From the node its certificate names, whatever the body says: one member must not be
       // able to report another as up, or report its resources.
-      const body = await readJson<{ sentAt: number; resources?: unknown; clusterSync?: unknown }>(req);
-      handlers.onHeartbeat(nodeId, body.sentAt, body.resources, body.clusterSync);
+      const body = await readJson<{ sentAt: number; resources?: unknown; clusterSync?: unknown; arkUpdate?: unknown }>(req);
+      handlers.onHeartbeat(nodeId, body.sentAt, body.resources, body.clusterSync, body.arkUpdate);
       send(res, 200, { ok: true, now: Date.now() });
       return;
     }

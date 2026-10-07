@@ -293,10 +293,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.nodeNames.get(server.nodeId) || server.nodeId;
   }
 
-  get placementNodes(): Array<{ nodeId: string; name: string }> {
-    return [...this.nodeNames.entries()].map(([nodeId, name]) => ({ nodeId, name }));
-  }
-
   refreshVisible(): void {
     let list = this.servers.slice();
     if (this.filter === 'online') list = list.filter(server => LiveServersService.isOnline(server));
@@ -502,10 +498,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
           this.cdr.markForCheck();
         }
       });
-  }
-
-  goToServerInstall(): void {
-    this.settingsDrawer.open('server-installation');
   }
 
   goToSettings(): void {

@@ -162,6 +162,7 @@ describe('ServerProcessService', () => {
       );
       expect(service.getServerProcess('inst1')).toBe(child);
       expect(service.getActiveProcessCount()).toBe(1);
+      expect(service.getActiveInstanceIds()).toEqual(['inst1']);
       expect(service.hasActiveProcess('inst1')).toBe(true);
       expect(getInstanceState('inst1')).toBe('starting');
     });

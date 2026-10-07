@@ -158,6 +158,11 @@ export class LocalRuntime {
     }
   }
 
+  /** A server moved here takes the next free port set when a server here already uses its ports. */
+  takeFreePortsIfShared(id: string) {
+    return instanceUtils.takeFreePortsIfShared(id);
+  }
+
   appliedRevision(id: string): number {
     const existing = instanceUtils.getInstance(id);
     const revision = Number(existing?.configRevision);

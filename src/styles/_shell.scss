@@ -730,6 +730,52 @@ $sidenav-width: 248px;
   color: var(--text-secondary);
 }
 
+// Search, machine filter and grouping above the server list: compact, to keep the list in view.
+.server-list-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem 0.4rem;
+
+  .form-control {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    min-height: 0;
+  }
+}
+
+.server-list-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  .server-machine-filter { flex: 1 1 auto; min-width: 0; }
+}
+
+.server-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.server-group-label {
+  margin: 0.45rem 0.6rem 0.15rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  align-self: flex-start;
+  display: inline-block;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 .sidenav-footer {
   display: flex;
   align-items: center;

@@ -453,8 +453,12 @@ $server-card-detail-gap: 0.25rem;
   gap: 0.4rem;
   min-width: 0;
 
+  // A fixed box, so the value keeps its width even before the icon font has loaded and the
+  // ligature still reads as a word.
   .material-icons {
     font-size: 18px;
+    width: 18px;
+    overflow: hidden;
     color: var(--text-secondary);
     flex-shrink: 0;
   }
@@ -741,54 +745,53 @@ $server-card-detail-gap: 0.25rem;
   p { margin: 0; }
 }
 
+// Name, bar, uptime: a row per server. Rows keep their size as servers are added and the list
+// scrolls, where vertical bars got thinner until neither the uptime nor the name could be read.
 .dash-uptime-bars {
   display: flex;
-  align-items: flex-end;
-  gap: 0.75rem;
-  height: 170px;
-  padding-top: 0.25rem;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
 }
 
 .dash-uptime-bar {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(2rem, 1fr) auto;
   align-items: center;
-  gap: 0.35rem;
-  height: 100%;
+  gap: 0.6rem;
 }
 
 .dash-uptime-value {
   font-size: 0.72rem;
   color: var(--text-primary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 3.25rem;
 }
 
 .dash-uptime-track {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: 44px;
+  height: 8px;
   display: flex;
-  align-items: flex-end;
   background: var(--surface-base);
-  border-radius: 6px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .dash-uptime-fill {
-  width: 100%;
-  border-radius: 6px 6px 0 0;
-  background: linear-gradient(180deg, var(--success) 0%, var(--success-2) 100%);
-  transition: height 0.4s ease;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--success-2) 0%, var(--success) 100%);
+  transition: width 0.4s ease;
 
-  &.empty { height: 3px !important; background: var(--border-muted); }
+  &.empty { width: 3px !important; background: var(--border-muted); }
 }
 
 .dash-uptime-name {
   font-size: 0.72rem;
   color: var(--text-secondary);
-  max-width: 100%;
   @include text-ellipsis;
 }
 
@@ -1100,6 +1103,26 @@ $server-card-detail-gap: 0.25rem;
 
   .material-icons { font-size: 18px; line-height: 1; color: var(--text-secondary); }
   small { font-size: 0.72rem; line-height: 1.2; font-weight: $font-normal; color: var(--text-secondary); }
+}
+
+// What players type to connect, with a compact copy button.
+.server-header-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+
+  code {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+  }
+
+  .server-header-copy {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.1rem 0.25rem;
+
+    .material-icons { font-size: 15px; }
+  }
 }
 
 .server-header-actions {

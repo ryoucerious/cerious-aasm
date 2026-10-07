@@ -1,5 +1,5 @@
 import { authorizeChannel, identifySender, isDesktopWindow } from './permission-gate';
-import { noteMeshServers, noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
+import { noteLocalNode, noteMeshServers, noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
 import { setMeshDesktopMode } from './desktop-session';
 import type { ApiProcessSender, WebSocketClient } from '../../types/messaging.types';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES } from '../../types/auth.types';
@@ -203,6 +203,79 @@ describe('authorizeChannel pool scope', () => {
   it('still refuses on permission before looking at the pool', () => {
     expect(authorizeChannel('start-server-instance', web(operator(['servers.view'])), { id: 's1' }).allowed).toBe(false);
     expect(mockGetInstance).not.toHaveBeenCalled();
+  });
+});
+
+// A machine admin sees the whole mesh but changes only its own machine and the servers on it.
+describe('authorizeChannel machine scope', () => {
+  const OTHER_MACHINE = 'That server is on another machine. A machine admin changes only the servers on its own machine.';
+  const NOT_YOURS = 'That is not your machine. A machine admin changes only its own machine.';
+  const machineAdmin = (extra: Partial<AuthenticatedUser> = {}) => ({
+    ...account('machine-admin', BUILT_IN_ROLES.find(role => role.id === 'machine-admin')!.permissions),
+    id: 'ma-1', machineNodeId: 'n1', ...extra
+  });
+
+  beforeEach(() => {
+    mockGetInstance.mockReset();
+    mockGetInstance.mockImplementation(id => (id === 'here' ? { id } : null) as never);
+    noteMeshServers([
+      { serverId: 'there', nodeId: 'n2', operatorUserId: 'op-2', managerUserId: null },
+      // A copy left here of a server since moved: the mesh's placement wins.
+      { serverId: 'moved', nodeId: 'n2', operatorUserId: null, managerUserId: null }
+    ]);
+    noteLocalNode('n1');
+  });
+  afterEach(() => {
+    noteMeshServers([]);
+    noteLocalNode(null);
+  });
+
+  it('runs and changes the servers on its own machine', () => {
+    expect(authorizeChannel('start-server-instance', web(machineAdmin()), { id: 'here' })).toEqual({ allowed: true });
+    expect(authorizeChannel('save-ini-file', web(machineAdmin()), { instanceId: 'here' })).toEqual({ allowed: true });
+  });
+
+  it('only looks at the servers on another machine', () => {
+    expect(authorizeChannel('start-server-instance', web(machineAdmin()), { id: 'there' })).toEqual({ allowed: false, error: OTHER_MACHINE });
+    expect(authorizeChannel('create-backup', web(machineAdmin()), { instanceId: 'there' })).toEqual({ allowed: false, error: OTHER_MACHINE });
+    expect(authorizeChannel('get-server-instance-logs', web(machineAdmin()), { id: 'there' })).toEqual({ allowed: true });
+    expect(authorizeChannel('get-backup-list', web(machineAdmin()), { instanceId: 'there' })).toEqual({ allowed: true });
+  });
+
+  it('goes by where the mesh says a server is, not by a copy left on this machine', () => {
+    mockGetInstance.mockImplementation(id => ({ id }) as never);
+
+    expect(authorizeChannel('stop-server-instance', web(machineAdmin()), { id: 'moved' })).toEqual({ allowed: false, error: OTHER_MACHINE });
+  });
+
+  it('moves any server between machines', () => {
+    expect(authorizeChannel('move-server', web(machineAdmin()), { serverId: 'there', nodeId: 'n3' })).toEqual({ allowed: true });
+  });
+
+  it('installs and updates on its own machine, and on another only when a mesh admin allowed it', () => {
+    expect(authorizeChannel('install', web(machineAdmin()), { target: 'server' })).toEqual({ allowed: true });
+    expect(authorizeChannel('mesh-node-update', web(machineAdmin()), { nodeId: 'n1', kind: 'ark' })).toEqual({ allowed: true });
+
+    noteLocalNode('n2');
+    expect(authorizeChannel('install', web(machineAdmin()), { target: 'server' })).toEqual({ allowed: false, error: NOT_YOURS });
+    expect(authorizeChannel('install', web(machineAdmin({ updatesAnyMachine: true })), { target: 'server' })).toEqual({ allowed: true });
+    expect(authorizeChannel('mesh-node-update', web(machineAdmin()), { nodeId: 'n2', kind: 'ark' }))
+      .toEqual({ allowed: false, error: 'A machine admin updates only its own machine, unless a mesh admin allows it to update every machine.' });
+    expect(authorizeChannel('mesh-node-update', web(machineAdmin({ updatesAnyMachine: true })), { nodeId: 'n2', kind: 'app' })).toEqual({ allowed: true });
+  });
+
+  it('changes nothing else about a machine that is not its own', () => {
+    noteLocalNode('n2');
+
+    expect(authorizeChannel('setup-ark-server-firewall', web(machineAdmin()), {})).toEqual({ allowed: false, error: NOT_YOURS });
+    expect(authorizeChannel('setup-ark-server-firewall', web(machineAdmin({ updatesAnyMachine: true })), {})).toEqual({ allowed: false, error: NOT_YOURS });
+    // Working through another machine's page on a server of its own is fine.
+    expect(authorizeChannel('curseforge-search-mods', web(machineAdmin()), { query: 'dino' })).toEqual({ allowed: true });
+    expect(authorizeChannel('get-server-instances', web(machineAdmin()))).toEqual({ allowed: true });
+  });
+
+  it('cannot add or remove machines, even through a role that lists it', () => {
+    expect(authorizeChannel('create-enrollment-token', web(machineAdmin()))).toMatchObject({ allowed: false });
   });
 });
 

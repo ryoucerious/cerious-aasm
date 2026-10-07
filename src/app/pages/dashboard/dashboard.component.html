@@ -122,11 +122,12 @@
 
         <div class="dash-card dash-uptime-card">
           <div class="dash-card-header"><h3>Server Uptime</h3></div>
+          <!-- One row per server, so a long fleet scrolls instead of squeezing every bar. -->
           <div class="dash-uptime-bars" *ngIf="servers.length; else noUptime">
             <div class="dash-uptime-bar" *ngFor="let bar of uptimeBars; trackBy: trackByUptimeBar">
-              <span class="dash-uptime-value">{{ bar.label }}</span>
-              <span class="dash-uptime-track"><span class="dash-uptime-fill" [class.empty]="bar.percent === 0" [style.height.%]="bar.percent"></span></span>
               <span class="dash-uptime-name" [title]="bar.server.name">{{ bar.server.name }}</span>
+              <span class="dash-uptime-track"><span class="dash-uptime-fill" [class.empty]="bar.percent === 0" [style.width.%]="bar.percent"></span></span>
+              <span class="dash-uptime-value">{{ bar.label }}</span>
             </div>
           </div>
           <ng-template #noUptime><div class="dash-muted">No servers to report.</div></ng-template>
@@ -147,9 +148,6 @@
           </button>
           <button type="button" class="dash-action" (click)="openBackupModal()" [disabled]="!servers.length">
             <span class="dash-action-icon tone-primary"><span class="material-icons">backup</span></span> Create Backup
-          </button>
-          <button type="button" class="dash-action" (click)="goToServerInstall()">
-            <span class="dash-action-icon tone-warning"><span class="material-icons">system_update_alt</span></span> Update ARK Server
           </button>
           <button type="button" class="dash-action" *ngIf="canCreateServer" (click)="openAddServer()">
             <span class="dash-action-icon tone-info"><span class="material-icons">add</span></span> Add Server
@@ -237,7 +235,7 @@
   </div>
 </div>
 
-<app-add-server-modal [show]="showAddModal" [servers]="servers" [placementNodes]="placementNodes" (closed)="onAddModalClosed()"></app-add-server-modal>
+<app-add-server-modal [show]="showAddModal" [servers]="servers" (closed)="onAddModalClosed()"></app-add-server-modal>
 
 <app-modal [title]="'Start All Servers'" [show]="showConfirmStartAll" (close)="showConfirmStartAll = false">
   <div class="modal-confirmation">Start all servers?</div>

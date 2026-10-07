@@ -120,3 +120,33 @@
   flex-wrap: wrap;
   gap: 0.4rem;
 }
+
+.mesh-invite {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.mesh-invite-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.mesh-invite-label {
+  flex: 0 0 6.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.mesh-invite-value {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  font-size: 0.8rem;
+  word-break: break-all;
+  user-select: all;
+}

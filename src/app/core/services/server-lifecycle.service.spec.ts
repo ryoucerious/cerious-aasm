@@ -152,10 +152,17 @@ describe('ServerLifecycleService', () => {
     expect(service.runningServers().map(s => s.id)).toEqual(['a', 'b']);
   });
 
-  it('stops every running server in parallel on exit', fakeAsync(() => {
-    roster = [server('a', 'running'), server('b', 'starting'), server('c', 'stopped')];
+  // In a mesh the roster lists every machine's servers; main says which run on this one.
+  it('names the servers running on this machine, from the roster', () => {
+    roster = [{ ...server('a', 'running'), name: 'Alpha' }, server('remote', 'running')];
+
+    expect(service.serversRunningHere(['a', 'gone']).map(s => [s.id, s.name])).toEqual([['a', 'Alpha'], ['gone', 'gone']]);
+  });
+
+  it('stops the servers it is given in parallel on exit, and no others', fakeAsync(() => {
+    roster = [server('a', 'running'), server('b', 'starting'), server('remote', 'running')];
     let done = false;
-    service.shutdownAllServers().then(() => done = true);
+    service.shutdownServers([server('a', 'running'), server('b', 'starting')]).then(() => done = true);
 
     tick(SHUTDOWN_WARNING_MS);
     flushMicrotasks();
@@ -170,7 +177,7 @@ describe('ServerLifecycleService', () => {
     stopReplies['a'] = slow;
     stopReplies['b'] = NEVER;
     let done = false;
-    service.shutdownAllServers().then(() => done = true);
+    service.shutdownServers(roster).then(() => done = true);
 
     tick(60_000);
     slow.next({ success: true, instanceId: 'a' });
@@ -185,16 +192,16 @@ describe('ServerLifecycleService', () => {
     roster = [server('a', 'running')];
     stopReplies['a'] = throwError(() => new Error('boom'));
     let done = false;
-    service.shutdownAllServers().then(() => done = true);
+    service.shutdownServers(roster).then(() => done = true);
     tick(SHUTDOWN_WARNING_MS);
     flushMicrotasks();
     expect(done).toBeTrue();
   }));
 
-  it('finishes at once with nothing running', fakeAsync(() => {
+  it('finishes at once with nothing to stop', fakeAsync(() => {
     roster = [server('c', 'stopped')];
     let done = false;
-    service.shutdownAllServers().then(() => done = true);
+    service.shutdownServers([]).then(() => done = true);
     flushMicrotasks();
     expect(done).toBeTrue();
   }));

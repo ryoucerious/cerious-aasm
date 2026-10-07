@@ -31,7 +31,7 @@ jest.mock('./services/automation/automation.service', () => ({
 }));
 jest.mock('./utils/ark/ark-server/ark-server-cleanup.utils', () => ({ cleanupOrphanedArkProcesses: jest.fn() }));
 jest.mock('./services/server-instance/server-process.service', () => ({
-  serverProcessService: { killAllProcesses: jest.fn(), getActiveProcessCount: jest.fn(() => 0) },
+  serverProcessService: { killAllProcesses: jest.fn(), getActiveProcessCount: jest.fn(() => 0), getActiveInstanceIds: jest.fn(() => []) },
 }));
 jest.mock('./services/server-instance/server-management.service', () => ({
   serverManagementService: { getAllInstances: jest.fn(async () => ({ instances: [] })) },
@@ -417,6 +417,15 @@ describe('main', () => {
       jest.useFakeTimers();
       main = loadMain();
       win = await emitReady(main);
+    });
+
+    // In a mesh the window lists every machine's servers; quitting stops only this machine's.
+    it('tells the renderer which servers run on this machine when it asks', () => {
+      main.serverProcessService.getActiveInstanceIds.mockReturnValue(['a1', 'b2']);
+
+      win.close();
+
+      expect(win.webContents.send).toHaveBeenCalledWith('app-close-request', { runningHere: ['a1', 'b2'] });
     });
 
     it('asks the renderer first and keeps the window open', () => {

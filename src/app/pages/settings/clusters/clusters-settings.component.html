@@ -71,6 +71,16 @@
           </p>
         </div>
 
+        <div class="cluster-notify" *ngIf="inMesh && cluster.managed !== false">
+          <label class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch cluster-notify-toggle" [checked]="cluster.notifyUploads !== false"
+                   (change)="setUploadNotices(cluster, $any($event.target).checked)" [disabled]="!canManage || held" />
+            <span class="slider"></span>
+            <span class="toggle-text">Tell players when their upload is ready</span>
+          </label>
+          <p class="settings-card-hint">A private chat message once what a player uploaded has reached every machine with a server in this cluster, so they know they can travel.</p>
+        </div>
+
         <div class="cluster-actions" *ngIf="canManage && renamingId !== cluster.clusterId">
           <button type="button" class="btn btn-ghost btn-sm" (click)="startRename(cluster)" [disabled]="held">Rename</button>
           <button type="button" class="btn btn-danger btn-sm" (click)="askRemove(cluster)" [disabled]="held">Remove</button>

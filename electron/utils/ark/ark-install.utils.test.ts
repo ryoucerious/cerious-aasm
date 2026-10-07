@@ -53,6 +53,14 @@ describe('ark-install.utils', () => {
       await expect(getCurrentInstalledVersion()).resolves.toBe('19934105');
     });
 
+    // An update downloads into a copy of the install beside it; its build is read from there.
+    it('reads the build of another install folder', async () => {
+      existing('/ark-update/steamapps/appmanifest_2430930.acf');
+      mockFs.readFileSync.mockReturnValue('"buildid"\t\t"20000000"');
+
+      await expect(getCurrentInstalledVersion('/ark-update')).resolves.toBe('20000000');
+    });
+
     it('falls back to version.txt when there is no manifest', async () => {
       existing('/ark/version.txt');
       mockFs.readFileSync.mockReturnValue('1.2.3\n');
@@ -103,6 +111,15 @@ describe('ark-install.utils', () => {
         stallTimeoutMs: 30 * 60 * 1000
       }));
       expect(done).toHaveBeenCalledWith(null);
+    });
+
+    it('runs SteamCMD against another install folder when given one', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(null));
+
+      installArkServer(jest.fn(), undefined, undefined, '/ark-update');
+
+      expect(lastOptions().args.slice(0, 2)).toEqual(['+force_install_dir', '/ark-update']);
     });
 
     it('requests the Windows depot on Linux and removes a stuck app manifest first', () => {

@@ -1,8 +1,10 @@
-import { Component, EventEmitter, HostListener, Input, Output, ChangeDetectionStrategy } from '@angular/core';
+import { Component, EventEmitter, HostListener, Input, Output, ChangeDetectionStrategy, ChangeDetectorRef, inject } from '@angular/core';
 import { NgIf, NgClass } from '@angular/common';
 import { ServerInstance, ServerInstanceDraft } from '../../core/models/server-instance.model';
 import { getMapVisual, MapVisual } from '../../core/utils/map-visuals';
-import { formatUptime, formatMegabytes, formatPercent } from '../../core/utils/format.utils';
+import { formatUptime, formatMegabytes, formatPercent, joinAddress } from '../../core/utils/format.utils';
+import { copyToClipboard } from '../../core/utils/clipboard.utils';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import {
   serverStatusKey, serverStatusLabel, serverStatusClass,
   isOnlineStatus, canStartStatus
@@ -37,6 +39,31 @@ export class ServerHeaderComponent {
   @Output() stopServer = new EventEmitter<void>();
   @Output() forceStopServer = new EventEmitter<void>();
   @Output() moveServer = new EventEmitter<void>();
+
+  private readonly meshNodes = inject(MeshNodesService);
+  private readonly cdr = inject(ChangeDetectorRef);
+  /** Just copied: the button says so for a moment. */
+  copied = false;
+
+  /**
+   * What a player types into the game to connect: the host of the machine running the server,
+   * a stable name when one was set in Change address, and the game port.
+   */
+  get connectAddress(): string {
+    const pageHost = typeof window !== 'undefined' ? window.location.hostname : '';
+    return joinAddress(this.server, this.meshNodes.joinHostFor(this.server ?? {}, pageHost) ?? pageHost);
+  }
+
+  async copyConnectAddress(): Promise<void> {
+    try {
+      await copyToClipboard(this.connectAddress);
+      this.copied = true;
+      this.cdr.markForCheck();
+      setTimeout(() => { this.copied = false; this.cdr.markForCheck(); }, 2000);
+    } catch {
+      /* the address stays on show to select by hand */
+    }
+  }
 
   /** More actions is open. */
   menuOpen = false;

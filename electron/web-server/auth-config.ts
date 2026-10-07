@@ -109,11 +109,12 @@ export function updateAuthConfig(config: AuthConfig): void {
 
 /**
  * The login in force. In a mesh, sign-in is required even where this machine's own login is off,
- * and then only mesh accounts sign in: the single login was never meant to be in force. The
- * saved login is never changed for it, so leaving the mesh puts this machine's own back.
+ * and only mesh accounts sign in: the single login belongs to this machine alone, and on joining
+ * its password became this machine's machine admin. The saved login is never changed for it, so
+ * leaving the mesh puts this machine's own back.
  */
 export function getAuthConfig(): AuthConfig {
-  if (meshSignInRequired && !authConfig.enabled) return { enabled: true, username: '', passwordHash: '' };
+  if (meshSignInRequired) return { enabled: true, username: '', passwordHash: '' };
   return { ...authConfig };
 }
 

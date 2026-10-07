@@ -42,6 +42,13 @@ export class SidebarComponent implements OnInit, OnDestroy {
   @Output() closeMobileMenu = new EventEmitter<void>();
 
   servers: ServerInstance[] = [];
+  /** The list as shown: searched, filtered by machine, and grouped by operator when asked. */
+  serverGroups: Array<{ label: string; servers: ServerInstance[] }> = [];
+  searchText = '';
+  /** '' for every machine, 'here' for this one, or a machine's node id. */
+  machineFilter = '';
+  machineOptions: Array<{ value: string; label: string }> = [];
+  groupByOperator = readGroupPreference();
   selectedServerId: string | null = null;
   selectedServer: ServerInstance | null = null;
   currentUrl = '';
@@ -135,8 +142,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
       }
     }));
 
-    this.subs.push(this.poolDirectory.changed$.subscribe(() => this.cdr.markForCheck()));
-    this.subs.push(this.meshNodes.changed$.subscribe(() => this.cdr.markForCheck()));
+    this.subs.push(this.poolDirectory.changed$.subscribe(() => { this.regroup(); this.cdr.markForCheck(); }));
+    this.subs.push(this.meshNodes.changed$.subscribe(() => { this.buildMachineOptions(); this.regroup(); this.cdr.markForCheck(); }));
     this.subs.push(this.auth.identity$.subscribe(() => this.cdr.markForCheck()));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
@@ -155,6 +162,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
         this.serverInstanceService.setActiveServer(next);
       }
       this.selectedServer = this.servers.find(server => server.id === this.selectedServerId) || null;
+      this.buildMachineOptions();
+      this.regroup();
       this.cdr.markForCheck();
     }));
 
@@ -275,6 +284,69 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   private syncConfigOpen(): void {
     if (this.configGroupActive) this.configOpen = true;
+  }
+
+  onSearch(text: string): void {
+    this.searchText = text;
+    this.regroup();
+  }
+
+  onMachineFilter(value: string): void {
+    this.machineFilter = value;
+    this.regroup();
+  }
+
+  onGroupByOperator(on: boolean): void {
+    this.groupByOperator = on;
+    try {
+      localStorage.setItem(GROUP_PREFERENCE_KEY, on ? '1' : '0');
+    } catch {
+      /* the choice lasts until the page closes */
+    }
+    this.regroup();
+  }
+
+  /** Dragging reorders the saved order, so only the whole list, ungrouped, can be dragged. */
+  get reorderable(): boolean {
+    return !this.searchText.trim() && !this.machineFilter && !this.groupByOperator;
+  }
+
+  /** Grouping by operator only means something once a server has one. */
+  get hasOperators(): boolean {
+    return this.servers.some(server => !!server.operatorUserId);
+  }
+
+  private buildMachineOptions(): void {
+    const machines = this.meshNodes.machines();
+    this.machineOptions = machines.length
+      ? [{ value: '', label: 'All machines' }, { value: 'here', label: 'This machine' }, ...machines.map(machine => ({ value: machine.nodeId, label: machine.name }))]
+      : [];
+    if (!this.machineOptions.length) this.machineFilter = '';
+  }
+
+  private regroup(): void {
+    const query = this.searchText.trim().toLowerCase();
+    const visible = this.servers.filter(server => {
+      if (this.machineFilter === 'here' && !this.meshNodes.isHere(server.nodeId)) return false;
+      if (this.machineFilter && this.machineFilter !== 'here' && server.nodeId !== this.machineFilter) return false;
+      if (!query) return true;
+      return [server.name, server.mapName, this.meshNodes.nameOf(server.nodeId), this.listLabel(server)]
+        .some(value => String(value || '').toLowerCase().includes(query));
+    });
+    if (!this.groupByOperator) {
+      this.serverGroups = [{ label: '', servers: visible }];
+      return;
+    }
+    // One bubble per operator, the admin pool last; within one, each machine's servers together.
+    const groups = new Map<string, ServerInstance[]>();
+    for (const server of visible) {
+      const label = server.operatorUserId ? this.poolDirectory.operatorLabel(server) : ADMIN_POOL;
+      groups.set(label, [...(groups.get(label) ?? []), server]);
+    }
+    const machine = (server: ServerInstance) => this.meshNodes.nameOf(server.nodeId);
+    this.serverGroups = [...groups.entries()]
+      .sort(([a], [b]) => (a === ADMIN_POOL ? 1 : b === ADMIN_POOL ? -1 : a.localeCompare(b)))
+      .map(([label, servers]) => ({ label, servers: [...servers].sort((a, b) => machine(a).localeCompare(machine(b))) }));
   }
 
   onDrop(event: CdkDragDrop<ServerInstance[]>): void {
@@ -450,5 +522,17 @@ export class SidebarComponent implements OnInit, OnDestroy {
   onConfirmStopAll(): void {
     this.showConfirmStopAllModal = false;
     this.serverLifecycle.stopAllServers();
+  }
+}
+
+const ADMIN_POOL = 'Admin pool';
+const GROUP_PREFERENCE_KEY = 'aasm.sidebar.groupByOperator';
+
+/** Per viewer: kept in this browser only. */
+function readGroupPreference(): boolean {
+  try {
+    return localStorage.getItem(GROUP_PREFERENCE_KEY) === '1';
+  } catch {
+    return false;
   }
 }

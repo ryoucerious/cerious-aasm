@@ -130,6 +130,11 @@ export class GeneralTabComponent implements OnInit, OnChanges, OnDestroy {
       { value: '', label: 'Admin pool' },
       ...this.directory.operators.map(person => ({ value: person.id, label: labelFor(person) }))
     ];
+    // An id no operator has any more (a server made before operators, an account removed): shown,
+    // so the picker is not blank and an admin can see to move it.
+    if (pool && !this.directory.operators.some(person => person.id === pool)) {
+      this.operatorOptions.push({ value: pool, label: 'No longer an operator' });
+    }
     this.assigneeOptions = [
       { value: '', label: 'Not assigned' },
       ...this.directory.assignees

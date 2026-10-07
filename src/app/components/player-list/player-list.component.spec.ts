@@ -135,13 +135,28 @@ describe('PlayerListComponent', () => {
     });
   });
 
-  describe('copying a SteamID', () => {
+  // ASA names players by EOS ID, 32 hex characters; an older machine in a mesh sends it as steamId.
+  it('shows each player\'s whole ID, however the machine hosting the server sends it', () => {
+    mockMessaging.sendMessage.and.returnValue(of({
+      success: true,
+      players: [{ name: 'Jared', playerId: '0002a1b2c3d4e5f60718293a4b5c6d7e' }, { name: 'Old', steamId: '00029f8e7d6c5b4a39281706f5e4d3c2' }]
+    }));
+
+    component.refreshPlayers();
+    fixture.detectChanges();
+
+    const ids = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.player-id')).map(cell => cell.textContent?.trim());
+    expect(ids).toEqual(['0002a1b2c3d4e5f60718293a4b5c6d7e', '00029f8e7d6c5b4a39281706f5e4d3c2']);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Player ID');
+  });
+
+  describe('copying a player ID', () => {
     it('uses the Clipboard API where the page has one', async () => {
       spyOn(navigator.clipboard, 'writeText').and.returnValue(Promise.resolve());
       spyOn(mockNotification, 'success');
-      await component.copySteamId('12345');
+      await component.copyPlayerId('12345');
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith('12345');
-      expect(mockNotification.success as jasmine.Spy).toHaveBeenCalledWith('SteamID copied to clipboard');
+      expect(mockNotification.success as jasmine.Spy).toHaveBeenCalledWith('Player ID copied to clipboard');
     });
 
     // The web UI served over plain HTTP on a LAN is not a secure context, so it has no navigator.clipboard.
@@ -155,11 +170,11 @@ describe('PlayerListComponent', () => {
       spyOn(mockNotification, 'success');
       const textareas = document.querySelectorAll('textarea').length;
 
-      await component.copySteamId('76561198000000000');
+      await component.copyPlayerId('76561198000000000');
 
       expect(copied).toBe('76561198000000000');
       expect(document.querySelectorAll('textarea').length).toBe(textareas);
-      expect(mockNotification.success as jasmine.Spy).toHaveBeenCalledWith('SteamID copied to clipboard');
+      expect(mockNotification.success as jasmine.Spy).toHaveBeenCalledWith('Player ID copied to clipboard');
     });
 
     it('says so when the copy is refused', async () => {
@@ -169,7 +184,7 @@ describe('PlayerListComponent', () => {
       spyOn(mockNotification, 'success');
       spyOn(mockNotification, 'error');
 
-      await component.copySteamId('123');
+      await component.copyPlayerId('123');
 
       expect(mockNotification.success).not.toHaveBeenCalled();
       expect(mockNotification.error).toHaveBeenCalled();

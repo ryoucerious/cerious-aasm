@@ -1,13 +1,19 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ServerHeaderComponent } from './server-header.component';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 
 describe('ServerHeaderComponent', () => {
   let component: ServerHeaderComponent;
   let fixture: ComponentFixture<ServerHeaderComponent>;
   const now = 1_700_000_000_000;
+  let joinHost: string | null;
 
   beforeEach(async () => {
-    await TestBed.configureTestingModule({ imports: [ServerHeaderComponent] }).compileComponents();
+    joinHost = 'ark.example.com';
+    await TestBed.configureTestingModule({
+      imports: [ServerHeaderComponent],
+      providers: [{ provide: MeshNodesService, useValue: { joinHostFor: () => joinHost } }]
+    }).compileComponents();
     fixture = TestBed.createComponent(ServerHeaderComponent);
     component = fixture.componentInstance;
     component.server = { id: 'a', name: 'Ragnarok', mapName: 'Ragnarok_WP', state: 'Running', maxPlayers: 70, gamePort: 7777, queryPort: 27015 } as any;
@@ -23,6 +29,27 @@ describe('ServerHeaderComponent', () => {
     expect(el.querySelector('.server-header-name')?.textContent).toContain('Ragnarok');
     expect(el.querySelector('.server-header-map')?.textContent).toContain('Ragnarok');
     expect(el.querySelector('.server-header-page')?.textContent).toContain('Rates');
+  });
+
+  // The port was on the console page and the full address only on the dashboard card.
+  describe('the address players connect to', () => {
+    const connect = () => (fixture.nativeElement as HTMLElement).querySelector('.server-header-connect');
+
+    it('is at the top of the page, by the name of the machine running it', () => {
+      fixture.detectChanges();
+
+      expect(connect()?.textContent).toContain('ark.example.com:7777');
+    });
+
+    it('copies whole', async () => {
+      const copied = spyOn(navigator.clipboard, 'writeText').and.resolveTo();
+      fixture.detectChanges();
+
+      connect()!.querySelector('button')!.click();
+      await fixture.whenStable();
+
+      expect(copied).toHaveBeenCalledWith('ark.example.com:7777');
+    });
   });
 
   // A move is occasional: it sits under More actions, away from Start, Stop and Force.

@@ -39,6 +39,10 @@ describe('SidebarComponent', () => {
   /** Mesh machine names by node id; empty outside a mesh. */
   let machineNames: Record<string, string>;
   let meshNodesChanged$: Subject<void>;
+  /** This machine's node id in a mesh. */
+  let localNode: string;
+  /** Operator names by user id. */
+  let operatorNames: Record<string, string>;
 
   const stopped = { id: '1', name: 'Alpha', state: 'stopped' };
   const running = { id: '2', name: 'Beta', state: 'running', players: 3 };
@@ -84,6 +88,10 @@ describe('SidebarComponent', () => {
     identity = { isAdmin: false };
     machineNames = {};
     meshNodesChanged$ = new Subject<void>();
+    localNode = '';
+    operatorNames = {};
+    // The group-by-operator choice is kept in this browser; each test starts without it.
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
 
     await TestBed.configureTestingModule({
       imports: [SidebarComponent, HttpClientTestingModule],
@@ -100,8 +108,10 @@ describe('SidebarComponent', () => {
         { provide: WebSocketService, useValue: { connected$: of(false) } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
         { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission), identity, identity$: of(identity) } },
-        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
-        { provide: MeshNodesService, useValue: { changed$: meshNodesChanged$.asObservable(), nameOf: (id?: string) => (id && machineNames[id]) || '' } }
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: (server: any) => (server?.operatorUserId && operatorNames[server.operatorUserId]) || 'Admin', assigneeLabel: () => 'Not assigned' } },
+        { provide: MeshNodesService, useValue: { changed$: meshNodesChanged$.asObservable(), nameOf: (id?: string) => (id && machineNames[id]) || '', placementChoices: () => [],
+          isHere: (id?: string | null) => !id || id === localNode,
+          machines: () => Object.entries(machineNames).map(([nodeId, name]) => ({ nodeId, name })) } }
       ]
     }).compileComponents();
 
@@ -331,6 +341,61 @@ describe('SidebarComponent', () => {
       { id: '2', name: 'Alpha', sortOrder: 1, operatorUserId: 'bob' }
     ]);
     expect(component.servers.map(server => server.id)).toEqual(['1', '2']);
+  });
+
+  describe('finding servers', () => {
+    const list = [
+      { id: 'a', name: 'The Island', mapName: 'TheIsland_WP', nodeId: 'n1', operatorUserId: 'op1' },
+      { id: 'b', name: 'Ragnarok', mapName: 'Ragnarok_WP', nodeId: 'n2' },
+      { id: 'c', name: 'Aberration', mapName: 'Aberration_WP', nodeId: 'n2', operatorUserId: 'op1' }
+    ];
+    const shown = () => component.serverGroups.flatMap(group => group.servers.map(server => server.id));
+
+    beforeEach(() => {
+      machineNames = { n1: 'PC 1', n2: 'Dallas01' };
+      localNode = 'n1';
+      operatorNames = { op1: 'Ops' };
+      servers$.next(list);
+    });
+
+    it('finds servers by name, map or machine as you type', () => {
+      component.onSearch('ragn');
+      expect(shown()).toEqual(['b']);
+      component.onSearch('island');
+      expect(shown()).toEqual(['a']);
+      component.onSearch('dallas');
+      expect(shown()).toEqual(['b', 'c']);
+    });
+
+    it('shows only this machine\'s servers, or one machine\'s', () => {
+      component.onMachineFilter('here');
+      expect(shown()).toEqual(['a']);
+      component.onMachineFilter('n2');
+      expect(shown()).toEqual(['b', 'c']);
+    });
+
+    it('offers the machines to filter by only in a mesh', () => {
+      expect(component.machineOptions.map(option => option.label)).toEqual(['All machines', 'This machine', 'PC 1', 'Dallas01']);
+      machineNames = {};
+      meshNodesChanged$.next();
+      expect(component.machineOptions).toEqual([]);
+    });
+
+    it('groups servers under each operator when asked, then by machine, with the admin pool last', () => {
+      component.onGroupByOperator(true);
+
+      expect(component.serverGroups.map(group => [group.label, group.servers.map(server => server.id)]))
+        .toEqual([['Ops', ['c', 'a']], ['Admin pool', ['b']]]);
+    });
+
+    it('reorders only the whole list, not a narrowed or grouped one', () => {
+      expect(component.reorderable).toBeTrue();
+      component.onSearch('ragn');
+      expect(component.reorderable).toBeFalse();
+      component.onSearch('');
+      component.onGroupByOperator(true);
+      expect(component.reorderable).toBeFalse();
+    });
   });
 
   it('maps server states to status classes', () => {

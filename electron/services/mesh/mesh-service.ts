@@ -2,14 +2,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { ALL_PERMISSIONS, AuthenticatedUser, Permission, ROLE_IDS } from '../../types/auth.types';
+import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES, Permission, ROLE_IDS, effectivePermissions } from '../../types/auth.types';
 import {
-  COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ClusterRecord, type MeshAddress, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
+  COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ArkUpdateStatus, type ClusterRecord, type MeshAddress, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
   type NodeRecord, type NodeResources, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
 import { getInstanceDir, getInstancesBaseDir } from '../../utils/ark/instance.utils';
 import { ClusterSync, importClusterData, type ClusterSyncSummary } from './cluster-sync';
+import { TransferNotices } from './transfer-notices';
 import { arkClusterIdOf, assertArkClusterIdFree, clusterFolder, clusterNameOf, knownClusters, rememberClusters } from '../clusters/cluster-registry';
 import { isServerMoving, whileServerMoves } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { appVersion } from '../../utils/app-version';
@@ -17,7 +18,7 @@ import { userDatabaseService } from '../auth/user-database.service';
 import { poolDirectory } from '../auth/pool-directory';
 import { messagingService } from '../messaging.service';
 import { autoUpdateService } from '../auto-update.service';
-import { beginClusterUpdate } from '../ark-update.service';
+import { arkUpdateProgress, beginClusterUpdate } from '../ark-update.service';
 import { relaunchInPlace } from '../docker-runtime-update';
 import { sampleHostResources } from '../host-resources';
 import { setMeshDesktopMode, setMeshDesktopUser } from '../auth/desktop-session';
@@ -30,7 +31,8 @@ import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHo
 import { executeCommand } from './command-router';
 import { providerForProfile } from './cluster-storage';
 import { clockSkewMs, probeTcp, wgInstalled, wireguardConfig, wireguardPrivateKey, applyWireguard } from './diagnostics';
-import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
+import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteLocalNode, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
+import { latestAccountsBeforeJoin, localLoginToCarry, machineAdminName, readAccountsSnapshot, type CarriedLogin } from './machine-admin';
 import { MeshRepository } from './mesh-repository';
 import { SCHEMA_VERSION } from './schema';
 import { hashArgon2id, hashToken, newEnrollmentToken, verifyArgon2id, verifyBcrypt } from './passwords';
@@ -41,12 +43,12 @@ import {
 import { chooseNode, moveServer, type PlacementInput } from './placement';
 import { partitionDecision } from './partition-policy';
 import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents, type AddressProbe, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
-import { addressFromEndpoints, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
+import { addressFromEndpoints, memberUrlOf, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
 import { reconcile, type ReconcileMemory } from './reconciler';
 import { DesiredIntents } from './desired-intent';
 import { PendingConfigs } from './pending-configs';
 import { RqliteClient } from './rqlite-client';
-import { RqliteSupervisor } from './rqlite-supervisor';
+import { RqliteSupervisor, rqliteProblem } from './rqlite-supervisor';
 
 const HTTP_USER = 'aasm';
 const PEER_PORT = envPort('AASM_PEER_PORT', 4747);
@@ -132,6 +134,8 @@ export class MeshService {
   private readonly nodeResources = new Map<string, { resources: NodeResources; at: number }>();
   /** How each other node's copy of the cluster files stands, from its last heartbeat. */
   private readonly nodeClusterSync = new Map<string, { summary: Record<string, ClusterSyncSummary>; at: number }>();
+  /** How each other member's ARK update was going at its last heartbeat. */
+  private readonly nodeArkUpdate = new Map<string, { progress: ArkUpdateStatus | null; at: number }>();
 
   /**
    * Who this node is. Read once while attached and kept in memory: it is consulted on every tick
@@ -219,6 +223,7 @@ export class MeshService {
 
   /** The web interface and the desktop window both need a mesh account from here on. */
   private claimMembership(): void {
+    noteLocalNode(readNodeIdentity()?.nodeId || null);
     setMeshMember(true);
     setMeshDesktopMode(true);
   }
@@ -252,6 +257,9 @@ export class MeshService {
   async createMesh(input: { name: string; adminUsername?: string; adminPassword?: string; address?: { host?: unknown; peerPort?: unknown; raftPort?: unknown } }): Promise<MeshStatus> {
     if (this.isEnabled()) return this.status();
     const address = input.address ? meshAddressOf(input.address) : null;
+    // Before anything is recorded on a member for a machine that could never take part.
+    const blocker = rqliteProblem();
+    if (blocker) throw new Error(blocker);
     const identity = ensureNodeIdentity();
     const ca = createMeshCa(input.name || 'cerious-aasm-mesh');
     const keys = generateKeyPair();
@@ -296,12 +304,15 @@ export class MeshService {
     memberUrl: string; token: string; name?: string; adminPassword?: string; adminUsername?: string;
     /** Where the others reach this machine, when they cannot reach it at its own address: outside their network, say. */
     address?: { host?: unknown; peerPort?: unknown; raftPort?: unknown };
-  }): Promise<MeshStatus> {
+  }): Promise<MeshStatus & { machineAdmin?: string }> {
     if (this.isEnabled()) throw new Error('This node is already in a mesh. Leave it before joining another.');
     const address = input.address ? meshAddressOf(input.address) : null;
+    // Before anything is recorded on a member for a machine that could never take part.
+    const blocker = rqliteProblem();
+    if (blocker) throw new Error(blocker);
     const [secret, pinned] = String(input.token || '').trim().split('.');
     if (!secret || !pinned) throw new Error('This token does not name the mesh it is for. Create a new token on a member.');
-    const memberUrl = input.memberUrl.replace(/\/$/, '');
+    const memberUrl = memberUrlOf(input.memberUrl);
     const shown = await peerRequest({ url: `${memberUrl}/v1/ca`, method: 'GET', insecure: true, timeoutMs: 15_000 });
     const caCert = (shown.body as { caCert?: string })?.caCert || '';
     let matches = false;
@@ -357,6 +368,8 @@ export class MeshService {
     this.repo = new MeshRepository(client);
     this.rqlite = client;
     this.secrets = secrets;
+    // Read before the mesh's accounts replace this machine's own.
+    const carried = this.loginToCarry(userDatabaseService.exportCredentialRows());
     // The mesh's accounts replace the ones this machine had; those are kept in a copy.
     try {
       userDatabaseService.snapshotTo(path.join(meshRoot(), `accounts-before-join-${Date.now()}.db`));
@@ -369,12 +382,83 @@ export class MeshService {
     fs.writeFileSync(adoptClustersMarker(), '');
     await this.attach(joinedIdentity);
     await this.importLocalServers(nodeId);
+    fs.rmSync(carriedLoginMarker(), { force: true });
+    let machineAdmin: string | null = null;
+    try {
+      machineAdmin = await this.carryLogin(nodeId, joinedIdentity.name, carried);
+    } catch (error) {
+      // Tried again at each check until it is in.
+      console.warn('[mesh] Could not yet bring this machine\'s admin password into the mesh:', messageOf(error));
+    }
     if (input.adminPassword) {
       const user = await this.verifyLogin(input.adminUsername || 'admin', input.adminPassword);
       if (user) this.adoptDesktop(user);
     }
     this.publishStatus();
-    return this.status();
+    const status = await this.status();
+    return machineAdmin ? { ...status, machineAdmin } : status;
+  }
+
+  /** The admin password this machine had of its own, from its accounts (oldest first) and its web login. */
+  private loginToCarry(accounts: Array<{ username: string; passwordHash: string; roleId: string; active: boolean; cliLocked?: boolean }>): CarriedLogin | null {
+    try {
+      return localLoginToCarry(accounts.map(account => ({ ...account, cliLocked: !!account.cliLocked })), readWebLogin());
+    } catch (error) {
+      console.warn('[mesh] Could not read this machine\'s own admin login:', messageOf(error));
+      return null;
+    }
+  }
+
+  /**
+   * Makes this machine's own admin password a numbered machine admin for it, so whoever ran it can
+   * still sign in once the mesh's accounts are the only way in. Nothing when the mesh already has
+   * a machine admin for it or that password. The name signed in with, or null. Throws while a
+   * write cannot be made; it is tried again then.
+   */
+  private async carryLogin(nodeId: string, nodeName: string, login: CarriedLogin | null): Promise<string | null> {
+    const repo = this.repo!;
+    const done = (username: string | null) => {
+      fs.writeFileSync(carriedLoginMarker(), JSON.stringify({ username, at: Date.now() }));
+      return username;
+    };
+    if (!login) return done(null);
+    const [users, scopes] = await Promise.all([repo.listUsers(), repo.listMachineAdmins()]);
+    // A machine that created the mesh brought its accounts with it, the password among them.
+    if (scopes.some(scope => scope.nodeId === nodeId) || users.some(user => user.passwordHash === login.passwordHash)) return done(null);
+    this.requireQuorum('security-write');
+    const { username, displayName } = machineAdminName(users.map(user => user.username), nodeName, isRunningInDocker() ? '' : os.hostname());
+    if (!await repo.getRole(ROLE_IDS.MACHINE_ADMIN)) {
+      const role = BUILT_IN_ROLES.find(builtIn => builtIn.id === ROLE_IDS.MACHINE_ADMIN)!;
+      await repo.upsertRole({ roleId: role.id, name: role.name, permissions: [...role.permissions], securityVersion: 1 });
+    }
+    const userId = randomUUID();
+    const now = Date.now();
+    const hashAlg = hashAlgOf(login.passwordHash);
+    await repo.upsertUser({
+      userId, username, displayName, passwordHash: login.passwordHash, passwordParameters: hashAlg, hashAlg, enabled: true,
+      securityVersion: 1, roleId: ROLE_IDS.MACHINE_ADMIN, ownerUserId: null, createdAt: now, updatedAt: now
+    });
+    await repo.setMachineAdmin(userId, nodeId, false);
+    console.log(`[mesh] This machine's admin password (its ${login.source} "${login.username}") now signs in as "${username}", the machine admin for ${nodeName}.`);
+    return done(username);
+  }
+
+  private carryWarned = false;
+
+  /**
+   * Once, for a machine that joined before machine admins existed: what it had is its command-line
+   * login, the accounts it kept a copy of when it joined, and its web login.
+   */
+  private async carryLoginOnce(nodeId: string): Promise<void> {
+    if (fs.existsSync(carriedLoginMarker())) return;
+    try {
+      const commandLine = userDatabaseService.exportCredentialRows().filter(row => row.cliLocked);
+      const before = readAccountsSnapshot(latestAccountsBeforeJoin(meshRoot()) ?? '').filter(row => !row.cliLocked);
+      await this.carryLogin(nodeId, this.identity()?.name || 'machine', this.loginToCarry([...commandLine, ...before]));
+    } catch (error) {
+      if (!this.carryWarned) console.warn('[mesh] Could not yet bring this machine\'s admin password into the mesh:', messageOf(error));
+      this.carryWarned = true;
+    }
   }
 
   async createEnrollmentToken(): Promise<{ token: string; expiresAt: number }> {
@@ -399,8 +483,9 @@ export class MeshService {
       ? request.nodeId
       : '';
     if (requestedId && requestedId === localId) throw new Error('This machine is already in the mesh.');
-    const consumed = await repo.consumeToken(hashToken(request.token), Date.now());
-    if (!consumed) throw new Error('Enrollment token is invalid or expired.');
+    const tokenHash = hashToken(request.token);
+    const consumed = await repo.consumeToken(tokenHash, Date.now());
+    if (!consumed) throw new Error(tokenRefusal(await repo.tokenState(tokenHash, Date.now())));
     const mesh = await repo.getMesh(this.identity()?.meshId);
     const secrets = this.secrets;
     if (!mesh || !secrets) throw new Error('This node is not in a mesh.');
@@ -682,6 +767,16 @@ export class MeshService {
       const decision = partitionDecision(await this.repo.hasQuorum(), 'remote-command');
       if (!decision.allow) return { success: false, error: decision.reason || 'The mesh has no quorum.' };
     }
+    if (kind === 'ark') {
+      // One machine at a time: its servers are down while it updates, and the others carry the players.
+      for (const other of await this.repo.listNodes(this.identity()?.meshId)) {
+        if (other.nodeId === nodeId || other.status === 'removed') continue;
+        const progress = other.nodeId === localId ? arkUpdateProgress() : this.reportedArkUpdate(other.nodeId);
+        if (progress && progress.phase !== 'complete' && progress.phase !== 'error') {
+          return { success: false, error: `${other.name} is updating ARK. Update one machine at a time.` };
+        }
+      }
+    }
     const command: ControlCommand = {
       commandId: randomUUID(),
       correlationId: randomUUID(),
@@ -903,6 +998,16 @@ export class MeshService {
     };
     const [peer, raft] = await Promise.all([check(address.peerPort), check(address.raftPort)]);
     return { peer, raft };
+  }
+
+  private blockerChecked: { at: number; problem: string | null } | null = null;
+
+  /** Why this machine cannot run the mesh database, if it cannot. Checked at most once a minute: it runs rqlited. */
+  private meshBlocker(): string | null {
+    if (!this.blockerChecked || Date.now() - this.blockerChecked.at > 60_000) {
+      this.blockerChecked = { at: Date.now(), problem: rqliteProblem() };
+    }
+    return this.blockerChecked.problem;
   }
 
   /** Where other machines reach this one: as it joined with, or as it would advertise if it created or joined a mesh now. */
@@ -1297,13 +1402,17 @@ export class MeshService {
   }
 
   /** The mesh's clusters, with whether the app keeps their files on every machine. */
-  async listClusters(): Promise<Array<ClusterRecord & { managed: boolean }>> {
+  async listClusters(): Promise<Array<ClusterRecord & { managed: boolean; notifyUploads: boolean }>> {
     if (!this.repo) return [];
     const [clusters, storage] = await Promise.all([this.repo.listClusters(), this.repo.listStorage()]);
-    return clusters.map(cluster => ({
-      ...cluster,
-      managed: storage.some(profile => profile.storageProfileId === cluster.storageProfileId && profile.mode === 'managed')
-    }));
+    return clusters.map(cluster => {
+      const profile = storage.find(item => item.storageProfileId === cluster.storageProfileId);
+      return {
+        ...cluster,
+        managed: profile?.mode === 'managed',
+        notifyUploads: profile?.metadata.notifyUploads !== false
+      };
+    });
   }
 
   /** Renames a cluster. Its ARK cluster ID stays: it names its folder on every machine. */
@@ -1655,8 +1764,13 @@ export class MeshService {
     if (!row) return;
     const existing = await this.repo.getUser(userId);
     const hashAlg = hashAlgOf(row.passwordHash);
+    const scope = (await this.repo.listMachineAdmins()).find(item => item.userId === userId) ?? null;
+    const nextScope = row.roleId === ROLE_IDS.MACHINE_ADMIN && row.machineNodeId
+      ? { nodeId: row.machineNodeId, updatesAny: !!row.updatesAnyMachine }
+      : null;
+    const scopeChanged = (scope?.nodeId ?? null) !== (nextScope?.nodeId ?? null) || !!scope?.updatesAny !== !!nextScope?.updatesAny;
     const accessChanged = !existing || existing.passwordHash !== row.passwordHash || existing.enabled !== row.active
-      || existing.roleId !== row.roleId || (existing.ownerUserId || null) !== (row.ownerUserId || null);
+      || existing.roleId !== row.roleId || (existing.ownerUserId || null) !== (row.ownerUserId || null) || scopeChanged;
     await this.repo.upsertUser({
       userId: row.id,
       username: row.username,
@@ -1671,6 +1785,8 @@ export class MeshService {
       createdAt: existing?.createdAt || Date.now(),
       updatedAt: Date.now()
     });
+    if (nextScope) await this.repo.setMachineAdmin(userId, nextScope.nodeId, nextScope.updatesAny);
+    else if (scope) await this.repo.clearMachineAdmin(userId);
   }
 
   /** A deleted account leaves the mesh, so every node removes it and the name can be used again. */
@@ -1701,13 +1817,14 @@ export class MeshService {
       return {
         ...emptyStatus(identity.nodeId, identity.name),
         advertise: this.advertisedAddress(),
+        blocker: this.meshBlocker(),
         meshId: identity.meshId,
         reconnecting: true,
         warning: 'This machine is in a mesh and is reconnecting to the other members. A mesh of two needs both machines running to get going again.'
       };
     }
     if (!this.repo || !identity?.meshId) {
-      return { ...emptyStatus(identity?.nodeId || null, identity?.name || null), advertise: this.advertisedAddress() };
+      return { ...emptyStatus(identity?.nodeId || null, identity?.name || null), advertise: this.advertisedAddress(), blocker: this.meshBlocker() };
     }
     const [mesh, nodes, clusters, storage, users, quorum, voters, leader] = await Promise.all([
       this.repo.getMesh(identity.meshId),
@@ -1745,6 +1862,7 @@ export class MeshService {
         host: hostOf(node.endpoints.peerUrl),
         resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId),
         clusterSync: node.nodeId === identity.nodeId ? this.clusterSync?.summary() ?? {} : this.reportedClusterSync(node.nodeId),
+        arkUpdate: node.nodeId === identity.nodeId ? arkUpdateProgress() : this.reportedArkUpdate(node.nodeId),
         address: addressFromEndpoints(node.endpoints.peerUrl, node.endpoints.raftAddr)
       })),
       advertise: this.advertisedAddress(),
@@ -1772,9 +1890,11 @@ export class MeshService {
     this.localResources = null;
     this.nodeResources.clear();
     this.nodeClusterSync.clear();
+    this.nodeArkUpdate.clear();
     if (this.clusterTimer) clearInterval(this.clusterTimer);
     this.clusterTimer = null;
     this.clusterSync = null;
+    this.notices = null;
     this.accountsFingerprint = '';
     messagingService.broadcastTap = null;
     this.localNodeId = null;
@@ -1793,6 +1913,7 @@ export class MeshService {
     const identity = this.identity();
     if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
     await this.stop();
+    noteLocalNode(null);
     setMeshMember(false);
     setMeshDesktopMode(false);
     this.noteDesktopAuth();
@@ -1888,7 +2009,8 @@ export class MeshService {
         onCommand: body => this.executeLocalCommand(body),
         onQuery: body => this.answerQuery(body),
         onSubscribe: () => this.greeting(),
-        onHeartbeat: (id, sentAt, resources, clusterSync) => {
+        onHeartbeat: (id, sentAt, resources, clusterSync, arkUpdate) => {
+          this.nodeArkUpdate.set(id, { progress: arkUpdateOf(arkUpdate), at: Date.now() });
           this.seenHeartbeats.set(id, { at: Date.now(), skewMs: clockSkewMs(sentAt) });
           const reported = nodeResourcesOf(resources);
           if (reported) this.nodeResources.set(id, { resources: reported, at: Date.now() });
@@ -1920,6 +2042,7 @@ export class MeshService {
     this.intents = new DesiredIntents(intentsPath());
     this.pendingConfigs = new PendingConfigs(path.join(meshRoot(), 'pending-configs.json'));
     setMeshWriteBlock(op => this.writeBlock(op));
+    noteLocalNode(nodeId);
     setMeshMember(true);
     setMeshDesktopMode(true);
     this.noteDesktopAuth();
@@ -1941,13 +2064,28 @@ export class MeshService {
       listClusterFiles: (clusterId: string) => this.repo!.listClusterFiles(clusterId),
       commitClusterFile: (file: Parameters<MeshRepository['commitClusterFile']>[0], base: number) => this.repo!.commitClusterFile(file, base)
     };
+    const notices = new TransferNotices({
+      machinesFor: clusterId => this.machinesHosting(clusterId, nodeId),
+      enabled: clusterId => this.uploadNoticesOn(clusterId),
+      notify: (clusterId, playerId) => this.tellUploadReady(clusterId, playerId, nodeId)
+    });
+    this.notices = notices;
     this.clusterSync = new ClusterSync({
       nodeId,
       repo,
       rootOf: clusterFolder,
       workDir: path.join(meshRoot(), 'cluster-sync'),
       fetch: (sha256, originNode, dest) => this.fetchClusterObject(sha256, originNode, dest),
-      announce: clusterId => this.peer?.broadcast({ type: 'cluster-changed', nodeId, clusterId })
+      announce: clusterId => this.peer?.broadcast({ type: 'cluster-changed', nodeId, clusterId }),
+      // A player's upload here: they are told once the other machines have it.
+      onRecorded: change => {
+        void notices.recorded(change).catch(error => console.warn('[mesh] Could not follow an upload:', messageOf(error)));
+      },
+      // So the machine where a player uploaded knows this one has it.
+      onPlaced: change => {
+        notices.superseded(change);
+        this.peer?.broadcast({ type: 'cluster-placed', nodeId, ...change });
+      }
     });
     if (this.clusterTimer) clearInterval(this.clusterTimer);
     this.clusterTimer = setInterval(() => this.syncClusters(), CLUSTER_SYNC_MS);
@@ -1955,7 +2093,77 @@ export class MeshService {
 
   private syncClusters(): void {
     if (!this.repo || !this.clusterSync || this.changingAddress) return;
+    this.notices?.expire();
     void this.clusterSync.syncOnce().catch(error => console.warn('[mesh] Could not sync cluster files:', messageOf(error)));
+  }
+
+  /** Waits on players' uploads until the other machines have them. */
+  private notices: TransferNotices | null = null;
+
+  /** The servers in a cluster, on every machine, from the config the mesh holds for each. */
+  private async clusterServers(clusterId: string): Promise<ServerRecord[]> {
+    return (await this.repo!.listServers()).filter(server => clusterRefOf(server.configJson) === clusterId);
+  }
+
+  /** The other machines an upload has to reach: those hosting a server in the cluster, reachable now. */
+  private async machinesHosting(clusterId: string, localId: string): Promise<string[]> {
+    const hosts = new Set((await this.clusterServers(clusterId)).map(server => server.nodeId));
+    return [...hosts].filter(nodeId => nodeId !== localId && this.reachable(nodeId));
+  }
+
+  /** On unless turned off for the cluster in Settings → Clusters. */
+  private async uploadNoticesOn(clusterId: string): Promise<boolean> {
+    const profile = await this.clusterProfile(clusterId);
+    return profile?.metadata.notifyUploads !== false;
+  }
+
+  private async clusterProfile(clusterId: string): Promise<StorageProfileRecord | null> {
+    const cluster = await this.repo!.getCluster(clusterId);
+    return cluster?.storageProfileId ? this.repo!.getStorage(cluster.storageProfileId) : null;
+  }
+
+  /** Whether players in a cluster are told when their upload is ready on every machine. */
+  async setUploadNotices(clusterId: string, enabled: boolean): Promise<void> {
+    this.requireQuorum('placement');
+    const profile = await this.clusterProfile(clusterId);
+    if (!profile) throw new Error('That cluster was not found.');
+    await this.repo!.upsertStorage({ ...profile, metadata: { ...profile.metadata, notifyUploads: enabled } });
+    this.publishStatus();
+  }
+
+  /**
+   * Finds the player on a running server of the cluster, this machine's first (where they
+   * uploaded), then the other machines' (where they may already have gone), and tells them
+   * privately that their upload is ready.
+   */
+  private async tellUploadReady(clusterId: string, playerId: string, localId: string): Promise<void> {
+    const servers = (await this.clusterServers(clusterId))
+      .sort((a, b) => Number(b.nodeId === localId) - Number(a.nodeId === localId));
+    const command = `ServerChatTo "${playerId}" ${UPLOAD_READY_MESSAGE}`;
+    for (const server of servers) {
+      const here = server.nodeId === localId;
+      const state = here ? localRuntime.state(server.serverId) : this.liveStates.get(server.serverId)?.state;
+      if (here ? state !== 'running' : state && state !== 'running') continue;
+      let players: Array<{ playerId?: string; steamId?: string }> = [];
+      try {
+        players = here
+          ? await localRuntime.onlinePlayers(server.serverId)
+          : (await this.queryRemote<{ players?: Array<{ playerId?: string; steamId?: string }> }>(server.serverId, 'online-players'))?.players ?? [];
+      } catch {
+        continue;
+      }
+      if (!players.some(player => (player.playerId || player.steamId || '').toLowerCase() === playerId)) continue;
+      const sent = here
+        ? await localRuntime.rcon(server.serverId, command)
+        : await this.forwardIfRemote('rcon', server.serverId, 'cluster', { command });
+      if (sent && 'error' in sent && sent.error) {
+        console.warn(`[cluster] Could not tell ${playerId} on ${server.name} their upload is ready: ${sent.error}`);
+      } else {
+        console.log(`[cluster] Told ${playerId} on ${server.name} their upload is ready.`);
+      }
+      return;
+    }
+    console.log(`[cluster] ${playerId}'s upload is ready; they are not on a running server of the cluster to tell.`);
   }
 
   /** Fetches cluster file contents from the machine that recorded them, or from any other member that has them. */
@@ -2043,9 +2251,15 @@ export class MeshService {
       // Every 15 s at most: lastSeen, the build this node runs, and what Auto-select scores it on.
       const outdated = self && (self.version !== version || self.protocolVersion !== PROTOCOL_VERSION || self.certSerial !== serial);
       if (self && (outdated || Date.now() - self.lastSeen > 15_000)) {
-        await this.repo.upsertNode({
-          ...self, version, protocolVersion: PROTOCOL_VERSION, certSerial: serial, capabilities: collectCapabilities(), lastSeen: Date.now()
-        });
+        // A write: it needs quorum. Without it the heartbeats below still go out, so the members
+        // that remain keep seeing each other; the record catches up once quorum is back.
+        try {
+          await this.repo.upsertNode({
+            ...self, version, protocolVersion: PROTOCOL_VERSION, certSerial: serial, capabilities: collectCapabilities(), lastSeen: Date.now()
+          });
+        } catch {
+          /* recorded at a later heartbeat */
+        }
       }
       if (!certs) return;
       const nodes = await this.repo.listNodes(this.identity()?.meshId);
@@ -2055,7 +2269,7 @@ export class MeshService {
             url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/heartbeat`,
             method: 'POST',
             // nodeId is for an older receiver; a current one takes it from the certificate.
-            body: { nodeId, sentAt: Date.now(), resources: this.localResources, clusterSync: this.clusterSync?.summary() ?? {} },
+            body: { nodeId, sentAt: Date.now(), resources: this.localResources, clusterSync: this.clusterSync?.summary() ?? {}, arkUpdate: arkUpdateProgress() },
             ca: fs.readFileSync(certs.caCert, 'utf8'),
             cert: fs.readFileSync(certs.nodeCert, 'utf8'),
             key: fs.readFileSync(certs.nodeKey, 'utf8'),
@@ -2133,6 +2347,14 @@ export class MeshService {
     // Another member recorded a change to a cluster file: look now rather than at the next check.
     if (frame?.type === 'cluster-changed' && frame.nodeId === fromNodeId) {
       this.syncClusters();
+      return;
+    }
+    // Another member has a version of a cluster file: an upload here may now be ready everywhere.
+    if (frame?.type === 'cluster-placed' && frame.nodeId === fromNodeId) {
+      const placed = frame as { clusterId?: unknown; path?: unknown; version?: unknown };
+      if (typeof placed.clusterId === 'string' && typeof placed.path === 'string' && typeof placed.version === 'number') {
+        this.notices?.placed(fromNodeId, { clusterId: placed.clusterId, path: placed.path, version: placed.version });
+      }
       return;
     }
     if (frame?.type !== 'server-event' || frame.nodeId !== fromNodeId || typeof frame.channel !== 'string') return;
@@ -2218,12 +2440,16 @@ export class MeshService {
   private async mirrorAccounts(users: UserRecord[]): Promise<void> {
     if (!this.repo || users.length === 0) return;
     try {
-      const roles = await this.repo.listRoles();
+      const [roles, scopes] = await Promise.all([this.repo.listRoles(), this.repo.listMachineAdmins()]);
       const accounts = {
-        users: users.map(user => ({
-          userId: user.userId, username: user.username, displayName: user.displayName, passwordHash: user.passwordHash,
-          enabled: user.enabled, roleId: user.roleId, ownerUserId: user.ownerUserId, createdAt: user.createdAt, updatedAt: user.updatedAt
-        })),
+        users: users.map(user => {
+          const scope = scopes.find(item => item.userId === user.userId);
+          return {
+            userId: user.userId, username: user.username, displayName: user.displayName, passwordHash: user.passwordHash,
+            enabled: user.enabled, roleId: user.roleId, ownerUserId: user.ownerUserId, createdAt: user.createdAt, updatedAt: user.updatedAt,
+            machineNodeId: scope?.nodeId ?? null, updatesAnyMachine: !!scope?.updatesAny
+          };
+        }),
         roles: roles.map(role => ({ roleId: role.roleId, name: role.name, permissions: role.permissions }))
       };
       const fingerprint = JSON.stringify(accounts);
@@ -2289,6 +2515,7 @@ export class MeshService {
       this.quorum = await this.repo.hasQuorum();
       if (this.quorum) {
         await this.ensureSchema();
+        await this.carryLoginOnce(nodeId);
         await this.flushIntents(nodeId);
         await this.flushPendingConfigs();
         await this.adoptLocalClusters();
@@ -2304,7 +2531,14 @@ export class MeshService {
       for (const server of servers) {
         if (server.nodeId !== nodeId) continue;
         try {
-          if (promoteStaged(server.serverId)) void serverInstanceService.broadcastInstances();
+          if (promoteStaged(server.serverId)) {
+            // Its ports are free on the machine it left; here a server may already use them.
+            const ports = await localRuntime.takeFreePortsIfShared(server.serverId);
+            if (ports) {
+              console.log(`[mesh] ${server.name} moved here onto ports a server here uses; it now uses game ${ports.gamePort}, query ${ports.queryPort}, RCON ${ports.rconPort}.`);
+            }
+            void serverInstanceService.broadcastInstances();
+          }
         } catch (error) {
           console.error(`[mesh] Could not take in the files for ${server.serverId}:`, error);
         }
@@ -2345,11 +2579,13 @@ export class MeshService {
         applyConfig: (id, revision, configJson) => localRuntime.applyConfig(id, revision, JSON.parse(configJson))
       }, this.reconcileMemory);
       this.peer?.broadcast({ type: 'status', nodeId, at: Date.now(), quorum: this.quorum });
-      await this.announce(nodeId);
       this.publishStatus();
       void this.publishInventoryIfChanged();
     } catch (error) {
       console.error('[mesh] Reconcile failed:', error);
+    } finally {
+      // Whatever else this check did: the others judge this machine up by its heartbeats alone.
+      await this.announce(nodeId);
     }
   }
 
@@ -2452,15 +2688,21 @@ export class MeshService {
     if (!this.repo) return null;
     const row = await this.repo.getUser(userId);
     if (!row) return null;
-    const role = await this.repo.getRole(row.roleId);
-    const permissions = row.roleId === ROLE_IDS.ADMIN ? [...ALL_PERMISSIONS] : ((role?.permissions || []) as Permission[]);
+    const [role, scopes] = await Promise.all([
+      this.repo.getRole(row.roleId),
+      row.roleId === ROLE_IDS.MACHINE_ADMIN ? this.repo.listMachineAdmins() : Promise.resolve([])
+    ]);
+    const scope = scopes.find(item => item.userId === row.userId);
+    const permissions = effectivePermissions({ id: row.roleId, permissions: (role?.permissions || []) as Permission[] });
     return {
       id: row.userId,
       username: row.username,
       displayName: row.displayName,
       roleId: row.roleId,
-      roleName: role?.name || row.roleId,
+      roleName: role?.name || BUILT_IN_ROLES.find(builtIn => builtIn.id === row.roleId)?.name || row.roleId,
       ownerUserId: row.ownerUserId,
+      machineNodeId: scope?.nodeId ?? null,
+      updatesAnyMachine: !!scope?.updatesAny,
       active: row.enabled,
       cliLocked: false,
       createdAt: row.createdAt,
@@ -2486,6 +2728,12 @@ export class MeshService {
   /** The window may already be open, so it has to hear that sign-in is now required or finished. */
   private noteDesktopAuth(): void {
     messagingService.sendToAll('mesh-auth-changed', {});
+  }
+
+  /** How a node said its ARK update was going at its last heartbeat; null once that is too old to show. */
+  private reportedArkUpdate(nodeId: string): ArkUpdateStatus | null {
+    const reported = this.nodeArkUpdate.get(nodeId);
+    return reported && reported.at >= Date.now() - HEARTBEAT_FRESH_MS ? reported.progress : null;
   }
 
   /** How a node said its copy of the cluster files stood at its last heartbeat; null once that is too old to show. */
@@ -2557,6 +2805,8 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
 
 /** How often each machine compares its cluster files with the mesh record. */
 const CLUSTER_SYNC_MS = 2_000;
+/** Sent privately to a player once what they uploaded has reached every machine of the cluster. */
+const UPLOAD_READY_MESSAGE = 'Your upload is ready on every server in the cluster. You can transfer now.';
 /** A file of a move is tried again after each of these, so a brief drop does not end the move. */
 const MOVE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 /** How often a move says how far it has got. */
@@ -2647,6 +2897,31 @@ function hostOf(peerUrl: string): string {
 }
 
 /** A cluster sync summary another node reported, keeping only well-formed entries; null when there are none. */
+/** The cluster a server chose, from the config the mesh holds for it. */
+function clusterRefOf(configJson: string): string | null {
+  try {
+    const ref = (JSON.parse(configJson) as { clusterRef?: unknown }).clusterRef;
+    return typeof ref === 'string' && ref ? ref : null;
+  } catch {
+    return null;
+  }
+}
+
+/** An ARK update's progress as a member reported it, checked; null for anything else. */
+function arkUpdateOf(value: unknown): ArkUpdateStatus | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.phase !== 'string') return null;
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
+  return {
+    phase: raw.phase as ArkUpdateStatus['phase'],
+    message: typeof raw.message === 'string' ? raw.message : '',
+    minutesLeft: num(raw.minutesLeft),
+    percent: num(raw.percent),
+    at: num(raw.at) ?? Date.now()
+  };
+}
+
 function clusterSyncOf(value: unknown): Record<string, ClusterSyncSummary> | null {
   if (!value || typeof value !== 'object') return null;
   const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0);
@@ -2707,6 +2982,13 @@ function destinationRefusal(node: NodeRecord | null): string | null {
 }
 
 /** Why `node` cannot take `operation` yet, or null. Its recorded protocol is refreshed as it announces. */
+/** Why a joining machine's token was refused, in words that say what to do next. */
+function tokenRefusal(state: 'used' | 'expired' | 'unknown' | 'valid'): string {
+  if (state === 'used') return 'This token was already used by another machine. Make a new token on a member for each machine you add.';
+  if (state === 'expired') return 'This token expired: a token lasts 15 minutes. Make a new one on a member.';
+  return 'This mesh did not issue that token. Check it was copied whole, or make a new one on a member.';
+}
+
 function outdatedNode(node: NodeRecord, operation: ControlCommand['operation']): string | null {
   if ((node.protocolVersion || 1) >= COMMAND_PROTOCOL[operation]) return null;
   return `${node.name} runs an older version of Cerious AASM. Update it to ${operation} servers from another node.`;
@@ -2729,6 +3011,22 @@ function rqliteDir(): string {
 }
 
 /** Present from a create or join until this machine's own clusters are in the mesh. */
+/** Written once this machine's own admin password is in the mesh, or it had none to bring. */
+function carriedLoginMarker(): string {
+  return path.join(meshRoot(), 'carried-login.json');
+}
+
+/** This machine's single web login, as the web server saved it: bcrypt, never the password. */
+function readWebLogin(): { username?: string; passwordHash?: string } | null {
+  const file = path.join(getDefaultInstallDir(), 'data', 'auth-config.json');
+  if (!fs.existsSync(file)) return null;
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+  return {
+    username: typeof saved.username === 'string' ? saved.username : '',
+    passwordHash: typeof saved.passwordHash === 'string' ? saved.passwordHash : ''
+  };
+}
+
 function adoptClustersMarker(): string {
   return path.join(meshRoot(), 'adopt-clusters');
 }

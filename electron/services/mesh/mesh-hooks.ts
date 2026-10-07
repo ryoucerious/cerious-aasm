@@ -78,6 +78,17 @@ export function noteMeshServers(servers: MeshServerSummary[]): void {
   if (!same) for (const listener of meshServerListeners) listener();
 }
 
+let localNodeId: string | null = null;
+
+/** This machine's node, while it is in a mesh: where a server with no mesh placement runs. */
+export function noteLocalNode(nodeId: string | null): void {
+  localNodeId = nodeId;
+}
+
+export function localNode(): string | null {
+  return localNodeId;
+}
+
 export function meshServer(serverId: string): MeshServerSummary | null {
   return meshServerList.get(serverId) ?? null;
 }

@@ -67,13 +67,16 @@ onRequest('create-user', async (payload, { sender, afterReply }) => {
       return { success: false, error: 'Your role cannot create that kind of account.' };
     }
   } else {
-    const refusal = roleAssignmentRefusal(identity, roleId);
+    const refusal = roleAssignmentRefusal(identity, roleId) ?? machineAdminRefusal(identity, roleId === ROLE_IDS.MACHINE_ADMIN);
     if (refusal) return { success: false, error: refusal };
   }
   // A pool owner's accounts always land in their own pool, whatever the payload says.
   const ownerUserId = kind === 'pool-owner' ? identity.user!.id : payload.ownerUserId;
 
-  const result = await userDatabaseService.createUser({ username, password, displayName, roleId, active, ownerUserId });
+  const result = await userDatabaseService.createUser({
+    username, password, displayName, roleId, active, ownerUserId,
+    machineNodeId: payload.machineNodeId, updatesAnyMachine: payload.updatesAnyMachine
+  });
   if (!result.success) return { success: false, error: result.error };
   await meshService.syncUser(result.data.id);
   afterReply(() => broadcastUsersChanged());
@@ -98,7 +101,9 @@ onRequest('update-user', async (payload, { sender, afterReply }) => {
     const refusal = poolEditRefusal(identity, existing, payload.roleId);
     if (refusal) return { success: false, error: refusal };
   } else {
-    const refusal = accountRefusal(identity, id) ?? roleAssignmentRefusal(identity, payload.roleId);
+    const touchesMachineAdmin = existing?.roleId === ROLE_IDS.MACHINE_ADMIN || payload.roleId === ROLE_IDS.MACHINE_ADMIN;
+    const refusal = accountRefusal(identity, id) ?? roleAssignmentRefusal(identity, payload.roleId)
+      ?? machineAdminRefusal(identity, touchesMachineAdmin);
     if (refusal) return { success: false, error: refusal };
   }
 
@@ -129,7 +134,9 @@ onRequest('update-user', async (payload, { sender, afterReply }) => {
     roleId: payload.roleId,
     active: payload.active,
     password: payload.password,
-    ...(ownerUserId !== undefined ? { ownerUserId } : {})
+    ...(ownerUserId !== undefined ? { ownerUserId } : {}),
+    ...(payload.machineNodeId !== undefined ? { machineNodeId: payload.machineNodeId } : {}),
+    ...(payload.updatesAnyMachine !== undefined ? { updatesAnyMachine: !!payload.updatesAnyMachine } : {})
   });
   if (!result.success) return { success: false, error: result.error };
   await meshService.syncUser(id);
@@ -326,6 +333,14 @@ function roleAssignmentRefusal(identity: SenderIdentity, roleId: unknown): strin
     return 'You cannot give out a role with permissions you do not have.';
   }
   return null;
+}
+
+/**
+ * A machine admin looks after a machine for the mesh admin, who alone makes one, picks its machine
+ * and lets it update every machine.
+ */
+function machineAdminRefusal(identity: SenderIdentity, touchesMachineAdmin: boolean): string | null {
+  return touchesMachineAdmin && !identity.isAdmin ? 'Only an admin can make or change a machine admin.' : null;
 }
 
 function accountRefusal(identity: SenderIdentity, userId: unknown): string | null {

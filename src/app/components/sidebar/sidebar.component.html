@@ -24,8 +24,24 @@
         <span class="material-icons nav-section-chevron">{{ showServers ? 'expand_more' : 'chevron_right' }}</span>
       </div>
 
-      <div class="server-list" *ngIf="showServers" cdkDropList (cdkDropListDropped)="onDrop($event)">
-        <div *ngFor="let server of servers; trackBy: trackByServerId"
+      <div class="server-list-tools" *ngIf="showServers && servers.length > 1">
+        <input type="search" class="form-control server-search" placeholder="Search servers" aria-label="Search servers"
+               [ngModel]="searchText" (ngModelChange)="onSearch($event)" />
+        <div class="server-list-filters" *ngIf="machineOptions.length || hasOperators">
+          <select class="form-control server-machine-filter" *ngIf="machineOptions.length" aria-label="Machine"
+                  [ngModel]="machineFilter" (ngModelChange)="onMachineFilter($event)">
+            <option *ngFor="let option of machineOptions" [value]="option.value">{{ option.label }}</option>
+          </select>
+          <label class="server-group-toggle" *ngIf="hasOperators" title="One group per operator">
+            <input type="checkbox" [ngModel]="groupByOperator" (ngModelChange)="onGroupByOperator($event)" /> By operator
+          </label>
+        </div>
+      </div>
+
+      <div class="server-list" *ngIf="showServers" cdkDropList [cdkDropListDisabled]="!reorderable" (cdkDropListDropped)="onDrop($event)">
+        <ng-container *ngFor="let group of serverGroups">
+        <div class="server-group-label" *ngIf="group.label">{{ group.label }}</div>
+        <div *ngFor="let server of group.servers; trackBy: trackByServerId"
              class="server-item"
              cdkDrag
              [class.selected]="selectedServerId === server.id"
@@ -55,6 +71,8 @@
             <span class="material-icons">close</span>
           </button>
         </div>
+        </ng-container>
+        <div class="server-list-empty" *ngIf="servers.length && !serverGroups[0]?.servers?.length && serverGroups.length <= 1">No servers match.</div>
         <div class="server-list-empty" *ngIf="!servers.length">
           No servers yet.
           <button type="button" class="link-btn" *ngIf="canCreateServer" (click)="onAddServerClick()">Add one</button>

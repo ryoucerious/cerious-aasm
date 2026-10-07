@@ -194,7 +194,8 @@
         "libasound2t64 | libasound2",
         "libxss1",
         "libgbm1",
-        "xvfb"
+        "xvfb",
+        "lib32gcc-s1 | lib32gcc1"
       ]
     },
     "rpm": {
@@ -206,7 +207,8 @@
         "alsa-lib",
         "libXScrnSaver",
         "mesa-libgbm",
-        "xorg-x11-server-Xvfb"
+        "xorg-x11-server-Xvfb",
+        "glibc(x86-32)"
       ]
     },
     "nsis": {

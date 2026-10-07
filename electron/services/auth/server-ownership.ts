@@ -83,7 +83,9 @@ export function applyServerOwnership(
     if (identity.isAdmin) {
       if (instance.operatorUserId === undefined) {
         keepStored(instance, existing, 'operatorUserId');
-      } else if (instance.operatorUserId) {
+      } else if (instance.operatorUserId && instance.operatorUserId !== (existing.operatorUserId || null)) {
+        // Only a change of pool is checked, as for the assignee below: a server whose stored
+        // operator is no longer one (made before operators, or the account went) still saves.
         const refusal = operatorRefusal(instance.operatorUserId, lookup);
         if (refusal) return refusal;
       }

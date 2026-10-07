@@ -353,15 +353,30 @@ undone by the mirror while its copy to the mesh is under way.
   name can be used again. Built-in roles are the same everywhere.
 - When a machine joins a mesh, the mesh's accounts replace the ones it
   had; those are kept in `mesh/accounts-before-join-<time>.db`.
+- The joining machine's own admin password comes with it, as a numbered
+  machine admin for that machine: `admin<N>-<site>-<machine>`, where
+  the site is its name in the mesh and the machine its host name (left
+  out in a container). The password is the one it was started with
+  (`--password` or `AASM_PASSWORD`), else its oldest active admin
+  account, else its single web login, carried as the stored hash. The
+  join reports the name, and the mesh page shows it. A member that
+  joined before this existed does the same once, at its first check
+  with quorum, from the copy it kept when it joined
+  (`mesh/carried-login.json` records that it has). Nothing is added
+  when the mesh already has that password or a machine admin for the
+  machine, and an account a mesh admin deletes is not brought back.
 - An account set from the command line stays local to its machine.
 - Every member's web interface and desktop window require sign-in,
   from the moment the app starts until the machine leaves, whatever its
   own login setting: they control servers on every node. Membership is
   read from the identity file before the web server or the window
-  starts, and the web server is started with sign-in already on. Where
-  the machine's own setting was off, only mesh accounts sign in.
-  Leaving the mesh puts that setting back; the saved setting is never
-  changed.
+  starts, and the web server is started with sign-in already on. Only
+  mesh accounts sign in: the machine's single web login is not in force
+  in a mesh, whether its own setting is on or off, and a session of it
+  is signed out. (It used to stay in force where the setting was on, as
+  an admin of every machine; a machine whose accounts were its way in
+  was locked out instead.) Leaving the mesh puts that login back; the
+  saved setting is never changed.
 - While a member reconnects after a restart, logins are checked against
   its own copy of the mesh accounts, so it is never locked out. An
   account set from the command line is not a mesh account and does not
@@ -407,6 +422,30 @@ is filled in. Mesh status says it is reconnecting meanwhile, never
 standalone, so the mesh page does not offer to create or join one.
 
 ### RBAC
+
+Admin is the mesh admin. Only an admin brings a machine in or takes one
+out: `nodes.enroll` and `nodes.remove` count for no other role, even a
+custom role that lists them.
+
+Machine Admin is a built-in role a level above Operator, for one mesh
+machine. Only an admin makes one, picks its machine, and may let it
+update every machine. A machine admin:
+
+- sees every server in the mesh, in every pool;
+- runs, configures, backs up and deletes the servers on its machine,
+  and adds servers there (whatever machine the page asked for);
+- moves any server between machines;
+- updates ARK and the app on its machine, and on every machine when it
+  was let;
+- changes nothing else about another machine: installing, firewall
+  setup, auto-start and adding a server from a backup there are refused.
+  Start All and Stop All cover only the servers on its machine;
+- manages no accounts, and no machine (rename, drain, address).
+
+Its machine is in the mesh's `machine_admins` table (schema 3), apart
+from `users`, so a node on an older version reads its accounts as
+before; there it is a custom role without the machine limits until it
+updates. A change of machine or of the update grant signs it out.
 
 Use capabilities, not hard-coded role names:
 

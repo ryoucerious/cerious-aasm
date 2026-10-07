@@ -175,6 +175,42 @@ describe('RconService', () => {
     });
   });
 
+  describe('online players', () => {
+    function answers(response: string): void {
+      jest.spyOn(service, 'executeRconCommand').mockResolvedValue({ success: true, response, instanceId: 'id' });
+    }
+
+    // ASA lists each player with their EOS ID: 32 hex characters, not a number.
+    it('reads each player\'s whole EOS ID from ASA\'s list', async () => {
+      answers('0. Jared, 0002a1b2c3d4e5f60718293a4b5c6d7e\n1. Ada, 00029f8e7d6c5b4a39281706f5e4d3c2\n ');
+
+      expect(await service.getOnlinePlayers('id')).toEqual([
+        { name: 'Jared', playerId: '0002a1b2c3d4e5f60718293a4b5c6d7e', steamId: '0002a1b2c3d4e5f60718293a4b5c6d7e' },
+        { name: 'Ada', playerId: '00029f8e7d6c5b4a39281706f5e4d3c2', steamId: '00029f8e7d6c5b4a39281706f5e4d3c2' }
+      ]);
+    });
+
+    it('keeps a name with a comma in it whole', async () => {
+      answers('0. Doe, Jane, 0002a1b2c3d4e5f60718293a4b5c6d7e\r\n');
+
+      expect(await service.getOnlinePlayers('id')).toEqual([
+        { name: 'Doe, Jane', playerId: '0002a1b2c3d4e5f60718293a4b5c6d7e', steamId: '0002a1b2c3d4e5f60718293a4b5c6d7e' }
+      ]);
+    });
+
+    it('still reads a numeric ID', async () => {
+      answers('0. Old, 76561198000000000');
+
+      expect(await service.getOnlinePlayers('id')).toEqual([{ name: 'Old', playerId: '76561198000000000', steamId: '76561198000000000' }]);
+    });
+
+    it('lists nobody when nobody is connected', async () => {
+      answers('No Players Connected');
+
+      expect(await service.getOnlinePlayers('id')).toEqual([]);
+    });
+  });
+
   it('forceDisconnectRcon calls disconnectRcon', async () => {
     const spy = jest.fn();
     (rconUtils.disconnectRcon as any) = spy;

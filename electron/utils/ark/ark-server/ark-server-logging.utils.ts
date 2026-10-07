@@ -19,6 +19,8 @@ const LOG_FILE_PATTERN = /^ShooterGame(_\d+)?\.log$/;
 const DETECTION_DELAY_MS = 2000;
 const RETRY_INTERVAL_MS = 1000;
 const TAIL_ATTACH_ATTEMPTS = 60;
+/** After the first minute: how often to look again for a log that is slow to appear. */
+const SLOW_RETRY_INTERVAL_MS = 5000;
 const POLL_INTERVAL_MS = 3000;
 // ARK logs grow to several GB; reading one whole on every request ballooned Electron past 10 GB.
 const TAIL_BYTES = 64 * 1024;
@@ -231,12 +233,13 @@ export function setupLogTailing(instanceId: string, onLog?: (line: string) => vo
       tail = tailFile(file, handleLine);
       return;
     }
-    if (++attempts < TAIL_ATTACH_ATTEMPTS) {
-      retryTimer = setTimeout(attach, RETRY_INTERVAL_MS);
-      return;
+    if (++attempts === TAIL_ATTACH_ATTEMPTS) {
+      // A server new to this machine (moved here, a fresh Proton prefix) can take minutes to write
+      // its log. Giving up here left it without lines, and starting, until the 15-minute net.
+      console.warn(`[ark-logging] No log file for ${instanceId} after ${TAIL_ATTACH_ATTEMPTS} s; still looking`);
+      onLog?.('[WARN] Still waiting for this server to write its log file');
     }
-    console.warn(`[ark-logging] Could not find the log file for ${instanceId} after ${TAIL_ATTACH_ATTEMPTS} s; not tailing`);
-    onLog?.('[WARN] Could not detect log file for this server instance');
+    retryTimer = setTimeout(attach, attempts < TAIL_ATTACH_ATTEMPTS ? RETRY_INTERVAL_MS : SLOW_RETRY_INTERVAL_MS);
   };
 
   tailers[instanceId] = {

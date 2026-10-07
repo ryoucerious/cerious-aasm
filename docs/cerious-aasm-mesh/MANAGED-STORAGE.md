@@ -40,3 +40,14 @@ Each machine's heartbeat carries a summary per cluster: files in step, changes w
 - **Create or join a mesh:** this machine's own clusters go into the mesh once. If the mesh already has a cluster with the same ARK ID, this machine's servers are pointed at it instead and their transfer files are copied into its folder.
 - **Leaving:** the machine keeps a copy of the mesh's clusters in `data/clusters.json`, so its servers stay in them on their own.
 - **A server that had its own cluster ID:** when it first starts in a cluster, what players uploaded under that ID is copied into the cluster, only for files the cluster does not have yet. This happens once per source folder, even if the server later moves to another cluster or another machine, so the same uploads cannot be downloaded twice. The original folder is left as it was.
+
+## Telling a player their upload is ready
+
+A player who uploads on one machine can only download on another once the file has reached it. The machine where the upload happened therefore tells the player when it has:
+
+1. **An upload is a file that grew or is new.** One that shrank or went is a download, and drops any notice still waiting for that player. The file's name is the player's EOS ID (a Steam ID in ASE); any other file is ignored.
+2. **It waits for every other machine hosting a server in the cluster** that can be reached now. Each machine announces a `cluster-placed` event when it has placed a version. Uploads that come faster than they sync produce one message, for the last.
+3. **It finds the player.** It looks on the cluster's running servers, this machine's first, using `ListPlayers` locally or the `online-players` query remotely.
+4. **It tells the player privately** with `ServerChatTo "<EOS ID>" Your upload is ready on every server in the cluster. You can transfer now.` A remote server gets this through the mesh's `rcon` command.
+
+If a machine has not confirmed within two minutes, the notice lapses rather than tell the player too soon. When every server of the cluster is on the uploading machine, nothing is sent: ARK reads the folder at once. The notice is on by default and can be turned off per cluster in Settings → Clusters (stored as `notifyUploads` in the cluster's storage profile).

@@ -4,6 +4,7 @@ import { filter } from 'rxjs/operators';
 import { MessagingService } from './messaging/messaging.service';
 import { WebSocketService } from './web-socket.service';
 import { IpcService } from './ipc.service';
+import { isLocalPageHost } from '../utils/format.utils';
 
 interface MeshMember {
   nodeId: string;
@@ -11,6 +12,8 @@ interface MeshMember {
   status?: string;
   maintenance?: boolean;
   connected?: boolean;
+  /** The host other machines dial: a name, when one was given in Change address. */
+  host?: string;
 }
 
 interface MeshStatusMembers {
@@ -73,6 +76,40 @@ export class MeshNodesService implements OnDestroy {
       .map(member => ({ nodeId: member.nodeId, name: member.name }));
   }
 
+  /**
+   * The machines a new server can be created on: every member reachable now. One skipping new
+   * servers is offered but says so; Auto-select passes it over.
+   */
+  placementChoices(): Array<{ nodeId: string; name: string; skipping: boolean }> {
+    return this.members
+      .filter(member => member.status !== 'removed' && !!member.connected)
+      .map(member => ({ nodeId: member.nodeId, name: member.name, skipping: !!member.maintenance }));
+  }
+
+  /**
+   * The host players connect to for a server: its machine's address, a stable name when one was
+   * set. Null to use the page's own host: outside a mesh, or for a server on this machine when
+   * the page was opened by a name other machines can use.
+   */
+  joinHostFor(server: { nodeId?: string | null }, pageHost: string): string | null {
+    const member = this.members.find(item => item.nodeId === (server.nodeId || this.localNodeId));
+    if (!member?.host) return null;
+    if (member.nodeId === this.localNodeId && !isLocalPageHost(pageHost)) return null;
+    return member.host;
+  }
+
+  /** Whether a server runs on this machine: outside a mesh, or with no node, it does. */
+  isHere(nodeId: string | null | undefined): boolean {
+    return !nodeId || !this.localNodeId || nodeId === this.localNodeId;
+  }
+
+  /** The machines of the mesh, to filter servers by; empty outside a mesh. */
+  machines(): Array<{ nodeId: string; name: string }> {
+    return this.members
+      .filter(member => member.status !== 'removed')
+      .map(member => ({ nodeId: member.nodeId, name: member.name }));
+  }
+
   refresh(): void {
     this.messaging.sendMessage<MeshStatusMembers>('get-mesh-status', {}).subscribe({
       next: status => this.apply(status),
@@ -85,7 +122,7 @@ export class MeshNodesService implements OnDestroy {
     const members = status.enabled ? (status.nodes || []) : [];
     const localNodeId = status.enabled ? status.nodeId || null : null;
     const fingerprint = JSON.stringify([localNodeId, members.map(member =>
-      [member.nodeId, member.name, member.status, !!member.maintenance, !!member.connected])]);
+      [member.nodeId, member.name, member.status, !!member.maintenance, !!member.connected, member.host || ''])]);
     if (fingerprint === this.fingerprint) return;
     this.fingerprint = fingerprint;
     this.members = members;

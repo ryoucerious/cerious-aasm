@@ -80,6 +80,8 @@ export interface NodeRecord {
   clusterSync?: Record<string, ClusterSyncStatus> | null;
   /** Set when a status snapshot is built: where the others reach it, from its peer URL and Raft address. */
   address?: MeshAddress | null;
+  /** Set when a status snapshot is built: how an ARK update on it is going, if one is. */
+  arkUpdate?: ArkUpdateStatus | null;
 }
 
 /**
@@ -92,6 +94,18 @@ export interface MeshAddress {
   peerPort: number;
   /** The mesh database (Raft). */
   raftPort: number;
+}
+
+/**
+ * How an ARK update on a machine is going: copying the install and downloading while its servers run,
+ * warning players, stopping, putting the new files in place, restarting, or how it ended.
+ */
+export interface ArkUpdateStatus {
+  phase: 'copying' | 'downloading' | 'warning' | 'stopping' | 'updating' | 'configuring' | 'starting' | 'complete' | 'error';
+  message: string;
+  minutesLeft?: number;
+  percent?: number;
+  at: number;
 }
 
 /** How one machine's copy of a cluster's transfer files stands. */
@@ -140,6 +154,14 @@ export interface UserRecord {
   ownerUserId: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/** A machine admin's machine. */
+export interface MachineAdminRecord {
+  userId: string;
+  nodeId: string;
+  /** Granted by a mesh admin: it may update ARK and the app on every machine. */
+  updatesAny: boolean;
 }
 
 export interface RoleRecord {
@@ -272,6 +294,8 @@ export interface MeshStatus {
   reconnecting?: boolean;
   /** Where other machines reach this one: as it joined with, or, outside a mesh, as it would advertise. */
   advertise?: MeshAddress;
+  /** Outside a mesh: why this machine cannot run the mesh database, so it cannot create or join one. */
+  blocker?: string | null;
   nodes: NodeRecord[];
   clusters: ClusterRecord[];
   storage: StorageProfileRecord[];

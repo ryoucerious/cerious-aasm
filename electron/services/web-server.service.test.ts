@@ -460,6 +460,24 @@ describe('WebServerService', () => {
       expect(child.replies()[0].data).toMatchObject({ success: false, error: 'You must sign in to do that.' });
     });
 
+    // The single login is this machine's alone; its password now signs in as this machine's admin.
+    it('treats a session of this machine\'s single login as signed out', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+      registerMeshAuth(mesh);
+      const listener = jest.fn();
+      messagingService.on('set-global-config', listener);
+
+      child.receive({
+        type: 'messaging-event', channel: 'set-global-config', payload: { requestId: 'r1' }, cid: 'c1', authEnabled: true,
+        user: { id: 'legacy-admin', username: 'admin', displayName: 'admin', roleId: 'admin', roleName: 'Admin', permissions: [], active: true }
+      });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(child.replies()[0].data).toMatchObject({ success: false, error: 'You must sign in to do that.' });
+    });
+
     it('does the same while this node is still reaching its mesh after a restart', async () => {
       const child = await startReady();
       setMeshMember(true);

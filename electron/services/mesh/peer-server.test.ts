@@ -258,17 +258,18 @@ describe('peer server checkpoint uploads', () => {
   it('takes a heartbeat as from the node its certificate names, with the resources and cluster sync it reports', async () => {
     const resources = { cpuPercent: 12, memory: { used: 1, total: 2 }, disk: null };
     const clusterSync = { c1: { files: 1, pendingSend: 0, pendingReceive: 0, conflicts: 0, lastSyncAt: 1, error: null } };
+    const arkUpdate = { phase: 'warning', message: 'Warning players: update in 12 min', minutesLeft: 12, at: 1 };
 
     const response = await peerRequest({
       url: `https://127.0.0.1:${port}/v1/heartbeat`,
       method: 'POST',
-      body: { nodeId: 'someone-else', sentAt: 5, resources, clusterSync },
+      body: { nodeId: 'someone-else', sentAt: 5, resources, clusterSync, arkUpdate },
       ca: caPem,
       ...client
     });
 
     expect(response.status).toBe(200);
-    expect(onHeartbeat).toHaveBeenCalledWith('client', 5, resources, clusterSync);
+    expect(onHeartbeat).toHaveBeenCalledWith('client', 5, resources, clusterSync, arkUpdate);
   });
 
   it('asks whether the certificate belongs to a member, by its serial and node id', async () => {

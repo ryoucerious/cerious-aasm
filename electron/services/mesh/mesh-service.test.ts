@@ -26,7 +26,7 @@ jest.mock('../../utils/platform.utils', () => ({
   getPlatform: jest.fn(() => 'linux'),
   isRunningInDocker: jest.fn(() => false)
 }));
-jest.mock('./rqlite-supervisor', () => ({ RqliteSupervisor: jest.fn() }));
+jest.mock('./rqlite-supervisor', () => ({ RqliteSupervisor: jest.fn(), rqliteProblem: jest.fn(() => null) }));
 jest.mock('./rqlite-client', () => ({ RqliteClient: jest.fn() }));
 jest.mock('./peer-server', () => ({ startPeerServer: jest.fn(), peerRequest: jest.fn(), peerUpload: jest.fn(), peerDownload: jest.fn(), subscribeEvents: jest.fn(), probeTls: jest.fn() }));
 jest.mock('../runtime/local-runtime', () => ({
@@ -55,7 +55,8 @@ jest.mock('../runtime/local-runtime', () => ({
     appliedRevision: jest.fn(),
     applyConfig: jest.fn(),
     deleteInstance: jest.fn(),
-    rcon: jest.fn()
+    rcon: jest.fn(),
+    takeFreePortsIfShared: jest.fn(async () => null)
   }
 }));
 jest.mock('../server-instance/server-instance.service', () => ({
@@ -73,12 +74,12 @@ jest.mock('../auth/user-database.service', () => ({
   }
 }));
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
-jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn() }));
+jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null) }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
 jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
 
 import { getDefaultInstallDir } from '../../utils/platform.utils';
-import { RqliteSupervisor } from './rqlite-supervisor';
+import { RqliteSupervisor, rqliteProblem } from './rqlite-supervisor';
 import { RqliteClient } from './rqlite-client';
 import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
@@ -86,6 +87,7 @@ import { localRuntime } from '../runtime/local-runtime';
 import { userDatabaseService } from '../auth/user-database.service';
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { sampleHostResources } from '../host-resources';
+import { arkUpdateProgress, beginClusterUpdate } from '../ark-update.service';
 import { MeshService } from './mesh-service';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
@@ -160,6 +162,8 @@ describe('MeshService', () => {
 
   afterEach(async () => {
     await service.stop();
+    // clearMocks keeps a return value; a machine's accounts must not leak into the next test.
+    jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([]);
     setMeshMember(false);
     setMeshDesktopMode(false);
     jest.useRealTimers();
@@ -196,8 +200,149 @@ describe('MeshService', () => {
     }
 
     function localRow(overrides: Partial<ReturnType<typeof userDatabaseService.exportCredentialRows>[number]> = {}) {
-      return { id: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, roleId: 'moderators', active: true, ownerUserId: null, ...overrides };
+      return {
+        id: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, roleId: 'moderators', active: true, ownerUserId: null,
+        cliLocked: false, machineNodeId: null, updatesAnyMachine: false, ...overrides
+      };
     }
+
+    describe('a machine admin', () => {
+      it('signs in with the machine it looks after, and cannot add machines', async () => {
+        const password = await hashArgon2id('correct horse');
+        await meshUser({ roleId: 'machine-admin', passwordHash: password.hash });
+        await repo.setMachineAdmin('u1', 'n7', false);
+        await service.resumeIfJoined();
+
+        const user = await service.verifyLogin('ada', 'correct horse');
+
+        expect(user).toMatchObject({ roleId: 'machine-admin', machineNodeId: 'n7', updatesAnyMachine: false });
+        expect(user!.permissions).toEqual(expect.arrayContaining(['servers.move', 'app.install']));
+        expect(user!.permissions).not.toContain('nodes.enroll');
+      });
+
+      it('is mirrored with its machine', async () => {
+        await meshUser({ roleId: 'machine-admin' });
+        await repo.setMachineAdmin('u1', 'n7', true);
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(jest.mocked(userDatabaseService.applyMeshAccounts).mock.calls[0][0].users)
+          .toEqual([expect.objectContaining({ userId: 'u1', machineNodeId: 'n7', updatesAnyMachine: true })]);
+      });
+
+      it('keeps its machine in the mesh as it changes, and signs it out when that changes', async () => {
+        await meshUser();
+        await service.resumeIfJoined();
+
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ roleId: 'machine-admin', machineNodeId: 'n2' })]);
+        await service.syncUser('u1');
+        expect(await repo.listMachineAdmins()).toEqual([{ userId: 'u1', nodeId: 'n2', updatesAny: false }]);
+        const version = (await repo.getUser('u1'))!.securityVersion;
+
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ roleId: 'machine-admin', machineNodeId: 'n2', updatesAnyMachine: true })]);
+        await service.syncUser('u1');
+        expect(await repo.listMachineAdmins()).toEqual([{ userId: 'u1', nodeId: 'n2', updatesAny: true }]);
+        expect((await repo.getUser('u1'))!.securityVersion).toBe(version + 1);
+
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([localRow({ roleId: 'viewer' })]);
+        await service.syncUser('u1');
+        expect(await repo.listMachineAdmins()).toEqual([]);
+      });
+
+      it('leaves with its account', async () => {
+        await meshUser({ roleId: 'machine-admin' });
+        await repo.setMachineAdmin('u1', 'n7', false);
+        await service.resumeIfJoined();
+
+        await service.forgetUser('u1');
+
+        expect(await repo.listMachineAdmins()).toEqual([]);
+      });
+    });
+
+    // A member that joined before machine admins existed: its own login stopped working, or (where
+    // it was the command line's or the web login) worked as an admin of every machine.
+    describe('carried over from a machine already in the mesh', () => {
+      const cliHash = '$2b$12$' + 'c'.repeat(53);
+
+      async function machineAdmins() {
+        const scopes = await repo.listMachineAdmins();
+        return Promise.all(scopes.map(async scope => ({ ...scope, user: await repo.getUser(scope.userId) })));
+      }
+
+      it('makes its admin password a machine admin for it, once', async () => {
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([
+          localRow({ id: 'mirror', username: 'admin', roleId: 'admin', passwordHash: verifier }),
+          localRow({ id: 'cli', username: 'root', roleId: 'admin', passwordHash: cliHash, cliLocked: true })
+        ]);
+        await repo.upsertNode(nodeRow(LOCAL));
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        const made = await machineAdmins();
+        expect(made).toEqual([expect.objectContaining({ nodeId: LOCAL, updatesAny: false })]);
+        expect(made[0].user).toMatchObject({ roleId: 'machine-admin', passwordHash: cliHash, hashAlg: 'bcrypt' });
+        expect(made[0].user!.username).toMatch(/^admin2-/);
+      });
+
+      it('does not bring it back once a mesh admin has deleted it', async () => {
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([
+          localRow({ id: 'cli', username: 'root', roleId: 'admin', passwordHash: cliHash, cliLocked: true })
+        ]);
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+        const [made] = await repo.listMachineAdmins();
+
+        await service.forgetUser(made.userId);
+        await jest.advanceTimersByTimeAsync(10_000);
+
+        expect(await repo.listMachineAdmins()).toEqual([]);
+      });
+
+      it('takes the web login when that is all it had', async () => {
+        fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'data', 'auth-config.json'), JSON.stringify({ enabled: true, username: 'web', passwordHash: cliHash }));
+        await repo.upsertNode(nodeRow(LOCAL));
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect((await machineAdmins())[0]?.user).toMatchObject({ passwordHash: cliHash });
+      });
+
+      it('adds nothing for a password the mesh already has', async () => {
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([
+          localRow({ id: 'cli', username: 'root', roleId: 'admin', passwordHash: verifier, cliLocked: true })
+        ]);
+        await meshUser({ roleId: 'admin', passwordHash: verifier });
+
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(await repo.listMachineAdmins()).toEqual([]);
+        expect(await repo.listUsers()).toHaveLength(1);
+      });
+
+      it('waits for quorum, then carries it', async () => {
+        jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([
+          localRow({ id: 'cli', username: 'root', roleId: 'admin', passwordHash: cliHash, cliLocked: true })
+        ]);
+        view.hasQuorum = false;
+        view.leader = false;
+        await service.resumeIfJoined();
+        await jest.advanceTimersByTimeAsync(5_000);
+        expect(await repo.listMachineAdmins()).toEqual([]);
+
+        view.hasQuorum = true;
+        view.leader = true;
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        expect(await repo.listMachineAdmins()).toHaveLength(1);
+      });
+    });
 
     it('mirrors the mesh\'s accounts and roles into this machine\'s account database', async () => {
       await repo.upsertRole({ roleId: 'moderators', name: 'Moderators', permissions: ['servers.view'], securityVersion: 1 });
@@ -208,7 +353,10 @@ describe('MeshService', () => {
       await jest.advanceTimersByTimeAsync(5_000);
 
       expect(userDatabaseService.applyMeshAccounts).toHaveBeenCalledWith({
-        users: [{ userId: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, enabled: true, roleId: 'moderators', ownerUserId: null, createdAt: 1, updatedAt: 2 }],
+        users: [{
+          userId: 'u1', username: 'ada', displayName: 'Ada', passwordHash: verifier, enabled: true, roleId: 'moderators', ownerUserId: null,
+          createdAt: 1, updatedAt: 2, machineNodeId: null, updatesAnyMachine: false
+        }],
         roles: [{ roleId: 'moderators', name: 'Moderators', permissions: ['servers.view'] }]
       });
       expect(messagingService.invalidateWebSessions).toHaveBeenCalledWith({ userId: 'u1', roleId: undefined });
@@ -436,11 +584,36 @@ describe('MeshService', () => {
         .toMatchObject({ peerUrl: 'https://mesh-b.example.org:4747', raftAddr: 'mesh-b.example.org:4002' });
     }, 30_000);
 
+    // Germany's rqlited could not run: the member recorded a machine that never arrived.
+    it('will not join from a machine that cannot run the mesh database, before sending the token', async () => {
+      jest.mocked(rqliteProblem).mockReturnValueOnce('rqlited at /opt/aasm/rqlited is not executable, and this app could not make it so. Run: chmod +x "/opt/aasm/rqlited"');
+
+      await expect(service.joinMesh({ memberUrl: MEMBER, token })).rejects.toThrow('rqlited at /opt/aasm/rqlited is not executable');
+      expect(peerRequest).not.toHaveBeenCalled();
+    });
+
     it('refuses an address that is not one before sending the token', async () => {
       await expect(service.joinMesh({ memberUrl: MEMBER, token, address: { host: 'not an address', peerPort: 4747, raftPort: 4002 } }))
         .rejects.toThrow('is not an IPv4 address or a host name');
       expect(peerRequest).not.toHaveBeenCalled();
     });
+
+    // Germany's own password stopped working after it joined; Dallas's kept working as an admin of
+    // every machine. Now each joining machine's password signs in as that machine's admin.
+    it('brings this machine\'s admin password along as a numbered machine admin for it', async () => {
+      const hash = '$2b$12$' + 'g'.repeat(53);
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([{
+        id: 'a1', username: 'admin', displayName: 'admin', passwordHash: hash, roleId: 'admin', active: true, ownerUserId: null,
+        cliLocked: false, machineNodeId: null, updatesAnyMachine: false
+      }]);
+
+      const joined = await service.joinMesh({ memberUrl: MEMBER, token, name: 'Germany01' });
+
+      expect(joined.machineAdmin).toMatch(/^admin2-germany01/);
+      const user = await repo.getUserByUsername(joined.machineAdmin!);
+      expect(user).toMatchObject({ roleId: 'machine-admin', passwordHash: hash, hashAlg: 'bcrypt', enabled: true });
+      expect(await repo.listMachineAdmins()).toEqual([{ userId: user!.userId, nodeId: LOCAL, updatesAny: false }]);
+    }, 30_000);
 
     it('keeps a copy of this machine\'s accounts before the mesh\'s replace them', async () => {
       await service.joinMesh({ memberUrl: MEMBER, token });
@@ -495,6 +668,20 @@ describe('MeshService', () => {
       expect(certificateCoversHost(fs.readFileSync(path.join(root, 'mesh', 'node.crt'), 'utf8'), 'mesh-a.example.com')).toBe(true);
       expect(startPeerServer).toHaveBeenCalledWith(4747, expect.anything());
     }, 30_000);
+
+    it('will not create a mesh on a machine that cannot run the mesh database', async () => {
+      jest.mocked(rqliteProblem).mockReturnValueOnce('rqlited at /opt/aasm/rqlited could not run: spawnSync ENOEXEC');
+
+      await expect(service.createMesh({ name: 'Here' })).rejects.toThrow('could not run: spawnSync ENOEXEC');
+      expect(supervisorStarts()).toEqual([]);
+    });
+
+    it('says why this machine cannot run a mesh before anyone tries', async () => {
+      jest.mocked(rqliteProblem).mockReturnValueOnce('rqlited was not found.');
+      fs.rmSync(path.join(root, 'mesh', 'node.json'));
+
+      expect((await service.status()).blocker).toBe('rqlited was not found.');
+    });
 
     it('creates a mesh at the address typed in, listening on its own ports', async () => {
       await service.createMesh({ name: 'Public', address: { host: 'mesh-a.example.com', peerPort: 14747, raftPort: 14002 } });
@@ -1921,12 +2108,15 @@ describe('MeshService', () => {
 
       it('brings a mesh made by an older version up to date', async () => {
         db.exec('DROP TABLE cluster_files');
+        db.exec('DROP TABLE machine_admins');
         db.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
 
         await jest.advanceTimersByTimeAsync(5_000);
 
         expect(await repo.listClusterFiles('any')).toEqual([]);
-        expect(await repo.schemaVersion()).toBe(2);
+        expect(await repo.listMachineAdmins()).toEqual([]);
+        expect(db.all("SELECT name FROM sqlite_master WHERE name = 'machine_admins'")).toHaveLength(1);
+        expect(await repo.schemaVersion()).toBe(3);
       });
     });
 
@@ -2032,6 +2222,95 @@ describe('MeshService', () => {
         await waitFor(() => fs.existsSync(path.join(folderOf(created.clusterId), PLAYER)), { advance: false });
 
         expect(fs.readFileSync(path.join(folderOf(created.clusterId), PLAYER), 'utf8')).toBe(contents);
+      });
+
+      describe('telling a player their upload is ready', () => {
+        const EOS = '0002a1b2c3d4e5f60718293a4b5c6d7e';
+        const MESSAGE = `ServerChatTo "${EOS}" Your upload is ready on every server in the cluster. You can transfer now.`;
+        let clusterId: string;
+
+        /** The other machine says it has this version of the player's file, over the subscription this one holds to it. */
+        function remoteHas(version: number): void {
+          for (const [options] of jest.mocked(subscribeEvents).mock.calls) {
+            options.onEvent({ type: 'cluster-placed', nodeId: REMOTE, clusterId, path: PLAYER, version });
+          }
+        }
+
+        async function uploadHere(contents: string): Promise<void> {
+          fs.mkdirSync(path.join(folderOf(clusterId), 'clusters', 'Islands'), { recursive: true });
+          fs.writeFileSync(path.join(folderOf(clusterId), PLAYER), contents);
+          await waitFor(async () => (await repo.listClusterFiles(clusterId)).some(row => row.path === PLAYER && row.size === contents.length));
+        }
+
+        beforeEach(async () => {
+          await jest.advanceTimersByTimeAsync(5_000);
+          clusterId = (await service.createCluster({ name: 'Islands', arkClusterId: 'Islands' })).clusterId;
+          // A server of the cluster on each machine.
+          for (const [serverId, nodeId] of [['isle', LOCAL], ['ragnarok', REMOTE]] as const) {
+            await repo.upsertServer({
+              serverId, name: serverId, nodeId, mapName: '', desiredState: 'running', configRevision: 1,
+              configJson: JSON.stringify({ clusterRef: clusterId }), clusterId: null, operatorUserId: null, managerUserId: null
+            });
+          }
+          jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now());
+          jest.mocked(localRuntime.state).mockImplementation(id => (id === 'isle' ? 'running' : 'stopped'));
+          jest.mocked(localRuntime.onlinePlayers).mockResolvedValue([{ name: 'Jared', playerId: EOS, steamId: EOS }] as never);
+          jest.mocked(localRuntime.rcon).mockResolvedValue({ success: true, response: 'ok' } as never);
+        });
+
+        it('tells the player on the server they uploaded from, privately, once the other machine has it', async () => {
+          await uploadHere('dino');
+          expect(localRuntime.rcon).not.toHaveBeenCalled();
+
+          remoteHas(1);
+          await waitFor(() => jest.mocked(localRuntime.rcon).mock.calls.length > 0);
+
+          expect(localRuntime.rcon).toHaveBeenCalledWith('isle', MESSAGE);
+        });
+
+        it('finds a player who has already travelled to a server on another machine', async () => {
+          jest.mocked(localRuntime.onlinePlayers).mockResolvedValue([] as never);
+          jest.mocked(peerRequest).mockImplementation(async options => {
+            if (options.url.endsWith('/v1/query')) return { status: 200, body: { players: [{ name: 'Jared', steamId: EOS }] } };
+            return { status: 200, body: { success: true } };
+          });
+          await uploadHere('dino');
+
+          remoteHas(1);
+          await waitFor(() => jest.mocked(peerRequest).mock.calls.some(([options]) => options.url.endsWith('/v1/command')));
+
+          const command = jest.mocked(peerRequest).mock.calls.map(([options]) => options).find(options => options.url.endsWith('/v1/command'))!;
+          expect(command.url).toBe('https://10.0.0.2:4747/v1/command');
+          expect(command.body).toMatchObject({ operation: 'rcon', serverId: 'ragnarok', args: { command: MESSAGE } });
+          expect(localRuntime.rcon).not.toHaveBeenCalled();
+        });
+
+        it('says nothing in a cluster where it is turned off', async () => {
+          await service.setUploadNotices(clusterId, false);
+
+          await uploadHere('dino');
+          remoteHas(1);
+          await waitFor(() => false, { maxSteps: 40 });
+
+          expect(localRuntime.rcon).not.toHaveBeenCalled();
+          expect(await service.listClusters()).toEqual([expect.objectContaining({ clusterId, notifyUploads: false })]);
+        });
+
+        it('is on for a new cluster', async () => {
+          expect(await service.listClusters()).toEqual([expect.objectContaining({ clusterId, notifyUploads: true })]);
+        });
+
+        it('tells the other machines what this one has placed', async () => {
+          const contents = 'from the other machine';
+          const hash = createHash('sha256').update(contents).digest('hex');
+          await repo.commitClusterFile({ clusterId, path: PLAYER, sha256: hash, size: contents.length, deleted: false, originNode: REMOTE }, 0);
+          jest.mocked(peerDownload).mockImplementation(async options => { fs.writeFileSync(options.dest, contents); return true; });
+
+          await waitFor(() => fs.existsSync(path.join(folderOf(clusterId), PLAYER)));
+          const broadcast = (await jest.mocked(startPeerServer).mock.results[0].value as { broadcast: jest.Mock }).broadcast;
+
+          expect(broadcast).toHaveBeenCalledWith({ type: 'cluster-placed', nodeId: LOCAL, clusterId, path: PLAYER, version: 1 });
+        });
       });
 
       it('reports how each machine\'s copy stands', async () => {
@@ -2239,6 +2518,133 @@ describe('MeshService', () => {
 
       expect(status.nodes.find(node => node.nodeId === REMOTE)?.address).toEqual({ host: '10.0.0.2', peerPort: 4747, raftPort: 4002 });
       expect(status.advertise).toEqual({ host: '127.0.0.1', peerPort: 4747, raftPort: 4002 });
+    });
+  });
+
+  // A second machine reused the first one's token and was told only that it was "invalid or expired".
+  describe('a machine joining with a token', () => {
+    const request = (token: string) => ({
+      token, nodeName: 'B', publicKeyPem: '', raftAddr: '10.0.0.2:4002', peerUrl: 'https://10.0.0.2:4747', protocolVersion: PROTOCOL_VERSION
+    });
+
+    beforeEach(async () => {
+      await service.resumeIfJoined();
+    });
+
+    it('says a token another machine already used was used', async () => {
+      await repo.insertToken(hashToken('used-token'), Date.now() + 60_000);
+      await repo.consumeToken(hashToken('used-token'), Date.now());
+
+      await expect(service.acceptJoin(request('used-token')))
+        .rejects.toThrow('This token was already used by another machine. Make a new token on a member for each machine you add.');
+    });
+
+    it('says a token that ran out expired', async () => {
+      await repo.insertToken(hashToken('old-token'), Date.now() - 1);
+
+      await expect(service.acceptJoin(request('old-token')))
+        .rejects.toThrow('This token expired: a token lasts 15 minutes. Make a new one on a member.');
+    });
+
+    it('says a token this mesh never issued is not its own', async () => {
+      await expect(service.acceptJoin(request('typo-token')))
+        .rejects.toThrow('This mesh did not issue that token. Check it was copied whole, or make a new one on a member.');
+    });
+  });
+
+  // "Update ARK Server fires blind": nothing showed how an update on another machine was going,
+  // and two machines could update at once.
+  describe('updating ARK machine by machine', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+    const warning = { phase: 'warning', message: 'Warning players: update in 12 min', minutesLeft: 12, at: 1 };
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL, '1'));
+      await repo.upsertNode({ ...nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'), name: 'Dallas01' });
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { success: true } });
+      await service.resumeIfJoined();
+    });
+
+    it('shows how the update on each machine is going', async () => {
+      jest.mocked(arkUpdateProgress).mockReturnValue({ phase: 'updating', message: 'Updating ARK server files', percent: 40, at: 2 } as never);
+      jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now(), undefined, undefined, warning);
+
+      const nodes = (await service.status()).nodes;
+
+      expect(nodes.find(node => node.nodeId === REMOTE)?.arkUpdate).toMatchObject({ phase: 'warning', minutesLeft: 12 });
+      expect(nodes.find(node => node.nodeId === LOCAL)?.arkUpdate).toMatchObject({ phase: 'updating', percent: 40 });
+    });
+
+    it('tells the other machines how its own update is going', async () => {
+      jest.mocked(arkUpdateProgress).mockReturnValue(warning as never);
+      jest.mocked(peerRequest).mockClear();
+
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      const [heartbeat] = jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith('/v1/heartbeat'));
+      expect(heartbeat.body).toMatchObject({ arkUpdate: warning });
+    });
+
+    it('updates one machine at a time', async () => {
+      jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now(), undefined, undefined, warning);
+
+      await expect(service.requestNodeUpdate(LOCAL, 'ark', 'admin'))
+        .resolves.toEqual({ success: false, error: 'Dallas01 is updating ARK. Update one machine at a time.' });
+      expect(beginClusterUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a server moved here', () => {
+    // It kept 7777 on a machine whose server already used 7777, and could not start.
+    it('takes free ports once its files are in, when a server here uses its own', async () => {
+      const staged = path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'MeshIncoming', 'arrived');
+      fs.mkdirSync(staged, { recursive: true });
+      fs.writeFileSync(path.join(staged, 'config.json'), JSON.stringify({ id: 'arrived', name: 'Arrived', gamePort: 7777 }));
+      await repo.upsertNode(nodeRow(LOCAL, '1'));
+      await repo.upsertServer({
+        serverId: 'arrived', name: 'Arrived', nodeId: LOCAL, mapName: '', desiredState: 'stopped', configRevision: 1,
+        configJson: '{}', clusterId: null, operatorUserId: null, managerUserId: null
+      });
+
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(fs.existsSync(path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'Servers', 'arrived', 'config.json'))).toBe(true);
+      expect(localRuntime.takeFreePortsIfShared).toHaveBeenCalledWith('arrived');
+    });
+  });
+
+  // A machine that stops sending heartbeats shows as unreachable everywhere. With PC 1 down the
+  // other two lost quorum, stopped heartbeating, and each saw only itself as connected.
+  describe('telling the other machines it is up', () => {
+    const REMOTE = '22222222-2222-4222-8222-222222222222';
+    const heartbeats = () => jest.mocked(peerRequest).mock.calls.filter(([options]) => options.url === 'https://10.0.0.2:4747/v1/heartbeat');
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL, '1'));
+      await repo.upsertNode(nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'));
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { ok: true } });
+      await service.resumeIfJoined();
+    });
+
+    it('keeps sending heartbeats while the mesh has no quorum', async () => {
+      view.hasQuorum = false;
+      view.leaderNodeId = null;
+      await jest.advanceTimersByTimeAsync(5_000);
+      jest.mocked(peerRequest).mockClear();
+
+      await jest.advanceTimersByTimeAsync(20_000);
+
+      expect(heartbeats().length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('keeps sending heartbeats when another part of its check fails', async () => {
+      jest.mocked(localRuntime.listInstances).mockRejectedValue(new Error('disk unavailable'));
+      jest.mocked(peerRequest).mockClear();
+
+      await jest.advanceTimersByTimeAsync(20_000);
+
+      expect(heartbeats().length).toBeGreaterThanOrEqual(3);
     });
   });
 

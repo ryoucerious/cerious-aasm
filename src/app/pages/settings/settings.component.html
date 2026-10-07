@@ -128,8 +128,9 @@
       <section class="settings-card">
         <h3 class="settings-card-title">Automatic ARK Updates</h3>
         <p class="settings-card-hint">
-          When a new build is published, players are warned, the servers stop, the update runs,
-          and the ones that were running start again.
+          When a new build is published, it downloads while the servers keep running. Once it is
+          ready, players are warned, the servers stop, the new files go in, and the ones that were
+          running start again.
         </p>
         <div class="form-group">
           <div class="form-control-label toggle-label">
@@ -141,7 +142,7 @@
         <div class="form-group">
           <label class="form-control-label">Warning time (minutes)</label>
           <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
-          <label class="form-control-label desc">How long players are warned over RCON before an update begins.</label>
+          <label class="form-control-label desc">How long players are warned over RCON, once the update has downloaded, before the servers stop for it.</label>
         </div>
       </section>
     </div>

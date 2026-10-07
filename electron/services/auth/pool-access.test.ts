@@ -5,6 +5,7 @@ import {
   instanceVisibleTo,
   isPoolOwnerIdentity,
   isPoolRole,
+  machineScopeRefusal,
   visibleInstanceIds,
   type PoolInstance
 } from './pool-access';
@@ -16,6 +17,7 @@ const viewerOfAdmin = { id: 'v0', roleId: 'viewer', ownerUserId: null };
 const manager = { id: 'm1', roleId: 'server-manager', ownerUserId: 'op1' };
 const attendant = { id: 't1', roleId: 'attendant', ownerUserId: null };
 const custom = { id: 'c1', roleId: 'auditors', ownerUserId: null };
+const machineAdmin = { id: 'ma1', roleId: 'machine-admin', ownerUserId: null, machineNodeId: 'n1' };
 
 const inOp1 = { id: 's1', operatorUserId: 'op1', managerUserId: 'm1' };
 const inOp1Unassigned = { id: 's2', operatorUserId: 'op1', managerUserId: null };
@@ -88,9 +90,32 @@ describe('pool-access', () => {
       expect(instanceVisibleTo(custom, inOp1)).toBe(false);
     });
 
+    // Above the operators: one machine's admin keeps an eye on the whole mesh.
+    it('shows a machine admin every server, in every pool', () => {
+      expect(instanceVisibleTo(machineAdmin, inOp1)).toBe(true);
+      expect(instanceVisibleTo(machineAdmin, inAdminPool)).toBe(true);
+      expect(instanceVisibleTo(machineAdmin, legacy)).toBe(true);
+    });
+
     it('shows nothing to nobody', () => {
       expect(instanceVisibleTo(null, inAdminPool)).toBe(false);
       expect(instanceVisibleTo(op1, null)).toBe(false);
+    });
+  });
+
+  describe('machineScopeRefusal', () => {
+    it('lets a machine admin act on the servers of its own machine only', () => {
+      expect(machineScopeRefusal(machineAdmin, 'n1')).toBeNull();
+      expect(machineScopeRefusal(machineAdmin, 'n2')).toBe('That server is on another machine. A machine admin changes only the servers on its own machine.');
+    });
+
+    it('never narrows anyone else', () => {
+      expect(machineScopeRefusal(op1, 'n2')).toBeNull();
+      expect(machineScopeRefusal(admin, 'n2')).toBeNull();
+    });
+
+    it('refuses a machine admin with no machine', () => {
+      expect(machineScopeRefusal({ ...machineAdmin, machineNodeId: null }, 'n1')).not.toBeNull();
     });
   });
 

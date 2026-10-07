@@ -38,9 +38,9 @@ describe('App', () => {
       send: jasmine.createSpy('send'),
       invoke: jasmine.createSpy('invoke').and.resolveTo(false)
     };
-    lifecycle = jasmine.createSpyObj('ServerLifecycleService', ['runningServers', 'shutdownAllServers']);
-    lifecycle.runningServers.and.returnValue([]);
-    lifecycle.shutdownAllServers.and.resolveTo();
+    lifecycle = jasmine.createSpyObj('ServerLifecycleService', ['serversRunningHere', 'shutdownServers']);
+    lifecycle.serversRunningHere.and.returnValue([]);
+    lifecycle.shutdownServers.and.resolveTo();
     connected$ = new BehaviorSubject(false);
     unauthorized$ = new Subject<void>();
 
@@ -80,12 +80,13 @@ describe('App', () => {
       expect(ipc.send).toHaveBeenCalledWith('app-close-response', { action: 'exit' });
     });
 
-    it('asks first when servers are running, listing them from the live roster', () => {
-      lifecycle.runningServers.and.returnValue(running);
+    it('asks first when servers run on this machine, naming only those', () => {
+      lifecycle.serversRunningHere.and.returnValue(running);
       const app = createApp().componentInstance;
 
-      ipcListeners.get('app-close-request')!({});
+      ipcListeners.get('app-close-request')!({}, { runningHere: ['a'] });
 
+      expect(lifecycle.serversRunningHere).toHaveBeenCalledWith(['a']);
       expect(app.showExitModal).toBeTrue();
       expect(app.runningServers).toEqual(running);
       expect(ipc.send).not.toHaveBeenCalled();
@@ -93,7 +94,7 @@ describe('App', () => {
 
     it('answers only after the servers have stopped', fakeAsync(() => {
       let finish!: () => void;
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(resolve => finish = resolve));
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(resolve => finish = resolve));
       const app = createApp().componentInstance;
       app.showExitModal = true;
 
@@ -110,9 +111,20 @@ describe('App', () => {
       expect(app.shuttingDown).toBeFalse();
     }));
 
+    it('stops only the servers it named, the ones on this machine', fakeAsync(() => {
+      lifecycle.serversRunningHere.and.returnValue(running);
+      const app = createApp().componentInstance;
+      ipcListeners.get('app-close-request')!({}, { runningHere: ['a'] });
+
+      app.onExitModalClose('shutdown');
+      flushMicrotasks();
+
+      expect(lifecycle.shutdownServers).toHaveBeenCalledWith(running);
+    }));
+
     it('still answers when stopping the servers fails', fakeAsync(() => {
       spyOn(console, 'error');
-      lifecycle.shutdownAllServers.and.rejectWith(new Error('boom'));
+      lifecycle.shutdownServers.and.rejectWith(new Error('boom'));
       const app = createApp().componentInstance;
 
       app.onExitModalClose('shutdown');
@@ -122,7 +134,7 @@ describe('App', () => {
     }));
 
     it('ignores other choices while servers are stopping', fakeAsync(() => {
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(() => {}));
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(() => {}));
       const app = createApp().componentInstance;
 
       app.onExitModalClose('shutdown');
@@ -130,20 +142,20 @@ describe('App', () => {
       flushMicrotasks();
 
       expect(ipc.send).not.toHaveBeenCalled();
-      expect(lifecycle.shutdownAllServers).toHaveBeenCalledTimes(1);
+      expect(lifecycle.shutdownServers).toHaveBeenCalledTimes(1);
     }));
 
     // Main asks again if it hears nothing for a while. By then the stopping servers no longer
     // count as running, so answering would let main exit while they are still saving.
     it('ignores a repeated close request while its servers are stopping', fakeAsync(() => {
-      lifecycle.runningServers.and.returnValue(running);
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(() => {}));
+      lifecycle.serversRunningHere.and.returnValue(running);
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(() => {}));
       const app = createApp().componentInstance;
       ipcListeners.get('app-close-request')!({});
       app.onExitModalClose('shutdown');
       flushMicrotasks();
 
-      lifecycle.runningServers.and.returnValue([]);
+      lifecycle.serversRunningHere.and.returnValue([]);
       ipcListeners.get('app-close-request')!({});
 
       expect(ipc.send).not.toHaveBeenCalled();
@@ -151,11 +163,11 @@ describe('App', () => {
     }));
 
     it('ignores a repeated close request while the question is still open', () => {
-      lifecycle.runningServers.and.returnValue(running);
+      lifecycle.serversRunningHere.and.returnValue(running);
       const app = createApp().componentInstance;
       ipcListeners.get('app-close-request')!({});
 
-      lifecycle.runningServers.and.returnValue([]);
+      lifecycle.serversRunningHere.and.returnValue([]);
       ipcListeners.get('app-close-request')!({});
 
       expect(ipc.send).not.toHaveBeenCalled();
@@ -174,7 +186,7 @@ describe('App', () => {
       await app.onExitModalClose('cancel');
       expect(ipc.send).toHaveBeenCalledWith('app-close-response', { action: 'cancel' });
       expect(app.showExitModal).toBeFalse();
-      expect(lifecycle.shutdownAllServers).not.toHaveBeenCalled();
+      expect(lifecycle.shutdownServers).not.toHaveBeenCalled();
     });
 
     it('stops listening for close requests on destroy', () => {

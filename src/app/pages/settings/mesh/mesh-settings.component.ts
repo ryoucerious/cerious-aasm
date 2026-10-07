@@ -7,6 +7,7 @@ import { MESH_ADDRESS_TIMEOUT_MS, MessagingService } from '../../../core/service
 import { NotificationService } from '../../../core/services/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { PERMISSIONS } from '../../../core/models/auth.model';
+import { copyToClipboard } from '../../../core/utils/clipboard.utils';
 
 /** Where other machines reach one: a host, and the TCP ports they dial. */
 interface MeshAddress {
@@ -30,6 +31,8 @@ interface MeshNode {
   version: string;
   connected?: boolean;
   address?: MeshAddress | null;
+  /** How an ARK update on it is going, from its heartbeat. */
+  arkUpdate?: { phase: string; message: string; minutesLeft?: number; percent?: number; at: number } | null;
 }
 
 interface MeshStatus {
@@ -43,8 +46,12 @@ interface MeshStatus {
   nodes: MeshNode[];
   /** In a mesh, not yet back in touch with it after a restart. */
   reconnecting?: boolean;
+  /** Outside a mesh: why this machine cannot run the mesh database, so it cannot create or join one. */
+  blocker?: string | null;
   /** Where other machines reach this one, or would if it created or joined a mesh now. */
   advertise?: MeshAddress;
+  /** Just after a join: the machine admin this machine's own admin password now signs in as. */
+  machineAdmin?: string;
 }
 
 const DEFAULT_PEER_PORT = 4747;
@@ -70,6 +77,7 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   memberUrl = '';
   token = '';
   issuedToken = '';
+  issuedExpiresAt: number | null = null;
   diagnosticText = '';
   wireguardText = '';
   busy = false;
@@ -127,29 +135,61 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Shown after a join until the page closes: the name to sign in with from now on. */
+  joinedAs: string | null = null;
+
   join(): void {
     this.busy = true;
     this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus }>('join-mesh', {
-      memberUrl: this.memberUrl,
-      token: this.token,
+      // Pasted values often bring spaces or a line break with them.
+      memberUrl: this.memberUrl.trim(),
+      token: this.token.trim(),
       ...this.typedAddress()
     }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
       next: result => {
         if (result.success && result.status) this.apply(result.status);
-        this.finish(result.success ? 'Joined the mesh.' : (result.error || 'Could not join.'), result.success);
+        this.joinedAs = result.success ? result.status?.machineAdmin || null : null;
+        const joined = this.joinedAs
+          ? `Joined the mesh. This machine's admin password now signs in as ${this.joinedAs}.`
+          : 'Joined the mesh.';
+        this.finish(result.success ? joined : (result.error || 'Could not join.'), result.success);
       },
       error: () => this.finish('Could not join.', false)
     });
   }
 
   issueToken(): void {
-    this.messaging.sendMessage<{ success?: boolean; token?: string; error?: string }>('create-enrollment-token', {}).subscribe({
+    this.messaging.sendMessage<{ success?: boolean; token?: string; expiresAt?: number; error?: string }>('create-enrollment-token', {}).subscribe({
       next: result => {
         this.issuedToken = result.token || '';
+        this.issuedExpiresAt = result.expiresAt ?? null;
         this.notification[result.success ? 'success' : 'error'](result.success ? 'Enrollment token created.' : (result.error || 'Could not create a token.'));
         this.cdr.markForCheck();
       }
     });
+  }
+
+  /** When the token issued here stops working. */
+  get issuedUntil(): string {
+    return this.issuedExpiresAt
+      ? new Date(this.issuedExpiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : 'it expires';
+  }
+
+  /** What a joining machine types as the join address: this machine's peer URL. */
+  get joinAddress(): string {
+    const address = this.status?.advertise;
+    return address ? `https://${address.host}:${address.peerPort}` : '';
+  }
+
+  /** Copied whole: a hand-typed join address once lost a digit. */
+  async copy(text: string, what: string): Promise<void> {
+    try {
+      await copyToClipboard(text);
+      this.notification.success(`${what} copied.`);
+    } catch {
+      this.notification.error(`Could not copy the ${what.toLowerCase()}. Select it and copy it instead.`);
+    }
   }
 
   get canUpdate(): boolean {
@@ -168,14 +208,58 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     return (this.status?.nodes || []).filter(node => node.status !== 'removed');
   }
 
+  /** Reachability only; a machine skipping new servers says so beside it. */
   connection(node: MeshNode): string {
-    if (node.maintenance) return 'Draining';
     return node.connected ? 'Connected' : 'Unreachable';
   }
 
   connectionTone(node: MeshNode): string {
-    if (node.maintenance) return 'tone-warning';
     return node.connected ? 'tone-success' : 'tone-danger';
+  }
+
+  /** The machine whose ARK update is waiting for a yes. */
+  confirmingArkUpdate: MeshNode | null = null;
+
+  /** How an ARK update on a machine is going, in a line; empty when none is. */
+  arkUpdateText(node: MeshNode): string {
+    const update = node.arkUpdate;
+    if (!update) return '';
+    const percent = typeof update.percent === 'number' ? ` ${update.percent}%` : '';
+    switch (update.phase) {
+      // The download runs beside the install while the servers keep running.
+      case 'copying': return `Updating ARK: copying the install${percent}, servers still up`;
+      case 'downloading': return `Updating ARK: downloading${percent}, servers still up`;
+      case 'warning': return `Updating ARK: warning players, ${update.minutesLeft ?? '?'} min left`;
+      case 'stopping': return 'Updating ARK: stopping servers';
+      case 'updating': return typeof update.percent === 'number' ? `Updating ARK: downloading ${update.percent}%` : 'Updating ARK: downloading';
+      case 'configuring': return 'Updating ARK: putting the new files in place';
+      case 'starting': return 'Updating ARK: starting servers';
+      case 'complete': return update.message || 'ARK updated';
+      case 'error': return `ARK update failed: ${update.message}`;
+      default: return '';
+    }
+  }
+
+  /** One machine at a time: while one updates, its servers are down and the others carry the players. */
+  get arkUpdateRunning(): boolean {
+    return this.nodes.some(node => !!node.arkUpdate && node.arkUpdate.phase !== 'complete' && node.arkUpdate.phase !== 'error');
+  }
+
+  askArkUpdate(node: MeshNode): void {
+    this.confirmingArkUpdate = node;
+    this.cdr.markForCheck();
+  }
+
+  cancelArkUpdate(): void {
+    this.confirmingArkUpdate = null;
+    this.cdr.markForCheck();
+  }
+
+  confirmArkUpdate(): void {
+    const node = this.confirmingArkUpdate;
+    this.confirmingArkUpdate = null;
+    if (node) this.updateNode(node, 'ark');
+    this.cdr.markForCheck();
   }
 
   updateNode(node: MeshNode, kind: 'ark' | 'app'): void {
@@ -374,6 +458,8 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
 
   private finish(message: string, ok: boolean | undefined): void {
     this.busy = false;
+    // The answer comes outside any click: without this, Join stayed disabled until the page redrew.
+    this.cdr.markForCheck();
     this.notification[ok ? 'success' : 'error'](message);
     this.refresh();
     void this.auth.refresh();

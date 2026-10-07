@@ -14,6 +14,20 @@ exports.default = async function afterPack(context) {
     return;
   }
 
+  // rqlited is the mesh database. A copy without the executable bit (a checkout on Windows, an
+  // archive that dropped modes) left Linux installs unable to join a mesh.
+  const rqliteRoot = path.join(context.appOutDir, 'resources', 'rqlite');
+  if (fs.existsSync(rqliteRoot)) {
+    for (const arch of fs.readdirSync(rqliteRoot)) {
+      const dir = path.join(rqliteRoot, arch);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const name of fs.readdirSync(dir)) {
+        fs.chmodSync(path.join(dir, name), 0o755);
+        console.log(`[afterPack] Made rqlite/${arch}/${name} executable`);
+      }
+    }
+  }
+
   const execName = context.packager.executableName;
   const execPath = path.join(context.appOutDir, execName);
 

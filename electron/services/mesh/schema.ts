@@ -3,7 +3,7 @@
  * mesh on an older version. Every statement can run more than once. Followers receive them
  * through the log.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -120,6 +120,13 @@ export const SCHEMA_STATEMENTS: string[] = [
     committed INTEGER NOT NULL,
     tombstone INTEGER NOT NULL,
     PRIMARY KEY (object_key, version)
+  )`,
+  // Version 3: the machine each machine admin looks after, and whether a mesh admin let it update
+  // every machine. A table of its own, so a node on an older version reads its users as before.
+  `CREATE TABLE IF NOT EXISTS machine_admins (
+    user_id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    updates_any INTEGER NOT NULL DEFAULT 0
   )`,
   // Version 2: the transfer files of each cluster whose files the app keeps on every machine.
   // One row per file, at its latest version; a deleted file keeps its row so an old copy

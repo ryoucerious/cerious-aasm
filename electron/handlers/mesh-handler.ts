@@ -138,7 +138,13 @@ onRequest('mesh-node-update', async (payload, { sender }) => {
   if (!result.success) return result;
   const detail = result.detail as { version?: string } | undefined;
   if (kind === 'ark') {
-    return { ...result, message: 'ARK update started. That machine stops its servers, updates the install, then starts them again.' };
+    const minutes = (result.detail as { warningMinutes?: number } | undefined)?.warningMinutes ?? 0;
+    return {
+      ...result,
+      message: minutes > 0
+        ? `That machine downloads the update while its servers keep running. Once it is ready, players are warned for ${minutes} minutes, then its servers stop, the new files go in, and they start again.`
+        : 'That machine is downloading the ARK update. None of its servers were running.'
+    };
   }
   const version = detail?.version ? ` to ${detail.version}` : '';
   return {

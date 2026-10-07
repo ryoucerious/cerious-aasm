@@ -71,6 +71,15 @@ describe('checkpoint', () => {
       expect(checkpointManifest('isle')).toEqual([SAVE, 'config.json']);
     });
 
+    // The exclusive join list stayed behind; the moved server started letting nobody in, or anyone.
+    it('carries the server\'s exclusive join list and what it brought into its cluster', () => {
+      writeServer('isle');
+      fs.writeFileSync(path.join(servers, 'isle', 'PlayersExclusiveJoinList.txt'), '0002a1b2c3d4e5f60718293a4b5c6d7e\n');
+      fs.writeFileSync(path.join(servers, 'isle', 'cluster-import.json'), '{"carried":[]}');
+
+      expect(checkpointManifest('isle')).toEqual(['PlayersExclusiveJoinList.txt', SAVE, 'cluster-import.json', 'config.json']);
+    });
+
     it('checksums the listed files the same way the destination does', async () => {
       writeServer('isle');
 

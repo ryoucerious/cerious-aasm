@@ -95,7 +95,7 @@ describe('DashboardComponent', () => {
         { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } },
         { provide: ServerNavService, useValue: { rememberTab: jasmine.createSpy('rememberTab') } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
-        { provide: MeshNodesService, useValue: { changed$: of(undefined), destinationsFor: () => moveDestinations, nameOf: () => '' } }
+        { provide: MeshNodesService, useValue: { changed$: of(undefined), destinationsFor: () => moveDestinations, nameOf: () => '', placementChoices: () => [] } }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
@@ -319,10 +319,15 @@ describe('DashboardComponent', () => {
   });
 
   it('opens the settings drawer from the quick actions', () => {
-    component.goToServerInstall();
-    expect(settingsDrawer.open).toHaveBeenCalledWith('server-installation');
     component.goToSettings();
     expect(settingsDrawer.open).toHaveBeenCalledWith();
+  });
+
+  // An update is per machine, with warnings to its players: Settings → Mesh, or ARK Installation.
+  it('has no Update ARK action of its own', () => {
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Update ARK Server');
   });
 
   it('builds uptime bars with the longest uptime as the tallest', () => {
@@ -331,6 +336,30 @@ describe('DashboardComponent', () => {
     expect(bars[0].percent).toBe(100);
     expect(bars[1].percent).toBe(0);
     expect(bars[1].label).toBe('0m');
+  });
+
+  // With a dozen or more servers up, the vertical bars were too thin to hold "3d 14h": the values
+  // ran into each other and every name was cut to a letter.
+  it('keeps each uptime and name readable with many servers up', () => {
+    const names = ['The Island', 'Scorched Earth', 'The Center', 'Aberration', 'Extinction', 'Astraeos', 'Ragnarok',
+      'Valguero', 'Lost Colony', 'Svartalfheim', 'Club ARK', 'Genesis', 'Fjordur', 'Crystal Isles'];
+    servers$.next(names.map((name, index) => ({
+      id: `s${index}`, name, state: 'running', players: 1, maxPlayers: 70,
+      startedAt: now - (3 * 86400 + 14 * 3600 + index * 600) * 1000, sortOrder: index
+    })));
+    const card = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.dash-uptime-card')!;
+    card.style.width = '360px';
+    fixture.detectChanges();
+
+    const texts = Array.from(card.querySelectorAll<HTMLElement>('.dash-uptime-value, .dash-uptime-name'));
+    const cut = texts.filter(text => text.scrollWidth > text.clientWidth).map(text => text.textContent?.trim());
+    const boxes = Array.from(card.querySelectorAll<HTMLElement>('.dash-uptime-value')).map(value => value.getBoundingClientRect());
+    const overlapping = boxes.filter((box, index) => boxes.some((other, otherIndex) => otherIndex !== index &&
+      box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom));
+
+    expect(texts.length).toBe(names.length * 2);
+    expect(cut).toEqual([]);
+    expect(overlapping.length).toBe(0);
   });
 
   it('exposes recent activity and the full list modal', () => {

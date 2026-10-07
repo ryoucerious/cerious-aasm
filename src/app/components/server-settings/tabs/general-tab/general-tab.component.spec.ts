@@ -157,6 +157,14 @@ describe('GeneralTabComponent', () => {
       expect(component.assigneeOptions.map(option => option.value)).toEqual(['', 'm1']);
     });
 
+    // A server made before operators carried an id no option matched: the picker showed blank.
+    it('shows a server whose operator is gone as such, so an admin can choose another', () => {
+      setServer({ id: 's1', operatorUserId: 'gone', managerUserId: null });
+
+      expect(component.operatorOptions.map(option => [option.value, option.label]))
+        .toEqual([['', 'Admin pool'], ['op1', 'Ops (op1)'], ['gone', 'No longer an operator']]);
+    });
+
     it('lets the pool\'s operator choose only the assignee', () => {
       identity = operator('op1');
       setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });

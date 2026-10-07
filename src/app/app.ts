@@ -89,7 +89,7 @@ export class App implements OnInit, OnDestroy {
         this.routeForMeshSignIn();
         this.cdr.detectChanges();
       });
-      this.stopListeningForClose = this.ipc.on('app-close-request', () => this.onCloseRequested());
+      this.stopListeningForClose = this.ipc.on('app-close-request', (_event, request) => this.onCloseRequested(request));
       return;
     }
 
@@ -133,7 +133,7 @@ export class App implements OnInit, OnDestroy {
 
     if (action === 'shutdown') {
       this.shuttingDown = true;
-      await this.serverLifecycle.shutdownAllServers()
+      await this.serverLifecycle.shutdownServers(this.runningServers)
         .catch(error => console.error('[app] Stopping servers before exit failed:', error));
     }
 
@@ -194,11 +194,18 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
-  private onCloseRequested(): void {
+  /**
+   * Main names the servers with a process on this machine. Only those are asked about and
+   * stopped: in a mesh the roster lists every machine's servers, and quitting here must not stop
+   * servers another machine runs.
+   */
+  private onCloseRequested(request?: unknown): void {
     // Main repeats an unanswered request. During a shutdown the servers still stopping no longer
     // count as running, so answering again would let main exit while they save.
     if (this.shuttingDown || this.showExitModal) return;
-    this.runningServers = this.serverLifecycle.runningServers();
+    const runningHere = (request as { runningHere?: unknown } | null | undefined)?.runningHere;
+    const ids = Array.isArray(runningHere) ? runningHere.filter((id): id is string => typeof id === 'string') : [];
+    this.runningServers = this.serverLifecycle.serversRunningHere(ids);
     if (this.runningServers.length > 0) {
       this.showExitModal = true;
     } else {

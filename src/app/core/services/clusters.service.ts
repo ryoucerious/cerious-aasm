@@ -13,6 +13,8 @@ export interface ClusterOption {
   arkClusterId: string;
   /** In a mesh: the app keeps its transfer files on every machine. */
   managed?: boolean;
+  /** In a mesh: players are told, privately in chat, once their upload has reached every machine. */
+  notifyUploads?: boolean;
 }
 
 export interface ClusterReply {
@@ -83,5 +85,9 @@ export class ClustersService implements OnDestroy {
 
   remove(clusterId: string): Observable<ClusterReply> {
     return this.messaging.sendMessage<ClusterReply>('delete-cluster', { clusterId });
+  }
+
+  setUploadNotices(clusterId: string, enabled: boolean): Observable<ClusterReply> {
+    return this.messaging.sendMessage<ClusterReply>('set-cluster-upload-notices', { clusterId, enabled });
   }
 }

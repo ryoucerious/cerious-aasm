@@ -94,15 +94,18 @@ describe('ClustersService', () => {
     replies['create-cluster'] = { success: true, cluster: islands };
     replies['rename-cluster'] = { success: false, error: 'That cluster was not found.' };
     replies['delete-cluster'] = { success: true };
+    replies['set-cluster-upload-notices'] = { success: true };
     const answers: unknown[] = [];
 
     clusters.create('Islands', 'Islands').subscribe(answer => answers.push(answer));
     clusters.rename('c1', 'Isles').subscribe(answer => answers.push(answer));
     clusters.remove('c1').subscribe(answer => answers.push(answer));
+    clusters.setUploadNotices('c1', false).subscribe(answer => answers.push(answer));
 
     expect(sendMessage).toHaveBeenCalledWith('create-cluster', { name: 'Islands', arkClusterId: 'Islands' });
     expect(sendMessage).toHaveBeenCalledWith('rename-cluster', { clusterId: 'c1', name: 'Isles' });
     expect(sendMessage).toHaveBeenCalledWith('delete-cluster', { clusterId: 'c1' });
-    expect(answers).toEqual([{ success: true, cluster: islands }, { success: false, error: 'That cluster was not found.' }, { success: true }]);
+    expect(sendMessage).toHaveBeenCalledWith('set-cluster-upload-notices', { clusterId: 'c1', enabled: false });
+    expect(answers).toEqual([{ success: true, cluster: islands }, { success: false, error: 'That cluster was not found.' }, { success: true }, { success: true }]);
   });
 });

@@ -84,6 +84,11 @@ export class ServerProcessService {
     return Object.keys(this.arkServerProcesses).length;
   }
 
+  /** The servers with a process on this machine: running, starting or stopping. */
+  getActiveInstanceIds(): string[] {
+    return Object.keys(this.arkServerProcesses);
+  }
+
   hasActiveProcess(instanceId: string): boolean {
     const child = this.arkServerProcesses[instanceId];
     return !!(child && !child.killed && child.exitCode === null);

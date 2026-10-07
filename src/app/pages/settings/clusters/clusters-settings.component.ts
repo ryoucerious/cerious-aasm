@@ -175,6 +175,21 @@ export class ClustersSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
+  setUploadNotices(cluster: ClusterOption, enabled: boolean): void {
+    this.clustersService.setUploadNotices(cluster.clusterId, enabled).subscribe({
+      next: reply => {
+        if (!reply?.success) this.notification.error(reply?.error || 'Could not change that cluster.');
+        // Either way: a refused change puts the switch back as it was.
+        this.clustersService.refresh();
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.notification.error('Could not change that cluster.');
+        this.clustersService.refresh();
+      }
+    });
+  }
+
   askRemove(cluster: ClusterOption): void {
     this.removing = cluster;
     this.cdr.markForCheck();

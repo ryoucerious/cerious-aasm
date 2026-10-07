@@ -12,7 +12,8 @@ jest.mock('../services/mesh/mesh-service', () => ({
     listClusters: jest.fn(async () => []),
     createCluster: jest.fn(),
     renameCluster: jest.fn(),
-    deleteCluster: jest.fn()
+    deleteCluster: jest.fn(),
+    setUploadNotices: jest.fn()
   }
 }));
 jest.mock('../services/clusters/cluster-registry', () => ({
@@ -104,5 +105,20 @@ describe('cluster-handler', () => {
       expect(meshService.deleteCluster).toHaveBeenCalledWith('c1');
       expect(registry.createLocalCluster).not.toHaveBeenCalled();
     });
+
+    it('turns telling players their upload is ready on or off for a cluster', async () => {
+      expect(await ask('set-cluster-upload-notices', { clusterId: 'c1', enabled: false })).toMatchObject({ success: true });
+
+      expect(meshService.setUploadNotices).toHaveBeenCalledWith('c1', false);
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('clusters-changed', {});
+    });
+  });
+
+  // On one machine every server of a cluster reads the same folder: there is nothing to wait for.
+  it('has no upload notices outside a mesh', async () => {
+    jest.mocked(meshService.isEnabled).mockReturnValue(false);
+
+    expect(await ask('set-cluster-upload-notices', { clusterId: 'c1', enabled: true })).toMatchObject({ success: false });
+    expect(meshService.setUploadNotices).not.toHaveBeenCalled();
   });
 });

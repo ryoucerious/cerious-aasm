@@ -9,14 +9,16 @@ import { copyToClipboard } from '../../core/utils/clipboard.utils';
 
 const REFRESH_INTERVAL_MS = 30_000;
 
+/** A player by name and the ID ARK knows them by: their EOS ID in ASA. */
 interface Player {
   name: string;
-  steamId: string;
+  playerId: string;
 }
 
 interface OnlinePlayersReply {
   success?: boolean;
-  players?: Player[];
+  /** An older machine in a mesh sends the ID only as steamId. */
+  players?: Array<{ name: string; playerId?: string; steamId?: string }>;
   error?: string;
 }
 
@@ -67,12 +69,12 @@ export class PlayerListComponent implements OnChanges, OnDestroy {
     this.refreshes.next();
   }
 
-  copySteamId(steamId: string): Promise<void> {
-    return copyToClipboard(steamId).then(
-      () => this.notificationService.success('SteamID copied to clipboard'),
+  copyPlayerId(playerId: string): Promise<void> {
+    return copyToClipboard(playerId).then(
+      () => this.notificationService.success('Player ID copied to clipboard'),
       error => {
-        console.error('[player-list] Could not copy the SteamID:', error);
-        this.notificationService.error('Could not copy the SteamID');
+        console.error('[player-list] Could not copy the player ID:', error);
+        this.notificationService.error('Could not copy the player ID');
       }
     );
   }
@@ -90,7 +92,7 @@ export class PlayerListComponent implements OnChanges, OnDestroy {
     return this.messaging.sendMessage<OnlinePlayersReply>('get-online-players', { id: server.id }).pipe(
       tap(response => {
         if (response?.success) {
-          this.players = response.players || [];
+          this.players = (response.players || []).map(player => ({ name: player.name, playerId: player.playerId || player.steamId || '' }));
           this.lastUpdated = new Date();
         } else {
           // Inline only: this also runs on the timer, and a toast every 30 s would be noise.

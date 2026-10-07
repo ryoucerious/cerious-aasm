@@ -1,4 +1,5 @@
-import { Component, EventEmitter, Input, Output, ViewChild, ElementRef, ChangeDetectorRef, ChangeDetectionStrategy, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, Output, ViewChild, ElementRef, ChangeDetectorRef, ChangeDetectionStrategy, OnChanges, SimpleChanges, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -9,6 +10,7 @@ import { SaveInstanceResult, ServerInstance } from '../../core/models/server-ins
 import { ImportServerResult, ServerInstanceService, withoutRuntimeFields } from '../../core/services/server-instance.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import type { DesktopFile } from '../../core/types/electron-api';
 
 export type ImportMode = 'create' | 'import' | 'clone';
@@ -29,7 +31,7 @@ export class AddServerModalComponent implements OnChanges {
   @Input() show = false;
   @Input() servers: ServerInstance[] = [];
   /** Mesh nodes the operator may place a new server on. Empty on a standalone install. */
-  @Input() placementNodes: Array<{ nodeId: string; name: string }> = [];
+    /** The machines of the mesh, from MeshNodesService: the same wherever the dialog is opened from. */
   selectedNodeId = '';
   placementOptions: DropdownOption<string>[] = [];
 
@@ -56,21 +58,29 @@ export class AddServerModalComponent implements OnChanges {
     private serverInstanceService: ServerInstanceService,
     private notificationService: NotificationService,
     private ipc: IpcService,
-    private cdr: ChangeDetectorRef
-  ) {}
+    private cdr: ChangeDetectorRef,
+    private meshNodes: MeshNodesService,
+    private destroyRef: DestroyRef
+  ) {
+    // Built when the machines change, not on every check: options rebuilt each check stopped clicks registering.
+    this.meshNodes.changed$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.buildPlacementOptions());
+  }
+
+  private buildPlacementOptions(): void {
+    const choices = this.meshNodes.placementChoices();
+    this.placementOptions = choices.length
+      ? [{ value: '', label: 'Auto-select' }, ...choices.map(node => ({ value: node.nodeId, label: node.skipping ? `${node.name} (skipping new servers)` : node.name }))]
+      : [];
+    this.cdr.markForCheck();
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['servers']) {
       this.cloneOptions = (this.servers || []).map(server => ({ value: server, label: server.name }));
     }
-    if (changes['placementNodes']) {
-      this.placementOptions = [
-        { value: '', label: 'Auto-select' },
-        ...this.placementNodes.map(node => ({ value: node.nodeId, label: node.name }))
-      ];
-    }
     if (changes['show'] && this.show) {
       this.reset();
+      this.buildPlacementOptions();
       setTimeout(() => this.serverNameInput?.nativeElement.focus(), 0);
     }
   }
