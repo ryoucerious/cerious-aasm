@@ -156,6 +156,19 @@ export interface UserRecord {
   updatedAt: number;
 }
 
+/** One member of the Raft cluster: its node id and the address the others reach its Raft port at. */
+export interface RaftMember {
+  id: string;
+  address: string;
+}
+
+/** What a member asks the others when a mesh without quorum forces machines out. */
+export interface ForceRemoval {
+  phase: 'prepare' | 'apply';
+  removing: string[];
+  members: RaftMember[];
+}
+
 /** A machine admin's machine. */
 export interface MachineAdminRecord {
   userId: string;
@@ -296,6 +309,8 @@ export interface MeshStatus {
   advertise?: MeshAddress;
   /** Outside a mesh: why this machine cannot run the mesh database, so it cannot create or join one. */
   blocker?: string | null;
+  /** Every machine this one reaches refuses it as no longer a member: the others removed it. */
+  removedFromMesh?: boolean;
   nodes: NodeRecord[];
   clusters: ClusterRecord[];
   storage: StorageProfileRecord[];

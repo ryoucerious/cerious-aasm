@@ -22,6 +22,7 @@ import { environment } from '../../../environments/environment';
 import { ThemeService, ThemePreference } from '../../core/services/theme.service';
 import { GlobalConfig } from '../../core/interfaces/global-config.interface';
 import { isBusyStatus } from '../../core/utils/server-status';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 
 /** The folder picker is a native dialog: the reply comes only once the user has chosen. */
 const DIRECTORY_DIALOG_TIMEOUT_MS = 10 * 60_000;
@@ -158,6 +159,7 @@ export class SettingsPageComponent implements OnInit {
 
   private readonly settingsDrawer = inject(SettingsDrawerService);
   private readonly auth = inject(AuthService);
+  private readonly listPreferences = inject(ServerListPreferencesService);
   private readonly webSocket = inject(WebSocketService);
   private readonly destroyRef = inject(DestroyRef);
   private installSub?: Subscription;
@@ -190,6 +192,15 @@ export class SettingsPageComponent implements OnInit {
     ];
     this.buildTabGroups();
     this.destroyRef.onDestroy(() => this.installSub?.unsubscribe());
+  }
+
+  /** The server list in the sidebar groups each operator's servers together. Kept in this browser. */
+  get groupServersByOperator(): boolean {
+    return this.listPreferences.groupByOperator;
+  }
+
+  onGroupServersByOperatorChange(event: Event): void {
+    this.listPreferences.setGroupByOperator((event.target as HTMLInputElement).checked);
   }
 
   get activeTabLabel(): string {

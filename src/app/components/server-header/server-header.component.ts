@@ -91,15 +91,27 @@ export class ServerHeaderComponent {
 
   /** Normalised key: 'running', 'starting', 'queued', 'stopping', 'stopped', 'crashed', 'error'. */
   get stateKey(): string {
-    return serverStatusKey(this.server?.state || this.live?.state);
+    return serverStatusKey(this.shownState);
   }
 
   get statusText(): string {
-    return serverStatusLabel(this.server?.state || this.live?.state);
+    return serverStatusLabel(this.shownState);
   }
 
   get statusClass(): string {
-    return serverStatusClass(this.server?.state || this.live?.state);
+    return serverStatusClass(this.shownState);
+  }
+
+  /**
+   * On a mesh machine that cannot be reached: nothing here can act on it. The live list says so
+   * first; the page's own copy follows state events, which a machine that has gone quiet never sends.
+   */
+  get unreachable(): boolean {
+    return serverStatusKey(this.live?.state) === 'unreachable' || serverStatusKey(this.server?.state) === 'unreachable';
+  }
+
+  private get shownState(): string | null | undefined {
+    return this.unreachable ? 'unreachable' : this.server?.state || this.live?.state;
   }
 
   get isRunning(): boolean {
@@ -107,7 +119,7 @@ export class ServerHeaderComponent {
   }
 
   get canStart(): boolean {
-    return canStartStatus(this.server?.state || this.live?.state);
+    return canStartStatus(this.shownState);
   }
 
   get canStop(): boolean {
@@ -140,12 +152,5 @@ export class ServerHeaderComponent {
 
   get uptime(): string {
     return this.isRunning ? formatUptime(this.live?.startedAt, this.now) : '--';
-  }
-
-  get ports(): string {
-    const game = this.server?.gamePort;
-    const query = this.server?.queryPort;
-    if (!game && !query) return '';
-    return `Game ${game ?? '--'} · Query ${query ?? '--'}`;
   }
 }

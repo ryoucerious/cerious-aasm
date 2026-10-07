@@ -12,13 +12,13 @@
         <input type="checkbox" class="toggle-switch" [checked]="expertMode" (change)="toggleExpertMode($event)" tabindex="0" />
         <span class="toggle-text">Expert Mode</span>
       </label>
-      <button class="btn btn-ghost btn-sm" (click)="onImportConfig($event)" [disabled]="isLocked" title="Import settings from an INI file">
+      <button class="btn btn-ghost btn-sm" *ngIf="!unreachable" (click)="onImportConfig($event)" [disabled]="isLocked" title="Import settings from an INI file">
         <i class="material-icons">file_upload</i> Import
       </button>
       <button class="btn btn-ghost btn-sm" (click)="onExportConfig($event)" title="Export server configuration as ZIP">
         <i class="material-icons">file_download</i> Export
       </button>
-      <button class="btn btn-ghost btn-sm" (click)="onOpenCopyConfig($event)" [disabled]="isLocked" title="Copy settings from another server">
+      <button class="btn btn-ghost btn-sm" *ngIf="!unreachable" (click)="onOpenCopyConfig($event)" [disabled]="isLocked" title="Copy settings from another server">
         <i class="material-icons">content_copy</i> Copy from
       </button>
       <button *ngIf="isElectron" class="btn btn-ghost btn-sm" (click)="onOpenDirectory($event)" title="Open server directory">
@@ -26,7 +26,14 @@
       </button>
     </div>
   </div>
-  <div class="settings-body">
+  <div class="ark-install-notice warning settings-unreachable" *ngIf="unreachable">
+    <i class="material-icons">cloud_off</i>
+    <span>
+      The machine that runs {{ serverInstance?.name || 'this server' }} cannot be reached, so its settings cannot be changed.
+      They can be once that machine answers again.
+    </span>
+  </div>
+  <div class="settings-body" *ngIf="!unreachable">
 
     <app-ini-editor
       *ngIf="isInIniTab"

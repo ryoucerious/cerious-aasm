@@ -88,6 +88,15 @@ describe('LiveServersService', () => {
     expect(service.find('a')?.startedAt).toBe(100);
   });
 
+  // Players, memory and uptime from before its machine went quiet are no longer known.
+  it('keeps nothing it last knew of a server whose machine cannot be reached', () => {
+    instances$.next([{ id: 'a', name: 'A', state: 'running', startedAt: 100, cpu: 5, memory: 900, players: 7 }]);
+
+    instances$.next([{ id: 'a', name: 'A', state: 'unreachable' }]);
+
+    expect(service.find('a')).toEqual(jasmine.objectContaining({ state: 'unreachable', players: 0, cpu: null, memory: undefined, startedAt: null }));
+  });
+
   it('merges configuration updates without touching state', () => {
     instances$.next([{ id: 'a', name: 'A', state: 'running' }]);
     channels['server-instance-updated'].next({ id: 'a', name: 'Renamed', state: 'stopped' });

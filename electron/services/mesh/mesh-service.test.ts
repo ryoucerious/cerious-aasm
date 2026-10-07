@@ -480,6 +480,219 @@ describe('MeshService', () => {
     });
   });
 
+  // Below quorum the mesh cannot agree to remove anyone, so a machine that is gone for good kept
+  // it degraded. The machines that can be reached take a new member list without it instead.
+  describe('force-removing machines that cannot be reached', () => {
+    const PEER = '22222222-2222-4222-8222-222222222222';
+    const GONE = '33333333-3333-4333-8333-333333333333';
+    const GONE2 = '44444444-4444-4444-8444-444444444444';
+    const GONE3 = '55555555-5555-4555-8555-555555555555';
+    /** What was sent to /v1/force-remove, and to which machine. */
+    let sent: Array<{ host: string; phase: string; body: Record<string, unknown> }>;
+    /** The phase at which the other machine refuses, if any. */
+    let refuseAt: string | null;
+    /** The other machine does not answer at all. */
+    let silent: boolean;
+
+    const peersFile = () => path.join(root, 'mesh', 'rqlite', 'raft', 'peers.json');
+    const member = (nodeId: string, name: string, host: string, serial: string): NodeRecord => ({
+      ...nodeRow(nodeId, serial, `https://${host}:4747`), name, endpoints: { peerUrl: `https://${host}:4747`, raftAddr: `${host}:4002`, httpAddr: '' }
+    });
+    const peer = () => jest.mocked(startPeerServer).mock.calls[0][1];
+    const heard = (nodeId: string) => peer().onHeartbeat(nodeId, Date.now());
+    const supervisorStarts = () => jest.mocked(RqliteSupervisor).mock.results
+      .flatMap(result => jest.mocked((result.value as { start: jest.Mock }).start).mock.calls.length)
+      .reduce((sum, count) => sum + count, 0);
+
+    async function settle<T>(work: Promise<T>): Promise<T> {
+      await jest.advanceTimersByTimeAsync(10_000);
+      return work;
+    }
+
+    beforeEach(async () => {
+      await repo.upsertNode(member(LOCAL, 'Docker 1', '10.0.0.1', '1'));
+      await repo.upsertNode(member(PEER, 'PC 1', '10.0.0.2', '2'));
+      await repo.upsertNode(member(GONE, 'asa-1', '10.0.0.3', '3'));
+      await repo.upsertNode(member(GONE2, 's001', '10.0.0.4', '4'));
+      view.hasQuorum = false;
+      view.leader = false;
+      sent = [];
+      refuseAt = null;
+      silent = false;
+      jest.mocked(peerRequest).mockImplementation(async options => {
+        if (options.url.endsWith('/v1/force-remove')) {
+          if (silent) throw new Error('connect ETIMEDOUT');
+          const body = options.body as Record<string, unknown>;
+          sent.push({ host: new URL(options.url).hostname, phase: String(body.phase), body });
+          return body.phase === refuseAt ? { status: 409, body: { error: 'PC 1 can still reach asa-1.' } } : { status: 200, body: { ok: true } };
+        }
+        throw new Error('connect ETIMEDOUT');
+      });
+      await service.resumeIfJoined();
+      heard(PEER);
+      // Once the machines that stay restart on the new member list, they agree again.
+      jest.mocked(RqliteSupervisor).mock.results.forEach(result => {
+        jest.mocked((result.value as { start: jest.Mock }).start).mockImplementation(async () => {
+          if (fs.existsSync(peersFile())) {
+            view.hasQuorum = true;
+            view.leader = true;
+          }
+        });
+      });
+    });
+
+    it('has every machine that stays and can be reached agree, then all take the new member list', async () => {
+      const result = await settle(service.forceRemoveNodes([GONE, GONE2], 'ada'));
+
+      expect(result).toEqual({ success: true });
+      const members = [{ id: LOCAL, address: '10.0.0.1:4002' }, { id: PEER, address: '10.0.0.2:4002' }];
+      expect(sent.map(item => [item.host, item.phase])).toEqual([['10.0.0.2', 'prepare'], ['10.0.0.2', 'apply']]);
+      expect(sent[0].body).toMatchObject({ removing: [GONE, GONE2], members });
+      expect(JSON.parse(fs.readFileSync(peersFile(), 'utf8'))).toEqual(members.map(item => ({ ...item, non_voter: false })));
+    });
+
+    it('then removes them as Remove does: marked removed, certificates revoked, a new database password', async () => {
+      await settle(service.forceRemoveNodes([GONE, GONE2], 'ada'));
+
+      expect((await repo.getNode(GONE))?.status).toBe('removed');
+      expect((await repo.getNode(GONE2))?.status).toBe('removed');
+      expect(await repo.isRevoked('3')).toBe(true);
+      expect(await repo.isRevoked('4')).toBe(true);
+      expect((await repo.getClusterCredential())?.pass).toBeTruthy();
+    });
+
+    // s001 stays in the new list; it takes it from the others when it comes back.
+    it('keeps a machine that cannot be reached when it is not being removed, once enough remain', async () => {
+      const result = await settle(service.forceRemoveNodes([GONE], 'ada'));
+
+      expect(result).toEqual({ success: true });
+      expect(JSON.parse(fs.readFileSync(peersFile(), 'utf8')).map((item: { id: string }) => item.id)).toEqual([LOCAL, PEER, GONE2]);
+      expect((await repo.getNode(GONE2))?.status).toBe('alive');
+    });
+
+    it('changes nothing when a machine that stays will not agree', async () => {
+      refuseAt = 'prepare';
+      const before = supervisorStarts();
+
+      const result = await settle(service.forceRemoveNodes([GONE], 'ada'));
+
+      expect(result).toEqual({ success: false, error: 'PC 1 would not take part: PC 1 can still reach asa-1. Nothing was changed.' });
+      expect(sent.map(item => item.phase)).toEqual(['prepare']);
+      expect(fs.existsSync(peersFile())).toBe(false);
+      expect(supervisorStarts()).toBe(before);
+      expect((await repo.getNode(GONE))?.status).toBe('alive');
+    });
+
+    it('changes nothing when a machine that stays does not answer', async () => {
+      silent = true;
+
+      const result = await settle(service.forceRemoveNodes([GONE], 'ada'));
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('PC 1 did not answer');
+      expect(fs.existsSync(peersFile())).toBe(false);
+    });
+
+    it('is only for a mesh that cannot agree: with quorum, Remove does it', async () => {
+      view.hasQuorum = true;
+
+      expect(await settle(service.forceRemoveNodes([GONE], 'ada')))
+        .toEqual({ success: false, error: 'The mesh can agree on removing machines now: use Remove.' });
+    });
+
+    it('does not force out a machine that can be reached, or this one', async () => {
+      expect(await settle(service.forceRemoveNodes([PEER], 'ada')))
+        .toEqual({ success: false, error: 'PC 1 can be reached. Only machines that cannot be reached can be forced out.' });
+      expect((await settle(service.forceRemoveNodes([LOCAL], 'ada'))).success).toBe(false);
+    });
+
+    it('does nothing when the machines left would still be too few to agree', async () => {
+      view.hasQuorum = true;
+      await repo.upsertNode(member(GONE3, 'old box', '10.0.0.5', '5'));
+      view.hasQuorum = false;
+
+      expect(await settle(service.forceRemoveNodes([GONE], 'ada'))).toEqual({
+        success: false,
+        error: 'That would still leave too few: 2 of the 4 machines left can be reached, and they would need 3. Remove more of the machines that cannot be reached.'
+      });
+      expect(sent).toEqual([]);
+    });
+
+    describe('as a machine asked to take part', () => {
+      const members = [{ id: PEER, address: '10.0.0.2:4002' }, { id: LOCAL, address: '10.0.0.1:4002' }];
+
+      it('agrees only while it too cannot agree, cannot reach those machines, and stays', async () => {
+        await expect(peer().onForceRemove!(PEER, { phase: 'prepare', removing: [GONE], members })).resolves.toEqual({ ok: true });
+
+        heard(GONE);
+        await expect(peer().onForceRemove!(PEER, { phase: 'prepare', removing: [GONE], members })).rejects.toThrow('This machine can still reach asa-1.');
+        await expect(peer().onForceRemove!(PEER, { phase: 'prepare', removing: [GONE2], members: [members[0]] })).rejects.toThrow('not in the new member list');
+        view.hasQuorum = true;
+        await expect(peer().onForceRemove!(PEER, { phase: 'prepare', removing: [GONE2], members })).rejects.toThrow('can agree on removing machines now');
+      });
+
+      it('takes the new member list when told to', async () => {
+        await peer().onForceRemove!(PEER, { phase: 'prepare', removing: [GONE], members });
+
+        await expect(peer().onForceRemove!(PEER, { phase: 'apply', removing: [GONE], members })).resolves.toEqual({ ok: true });
+
+        expect(JSON.parse(fs.readFileSync(peersFile(), 'utf8'))).toEqual(members.map(item => ({ ...item, non_voter: false })));
+      });
+
+      it('does not take a member list it was not first asked to agree to', async () => {
+        await expect(peer().onForceRemove!(PEER, { phase: 'apply', removing: [GONE], members })).rejects.toThrow('was not agreed');
+        expect(fs.existsSync(peersFile())).toBe(false);
+      });
+    });
+  });
+
+  // The machine that was forced out, back again: the others refuse it, and Leave works without them.
+  describe('a machine the others removed', () => {
+    const PEER = '22222222-2222-4222-8222-222222222222';
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+      await repo.upsertNode(nodeRow(PEER, '2', 'https://10.0.0.2:4747'));
+      view.hasQuorum = false;
+      view.leader = false;
+    });
+
+    it('says so when every machine it reaches refuses it as no longer a member', async () => {
+      // As the peer API refuses a certificate it no longer trusts.
+      jest.mocked(peerRequest).mockResolvedValue({ status: 401, body: { error: 'This certificate does not belong to a member of the mesh.' } });
+
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect((await service.status()).removedFromMesh).toBe(true);
+    });
+
+    it('does not say so while any machine still takes it', async () => {
+      view.hasQuorum = true;
+      await repo.upsertNode(nodeRow('33333333-3333-4333-8333-333333333333', '3', 'https://10.0.0.3:4747'));
+      view.hasQuorum = false;
+      // One machine refuses it, as a machine that did not hear of it would never do; another takes it.
+      jest.mocked(peerRequest).mockImplementation(async options => (options.url.includes('10.0.0.3')
+        ? { status: 401, body: { error: 'This certificate does not belong to a member of the mesh.' } }
+        : { status: 200, body: { ok: true } }));
+
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect((await service.status()).removedFromMesh).toBeFalsy();
+    });
+
+    it('leaves without the others, keeping its servers', async () => {
+      await service.resumeIfJoined();
+
+      await service.leaveWithoutQuorum();
+
+      expect(service.isEnabled()).toBe(false);
+      expect(meshSignInRequired()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'mesh', 'node.json'), 'utf8')).meshId).toBe('');
+    });
+  });
+
   describe('which certificates it trusts', () => {
     it('trusts only the certificate a current member is recorded with', async () => {
       const MEMBER = '22222222-2222-4222-8222-222222222222';
@@ -1858,6 +2071,8 @@ describe('MeshService', () => {
       await place('far', REMOTE);
       await service.resumeIfJoined();
       await jest.advanceTimersByTimeAsync(5_000);
+      // The other machine is up: it has just sent a heartbeat.
+      jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now());
     });
 
     // The move dialog may be open on another node than the one running the move.
@@ -1955,6 +2170,47 @@ describe('MeshService', () => {
       expect(far.state).toBe('stopped');
       expect(far.startedAt).toBeUndefined();
       expect(far.players).toBeUndefined();
+    });
+
+    // A machine that went quiet kept showing its servers as running, with players and uptime.
+    describe('on a machine it cannot hear from', () => {
+      const farListed = async () => (await service.withMeshServers([])).find(instance => instance.id === 'far') as Record<string, unknown>;
+
+      beforeEach(() => {
+        const event = (channel: string, data: Record<string, unknown>) =>
+          subscriptions[0].onEvent({ type: 'server-event', nodeId: REMOTE, channel, data: { instanceId: 'far', ...data } });
+        event('server-instance-state', { state: 'running', startedAt: 1_000 });
+        event('server-instance-players', { players: 5 });
+        // From here it answers nothing: not this machine's heartbeats either.
+        jest.mocked(peerRequest).mockRejectedValue(new Error('connect ETIMEDOUT'));
+      });
+
+      it('lists the server as unreachable, without the figures it last reported', async () => {
+        await jest.advanceTimersByTimeAsync(30_000);
+
+        const far = await farListed();
+        expect(far.state).toBe('unreachable');
+        expect(far.players).toBeUndefined();
+        expect(far.startedAt).toBeUndefined();
+      });
+
+      it('lists it as its host reports again once the machine is heard from', async () => {
+        await jest.advanceTimersByTimeAsync(30_000);
+
+        jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(REMOTE, Date.now());
+
+        expect(await farListed()).toMatchObject({ state: 'running', players: 5 });
+      });
+
+      it('tells the screens when the machine stops answering', async () => {
+        await jest.advanceTimersByTimeAsync(10_000);
+        jest.mocked(serverInstanceService.broadcastInstances).mockClear();
+
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(serverInstanceService.broadcastInstances).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(serverInstanceService.broadcastInstances).toHaveBeenCalled();
+      });
     });
 
     it('goes back to the stored state once it stops hearing from that node', async () => {

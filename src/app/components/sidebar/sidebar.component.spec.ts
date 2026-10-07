@@ -17,6 +17,7 @@ import { ServerLifecycleService } from '../../core/services/server-lifecycle.ser
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
@@ -90,8 +91,9 @@ describe('SidebarComponent', () => {
     meshNodesChanged$ = new Subject<void>();
     localNode = '';
     operatorNames = {};
-    // The group-by-operator choice is kept in this browser; each test starts without it.
+    // The list's choices are kept in this browser; each test starts without them.
     localStorage.removeItem('aasm.sidebar.groupByOperator');
+    localStorage.removeItem('aasm.sidebar.closedGroups');
 
     await TestBed.configureTestingModule({
       imports: [SidebarComponent, HttpClientTestingModule],
@@ -343,59 +345,131 @@ describe('SidebarComponent', () => {
     expect(component.servers.map(server => server.id)).toEqual(['1', '2']);
   });
 
-  describe('finding servers', () => {
+  // A tree that groups only what is really apart: the machines of a mesh, and the operators when
+  // that is switched on in Settings → Servers.
+  describe('the server tree', () => {
     const list = [
       { id: 'a', name: 'The Island', mapName: 'TheIsland_WP', nodeId: 'n1', operatorUserId: 'op1' },
       { id: 'b', name: 'Ragnarok', mapName: 'Ragnarok_WP', nodeId: 'n2' },
       { id: 'c', name: 'Aberration', mapName: 'Aberration_WP', nodeId: 'n2', operatorUserId: 'op1' }
     ];
-    const shown = () => component.serverGroups.flatMap(group => group.servers.map(server => server.id));
+    /** The rows as shown: groups as "label (count)", servers by id, indented by depth. */
+    const rows = () => component.serverRows.map(row =>
+      `${'  '.repeat(row.depth)}${row.kind === 'group' ? `${row.label}${row.note ? ` [${row.note}]` : ''} (${row.count})` : row.server!.id}`);
+    const page = () => fixture.nativeElement as HTMLElement;
 
-    beforeEach(() => {
+    function inMesh(): void {
       machineNames = { n1: 'PC 1', n2: 'Dallas01' };
       localNode = 'n1';
+      meshNodesChanged$.next();
+    }
+
+    beforeEach(() => {
       operatorNames = { op1: 'Ops' };
       servers$.next(list);
     });
 
-    it('finds servers by name, map or machine as you type', () => {
+    it('is one flat list outside a mesh', () => {
+      expect(rows()).toEqual(['a', 'b', 'c']);
+      fixture.detectChanges();
+      expect(page().querySelectorAll('.server-group').length).toBe(0);
+    });
+
+    it('puts each server under its machine in a mesh, this machine first', () => {
+      inMesh();
+
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a', 'Dallas01 (2)', '  b', '  c']);
+      fixture.detectChanges();
+      expect(Array.from(page().querySelectorAll('.server-group-name')).map(name => name.textContent?.trim())).toEqual(['PC 1', 'Dallas01']);
+    });
+
+    it('stays flat in a mesh whose servers are all on one machine, naming it under each server', () => {
+      inMesh();
+      servers$.next(list.map(server => ({ ...server, nodeId: 'n2' })));
+
+      expect(rows()).toEqual(['a', 'b', 'c']);
+      expect(component.subtitle(component.servers[1])).toBe('Dallas01');
+    });
+
+    it('does not repeat the machine under a server grouped beneath it', () => {
+      inMesh();
+
+      expect(component.subtitle(component.servers[1])).toBe('');
+    });
+
+    it('folds a machine away, and remembers it', () => {
+      inMesh();
+
+      component.toggleGroup('machine:n2');
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a', 'Dallas01 (2)']);
+      expect(component.serverRows.find(row => row.key === 'machine:n2')?.open).toBeFalse();
+
+      const again = TestBed.createComponent(SidebarComponent).componentInstance;
+      again.ngOnInit();
+      expect(again.serverRows.find(row => row.key === 'machine:n2')?.open).toBeFalse();
+      again.ngOnDestroy();
+    });
+
+    it('finds servers by name, map or machine as you type, opening the groups it finds them in', () => {
+      inMesh();
+      component.toggleGroup('machine:n2');
+
       component.onSearch('ragn');
-      expect(shown()).toEqual(['b']);
+      expect(rows()).toEqual(['Dallas01 (1)', '  b']);
       component.onSearch('island');
-      expect(shown()).toEqual(['a']);
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a']);
       component.onSearch('dallas');
-      expect(shown()).toEqual(['b', 'c']);
+      expect(rows()).toEqual(['Dallas01 (2)', '  b', '  c']);
     });
 
-    it('shows only this machine\'s servers, or one machine\'s', () => {
-      component.onMachineFilter('here');
-      expect(shown()).toEqual(['a']);
-      component.onMachineFilter('n2');
-      expect(shown()).toEqual(['b', 'c']);
+    it('groups by operator above the machines when that is switched on, with the admin pool last', () => {
+      inMesh();
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
+
+      expect(rows()).toEqual([
+        'Ops (2)', '  PC 1 [this machine] (1)', '    a', '  Dallas01 (1)', '    c',
+        'Admin pool (1)', '  Dallas01 (1)', '    b'
+      ]);
     });
 
-    it('offers the machines to filter by only in a mesh', () => {
-      expect(component.machineOptions.map(option => option.label)).toEqual(['All machines', 'This machine', 'PC 1', 'Dallas01']);
-      machineNames = {};
-      meshNodesChanged$.next();
-      expect(component.machineOptions).toEqual([]);
+    it('groups by operator without machines outside a mesh', () => {
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
+
+      expect(rows()).toEqual(['Ops (2)', '  a', '  c', 'Admin pool (1)', '  b']);
     });
 
-    it('groups servers under each operator when asked, then by machine, with the admin pool last', () => {
-      component.onGroupByOperator(true);
+    it('has no operator level when no server has an operator', () => {
+      servers$.next(list.map(server => ({ ...server, operatorUserId: undefined })));
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
 
-      expect(component.serverGroups.map(group => [group.label, group.servers.map(server => server.id)]))
-        .toEqual([['Ops', ['c', 'a']], ['Admin pool', ['b']]]);
+      expect(rows()).toEqual(['a', 'b', 'c']);
     });
 
-    it('reorders only the whole list, not a narrowed or grouped one', () => {
+    it('offers no machine dropdown or operator box of its own', () => {
+      inMesh();
+      fixture.detectChanges();
+
+      expect(page().querySelector('.server-list-tools select')).toBeNull();
+      expect(page().querySelector('.server-list-tools input[type="checkbox"]')).toBeNull();
+    });
+
+    it('reorders only a flat list that is not being searched', () => {
       expect(component.reorderable).toBeTrue();
       component.onSearch('ragn');
       expect(component.reorderable).toBeFalse();
       component.onSearch('');
-      component.onGroupByOperator(true);
+      inMesh();
       expect(component.reorderable).toBeFalse();
     });
+  });
+
+  it('does not rename a server whose machine cannot be reached', () => {
+    const unreachable = { id: '9', name: 'Far', state: 'unreachable' };
+    servers$.next([unreachable]);
+
+    component.onServerNameDoubleClick(unreachable as any, { stopPropagation: () => {} } as any);
+
+    expect(component.editingServerId).toBeNull();
   });
 
   it('maps server states to status classes', () => {

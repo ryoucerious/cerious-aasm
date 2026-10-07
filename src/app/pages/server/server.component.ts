@@ -22,6 +22,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MoveServerDialogComponent } from '../../components/move-server-dialog/move-server-dialog.component';
 import { PERMISSIONS } from '../../core/models/auth.model';
+import { serverStatusKey } from '../../core/utils/server-status';
 import { ServerHeaderComponent } from '../../components/server-header/server-header.component';
 import { PlayerListComponent } from '../../components/player-list/player-list.component';
 import { ModalComponent } from '../../components/modal/modal.component';
@@ -116,7 +117,15 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   }
 
   get settingsLocked(): boolean {
-    return this.serverStateService.areSettingsLocked(this.activeServerInstance?.state);
+    return this.unreachable || this.serverStateService.areSettingsLocked(this.activeServerInstance?.state);
+  }
+
+  /**
+   * On a mesh machine that cannot be reached. The live list says so: this page's own copy follows
+   * state events, and a machine that has gone quiet sends none.
+   */
+  get unreachable(): boolean {
+    return serverStatusKey(this.liveServer?.state) === 'unreachable' || serverStatusKey(this.activeServerInstance?.state) === 'unreachable';
   }
 
   constructor(
@@ -156,8 +165,9 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   }
 
   /** The backend refuses RCON for roles without the permission; the panel is simply not shown. */
+  /** Not for a server whose mesh machine cannot be reached: a command would not get there. */
   get canUseRcon(): boolean {
-    return this.auth.can(PERMISSIONS.RCON_USE);
+    return this.auth.can(PERMISSIONS.RCON_USE) && !this.unreachable;
   }
 
   ngOnInit() {

@@ -15,6 +15,16 @@ describe('ServerCardComponent', () => {
     fixture.detectChanges();
   });
 
+  it('offers no button at all while its machine cannot be reached', () => {
+    fixture.componentRef.setInput('server', { ...component.server, state: 'unreachable', gamePort: 7777 });
+    component.canMove = true;
+    fixture.detectChanges();
+
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'));
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.filter(button => !button.disabled).map(button => button.textContent?.trim())).toEqual([]);
+  });
+
   it('should create and render the name, map and status', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('.server-card-name')?.textContent).toContain('Aberration');

@@ -20,6 +20,7 @@ import { SaveInstanceResult } from '../../core/models/server-instance.model';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
 import { Subject, Subscription, of, throwError } from 'rxjs';
+import { LiveServersService } from '../../core/services/live-servers.service';
 
 describe('ServerComponent', () => {
   let component: ServerComponent;
@@ -452,6 +453,22 @@ describe('ServerComponent', () => {
       expect(component.canUseRcon).toBeTrue();
       denied = new Set(['rcon.use']);
       expect(component.canUseRcon).toBeFalse();
+    });
+
+    it('offers no RCON panel for a server whose machine cannot be reached', () => {
+      component.activeServerInstance = { id: 'srv1', name: 'One', state: 'unreachable' } as any;
+
+      expect(component.canUseRcon).toBeFalse();
+    });
+
+    // The page's own copy follows state events; a machine that went quiet sends none.
+    it('goes by the live list, which knows when the machine went quiet', () => {
+      component.activeServerInstance = { id: 'srv1', name: 'One', state: 'Running' } as any;
+      spyOn(TestBed.inject(LiveServersService), 'find').and.returnValue({ id: 'srv1', name: 'One', state: 'unreachable' } as any);
+
+      expect(component.unreachable).toBeTrue();
+      expect(component.canUseRcon).toBeFalse();
+      expect(component.settingsLocked).toBeTrue();
     });
   });
 

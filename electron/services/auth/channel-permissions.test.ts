@@ -29,6 +29,13 @@ describe('channel-permissions', () => {
     ]);
   });
 
+  // Forcing machines out, or leaving without the others, changes who is in the mesh: removing machines.
+  it('needs the remove-machines permission to force machines out or leave without the others', () => {
+    expect(permissionForChannel('force-remove-mesh-nodes')).toBe('nodes.remove');
+    expect(permissionForChannel('leave-mesh-anyway')).toBe('nodes.remove');
+    expect(isChannelAllowed('force-remove-mesh-nodes', ['nodes.manage'], false)).toBe(false);
+  });
+
   it('names a permission for the refusal text of an object rule', () => {
     expect(permissionForChannel('get-users')).toBe('users.manage');
     expect(permissionForChannel('assign-server-manager')).toBe('servers.create');

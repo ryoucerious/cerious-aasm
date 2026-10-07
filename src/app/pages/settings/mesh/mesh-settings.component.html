@@ -7,9 +7,22 @@
     <i class="material-icons">error_outline</i>
     <span><strong>This machine cannot run the mesh database, so it cannot create or join a mesh.</strong> {{ status.blocker }}</span>
   </div>
-  <div class="ark-install-notice warning" *ngIf="status.degraded">
+  <div class="ark-install-notice warning mesh-removed" *ngIf="status.enabled && status.removedFromMesh">
+    <i class="material-icons">person_remove</i>
+    <span>
+      <strong>The other machines removed this one from the mesh</strong> while it could not be reached, and they no longer take it.
+      Leave to make it standalone again: its servers stay here, and so do the accounts it knows. To come back, join again with a new token.
+    </span>
+    <button type="button" class="btn btn-danger btn-sm" (click)="askLeaveAnyway()">Leave</button>
+  </div>
+  <div class="ark-install-notice warning mesh-degraded" *ngIf="status.degraded && !status.removedFromMesh">
     <i class="material-icons">warning</i>
-    <span><strong>Mesh Degraded.</strong> Local servers can still be controlled. Security, enrollment, and placement changes wait for quorum.</span>
+    <span>
+      <strong>Mesh Degraded.</strong> Only {{ machinesReachable }} of {{ machinesTotal }} machines can be reached, and changes to the mesh need
+      {{ quorumNeeded }}, so two halves of a split mesh can never both change it. Every machine's own servers can still be controlled.
+      Renaming, addresses, Skip new servers, adding or removing machines and accounts wait until then.
+      <ng-container *ngIf="canRemoveNodes && forceRemoveCandidates.length">A machine that is gone for good can be forced out from the ⋯ menu on its card.</ng-container>
+    </span>
   </div>
   <div class="ark-install-notice warning" *ngIf="status.warning">
     <i class="material-icons">info</i>
@@ -120,7 +133,10 @@
       <article class="mesh-node-card" *ngFor="let node of nodes; trackBy: trackByNodeId">
         <div class="mesh-node-top">
           <div class="mesh-node-identity">
-            <h4 class="mesh-node-name" *ngIf="renamingNodeId !== node.nodeId">{{ node.name }}</h4>
+            <div class="mesh-node-title" *ngIf="renamingNodeId !== node.nodeId">
+              <h4 class="mesh-node-name">{{ node.name }}</h4>
+              <span class="mesh-node-tag" *ngIf="node.nodeId === status.nodeId">This machine</span>
+            </div>
             <div class="mesh-node-rename-row" *ngIf="renamingNodeId === node.nodeId">
               <input class="form-control mesh-node-rename-input" [(ngModel)]="renameText" name="renameText" maxlength="64"
                      aria-label="Machine name" (keydown.enter)="saveRename(node)" (keydown.escape)="cancelRename()" />
@@ -128,14 +144,47 @@
               <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRename()">Cancel</button>
             </div>
             <p class="mesh-node-meta">
-              <span *ngIf="node.nodeId === status.nodeId">This machine</span>
-              <span>Version {{ node.version || 'unknown' }}</span>
+              <span>{{ versionText(node) }}</span>
+              <span class="mesh-node-address" *ngIf="node.address">{{ addressText(node.address) }}</span>
             </p>
-            <p class="mesh-node-meta mesh-node-skipping" *ngIf="node.maintenance">Skipping new servers: Auto-select and moves pass it over</p>
             <p class="mesh-node-meta mesh-node-ark-update" *ngIf="arkUpdateText(node)">{{ arkUpdateText(node) }}</p>
-            <p class="mesh-node-meta mesh-node-address" *ngIf="node.address">Reached at {{ addressText(node.address) }}</p>
           </div>
-          <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
+          <div class="mesh-node-status">
+            <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
+            <!-- Occasional changes, kept off the card's face. -->
+            <div class="mesh-node-more-anchor">
+              <button type="button" class="btn btn-ghost btn-icon-only mesh-node-more" (click)="toggleMenu(node, $event)"
+                      title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuNodeId === node.nodeId">
+                <span class="material-icons">more_horiz</span>
+              </button>
+              <div class="card-menu mesh-node-menu" *ngIf="menuNodeId === node.nodeId" role="menu" (click)="$event.stopPropagation()">
+                <ng-container *ngIf="canManageNodes">
+                  <button type="button" class="card-menu-item" role="menuitem" [disabled]="status.degraded"
+                          (click)="closeMenu(); startRename(node)">
+                    <span class="material-icons">edit</span> Rename
+                  </button>
+                  <button type="button" class="card-menu-item" role="menuitem" [disabled]="status.degraded || savingAddress || !node.connected"
+                          (click)="closeMenu(); startAddress(node)">
+                    <span class="material-icons">lan</span> Change address
+                  </button>
+                  <div class="mesh-node-menu-divider" role="separator"></div>
+                </ng-container>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'remove'"
+                        [disabled]="status.degraded" (click)="closeMenu(); askRemove(node)">
+                  <span class="material-icons">{{ node.nodeId === status.nodeId ? 'logout' : 'link_off' }}</span> {{ node.nodeId === status.nodeId ? 'Leave' : 'Remove' }}
+                </button>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'force-remove'"
+                        (click)="closeMenu(); askForceRemove(node)">
+                  <span class="material-icons">link_off</span> Force remove
+                </button>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'leave-anyway'"
+                        (click)="closeMenu(); askLeaveAnyway()">
+                  <span class="material-icons">logout</span> Leave anyway
+                </button>
+                <p class="mesh-node-menu-note" *ngIf="menuNote(node)">{{ menuNote(node) }}</p>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="mesh-address-form" *ngIf="addressNodeId === node.nodeId">
           <ng-container *ngTemplateOutlet="addressFields; context: { $implicit: addressForm }"></ng-container>
@@ -151,28 +200,23 @@
           </div>
         </div>
         <div class="mesh-node-actions">
-          <button type="button" class="btn btn-ghost btn-sm mesh-node-rename" *ngIf="canManageNodes && renamingNodeId !== node.nodeId"
-                  (click)="startRename(node)" [disabled]="status.degraded">
-            Rename
-          </button>
-          <button type="button" class="btn btn-ghost btn-sm" *ngIf="canManageNodes && addressNodeId !== node.nodeId"
-                  (click)="startAddress(node)" [disabled]="status.degraded || savingAddress || !node.connected">
-            Change address
-          </button>
-          <button type="button" class="btn btn-ghost btn-sm" (click)="askArkUpdate(node)" [disabled]="!canUpdate || !!updatingKey || arkUpdateRunning"
-                  [title]="arkUpdateRunning ? 'A machine is updating ARK. Update one machine at a time.' : ''">
-            Update ARK
-          </button>
-          <button type="button" class="btn btn-ghost btn-sm" (click)="updateNode(node, 'app')" [disabled]="!canUpdate || !!updatingKey">
-            Update app
-          </button>
-          <button type="button" class="btn btn-ghost btn-sm" (click)="maintenance(node)" [disabled]="status.degraded"
-                  [title]="node.maintenance ? 'Let Auto-select and moves put servers on this machine again' : 'Keep Auto-select and moves from putting servers on this machine. Its own servers keep running.'">
-            {{ node.maintenance ? 'Take new servers' : 'Skip new servers' }}
-          </button>
-          <button type="button" class="btn btn-danger btn-sm" (click)="askRemove(node)" [disabled]="status.degraded">
-            {{ node.nodeId === status.nodeId ? 'Leave' : 'Remove' }}
-          </button>
+          <label class="toggle-label mesh-node-skip"
+                 [title]="quorumReason || 'When on, Auto-select and moves do not put servers on this machine. Its own servers keep running.'">
+            <input type="checkbox" class="toggle-switch" [checked]="node.maintenance" [disabled]="status.degraded || !canManageNodes"
+                   (change)="setSkipping(node, $event)" />
+            <span class="toggle-text">Skip new servers</span>
+          </label>
+          <div class="mesh-node-updates">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="askArkUpdate(node)"
+                    [disabled]="!canUpdate || !!updatingKey || arkUpdateRunning || !!updateBlock(node)"
+                    [title]="updateBlock(node) || (arkUpdateRunning ? 'A machine is updating ARK. Update one machine at a time.' : '')">
+              Update ARK
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="askAppUpdate(node)" [disabled]="!canUpdate || !!updatingKey || !!updateBlock(node)"
+                    [title]="updateBlock(node)">
+              Update app
+            </button>
+          </div>
         </div>
       </article>
     </div>
@@ -203,7 +247,7 @@
     <pre class="mesh-output" *ngIf="wireguardText">{{ wireguardText }}</pre>
   </section>
 
-  <app-modal [title]="'Update ARK'" [show]="!!confirmingArkUpdate" (close)="cancelArkUpdate()">
+  <app-modal [title]="'Update ARK'" [show]="!!confirmingArkUpdate" [maxWidth]="'520px'" (close)="cancelArkUpdate()">
     <div class="modal-confirmation">
       Update ARK on {{ confirmingArkUpdate?.name }}? The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for 15 minutes (the warning time in Settings → Updates), then its servers stop, the new files go in, and they start again.
       If none of its servers is running, the update starts at once.
@@ -214,13 +258,64 @@
     </div>
   </app-modal>
 
-  <app-modal [title]="'Leave mesh'" [show]="showConfirmLeave" (close)="cancelLeave()">
+  <app-modal [title]="'Update app'" [show]="!!confirmingAppUpdate" [maxWidth]="'520px'" (close)="cancelAppUpdate()">
+    <div class="modal-confirmation">
+      Update the app on {{ confirmingAppUpdate?.name }}? The new version downloads, then the app on {{ confirmingAppUpdate?.name }} restarts.
+      Any servers running there stop while it restarts, and players are not warned first.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelAppUpdate()">Cancel</button>
+      <button type="button" class="btn btn-primary" (click)="confirmAppUpdate()">Update app</button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Leave mesh'" [show]="showConfirmLeave" [maxWidth]="'520px'" (close)="cancelLeave()">
     <div class="modal-confirmation">
       Leave {{ status.meshName || 'this mesh' }}? This machine returns to standalone. Servers on it stay here.
     </div>
     <div class="action-group-modal">
       <button type="button" class="btn" (click)="cancelLeave()">Cancel</button>
       <button type="button" class="btn btn-danger" (click)="confirmLeave()">Leave</button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Force remove'" [show]="showForceRemove" [maxWidth]="'560px'" (close)="cancelForceRemove()">
+    <div class="modal-confirmation">
+      <p>
+        The mesh cannot agree to remove a machine while too few can be reached. Instead, every machine that stays and can be
+        reached takes a new member list without the ones ticked, and the mesh can agree again. Game servers keep running.
+      </p>
+      <div class="mesh-force-remove-choices">
+        <label class="toggle-label mesh-force-remove-choice" *ngFor="let node of forceRemoveCandidates; trackBy: trackByNodeId">
+          <input type="checkbox" [checked]="forceRemoveIds.has(node.nodeId)" [disabled]="forceRemoving" (change)="toggleForceRemove(node.nodeId, $event)" />
+          <span>{{ node.name }}</span>
+        </label>
+      </div>
+      <p class="mesh-force-remove-plan">
+        Leaves {{ forceRemovePlan.staying }} machines, {{ forceRemovePlan.reachable }} of which can be reached; they need {{ forceRemovePlan.needed }}.
+        <strong *ngIf="!forceRemovePlan.enough"> Still too few: tick more of the machines that cannot be reached.</strong>
+      </p>
+      <p class="warning-text">
+        Only do this for a machine that is gone for good. If it comes back, it is refused, and it has to leave and join again; its
+        servers stay on it.
+      </p>
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelForceRemove()" [disabled]="forceRemoving">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmForceRemove()" [disabled]="!forceRemovePlan.enough || forceRemoving">
+        {{ forceRemoving ? 'Removing…' : 'Force remove' }}
+      </button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Leave anyway'" [show]="showLeaveAnyway" [maxWidth]="'520px'" (close)="cancelLeaveAnyway()">
+    <div class="modal-confirmation">
+      Leave {{ status.meshName || 'this mesh' }} without the other machines? This machine returns to standalone; its servers and the
+      accounts it knows stay here. Unless they removed it already, the others still count this machine until they remove it.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelLeaveAnyway()">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmLeaveAnyway()">Leave anyway</button>
     </div>
   </app-modal>
 

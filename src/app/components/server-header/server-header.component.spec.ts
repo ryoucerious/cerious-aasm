@@ -22,6 +22,19 @@ describe('ServerHeaderComponent', () => {
     fixture.detectChanges();
   });
 
+  // The page's own copy can still say Running: the live list is what knows the machine went quiet.
+  it('offers no button at all while its machine cannot be reached, and says so', () => {
+    fixture.componentRef.setInput('live', { ...component.live, state: 'unreachable' });
+    fixture.componentRef.setInput('canMove', true);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+
+    const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('button'));
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.filter(button => !button.disabled).map(button => button.textContent?.trim())).toEqual([]);
+    expect(el.querySelector('.status-badge')?.textContent?.trim()).toBe('Unreachable');
+  });
+
   it('should create and render name, map and page title', () => {
     fixture.componentRef.setInput('pageTitle', 'Rates');
     fixture.detectChanges();
@@ -39,6 +52,15 @@ describe('ServerHeaderComponent', () => {
       fixture.detectChanges();
 
       expect(connect()?.textContent).toContain('ark.example.com:7777');
+    });
+
+    // The address carries the game port; the query port is in the server's settings.
+    it('stands in for the Game and Query ports line', () => {
+      fixture.detectChanges();
+      const el: HTMLElement = fixture.nativeElement;
+
+      expect(el.querySelector('.server-header-ports')).toBeNull();
+      expect(el.textContent).not.toContain('Query');
     });
 
     it('copies whole', async () => {
@@ -143,7 +165,6 @@ describe('ServerHeaderComponent', () => {
     expect(component.memory).toBe('10.4 GB');
     expect(component.cpu).toBe('15%');
     expect(component.uptime).toBe('1d 6h');
-    expect(component.ports).toBe('Game 7777 · Query 27015');
   });
 
   it('handles "Preparing to start" and stopped states', () => {

@@ -12,6 +12,8 @@ import { IpcService } from '../../core/services/ipc.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { GlobalConfig } from '../../core/interfaces/global-config.interface';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
+import { AuthService } from '../../core/services/auth.service';
 
 describe('SettingsPageComponent', () => {
   let component: SettingsPageComponent;
@@ -235,6 +237,48 @@ describe('SettingsPageComponent', () => {
     expect(component.webServerPort).toBe(8080);
     expect(component.autoUpdateArkServer).toBeTrue();
     expect(component.serverStartDelaySeconds).toBe(30);
+  });
+
+  // Moved here from the server list, which now groups only by the machines of a mesh.
+  it('switches grouping the server list by operator, for this browser', () => {
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
+    fixture.detectChanges();
+    TestBed.inject(SettingsDrawerService).open('servers');
+    fixture.detectChanges();
+    const toggle = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.server-list-group-by-operator')!;
+    expect(toggle.checked).toBeFalse();
+
+    toggle.click();
+    fixture.detectChanges();
+
+    expect(TestBed.inject(ServerListPreferencesService).groupByOperator).toBeTrue();
+    expect(localStorage.getItem('aasm.sidebar.groupByOperator')).toBe('1');
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
+  });
+
+  // Bare text beside a link inside a flex row became three narrow columns, each wrapping on its own.
+  it('keeps each Authentication notice to one line of text beside its icon', () => {
+    ipc.isElectron = true;
+    create();
+    fixture.detectChanges();
+    TestBed.inject(SettingsDrawerService).open('web-server');
+    config.config$.next({ authenticationEnabled: true });
+    fixture.detectChanges();
+    const notices = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.settings-auth .ark-install-notice'));
+    const looseText = (notice: Element) => Array.from(notice.childNodes).some(child => child.nodeType === Node.TEXT_NODE && !!child.textContent?.trim());
+    const itemCount = (notice: Element) => notice.children.length;
+
+    expect(notices().length).withContext('no accounts yet').toBe(1);
+    expect(notices().map(looseText)).toEqual([false]);
+    expect(notices().map(itemCount)).toEqual([2]);
+
+    const auth = TestBed.inject(AuthService) as unknown as { identitySubject: BehaviorSubject<Record<string, unknown>> };
+    auth.identitySubject.next({ ...auth.identitySubject.value, accountsInUse: true });
+    fixture.detectChanges();
+
+    expect(notices()[0].textContent).toContain('Accounts are managed under');
+    expect(notices().map(looseText)).toEqual([false]);
+    expect(notices().map(itemCount)).toEqual([2]);
   });
 
   it('does not ask for the settings itself, since GlobalConfigService loads them when the connection is up', () => {

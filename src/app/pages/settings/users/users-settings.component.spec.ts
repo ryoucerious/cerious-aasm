@@ -98,6 +98,72 @@ describe('UsersSettingsComponent', () => {
     expect(notification.error).toHaveBeenCalled();
     expect(component.loading).toBeFalse();
   });
+  // The table squeezed six columns into the settings drawer; each account is a card now.
+  describe('the accounts, one card each', () => {
+    async function render(): Promise<HTMLElement> {
+      // The first change detection runs ngOnInit, which starts its own reload.
+      fixture.detectChanges();
+      await component.reload();
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+    const cards = (page: HTMLElement) => Array.from(page.querySelectorAll<HTMLElement>('.user-card'));
+    const facts = (card: HTMLElement) => Object.fromEntries(Array.from(card.querySelectorAll('.user-card-fact'))
+      .map(fact => [fact.querySelector('dt')?.textContent?.trim(), fact.querySelector('dd')?.textContent?.trim()]));
+    /** A button's words, without its icon's. */
+    const words = (button: Element) => Array.from(button.childNodes)
+      .filter(child => child.nodeType === Node.TEXT_NODE).map(child => child.textContent).join('').trim();
+    const button = (card: HTMLElement, label: string) => Array.from(card.querySelectorAll<HTMLButtonElement>('button')).find(item => words(item) === label);
+
+    it('shows who each is, whether they may sign in, their role, pool and last sign-in', async () => {
+      const page = await render();
+
+      expect(page.querySelector('table.accounts-table')).toBeNull();
+      expect(cards(page).length).toBe(5);
+      const ann = cards(page)[0];
+      expect(ann.querySelector('.user-card-name')?.textContent?.trim()).toBe('ann');
+      expect(ann.querySelector('.user-card-status')?.textContent?.trim()).toBe('Active');
+      expect(facts(ann)).toEqual({ Role: 'Viewer', Pool: 'Admin pool', 'Last sign-in': 'Never' });
+      expect(cards(page)[1].querySelector('.user-card-display')?.textContent?.trim()).toBe('Ops');
+    });
+
+    it('says when an account is disabled', async () => {
+      auth.listUsersAndRoles.and.resolveTo({ users: [{ ...user, active: false }], roles });
+
+      const page = await render();
+
+      const status = cards(page)[0].querySelector('.user-card-status')!;
+      expect(status.textContent?.trim()).toBe('Disabled');
+      expect(status.classList).toContain('status-stopped');
+    });
+
+    it('edits and deletes from buttons that say so', async () => {
+      const page = await render();
+
+      button(cards(page)[0], 'Edit')!.click();
+      expect(component.showUserModal).toBeTrue();
+      expect(component.editingUser).toBe(user);
+      component.closeUserModal();
+
+      button(cards(page)[0], 'Delete')!.click();
+      expect(component.userToDelete).toBe(user);
+    });
+
+    it('will not delete a command-line account or your own, and says why', async () => {
+      identity = { ...admin, user: { ...operator, roleName: 'Operator', permissions: [] } };
+      auth.listUsersAndRoles.and.resolveTo({ users: [{ ...user, cliLocked: true }, operator], roles });
+
+      const page = await render();
+
+      const [cli, own] = cards(page);
+      expect(cli.textContent).toContain('Password is set on the command line');
+      expect(button(cli, 'Delete')!.disabled).toBeTrue();
+      expect(button(cli, 'Delete')!.title).toBe('This account is provided by the command line');
+      expect(button(own, 'Delete')!.disabled).toBeTrue();
+      expect(button(own, 'Delete')!.title).toBe('You cannot delete your own account');
+    });
+  });
+
   // A level above operator: an admin makes one for a mesh machine.
   describe('machine admins', () => {
     it('asks which machine it looks after, and whether it may update every machine', async () => {
@@ -155,7 +221,7 @@ describe('UsersSettingsComponent', () => {
       await component.reload();
       fixture.detectChanges();
 
-      const cells = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('td.pool-cell')).map(cell => cell.textContent?.trim());
+      const cells = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.user-card-pool')).map(cell => cell.textContent?.trim());
       expect(cells).toEqual(['Admin pool', 'Operators', 'Ops', 'Ops', 'Dallas01, updates every machine']);
       expect(text()).toContain('Roles');
     });

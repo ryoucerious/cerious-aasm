@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES, Permission, ROLE_IDS, effectivePermissions } from '../../types/auth.types';
 import {
   COMMAND_PROTOCOL, PROTOCOL_VERSION, QUERY_PROTOCOL, protocolError, type ArkUpdateStatus, type ClusterRecord, type MeshAddress, type MeshQuery, type CommandResult, type ControlCommand, type DesiredState, type MeshStatus,
-  type NodeRecord, type NodeResources, type ServerRecord, type StorageProfileRecord, type UserRecord
+  type ForceRemoval, type NodeRecord, type NodeResources, type RaftMember, type ServerRecord, type StorageProfileRecord, type UserRecord
 } from '../../types/mesh.types';
 import { getDefaultInstallDir, isRunningInDocker } from '../../utils/platform.utils';
 import { getInstanceDir, getInstancesBaseDir } from '../../utils/ark/instance.utils';
@@ -546,6 +546,166 @@ export class MeshService {
     // The servers on this machine stay where they are.
     if (leaving) await this.leaveLocally();
     else this.publishStatus();
+  }
+
+  /** Set while every machine this one reaches refuses it as no longer a member. */
+  private removedFromMesh = false;
+  /** The forced removal this machine agreed to, until the member that asked says to apply it. */
+  private agreedForceRemoval: { key: string; at: number } | null = null;
+
+  /**
+   * Takes machines that cannot be reached out of a mesh that has lost its quorum, so the rest can
+   * agree again. Raft cannot agree on a removal without a majority, so the machines that stay and
+   * can be reached each take the new member list on their own (rqlite's peers.json), after all of
+   * them have agreed to it: one that will not, or does not answer, leaves everything as it was.
+   * Then the removal is finished as Remove does it. A machine that stays but cannot be reached
+   * takes the new list from the others when it is back.
+   */
+  async forceRemoveNodes(nodeIds: string[], actor = 'desktop'): Promise<CommandResult> {
+    const identity = this.identity();
+    const localId = identity?.nodeId;
+    if (!this.repo || !this.secrets || !localId) return { success: false, error: 'Mesh is not enabled.' };
+    if (await this.repo.hasQuorum()) return { success: false, error: 'The mesh can agree on removing machines now: use Remove.' };
+    const nodes = (await this.repo.listNodes(identity?.meshId)).filter(node => node.status !== 'removed');
+    const removing = [...new Set(nodeIds.map(String))];
+    if (removing.length === 0) return { success: false, error: 'Choose the machines to remove.' };
+    for (const id of removing) {
+      const node = nodes.find(item => item.nodeId === id);
+      if (!node) return { success: false, error: 'That machine is not in the mesh.' };
+      if (id === localId) return { success: false, error: 'This machine cannot force itself out. Use Leave anyway on it instead.' };
+      if (this.reachable(id)) return { success: false, error: `${node.name} can be reached. Only machines that cannot be reached can be forced out.` };
+    }
+    const staying = nodes.filter(node => !removing.includes(node.nodeId));
+    const reachable = staying.filter(node => this.reachable(node.nodeId));
+    const needed = Math.floor(staying.length / 2) + 1;
+    if (reachable.length < needed) {
+      return {
+        success: false,
+        error: `That would still leave too few: ${reachable.length} of the ${staying.length} machines left can be reached, and they would need ${needed}. Remove more of the machines that cannot be reached.`
+      };
+    }
+    const members: RaftMember[] = staying.map(node => ({ id: node.nodeId, address: node.endpoints.raftAddr }));
+    const others = reachable.filter(node => node.nodeId !== localId);
+    const names = removing.map(id => nodes.find(node => node.nodeId === id)?.name || id).join(', ');
+
+    for (const node of others) {
+      const refusal = await this.askForceRemoval(node, { phase: 'prepare', removing, members });
+      if (refusal) return { success: false, error: `${node.name} ${refusal} Nothing was changed.` };
+    }
+    console.warn(`[mesh] ${actor} is forcing ${names} out of the mesh; ${staying.map(node => node.name).join(', ')} stay`);
+    const applied = await Promise.all(others.map(async node => ({ node, refusal: await this.askForceRemoval(node, { phase: 'apply', removing, members }) })));
+
+    this.changingAddress = true;
+    try {
+      await this.restartRaftWith(localId, members);
+      if (!await waitReady(this.rqlite!, this.supervisor, 240)) {
+        return { success: false, error: 'The machines took the new member list but have not agreed on a leader yet. Check that each of them is running; it can take a minute.' };
+      }
+    } finally {
+      this.changingAddress = false;
+    }
+
+    // As Remove does it: the machines forced out are refused by every member from here on.
+    for (const id of removing) {
+      const node = await this.repo!.getNode(id);
+      if (!node) continue;
+      if (node.certSerial) await this.repo!.revokeSerial(node.certSerial, Date.now());
+      await this.repo!.upsertNode({ ...node, status: 'removed' });
+    }
+    await this.repo!.setClusterCredential({ user: HTTP_USER, pass: randomUUID() });
+    this.publishStatus();
+    for (const { node, refusal } of applied) {
+      if (refusal) console.warn(`[mesh] ${node.name} agreed but did not take the new member list: ${refusal}`);
+    }
+    return { success: true };
+  }
+
+  /** Asks a member to agree to, or take, a forced removal. Null when it did; otherwise why not. */
+  private async askForceRemoval(node: NodeRecord, body: ForceRemoval): Promise<string | null> {
+    const certs = readCertPaths();
+    if (!certs) return 'could not be asked: this machine has no mesh certificate.';
+    try {
+      const response = await peerRequest({
+        url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/force-remove`,
+        method: 'POST',
+        body,
+        ca: fs.readFileSync(certs.caCert, 'utf8'),
+        cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+        key: fs.readFileSync(certs.nodeKey, 'utf8'),
+        timeoutMs: 60_000
+      });
+      if (response.status === 200) return null;
+      return `would not take part: ${(response.body as { error?: string })?.error || `it answered ${response.status}.`}`;
+    } catch (error) {
+      return `did not answer: ${messageOf(error)}.`;
+    }
+  }
+
+  /**
+   * Another member forces machines out. This machine agrees only while it cannot agree either,
+   * cannot reach those machines itself, and stays in the new member list; it takes the list only
+   * once it has agreed to that very list, and does not wait for a leader, which needs the others.
+   */
+  private async takePartInForceRemoval(askerId: string, body: { phase?: unknown; removing?: unknown; members?: unknown }): Promise<{ ok: true }> {
+    const localId = this.identity()?.nodeId;
+    if (!this.repo || !this.secrets || !localId) throw new Error('This machine is not in a mesh.');
+    const removing = Array.isArray(body.removing) ? body.removing.filter((id): id is string => typeof id === 'string') : [];
+    const members = Array.isArray(body.members)
+      ? body.members
+        .filter((item): item is RaftMember => !!item && typeof (item as RaftMember).id === 'string' && typeof (item as RaftMember).address === 'string')
+        .map(item => ({ id: item.id, address: item.address }))
+      : [];
+    const key = JSON.stringify([askerId, removing, members]);
+    if (body.phase === 'prepare') {
+      if (await this.repo.hasQuorum()) throw new Error('This machine can agree on removing machines now: use Remove.');
+      if (!members.some(item => item.id === localId)) throw new Error('This machine is not in the new member list.');
+      if (removing.length === 0 || removing.includes(localId)) throw new Error('This machine would be removed.');
+      for (const id of removing) {
+        if (this.reachable(id)) throw new Error(`This machine can still reach ${(await this.repo.getNode(id))?.name || id}.`);
+      }
+      this.agreedForceRemoval = { key, at: Date.now() };
+      return { ok: true };
+    }
+    if (body.phase === 'apply') {
+      const agreed = this.agreedForceRemoval;
+      if (!agreed || agreed.key !== key || Date.now() - agreed.at > FORCE_REMOVAL_AGREEMENT_MS) {
+        throw new Error('That member list was not agreed first.');
+      }
+      this.agreedForceRemoval = null;
+      console.warn(`[mesh] Taking the member list another machine forced: ${members.map(item => item.id).join(', ')}`);
+      this.changingAddress = true;
+      try {
+        await this.restartRaftWith(localId, members);
+      } finally {
+        this.changingAddress = false;
+      }
+      return { ok: true };
+    }
+    throw new Error('Unknown step.');
+  }
+
+  /** Restarts this machine's rqlited on a member list of its own, with rqlite's peers.json. */
+  private async restartRaftWith(nodeId: string, members: RaftMember[]): Promise<void> {
+    const secrets = this.secrets!;
+    await this.supervisor.stop();
+    const raftDir = path.join(rqliteDir(), 'raft');
+    fs.mkdirSync(raftDir, { recursive: true });
+    fs.writeFileSync(path.join(raftDir, 'peers.json'), JSON.stringify(members.map(item => ({ id: item.id, address: item.address, non_voter: false }))));
+    await this.startRqlite(nodeId, secrets);
+    const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
+    this.rqlite = client;
+    this.repo = new MeshRepository(client);
+  }
+
+  /**
+   * Leaves without the others' agreement: when they removed this machine while it was away, or
+   * none of them can be reached. The others still count it until they remove it. Its servers and
+   * its copy of the accounts stay.
+   */
+  async leaveWithoutQuorum(): Promise<void> {
+    console.warn('[mesh] Leaving the mesh without the other machines');
+    this.removedFromMesh = false;
+    await this.leaveLocally();
   }
 
   async verifyLogin(username: string, password: string): Promise<AuthenticatedUser | null> {
@@ -1151,8 +1311,11 @@ export class MeshService {
     const remote = servers
       .filter(server => server.nodeId && server.nodeId !== localId && !known.has(server.serverId) && !removed.has(server.nodeId))
       .map(server => {
-        // What its host last reported; the stored desired state until it reports one.
         const instance = instanceFromMeshServer(server);
+        // A machine that has stopped sending heartbeats: what it last reported may no longer be
+        // true, so its servers say so rather than show it. The heartbeat is what its card goes by.
+        if (!this.reachable(server.nodeId)) return { ...instance, state: 'unreachable' } as InstanceConfig;
+        // What its host last reported; the stored desired state until it reports one.
         const live = this.liveStates.get(server.serverId);
         if (!live) return instance;
         const reported = Object.fromEntries(Object.entries(live).filter(([key, value]) => key !== 'nodeId' && value !== undefined));
@@ -1848,6 +2011,7 @@ export class MeshService {
       // As the mesh names it: another member may have renamed it since this machine last synced.
       nodeName: nodes.find(node => node.nodeId === identity.nodeId)?.name || identity.name,
       leaderNodeId: leader,
+      removedFromMesh: this.removedFromMesh,
       voterCount: voters,
       hasQuorum: quorum,
       protocolVersion: PROTOCOL_VERSION,
@@ -2022,6 +2186,7 @@ export class MeshService {
         onClusterObject: sha256 => this.clusterSync?.objectPath(sha256) ?? null,
         // Another member is about to change its address: whether this one reaches it there.
         onProbeAddress: (askerId, body) => this.probeAddress(askerId, body),
+        onForceRemove: (askerId, body) => this.takePartInForceRemoval(askerId, body),
         // A move's destination stages the streamed files; they become the server when its placement arrives.
         onCheckpointBegin: body => beginStage(String(body.serverId || ''), {
           resume: body.resume === true,
@@ -2263,6 +2428,8 @@ export class MeshService {
       }
       if (!certs) return;
       const nodes = await this.repo.listNodes(this.identity()?.meshId);
+      let accepted = 0;
+      let refused = 0;
       await Promise.all(nodes.filter(node => node.nodeId !== nodeId && node.status !== 'removed').map(async node => {
         try {
           const response = await peerRequest({
@@ -2275,11 +2442,23 @@ export class MeshService {
             key: fs.readFileSync(certs.nodeKey, 'utf8'),
             timeoutMs: 3000
           });
-          if (response.status === 200) this.seenHeartbeats.set(node.nodeId, { at: Date.now(), skewMs: 0 });
+          if (response.status === 200) {
+            this.seenHeartbeats.set(node.nodeId, { at: Date.now(), skewMs: 0 });
+            accepted++;
+          } else if (/does not belong to a member/i.test(String((response.body as { error?: unknown })?.error ?? ''))) {
+            refused++;
+          }
         } catch {
           // A node that does not answer shows as unreachable until the next heartbeat.
         }
       }));
+      // Refused by every machine that answered: they removed this one, by force while it was away.
+      const removed = refused > 0 && accepted === 0;
+      if (removed !== this.removedFromMesh) {
+        this.removedFromMesh = removed;
+        if (removed) console.warn('[mesh] The other machines no longer take this one as a member: they removed it. Leave to make it standalone.');
+        this.publishStatus();
+      }
     } catch (error) {
       console.error('[mesh] Could not announce this node:', error);
     } finally {
@@ -2802,6 +2981,9 @@ function instanceFromMeshServer(server: ServerRecord): InstanceConfig {
     state: server.desiredState
   } as InstanceConfig;
 }
+
+/** How long a machine keeps a forced removal it agreed to, waiting for the word to apply it. */
+const FORCE_REMOVAL_AGREEMENT_MS = 5 * 60_000;
 
 /** How often each machine compares its cluster files with the mesh record. */
 const CLUSTER_SYNC_MS = 2_000;

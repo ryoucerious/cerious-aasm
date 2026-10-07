@@ -13,11 +13,10 @@
       <span class="server-header-map"><span class="material-icons">map</span>{{ visual.label }}</span>
       <span class="server-header-connect" *ngIf="connectAddress" title="What players type to connect">
         <span class="material-icons">link</span><code>{{ connectAddress }}</code>
-        <button type="button" class="btn btn-ghost btn-icon-only server-header-copy" (click)="copyConnectAddress()" [attr.aria-label]="copied ? 'Copied' : 'Copy connect address'">
+        <button type="button" class="btn btn-ghost btn-icon-only server-header-copy" (click)="copyConnectAddress()" [disabled]="unreachable" [attr.aria-label]="copied ? 'Copied' : 'Copy connect address'">
           <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span>
         </button>
       </span>
-      <span class="server-header-ports" *ngIf="ports">{{ ports }}</span>
       <span class="server-header-rcon" [class.connected]="rconConnected" *ngIf="isRunning">
         <span class="material-icons">{{ rconConnected ? 'link' : 'link_off' }}</span>
         RCON {{ rconConnected ? 'connected' : 'disconnected' }}
@@ -43,7 +42,7 @@
     </button>
     <!-- Occasional actions, kept apart from the controls used every day. -->
     <div class="server-header-more-anchor" *ngIf="canMove">
-      <button type="button" class="btn btn-ghost btn-icon-only server-header-more" (click)="toggleMenu($event)"
+      <button type="button" class="btn btn-ghost btn-icon-only server-header-more" (click)="toggleMenu($event)" [disabled]="unreachable"
               title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuOpen">
         <span class="material-icons">more_horiz</span>
       </button>

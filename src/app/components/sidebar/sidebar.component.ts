@@ -12,6 +12,7 @@ import { ServerLifecycleService } from '../../core/services/server-lifecycle.ser
 import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus, isBusyStatus } from '../../core/utils/server-status';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 import { ServerNavService, ServerTabDef, ServerTabId } from '../../core/services/server-nav.service';
 import { ModalComponent } from '../modal/modal.component';
 import { AddServerModalComponent } from '../add-server-modal/add-server-modal.component';
@@ -22,6 +23,24 @@ import { IpcService } from '../../core/services/ipc.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { environment } from '../../../environments/environment';
+
+/**
+ * One row of the server list: a group (an operator, or a machine of a mesh) or a server under it.
+ * The tree is flattened into rows, each with its depth, so the list stays one list to drag.
+ */
+export interface ServerListRow {
+  kind: 'group' | 'server';
+  /** A group's key, kept to remember it folded; a server's id. */
+  key: string;
+  depth: number;
+  label?: string;
+  /** Beside a group's name: which machine is this one. */
+  note?: string;
+  /** How many servers a group holds, as searched. */
+  count?: number;
+  open?: boolean;
+  server?: ServerInstance;
+}
 
 /**
  * Left-hand navigation: Dashboard, the server list, the selected server's pages, Settings.
@@ -42,13 +61,19 @@ export class SidebarComponent implements OnInit, OnDestroy {
   @Output() closeMobileMenu = new EventEmitter<void>();
 
   servers: ServerInstance[] = [];
-  /** The list as shown: searched, filtered by machine, and grouped by operator when asked. */
-  serverGroups: Array<{ label: string; servers: ServerInstance[] }> = [];
+  /**
+   * The list as shown: searched, and grouped only where servers really are apart. Under the
+   * machines of a mesh whose servers are on more than one; under operators as well when that is
+   * switched on in Settings → Servers and some server has one.
+   */
+  serverRows: ServerListRow[] = [];
   searchText = '';
-  /** '' for every machine, 'here' for this one, or a machine's node id. */
-  machineFilter = '';
-  machineOptions: Array<{ value: string; label: string }> = [];
-  groupByOperator = readGroupPreference();
+  /** The list is grouped by machine: a mesh whose servers run on more than one machine. */
+  groupedByMachine = false;
+  groupedByOperator = false;
+  private groupByOperator = false;
+  /** Groups folded away, kept in this browser. */
+  private readonly closedGroups = readClosedGroups();
   selectedServerId: string | null = null;
   selectedServer: ServerInstance | null = null;
   currentUrl = '';
@@ -98,6 +123,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     private auth: AuthService,
     private poolDirectory: PoolDirectoryService,
     private meshNodes: MeshNodesService,
+    private listPreferences: ServerListPreferencesService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -143,7 +169,12 @@ export class SidebarComponent implements OnInit, OnDestroy {
     }));
 
     this.subs.push(this.poolDirectory.changed$.subscribe(() => { this.regroup(); this.cdr.markForCheck(); }));
-    this.subs.push(this.meshNodes.changed$.subscribe(() => { this.buildMachineOptions(); this.regroup(); this.cdr.markForCheck(); }));
+    this.subs.push(this.meshNodes.changed$.subscribe(() => { this.regroup(); this.cdr.markForCheck(); }));
+    this.subs.push(this.listPreferences.groupByOperator$.subscribe(on => {
+      this.groupByOperator = on;
+      this.regroup();
+      this.cdr.markForCheck();
+    }));
     this.subs.push(this.auth.identity$.subscribe(() => this.cdr.markForCheck()));
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
@@ -162,7 +193,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
         this.serverInstanceService.setActiveServer(next);
       }
       this.selectedServer = this.servers.find(server => server.id === this.selectedServerId) || null;
-      this.buildMachineOptions();
       this.regroup();
       this.cdr.markForCheck();
     }));
@@ -291,62 +321,100 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.regroup();
   }
 
-  onMachineFilter(value: string): void {
-    this.machineFilter = value;
+  /** Folds a group away, or opens it again. Searching opens every group it finds servers in. */
+  toggleGroup(key: string): void {
+    if (this.closedGroups.has(key)) this.closedGroups.delete(key);
+    else this.closedGroups.add(key);
+    saveClosedGroups(this.closedGroups);
     this.regroup();
-  }
-
-  onGroupByOperator(on: boolean): void {
-    this.groupByOperator = on;
-    try {
-      localStorage.setItem(GROUP_PREFERENCE_KEY, on ? '1' : '0');
-    } catch {
-      /* the choice lasts until the page closes */
-    }
-    this.regroup();
+    this.cdr.markForCheck();
   }
 
   /** Dragging reorders the saved order, so only the whole list, ungrouped, can be dragged. */
   get reorderable(): boolean {
-    return !this.searchText.trim() && !this.machineFilter && !this.groupByOperator;
+    return !this.searchText.trim() && !this.groupedByMachine && !this.groupedByOperator;
   }
 
-  /** Grouping by operator only means something once a server has one. */
-  get hasOperators(): boolean {
-    return this.servers.some(server => !!server.operatorUserId);
-  }
-
-  private buildMachineOptions(): void {
-    const machines = this.meshNodes.machines();
-    this.machineOptions = machines.length
-      ? [{ value: '', label: 'All machines' }, { value: 'here', label: 'This machine' }, ...machines.map(machine => ({ value: machine.nodeId, label: machine.name }))]
-      : [];
-    if (!this.machineOptions.length) this.machineFilter = '';
+  trackByRow(_index: number, row: ServerListRow): string {
+    return `${row.kind}:${row.key}`;
   }
 
   private regroup(): void {
     const query = this.searchText.trim().toLowerCase();
-    const visible = this.servers.filter(server => {
-      if (this.machineFilter === 'here' && !this.meshNodes.isHere(server.nodeId)) return false;
-      if (this.machineFilter && this.machineFilter !== 'here' && server.nodeId !== this.machineFilter) return false;
-      if (!query) return true;
-      return [server.name, server.mapName, this.meshNodes.nameOf(server.nodeId), this.listLabel(server)]
-        .some(value => String(value || '').toLowerCase().includes(query));
-    });
-    if (!this.groupByOperator) {
-      this.serverGroups = [{ label: '', servers: visible }];
-      return;
+    const visible = this.servers.filter(server => !query
+      || [server.name, server.mapName, this.meshNodes.nameOf(server.nodeId), this.listLabel(server)]
+        .some(value => String(value || '').toLowerCase().includes(query)));
+    // Decided on every server, not the ones a search shows, so the tree keeps its shape as you type.
+    this.groupedByMachine = this.meshNodes.machines().length > 0 && new Set(this.servers.map(server => this.machineKeyOf(server))).size > 1;
+    this.groupedByOperator = this.groupByOperator && this.servers.some(server => !!server.operatorUserId);
+
+    const rows: ServerListRow[] = [];
+    const group = (key: string, label: string, note: string, depth: number, servers: ServerInstance[], inside: (depth: number) => void) => {
+      const open = !!query || !this.closedGroups.has(key);
+      rows.push({ kind: 'group', key, label, note, depth, count: servers.length, open });
+      if (open) inside(depth + 1);
+    };
+    const serversAt = (servers: ServerInstance[], depth: number) => {
+      for (const server of servers) rows.push({ kind: 'server', key: server.id, depth, server });
+    };
+    const machinesAt = (servers: ServerInstance[], depth: number, parent: string) => {
+      if (!this.groupedByMachine) {
+        serversAt(servers, depth);
+        return;
+      }
+      for (const machine of this.machineGroups(servers)) {
+        group(`${parent}machine:${machine.key}`, machine.label, machine.here ? 'this machine' : '', depth, machine.servers,
+          inner => serversAt(machine.servers, inner));
+      }
+    };
+
+    if (this.groupedByOperator) {
+      for (const pool of this.operatorGroups(visible)) {
+        const key = `operator:${pool.key}`;
+        group(key, pool.label, '', 0, pool.servers, inner => machinesAt(pool.servers, inner, `${key}/`));
+      }
+    } else {
+      machinesAt(visible, 0, '');
     }
-    // One bubble per operator, the admin pool last; within one, each machine's servers together.
+    this.serverRows = rows;
+  }
+
+  /** The machine a server runs on: its node, or this machine for one the mesh has not placed. */
+  private machineKeyOf(server: ServerInstance): string {
+    if (server.nodeId) return server.nodeId;
+    return this.meshNodes.machines().find(machine => this.meshNodes.isHere(machine.nodeId))?.nodeId ?? 'here';
+  }
+
+  /** Each machine's servers in the saved order, this machine first, then by name. */
+  private machineGroups(servers: ServerInstance[]): Array<{ key: string; label: string; here: boolean; servers: ServerInstance[] }> {
     const groups = new Map<string, ServerInstance[]>();
-    for (const server of visible) {
-      const label = server.operatorUserId ? this.poolDirectory.operatorLabel(server) : ADMIN_POOL;
-      groups.set(label, [...(groups.get(label) ?? []), server]);
+    for (const server of servers) {
+      const key = this.machineKeyOf(server);
+      groups.set(key, [...(groups.get(key) ?? []), server]);
     }
-    const machine = (server: ServerInstance) => this.meshNodes.nameOf(server.nodeId);
-    this.serverGroups = [...groups.entries()]
-      .sort(([a], [b]) => (a === ADMIN_POOL ? 1 : b === ADMIN_POOL ? -1 : a.localeCompare(b)))
-      .map(([label, servers]) => ({ label, servers: [...servers].sort((a, b) => machine(a).localeCompare(machine(b))) }));
+    return [...groups.entries()]
+      .map(([key, members]) => ({
+        key,
+        label: this.meshNodes.nameOf(key) || (key === 'here' ? 'This machine' : 'Unknown machine'),
+        here: key === 'here' || this.meshNodes.isHere(key),
+        servers: members
+      }))
+      .sort((a, b) => Number(b.here) - Number(a.here) || a.label.localeCompare(b.label));
+  }
+
+  /** Each operator's servers, by the operator's name, the admin pool last. */
+  private operatorGroups(servers: ServerInstance[]): Array<{ key: string; label: string; servers: ServerInstance[] }> {
+    const groups = new Map<string, { label: string; servers: ServerInstance[] }>();
+    for (const server of servers) {
+      const key = server.operatorUserId || 'admin';
+      const label = server.operatorUserId ? this.poolDirectory.operatorLabel(server) : ADMIN_POOL;
+      const existing = groups.get(key);
+      if (existing) existing.servers.push(server);
+      else groups.set(key, { label, servers: [server] });
+    }
+    return [...groups.entries()]
+      .map(([key, pool]) => ({ key, ...pool }))
+      .sort((a, b) => (a.key === 'admin' ? 1 : b.key === 'admin' ? -1 : a.label.localeCompare(b.label)));
   }
 
   onDrop(event: CdkDragDrop<ServerInstance[]>): void {
@@ -359,7 +427,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   onServerNameDoubleClick(server: ServerInstance, event: Event): void {
     event.stopPropagation();
-    if (!this.canRenameServer || this.isServerBusy(server)) return;
+    // A rename of a server whose machine cannot be reached would not get there.
+    if (!this.canRenameServer || this.isServerBusy(server) || serverStatusKey(server.state) === 'unreachable') return;
     this.editingServerId = server.id;
     this.editingServerName = server.name;
     this.cdr.markForCheck();
@@ -438,9 +507,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
    * Admin sees the operator and the assignee. Anyone else sees the assignee.
    * "Admin" and "Not assigned" are not names, and the join address stays on the card.
    */
-  /** The machine a server runs on in a mesh, then who it is assigned to. */
+  /** The machine a server runs on in a mesh, then who it is assigned to; not what a group above already says. */
   subtitle(server: ServerInstance): string {
-    return [this.meshNodes.nameOf(server.nodeId), this.listLabel(server)].filter(Boolean).join(' · ');
+    return [this.groupedByMachine ? '' : this.meshNodes.nameOf(server.nodeId), this.listLabel(server)].filter(Boolean).join(' · ');
   }
 
   listLabel(server: ServerInstance): string {
@@ -448,8 +517,9 @@ export class SidebarComponent implements OnInit, OnDestroy {
     const hasAssignee = !!server.managerUserId && assignee !== 'Not assigned';
     const operator = this.poolDirectory.operatorLabel(server);
     const hasOperator = !!server.operatorUserId && operator !== 'Operator';
-    if (this.groupsByOperator && hasOperator && hasAssignee) return `${operator} · ${assignee}`;
-    if (this.groupsByOperator && hasOperator) return operator;
+    const namesOperator = this.groupsByOperator && hasOperator && !this.groupedByOperator;
+    if (namesOperator && hasAssignee) return `${operator} · ${assignee}`;
+    if (namesOperator) return operator;
     if (hasAssignee) return assignee;
     return '';
   }
@@ -526,13 +596,22 @@ export class SidebarComponent implements OnInit, OnDestroy {
 }
 
 const ADMIN_POOL = 'Admin pool';
-const GROUP_PREFERENCE_KEY = 'aasm.sidebar.groupByOperator';
+const CLOSED_GROUPS_KEY = 'aasm.sidebar.closedGroups';
 
 /** Per viewer: kept in this browser only. */
-function readGroupPreference(): boolean {
+function readClosedGroups(): Set<string> {
   try {
-    return localStorage.getItem(GROUP_PREFERENCE_KEY) === '1';
+    const saved = JSON.parse(localStorage.getItem(CLOSED_GROUPS_KEY) || '[]');
+    return new Set(Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : []);
   } catch {
-    return false;
+    return new Set();
+  }
+}
+
+function saveClosedGroups(keys: Set<string>): void {
+  try {
+    localStorage.setItem(CLOSED_GROUPS_KEY, JSON.stringify([...keys]));
+  } catch {
+    /* folded until the page closes */
   }
 }

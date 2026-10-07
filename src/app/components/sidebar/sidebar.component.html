@@ -27,22 +27,20 @@
       <div class="server-list-tools" *ngIf="showServers && servers.length > 1">
         <input type="search" class="form-control server-search" placeholder="Search servers" aria-label="Search servers"
                [ngModel]="searchText" (ngModelChange)="onSearch($event)" />
-        <div class="server-list-filters" *ngIf="machineOptions.length || hasOperators">
-          <select class="form-control server-machine-filter" *ngIf="machineOptions.length" aria-label="Machine"
-                  [ngModel]="machineFilter" (ngModelChange)="onMachineFilter($event)">
-            <option *ngFor="let option of machineOptions" [value]="option.value">{{ option.label }}</option>
-          </select>
-          <label class="server-group-toggle" *ngIf="hasOperators" title="One group per operator">
-            <input type="checkbox" [ngModel]="groupByOperator" (ngModelChange)="onGroupByOperator($event)" /> By operator
-          </label>
-        </div>
       </div>
 
       <div class="server-list" *ngIf="showServers" cdkDropList [cdkDropListDisabled]="!reorderable" (cdkDropListDropped)="onDrop($event)">
-        <ng-container *ngFor="let group of serverGroups">
-        <div class="server-group-label" *ngIf="group.label">{{ group.label }}</div>
-        <div *ngFor="let server of group.servers; trackBy: trackByServerId"
+        <ng-container *ngFor="let row of serverRows; trackBy: trackByRow">
+        <button type="button" class="server-group" *ngIf="row.kind === 'group'" [ngClass]="'server-depth-' + row.depth"
+                [attr.aria-expanded]="row.open" (click)="toggleGroup(row.key)">
+          <span class="material-icons server-group-chevron">{{ row.open ? 'expand_more' : 'chevron_right' }}</span>
+          <span class="server-group-name">{{ row.label }}</span>
+          <span class="server-group-note" *ngIf="row.note">{{ row.note }}</span>
+          <span class="server-group-count">{{ row.count }}</span>
+        </button>
+        <div *ngIf="row.kind === 'server' && row.server as server"
              class="server-item"
+             [ngClass]="'server-depth-' + row.depth"
              cdkDrag
              [class.selected]="selectedServerId === server.id"
              (click)="onServerClick(server)">
@@ -72,7 +70,7 @@
           </button>
         </div>
         </ng-container>
-        <div class="server-list-empty" *ngIf="servers.length && !serverGroups[0]?.servers?.length && serverGroups.length <= 1">No servers match.</div>
+        <div class="server-list-empty" *ngIf="servers.length && !serverRows.length">No servers match.</div>
         <div class="server-list-empty" *ngIf="!servers.length">
           No servers yet.
           <button type="button" class="link-btn" *ngIf="canCreateServer" (click)="onAddServerClick()">Add one</button>

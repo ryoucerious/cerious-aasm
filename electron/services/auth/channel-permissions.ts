@@ -183,6 +183,9 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'join-mesh': PERMISSIONS.MESH_CONFIGURE,
   'create-enrollment-token': PERMISSIONS.NODES_ENROLL,
   'remove-mesh-node': PERMISSIONS.NODES_REMOVE,
+  // Below quorum: machines that cannot be reached taken out by the rest, or this one leaving alone.
+  'force-remove-mesh-nodes': PERMISSIONS.NODES_REMOVE,
+  'leave-mesh-anyway': PERMISSIONS.NODES_REMOVE,
   'get-mesh-nodes': PERMISSIONS.NODES_VIEW,
   'set-node-maintenance': PERMISSIONS.NODES_MANAGE,
   'rename-mesh-node': PERMISSIONS.NODES_MANAGE,

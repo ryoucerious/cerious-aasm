@@ -41,11 +41,69 @@
   }
 }
 
+.mesh-node-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .mesh-node-name {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-strong);
+}
+
+.mesh-node-tag {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+// The pill, and the ⋯ menu beside it.
+.mesh-node-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mesh-node-more-anchor {
+  position: relative;
+  display: flex;
+}
+
+// As tall as the pill beside it, just a little wider (.btn-icon-only reserves a bigger box).
+.mesh-node-more {
+  min-width: 0;
+  min-height: 0;
+  padding: 0.15rem 0.35rem;
+
+  .material-icons { font-size: 20px; }
+}
+
+// The card does not clip, so the menu hangs from its button rather than the viewport.
+.card-menu.mesh-node-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 250px;
+}
+
+.mesh-node-menu-divider {
+  height: 1px;
+  margin: 0.3rem 0.35rem;
+  background: var(--border-muted-1);
+}
+
+.mesh-node-menu-note {
+  margin: 0.35rem 0.65rem 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .mesh-node-meta {
@@ -60,7 +118,6 @@
 }
 
 .mesh-node-pill {
-  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   padding: 0.2rem 0.6rem;
@@ -70,17 +127,51 @@
   letter-spacing: 0.01em;
 }
 
+// The switch on the left, the two updates on the right.
 .mesh-node-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.4rem 0.75rem;
   margin-top: 0.85rem;
-  padding-top: 0.85rem;
+  padding-top: 0.75rem;
   border-top: 1px solid var(--border-muted-1);
 
-  .btn-danger { margin-left: auto; }
+  .mesh-node-skip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .mesh-node-updates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
 }
+
+// The machines that can be forced out, one per line, and what removing the ticked ones leaves.
+.mesh-force-remove-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.75rem;
+
+  .mesh-force-remove-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+}
+
+.mesh-force-remove-plan { margin: 0 0 0.75rem; }
+
+// The notice that this machine was removed carries its own Leave button.
+.mesh-removed .btn { margin-left: auto; flex-shrink: 0; }
 
 .mesh-output {
   margin: 0.75rem 0 0;

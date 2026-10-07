@@ -461,6 +461,13 @@
     border-color: var(--danger-fill);
     box-shadow: 0 0 0 2px var(--danger-soft);
   }
+
+  // Its machine cannot be reached: outlined, as nothing about the server itself is known.
+  &.status-unreachable {
+    background: transparent;
+    color: var(--warning);
+    border-color: var(--warning);
+  }
 }
 
 .button-header {

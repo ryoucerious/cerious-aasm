@@ -78,7 +78,7 @@ For a member outside the others' network:
 1. Forward both TCP ports to the machine on its router, in both directions: each side's router forwards to its own machine. A VPN such as Tailscale or WireGuard avoids port forwarding.
 2. Tell the mesh the address the others should dial: the public IP address or a dynamic DNS name. Use the outside ports when the router forwards different ones to 4747 and 4002.
    - Joining: under "How other machines reach this one" in Settings → Mesh, choose **Use another address** before **Join mesh**. Do the same before **Create mesh** when the first machine is the one others reach from outside.
-   - Already a member: **Change address** on its card in Settings → Mesh. Every other member first checks it can reach the machine there; nothing changes if one cannot.
+   - Already a member: **Change address** in the ⋯ menu on its card in Settings → Mesh. Every other member first checks it can reach the machine there; nothing changes if one cannot.
 3. Machines on the same network as each other then also reach each other by that public address. That needs the router to support NAT loopback (hairpinning). If it does not, use a dynamic DNS name that resolves to the LAN address inside the network, or a VPN.
 
 Ports 4001 (the local database API) and 3000 (the web interface) are not part of the mesh, and need no forwarding for it.

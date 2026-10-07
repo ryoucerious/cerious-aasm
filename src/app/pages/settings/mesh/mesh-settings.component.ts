@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy, HostListener } from '@angular/core';
 import { NgIf, NgFor, NgClass, NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
@@ -48,6 +48,8 @@ interface MeshStatus {
   reconnecting?: boolean;
   /** Outside a mesh: why this machine cannot run the mesh database, so it cannot create or join one. */
   blocker?: string | null;
+  /** Every machine this one reaches refuses it: the others removed it while it was away. */
+  removedFromMesh?: boolean;
   /** Where other machines reach this one, or would if it created or joined a mesh now. */
   advertise?: MeshAddress;
   /** Just after a join: the machine admin this machine's own admin password now signs in as. */
@@ -83,6 +85,12 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   busy = false;
   updatingKey = '';
   showConfirmLeave = false;
+  /** Leave anyway: without the others, which cannot agree or removed this machine. */
+  showLeaveAnyway = false;
+  /** Force remove: the machines ticked to be taken out of a mesh that cannot agree. */
+  showForceRemove = false;
+  forceRemoveIds = new Set<string>();
+  forceRemoving = false;
   /** The machine whose name is being edited, and the name typed so far. */
   renamingNodeId: string | null = null;
   renameText = '';
@@ -196,6 +204,35 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.APP_INSTALL);
   }
 
+  /** The voting machines of the mesh. */
+  get machinesTotal(): number {
+    return this.status?.voterCount || this.nodes.filter(node => node.status !== 'removed').length;
+  }
+
+  get machinesReachable(): number {
+    return this.nodes.filter(node => node.status !== 'removed' && node.connected).length;
+  }
+
+  /** A change to the mesh is agreed by a majority of its voting machines: 3 of 4, 2 of 3. */
+  get quorumNeeded(): number {
+    return Math.floor(this.machinesTotal / 2) + 1;
+  }
+
+  /** Why a change to the mesh cannot be made now; empty while it can. */
+  get quorumReason(): string {
+    return this.status?.degraded ? `Waits until ${this.quorumNeeded} of the ${this.machinesTotal} machines can be reached.` : '';
+  }
+
+  /**
+   * Why a machine cannot be told to update; empty when it can. The request goes to the machine
+   * itself, and to another machine only while the mesh has quorum. This one can always update.
+   */
+  updateBlock(node: MeshNode): string {
+    if (!node.connected) return `${node.name} cannot be reached.`;
+    if (node.nodeId !== this.status?.nodeId && this.status?.degraded) return 'Updating another machine waits until enough machines can be reached.';
+    return '';
+  }
+
   /**
    * By machine: every heartbeat brings a new status, with new objects for the same machines.
    * Rebuilt for each, the cards took away the box being typed in every few seconds.
@@ -206,6 +243,48 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
 
   get nodes(): MeshNode[] {
     return (this.status?.nodes || []).filter(node => node.status !== 'removed');
+  }
+
+  /** The machine whose ⋯ menu is open: Rename, Change address and the red action live there. */
+  menuNodeId: string | null = null;
+
+  toggleMenu(node: MeshNode, event: Event): void {
+    event.stopPropagation();
+    this.menuNodeId = this.menuNodeId === node.nodeId ? null : node.nodeId;
+    this.cdr.markForCheck();
+  }
+
+  @HostListener('document:click')
+  @HostListener('document:keydown.escape')
+  closeMenu(): void {
+    if (this.menuNodeId === null) return;
+    this.menuNodeId = null;
+    this.cdr.markForCheck();
+  }
+
+  get canRemoveNodes(): boolean {
+    return this.auth.can(PERMISSIONS.NODES_REMOVE);
+  }
+
+  /** Under a machine's menu: why the items greyed out there cannot be used now; empty when all can. */
+  menuNote(node: MeshNode): string {
+    if (this.status?.degraded) {
+      const waiting = [
+        ...(this.canManageNodes ? ['Rename', 'Change address'] : []),
+        ...(this.removeAction(node) === 'remove' ? [node.nodeId === this.status.nodeId ? 'Leave' : 'Remove'] : [])
+      ];
+      if (!waiting.length) return '';
+      const listed = waiting.length > 1 ? `${waiting.slice(0, -1).join(', ')} and ${waiting[waiting.length - 1]}` : waiting[0];
+      return `${listed} ${waiting.length > 1 ? 'wait' : 'waits'} until ${this.quorumNeeded} of the ${this.machinesTotal} machines can be reached.`;
+    }
+    // Every other machine checks it can reach the new address first, through the machine itself.
+    if (this.canManageNodes && !node.connected) return `Change address waits until ${node.name} can be reached.`;
+    return '';
+  }
+
+  /** A machine's record holds '0' from its enrollment until its first heartbeat is written. */
+  versionText(node: MeshNode): string {
+    return node.version && node.version !== '0' ? `Version ${node.version}` : 'Version not reported yet';
   }
 
   /** Reachability only; a machine skipping new servers says so beside it. */
@@ -262,6 +341,26 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
+  /** The machine whose app update is waiting for a yes: the app restarts, and its servers with it. */
+  confirmingAppUpdate: MeshNode | null = null;
+
+  askAppUpdate(node: MeshNode): void {
+    this.confirmingAppUpdate = node;
+    this.cdr.markForCheck();
+  }
+
+  cancelAppUpdate(): void {
+    this.confirmingAppUpdate = null;
+    this.cdr.markForCheck();
+  }
+
+  confirmAppUpdate(): void {
+    const node = this.confirmingAppUpdate;
+    this.confirmingAppUpdate = null;
+    if (node) this.updateNode(node, 'app');
+    this.cdr.markForCheck();
+  }
+
   updateNode(node: MeshNode, kind: 'ark' | 'app'): void {
     this.updatingKey = `${node.nodeId}:${kind}`;
     this.messaging.sendMessage<{ success?: boolean; error?: string; message?: string }>('mesh-node-update', {
@@ -315,10 +414,107 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
-  maintenance(node: MeshNode): void {
-    this.messaging.sendMessage('set-node-maintenance', { nodeId: node.nodeId, maintenance: !node.maintenance }).subscribe({
-      next: () => this.refresh()
+  /** Skip new servers: Auto-select and moves pass the machine over. Its own servers keep running. */
+  setSkipping(node: MeshNode, event: Event): void {
+    const maintenance = (event.target as HTMLInputElement).checked;
+    this.messaging.sendMessage<{ success?: boolean; error?: string }>('set-node-maintenance', { nodeId: node.nodeId, maintenance }).subscribe({
+      next: result => {
+        if (result && result.success === false) this.notification.error(result.error || 'Could not change that machine.');
+        this.refresh();
+      },
+      // The switch goes back to what the machine really is.
+      error: () => {
+        this.notification.error('Could not change that machine.');
+        this.refresh();
+      }
     });
+  }
+
+  /**
+   * What the red button on a machine's card does. While the mesh cannot agree, this machine can
+   * leave anyway and one that cannot be reached can be forced out; otherwise Remove and Leave.
+   */
+  removeAction(node: MeshNode): 'leave-anyway' | 'force-remove' | 'remove' {
+    if (!this.status?.degraded || !this.auth.can(PERMISSIONS.NODES_REMOVE)) return 'remove';
+    if (node.nodeId === this.status.nodeId) return 'leave-anyway';
+    return node.connected ? 'remove' : 'force-remove';
+  }
+
+  /** The machines that can be forced out: the ones that cannot be reached, other than this one. */
+  get forceRemoveCandidates(): MeshNode[] {
+    return this.nodes.filter(node => node.status !== 'removed' && node.nodeId !== this.status?.nodeId && !node.connected);
+  }
+
+  /** What the ticked machines would leave: how many stay, how many of those answer, how many must agree. */
+  get forceRemovePlan(): { staying: number; reachable: number; needed: number; enough: boolean } {
+    const staying = this.nodes.filter(node => node.status !== 'removed' && !this.forceRemoveIds.has(node.nodeId));
+    const reachable = staying.filter(node => node.connected).length;
+    const needed = Math.floor(staying.length / 2) + 1;
+    return { staying: staying.length, reachable, needed, enough: this.forceRemoveIds.size > 0 && reachable >= needed };
+  }
+
+  askForceRemove(node: MeshNode): void {
+    this.forceRemoveIds = new Set([node.nodeId]);
+    this.showForceRemove = true;
+    this.cdr.markForCheck();
+  }
+
+  toggleForceRemove(nodeId: string, event: Event): void {
+    const next = new Set(this.forceRemoveIds);
+    if ((event.target as HTMLInputElement).checked) next.add(nodeId);
+    else next.delete(nodeId);
+    this.forceRemoveIds = next;
+    this.cdr.markForCheck();
+  }
+
+  cancelForceRemove(): void {
+    if (this.forceRemoving) return;
+    this.showForceRemove = false;
+    this.cdr.markForCheck();
+  }
+
+  confirmForceRemove(): void {
+    if (!this.forceRemovePlan.enough || this.forceRemoving) return;
+    const nodeIds = [...this.forceRemoveIds];
+    this.forceRemoving = true;
+    this.cdr.markForCheck();
+    this.messaging.sendMessage<{ success?: boolean; error?: string }>('force-remove-mesh-nodes', { nodeIds }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
+      next: result => {
+        this.forceRemoving = false;
+        this.showForceRemove = false;
+        if (result?.success) this.notification.success('Removed. The mesh can agree again.');
+        else this.notification.error(result?.error || 'Could not force those machines out.');
+        this.refresh();
+      },
+      error: () => {
+        this.forceRemoving = false;
+        this.notification.error('Could not force those machines out.');
+        this.refresh();
+      }
+    });
+  }
+
+  askLeaveAnyway(): void {
+    this.showLeaveAnyway = true;
+    this.cdr.markForCheck();
+  }
+
+  cancelLeaveAnyway(): void {
+    this.showLeaveAnyway = false;
+    this.cdr.markForCheck();
+  }
+
+  confirmLeaveAnyway(): void {
+    this.showLeaveAnyway = false;
+    this.messaging.sendMessage<{ success?: boolean; error?: string }>('leave-mesh-anyway', {}).subscribe({
+      next: result => {
+        if (result && result.success === false) this.notification.error(result.error || 'Could not leave the mesh.');
+        this.refresh();
+        void this.auth.refresh();
+      },
+      error: () => this.notification.error('Could not leave the mesh.')
+    });
+    this.cdr.markForCheck();
   }
 
   askRemove(node: MeshNode): void {

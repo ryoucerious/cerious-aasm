@@ -404,7 +404,11 @@ from the UI; a later stop reports through the callbacks that start
 registered. A running state carries the process start time, so every
 node shows the same uptime. Each node keeps what a host last reported
 about its servers, so a page opened later lists them as the host does;
-a stop clears uptime, players, CPU and memory.
+a stop clears uptime, players, CPU and memory. While a host sends no
+heartbeat (the same rule as Unreachable on its card), its servers are
+listed as Unreachable, with no uptime, players, CPU or memory, and none
+of them can be started, stopped, moved or deleted from another machine.
+They show what the host reports again as soon as it is heard from.
 
 Each heartbeat carries the sender's CPU, memory and disk. The node is
 the one its certificate names, whatever the body says. Mesh status
@@ -462,6 +466,27 @@ mesh.view/configure/security.manage
 
 Support Mesh-wide and resource-scoped grants. Authorization is
 server-side and default-deny.
+
+### Removing machines without quorum
+
+Removing a machine is a change to the Raft membership, so it needs a
+majority of the current members, as every other change does. While too
+few can be reached, a machine that cannot be reached can be **forced
+out** instead (`nodes.remove`): every machine that stays and can be
+reached first agrees to the new member list, then each restarts its
+rqlited with it (rqlite's `peers.json`). A machine that will not agree,
+because it still reaches one of those machines, still has quorum, or is
+not in the list, or that does not answer, leaves everything as it was.
+The ones that stay and can be reached must be a majority of the new list.
+A machine that stays but cannot be reached takes the new list from the
+others when it is back. Then the removal finishes as Remove does: marked
+removed, its certificate revoked, a new database password.
+
+A machine forced out that comes back is refused by every member it
+reaches; its mesh page then says the others removed it and offers Leave.
+**Leave anyway** makes any machine standalone without the others'
+agreement; they still count it until they remove it. Either way its
+servers and its copy of the accounts stay.
 
 ### Partition behavior
 

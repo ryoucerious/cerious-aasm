@@ -34,7 +34,7 @@
       <div class="server-card-session server-card-address" *ngIf="connectAddress">
         <span class="material-icons" [attr.data-tooltip]="connectAddress">lan</span>
         <span class="server-card-session-name" [attr.data-tooltip]="connectAddress">{{ connectAddress }}</span>
-        <button type="button" class="server-card-copy" (click)="onCopyAddress($event)"
+        <button type="button" class="server-card-copy" (click)="onCopyAddress($event)" [disabled]="unreachable"
                 [attr.data-tooltip]="copied ? 'Copied' : 'Copy'"
                 [attr.aria-label]="copied ? 'Copied' : 'Copy'">
           <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span>
@@ -88,11 +88,12 @@
         <span class="material-icons">{{ isOnline ? 'stop' : 'play_arrow' }}</span>
         {{ isOnline ? 'Stop' : (isBusy ? status.label : 'Start') }}
       </button>
-      <button type="button" class="btn btn-ghost" data-tooltip="Console" (click)="onConsole($event)">
+      <button type="button" class="btn btn-ghost" data-tooltip="Console" (click)="onConsole($event)" [disabled]="unreachable">
         <span class="material-icons">terminal</span> Console
       </button>
       <div class="server-card-menu-anchor" #menuAnchor>
-        <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" data-tooltip="More actions" aria-label="More actions" [attr.aria-expanded]="menuOpen">
+        <button type="button" class="btn btn-ghost btn-icon-only" (click)="toggleMenu($event)" data-tooltip="More actions" aria-label="More actions" [attr.aria-expanded]="menuOpen"
+                [disabled]="unreachable">
           <span class="material-icons">more_horiz</span>
         </button>
         <!-- Positioned against the viewport: the card hides its overflow, which would clip this

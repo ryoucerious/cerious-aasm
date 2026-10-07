@@ -8,6 +8,7 @@ import { ArkServerValidationService } from '../../core/services/ark-server-valid
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { ConfigImportExportService } from '../../core/services/config-import-export.service';
 import { downloadBase64File } from '../../core/utils/download.utils';
+import { serverStatusKey } from '../../core/utils/server-status';
 import { FieldDefinition } from '../../core/services/field-definitions.service';
 import { ServerNavService, ServerTabId } from '../../core/services/server-nav.service';
 import { ModEntry } from '../../core/models/server-instance.model';
@@ -65,6 +66,8 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Input() serverInstance: any;
   @Input() activeTab: TabType = 'general';
   @Input() isLocked = false;
+  /** Set by the server page from the live list, which knows before this server's own copy does. */
+  @Input() machineUnreachable = false;
   @Input() generalFields: FieldDefinition[] = [];
   @Input() ratesFields: FieldDefinition[] = [];
   @Input() structuresFields: FieldDefinition[] = [];
@@ -181,6 +184,14 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   }
 
   /** Hosts pass 'players' etc. through the same input; anything outside this component's pages shows nothing. */
+  /**
+   * On a mesh machine that cannot be reached: nothing here can be changed, as a change would not
+   * get there and what is shown may no longer be what it runs.
+   */
+  get unreachable(): boolean {
+    return this.machineUnreachable || serverStatusKey(this.serverInstance?.state) === 'unreachable';
+  }
+
   get isKnownTab(): boolean {
     return this.activeTab !== 'console' && this.activeTab !== 'players';
   }

@@ -101,6 +101,11 @@ export class ServerCardComponent implements OnDestroy {
     return serverStatusKey(this.server?.state);
   }
 
+  /** On a mesh machine that cannot be reached: nothing on the card can act on it. */
+  get unreachable(): boolean {
+    return this.stateKey === 'unreachable';
+  }
+
   get isOnline(): boolean {
     return isOnlineStatus(this.server?.state);
   }

@@ -85,6 +85,23 @@ onRequest('remove-mesh-node', async payload => {
   }
 });
 
+/** Machines that cannot be reached, taken out of a mesh that has lost its quorum. */
+onRequest('force-remove-mesh-nodes', async (payload, { sender }) => {
+  const nodeIds = Array.isArray(payload.nodeIds) ? payload.nodeIds.filter((id: unknown): id is string => typeof id === 'string') : [];
+  const result = await meshService.forceRemoveNodes(nodeIds, identifySender(sender).user?.username || 'desktop');
+  return result.success ? { success: true, status: await meshService.status() } : result;
+});
+
+/** This machine leaves without the others: they removed it, or none can be reached. */
+onRequest('leave-mesh-anyway', async () => {
+  try {
+    await meshService.leaveWithoutQuorum();
+    return { success: true, status: await meshService.status() };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not leave the mesh.' };
+  }
+});
+
 onRequest('set-node-maintenance', async payload => {
   try {
     await meshService.setMaintenance(String(payload.nodeId || ''), !!payload.maintenance);

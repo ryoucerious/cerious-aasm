@@ -60,6 +60,31 @@ describe('ServerSettingsComponent', () => {
     expect(component).toBeTruthy();
   });
 
+  // A change could not reach the machine, and what is shown may no longer be what it runs.
+  describe('a server whose machine cannot be reached', () => {
+    beforeEach(() => {
+      fixture.componentRef.setInput('serverInstance', { id: 'A', name: 'Ragnarok', mapName: 'TheIsland_WP', restartDays: [], state: 'unreachable' });
+      fixture.detectChanges();
+    });
+
+    for (const tab of ['general', 'backup', 'automation', 'ini-Game', 'mods', 'firewall']) {
+      it(`offers nothing to change on the ${tab} page, and says why`, () => {
+        showTab(tab);
+        const page = fixture.nativeElement as HTMLElement;
+
+        expect(page.querySelector('.settings-unreachable')?.textContent).toContain('cannot be reached');
+        expect(page.querySelectorAll('.settings-body input, .settings-body select, .settings-body textarea, .settings-body button').length).toBe(0);
+      });
+    }
+
+    it('offers no import or copy', () => {
+      const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.settings-toolbar-actions button')).map(button => button.textContent?.trim());
+
+      expect(labels.some(label => label?.includes('Import'))).toBeFalse();
+      expect(labels.some(label => label?.includes('Copy from'))).toBeFalse();
+    });
+  });
+
   it('asks the backend which platform it runs on, for the firewall page', () => {
     const firewall = TestBed.inject(FirewallService);
     spyOn(firewall, 'checkFirewallStatus').and.returnValue(of({ enabled: true, platform: 'linux' }));

@@ -722,6 +722,8 @@ $sidenav-width: 248px;
   &.status-starting { background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
   &.status-stopping { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
   &.status-error    { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+  // Hollow: nothing is known about it while its machine cannot be reached.
+  &.status-unreachable { background: transparent; box-shadow: inset 0 0 0 2px var(--warning); }
 }
 
 .server-list-empty {
@@ -730,7 +732,7 @@ $sidenav-width: 248px;
   color: var(--text-secondary);
 }
 
-// Search, machine filter and grouping above the server list: compact, to keep the list in view.
+// The search above the server list: compact, to keep the list in view.
 .server-list-tools {
   display: flex;
   flex-direction: column;
@@ -744,37 +746,61 @@ $sidenav-width: 248px;
   }
 }
 
-.server-list-filters {
+// A group in the server tree: a machine of a mesh, or an operator. It folds its servers away.
+.sidenav .server-group {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-
-  .server-machine-filter { flex: 1 1 auto; min-width: 0; }
-}
-
-.server-group-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  flex: 0 0 auto;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  margin: 0.25rem 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
   font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--text-secondary);
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  .server-group-chevron {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .server-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .server-group-note {
+    font-weight: 400;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .server-group-count {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    font-weight: 500;
+  }
 }
 
-.server-group-label {
-  margin: 0.45rem 0.6rem 0.15rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  align-self: flex-start;
-  display: inline-block;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
+// Each level of the tree steps in a little.
+.sidenav .server-group.server-depth-1 { padding-left: 1.35rem; }
+.sidenav .server-item.server-depth-1 { padding-left: 1.6rem; }
+.sidenav .server-item.server-depth-2 { padding-left: 2.35rem; }
 
 .sidenav-footer {
   display: flex;
@@ -1192,19 +1218,78 @@ app-window-controls {
   .users-actions { white-space: nowrap; }
 }
 
-// The columns that take the leftover width: name and role for accounts, the description
-// column for roles. The rest keep to their content.
-.accounts-table {
-  th:nth-child(1) { width: 45%; }
-  th:nth-child(2) { width: 35%; }
-}
-
+// The description column takes the leftover width; the rest keep to their content.
 .roles-table th:first-child { width: 100%; }
 
-.user-cell {
+// Accounts, a card each: two across when the drawer is wide enough, one when it is narrow.
+.user-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.user-card {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.75rem;
+}
+
+.user-card-top {
+  display: flex;
+  align-items: flex-start;
   gap: 0.6rem;
+}
+
+.user-card-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.user-card-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.user-card-display,
+.user-card-note {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.user-card-status { flex: 0 0 auto; }
+
+// Label and value in two columns, lined up across the rows.
+.user-card-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.3rem 0.9rem;
+  margin: 0.75rem 0;
+  font-size: 0.82rem;
+
+  .user-card-fact { display: contents; }
+  dt { color: var(--text-secondary); }
+  dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+}
+
+// At the foot of the card, level across a row of cards of different heights.
+.user-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: auto;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border-muted-1);
 }
 
 .user-avatar {
@@ -1219,12 +1304,6 @@ app-window-controls {
   font-weight: $font-semibold;
   font-size: 0.85rem;
   flex-shrink: 0;
-}
-
-.user-cell-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 
 .user-cell-name {
