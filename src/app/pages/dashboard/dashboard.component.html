@@ -33,18 +33,27 @@
 
   <div class="dash-grid">
     <div class="dash-main">
-      <div class="dash-section-header">
-        <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
-        <div class="dash-toolbar">
-          <div class="dash-view-toggle" role="group" aria-label="View">
-            <button type="button" class="dash-toggle-btn" [class.active]="view === 'grid'" (click)="setView('grid')" title="Grid view"><span class="material-icons">grid_view</span></button>
-            <button type="button" class="dash-toggle-btn" [class.active]="view === 'list'" (click)="setView('list')" title="List view"><span class="material-icons">view_list</span></button>
-          </div>
-          <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
-          <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
+      <!-- The title and Add Server on one row; search on the left of the next, filters on the right. -->
+      <div class="dash-servers-head">
+        <div class="dash-section-header">
+          <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
           <button type="button" class="btn btn-primary" *ngIf="canCreateServer" (click)="openAddServer()">
             <span class="material-icons">add</span> Add Server
           </button>
+        </div>
+        <div class="dash-toolbar">
+          <input type="search" class="form-control dash-search" placeholder="Search servers" aria-label="Search servers"
+                 [(ngModel)]="searchText" (ngModelChange)="onSearchChange()" />
+          <div class="dash-toolbar-filters">
+            <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
+            <app-dropdown class="dash-select dash-machine-filter" *ngIf="machineOptions.length" [options]="machineOptions" [(ngModel)]="machine"
+                          (ngModelChange)="onFilterChange()" ariaLabel="Filter by machine"></app-dropdown>
+            <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
+            <div class="dash-view-toggle" role="group" aria-label="View">
+              <button type="button" class="dash-toggle-btn" [class.active]="view === 'grid'" (click)="setView('grid')" title="Grid view"><span class="material-icons">grid_view</span></button>
+              <button type="button" class="dash-toggle-btn" [class.active]="view === 'list'" (click)="setView('list')" title="List view"><span class="material-icons">view_list</span></button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -79,7 +88,8 @@
         <div class="dash-empty" *ngIf="!visibleServers.length">
           <span class="material-icons">dns</span>
           <p *ngIf="!servers.length">No servers yet. Create your first ARK: Survival Ascended server.</p>
-          <p *ngIf="servers.length">No servers match this filter.</p>
+          <p *ngIf="servers.length">No servers match.</p>
+          <button type="button" class="btn btn-ghost dash-empty-clear" *ngIf="servers.length" (click)="clearSearchAndFilters()">Clear search and filters</button>
           <button type="button" class="btn btn-primary" *ngIf="!servers.length && canCreateServer" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
         </div>
       </div>

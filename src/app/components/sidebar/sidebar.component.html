@@ -24,7 +24,7 @@
         <span class="material-icons nav-section-chevron">{{ showServers ? 'expand_more' : 'chevron_right' }}</span>
       </div>
 
-      <div class="server-list-tools" *ngIf="showServers && servers.length > 1">
+      <div class="server-list-tools" *ngIf="showServers && servers.length >= searchFrom">
         <input type="search" class="form-control server-search" placeholder="Search servers" aria-label="Search servers"
                [ngModel]="searchText" (ngModelChange)="onSearch($event)" />
       </div>

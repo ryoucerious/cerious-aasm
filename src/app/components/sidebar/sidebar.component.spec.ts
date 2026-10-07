@@ -453,6 +453,33 @@ describe('SidebarComponent', () => {
       expect(page().querySelector('.server-list-tools input[type="checkbox"]')).toBeNull();
     });
 
+    // A search box over a short list is clutter; it comes in at ten servers.
+    describe('searching', () => {
+      const many = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `s${index}`, name: `Server ${index}`, mapName: 'TheIsland_WP' }));
+      const box = () => page().querySelector('.server-search');
+
+      it('is offered from ten servers', () => {
+        servers$.next(many(9));
+        fixture.detectChanges();
+        expect(box()).toBeNull();
+
+        servers$.next(many(10));
+        fixture.detectChanges();
+        expect(box()).not.toBeNull();
+      });
+
+      it('lets go of a search once the list is too short for the box', () => {
+        servers$.next(many(10));
+        component.onSearch('Server 3');
+        expect(rows()).toEqual(['s3']);
+
+        servers$.next(many(9));
+
+        expect(component.searchText).toBe('');
+        expect(rows().length).toBe(9);
+      });
+    });
+
     it('reorders only a flat list that is not being searched', () => {
       expect(component.reorderable).toBeTrue();
       component.onSearch('ragn');

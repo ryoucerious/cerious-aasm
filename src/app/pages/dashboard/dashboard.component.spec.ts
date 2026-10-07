@@ -241,7 +241,125 @@ describe('DashboardComponent', () => {
     component.filter = 'offline';
     component.onFilterChange();
     const stored = JSON.parse(localStorage.getItem('cerious-aasm.dashboard') || '{}');
-    expect(stored).toEqual({ view: 'list', filter: 'offline', sort: 'custom' });
+    expect(stored).toEqual({ view: 'list', filter: 'offline', sort: 'custom', machine: 'all' });
+  });
+
+  // The status dropdown was the only way to narrow the list: no search, and no machine in a mesh.
+  describe('searching and filtering the servers', () => {
+    const island = {
+      id: 'i', name: 'Island PvE', sessionName: 'Chill Island', mapName: 'TheIsland_WP', state: 'stopped', players: 0, maxPlayers: 70,
+      sortOrder: 2, nodeId: 'box', operatorUserId: 'op1'
+    };
+    const desk = { nodeId: 'desk', name: 'Jareds-PC', status: 'alive' };
+    const box = { nodeId: 'box', name: 'b3e6', status: 'alive' };
+    const visible = () => component.visibleServers.map(server => server.id);
+    const page = () => fixture.nativeElement as HTMLElement;
+
+    /** The page with these servers, in a mesh of these machines (none: standalone). */
+    function open(servers: any[], nodes: any[] = []): void {
+      meshStatus = nodes.length ? { enabled: true, nodeId: 'desk', nodes } : { enabled: false };
+      messaging.receiveMessage = () => NEVER;
+      servers$.next(servers);
+      fixture = TestBed.createComponent(DashboardComponent);
+      component = fixture.componentInstance;
+      (component.poolDirectory as any).operatorLabel = (server: any) => server?.operatorUserId === 'op1' ? 'Ops Team' : 'Admin';
+      fixture.detectChanges();
+    }
+
+    function search(text: string): void {
+      const input = page().querySelector<HTMLInputElement>('.dash-search')!;
+      input.value = text;
+      input.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+    }
+
+    it('finds servers by name, session name, map, machine or operator as you type', () => {
+      open([{ ...alpha, nodeId: 'box' }, { ...beta, nodeId: 'desk' }, island], [desk, box]);
+
+      search('chill');
+      expect(visible()).toEqual(['i']);
+      search('the island');
+      expect(visible()).toEqual(['i']);
+      search('b3e6');
+      expect(visible()).toEqual(['a', 'i']);
+      search('ops team');
+      expect(visible()).toEqual(['i']);
+      search('BETA');
+      expect(visible()).toEqual(['b']);
+      search('');
+      expect(visible()).toEqual(['a', 'b', 'i']);
+    });
+
+    it('filters by machine in a mesh, even with every server on one machine, and not outside one', () => {
+      open([{ ...alpha, nodeId: 'desk' }, beta], [desk, box]);
+
+      expect(page().querySelector('.dash-machine-filter')).not.toBeNull();
+      expect(component.machineOptions.map(option => option.label)).toEqual(['All machines', 'Jareds-PC', 'b3e6']);
+      component.machine = 'box';
+      component.onFilterChange();
+      expect(visible()).toEqual([]);
+      // A server without a machine of its own is on this one.
+      component.machine = 'desk';
+      component.onFilterChange();
+      expect(visible()).toEqual(['a', 'b']);
+
+      open([alpha, beta]);
+      expect(page().querySelector('.dash-machine-filter')).toBeNull();
+    });
+
+    it('narrows by search, status and machine together, and reorders only the whole list', () => {
+      open([{ ...alpha, nodeId: 'box' }, { ...beta, nodeId: 'desk' }, island], [desk, box]);
+
+      component.machine = 'box';
+      component.onFilterChange();
+      expect(visible()).toEqual(['a', 'i']);
+      expect(component.canReorder).toBeFalse();
+      component.filter = 'offline';
+      component.onFilterChange();
+      expect(visible()).toEqual(['i']);
+
+      component.filter = 'all';
+      component.machine = 'all';
+      component.onFilterChange();
+      expect(component.canReorder).toBeTrue();
+      search('alpha');
+      expect(component.canReorder).toBeFalse();
+    });
+
+    it('says when nothing matches, and clears the search and filters', async () => {
+      open([alpha, beta]);
+      component.filter = 'online';
+      component.onFilterChange();
+
+      search('nothing like this');
+      expect(page().querySelector('.dash-empty')?.textContent).toContain('No servers match');
+      page().querySelector<HTMLButtonElement>('.dash-empty-clear')!.click();
+      fixture.detectChanges();
+      // ngModel writes the new value into the box a microtask later. (whenStable never settles here:
+      // the page polls on a timer.)
+      await Promise.resolve();
+
+      expect(visible()).toEqual(['a', 'b']);
+      expect(component.searchText).toBe('');
+      expect(component.filter).toBe('all');
+      expect(page().querySelector<HTMLInputElement>('.dash-search')!.value).toBe('');
+    });
+
+    it('remembers the machine but not the search, and forgets a machine no longer in the mesh', () => {
+      open([alpha, beta], [desk, box]);
+      component.machine = 'box';
+      component.onFilterChange();
+      search('alpha');
+
+      expect(JSON.parse(localStorage.getItem('cerious-aasm.dashboard') || '{}')).toEqual({ view: 'grid', filter: 'all', sort: 'custom', machine: 'box' });
+      open([alpha, beta], [desk, box]);
+      expect(component.machine).toBe('box');
+      expect(component.searchText).toBe('');
+
+      open([alpha, beta], [desk]);
+      expect(component.machine).toBe('all');
+      expect(visible()).toEqual(['a', 'b']);
+    });
   });
 
   it('reorders cards', () => {

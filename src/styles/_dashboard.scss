@@ -240,6 +240,27 @@
   &.dash-select-wide { width: 170px; }
 }
 
+.dash-servers-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+// The search takes the room the filters leave; short of room, it gets a row of its own.
+.dash-toolbar .dash-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.dash-toolbar-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
 .server-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

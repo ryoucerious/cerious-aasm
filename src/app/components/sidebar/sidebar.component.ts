@@ -68,6 +68,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
    */
   serverRows: ServerListRow[] = [];
   searchText = '';
+  /** A search box over a short list is clutter; it comes in at this many servers. */
+  readonly searchFrom = SEARCH_FROM;
   /** The list is grouped by machine: a mesh whose servers run on more than one machine. */
   groupedByMachine = false;
   groupedByOperator = false;
@@ -179,6 +181,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
+      // The box goes once the list is too short for it, and a search left in it would hide servers.
+      if (servers.length < SEARCH_FROM) this.searchText = '';
       // Auto-select the first server if none is selected so server pages have something to show.
       if (this.servers.length > 0 && !this.selectedServerId) {
         const first = this.servers[0];
@@ -596,6 +600,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
 }
 
 const ADMIN_POOL = 'Admin pool';
+const SEARCH_FROM = 10;
 const CLOSED_GROUPS_KEY = 'aasm.sidebar.closedGroups';
 
 /** Per viewer: kept in this browser only. */

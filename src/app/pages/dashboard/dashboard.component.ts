@@ -26,6 +26,7 @@ import { ModalComponent } from '../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../components/dropdown/dropdown.component';
 import { AnimateReflowDirective } from '../../core/directives/animate-reflow.directive';
 import { ACTIVITY_ICONS } from '../../core/utils/activity-icons';
+import { getMapVisual } from '../../core/utils/map-visuals';
 import { bucketSamples, seriesStats, toPoints, linePath, areaPath, PlayerHistorySample, ChartPoint } from '../../core/utils/chart.utils';
 import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel, isLocalPageHost } from '../../core/utils/format.utils';
 
@@ -107,6 +108,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
   view: 'grid' | 'list' = 'grid';
   filter: ServerFilter = 'all';
   sort: ServerSort = 'custom';
+  /** Matched against the name, session name, map, machine and operator. Not remembered. */
+  searchText = '';
+  /** A machine's node id, or 'all'. Offered only in a mesh. */
+  machine = 'all';
+  /** "All machines" and each machine, in a mesh; empty outside one. */
+  machineOptions: DropdownOption<string>[] = [];
   readonly filterOptions: DropdownOption<ServerFilter>[] = [
     { value: 'all', label: 'All Servers' },
     { value: 'online', label: 'Online' },
@@ -206,12 +213,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.nodeNames.clear();
       this.meshNodes = [];
       this.localNodeId = null;
+      this.machineOptions = [];
     } else {
       this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
       this.meshNodes = (status.nodes || []).filter(node => node.status !== 'removed');
       this.localNodeId = status.nodeId || null;
       this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
+      this.machineOptions = [{ value: 'all', label: 'All machines' }, ...this.meshNodes.map(node => ({ value: node.nodeId, label: node.name }))];
+      // A machine since removed would leave nothing to show and no way to pick it again.
+      if (this.machine !== 'all' && !this.meshNodes.some(node => node.nodeId === this.machine)) this.machine = 'all';
     }
+    this.refreshVisible();
     this.cdr.markForCheck();
   }
 
@@ -284,8 +296,46 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.saveViewPreferences();
   }
 
+  onSearchChange(): void {
+    this.refreshVisible();
+    this.cdr.markForCheck();
+  }
+
+  /** From "No servers match": back to every server. */
+  clearSearchAndFilters(): void {
+    this.searchText = '';
+    this.filter = 'all';
+    this.machine = 'all';
+    this.refreshVisible();
+    this.saveViewPreferences();
+    this.cdr.markForCheck();
+  }
+
+  /** Dragging reorders the saved order, so only the whole list, unsorted, can be dragged. */
   get canReorder(): boolean {
-    return this.sort === 'custom' && this.filter === 'all';
+    return this.sort === 'custom' && this.filter === 'all' && !this.filteringByMachine && !this.searchText.trim();
+  }
+
+  private get filteringByMachine(): boolean {
+    return this.machine !== 'all' && this.meshNodes.length > 0;
+  }
+
+  /** A server without a machine of its own runs on this one. */
+  private machineOf(server: ServerInstance): string | null {
+    return server.nodeId || this.localNodeId;
+  }
+
+  private matchesSearch(server: ServerInstance, query: string): boolean {
+    const fields = [
+      server.name,
+      server.sessionName,
+      server.mapName,
+      getMapVisual(server.mapName).label,
+      this.nodeLabel(server),
+      // "Admin" stands for no operator, which would match every server not in a pool.
+      server.operatorUserId ? this.poolDirectory.operatorLabel(server) : ''
+    ];
+    return fields.some(value => String(value || '').toLowerCase().includes(query));
   }
 
   nodeLabel(server: ServerInstance): string {
@@ -297,6 +347,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     let list = this.servers.slice();
     if (this.filter === 'online') list = list.filter(server => LiveServersService.isOnline(server));
     if (this.filter === 'offline') list = list.filter(server => !LiveServersService.isOnline(server));
+    if (this.filteringByMachine) list = list.filter(server => this.machineOf(server) === this.machine);
+    const query = this.searchText.trim().toLowerCase();
+    if (query) list = list.filter(server => this.matchesSearch(server, query));
 
     const byName = (a: ServerInstance, b: ServerInstance) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
     switch (this.sort) {
@@ -660,6 +713,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       if (prefs.view === 'grid' || prefs.view === 'list') this.view = prefs.view;
       if (['all', 'online', 'offline'].includes(prefs.filter)) this.filter = prefs.filter;
       if (['custom', 'name-asc', 'name-desc', 'status', 'players'].includes(prefs.sort)) this.sort = prefs.sort;
+      if (typeof prefs.machine === 'string' && prefs.machine) this.machine = prefs.machine;
     } catch {
       // Corrupt or unavailable storage: keep the defaults.
     }
@@ -667,7 +721,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   private saveViewPreferences(): void {
     try {
-      localStorage.setItem('cerious-aasm.dashboard', JSON.stringify({ view: this.view, filter: this.filter, sort: this.sort }));
+      localStorage.setItem('cerious-aasm.dashboard', JSON.stringify({ view: this.view, filter: this.filter, sort: this.sort, machine: this.machine }));
     } catch {
       // Unavailable storage: the choice lasts for this visit only.
     }
