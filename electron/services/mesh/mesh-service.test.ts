@@ -77,6 +77,10 @@ jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailable
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null) }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
 jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
+jest.mock('../ark-api-actions', () => ({
+  runArkApiAction: jest.fn(),
+  isReadOnlyArkApiAction: jest.fn((action: string) => action === 'status' || action === 'list')
+}));
 
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 import { RqliteSupervisor, rqliteProblem } from './rqlite-supervisor';
@@ -84,6 +88,7 @@ import { RqliteClient } from './rqlite-client';
 import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
 import { localRuntime } from '../runtime/local-runtime';
+import { runArkApiAction } from '../ark-api-actions';
 import { userDatabaseService } from '../auth/user-database.service';
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { sampleHostResources } from '../host-resources';
@@ -551,6 +556,20 @@ describe('MeshService', () => {
       expect(JSON.parse(fs.readFileSync(peersFile(), 'utf8'))).toEqual(members.map(item => ({ ...item, non_voter: false })));
     });
 
+    it('forgets the servers of the machines it forces out', async () => {
+      // A write: the mesh here cannot agree until the machines are forced out.
+      view.hasQuorum = true;
+      await repo.upsertServer({
+        serverId: 'on-asa', name: 'on-asa', nodeId: GONE, mapName: '', desiredState: 'running', configRevision: 1, configJson: '{}',
+        clusterId: null, operatorUserId: null, managerUserId: null
+      });
+      view.hasQuorum = false;
+
+      await settle(service.forceRemoveNodes([GONE, GONE2], 'ada'));
+
+      expect((await repo.listServers()).map(server => server.serverId)).not.toContain('on-asa');
+    });
+
     it('then removes them as Remove does: marked removed, certificates revoked, a new database password', async () => {
       await settle(service.forceRemoveNodes([GONE, GONE2], 'ada'));
 
@@ -672,6 +691,94 @@ describe('MeshService', () => {
       expect(lastContact(LOCAL)).toBe(Date.now());
       expect(lastContact(PEER)).toBe(heardAt);
       expect(lastContact(QUIET)).toBe(quietRecordedAt);
+    });
+  });
+
+  // PC 1 removed Docker 1, which only learned of it when PC 1 began refusing it, and then sat on a
+  // banner asking it to leave. Remove tells the machine now, and it goes standalone on its own.
+  describe('telling a machine it was removed', () => {
+    const PEER = '22222222-2222-4222-8222-222222222222';
+    const peer = () => jest.mocked(startPeerServer).mock.calls[0][1];
+    const sentTo = (suffix: string) => jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith(suffix));
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+      await repo.upsertNode(nodeRow(PEER, '2', 'https://10.0.0.2:4747'));
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { ok: true } });
+      await service.resumeIfJoined();
+    });
+
+    it('tells the machine it removes, so it goes standalone without being asked to leave', async () => {
+      await service.removeNode(PEER);
+
+      expect(sentTo('/v1/removed').map(options => options.url)).toEqual(['https://10.0.0.2:4747/v1/removed']);
+      expect((await repo.getNode(PEER))?.status).toBe('removed');
+    });
+
+    it('still removes a machine that cannot be told', async () => {
+      jest.mocked(peerRequest).mockImplementation(async options => {
+        if (options.url.endsWith('/v1/removed')) throw new Error('connect ETIMEDOUT');
+        return { status: 200, body: { ok: true } };
+      });
+
+      await expect(service.removeNode(PEER)).resolves.toBeUndefined();
+
+      expect((await repo.getNode(PEER))?.status).toBe('removed');
+    });
+
+    it('goes standalone, keeping its servers, when a member says it was removed', async () => {
+      await peer().onRemoved!(PEER);
+      // Just after the reply: leaving stops the peer server the word came in on.
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(service.isEnabled()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'mesh', 'node.json'), 'utf8')).meshId).toBe('');
+    });
+
+    it('takes that word only from a member', async () => {
+      await repo.upsertNode({ ...nodeRow(PEER, '2', 'https://10.0.0.2:4747'), status: 'removed' });
+
+      await expect(peer().onRemoved!(PEER)).rejects.toThrow(/not a member/);
+      expect(service.isEnabled()).toBe(true);
+    });
+  });
+
+  // A removed machine's servers stay on that machine; the mesh went on holding them, hidden but in
+  // the way of the machine joining again and of the clusters they were in.
+  describe('forgetting a removed machine\'s servers', () => {
+    const PEER = '22222222-2222-4222-8222-222222222222';
+    const GONE = '33333333-3333-4333-8333-333333333333';
+    const serverRow = (serverId: string, nodeId: string) => ({
+      serverId, name: serverId, nodeId, mapName: '', desiredState: 'running' as const, configRevision: 1, configJson: '{}',
+      clusterId: null, operatorUserId: null, managerUserId: null
+    });
+    const serverIds = async () => (await repo.listServers()).map(server => server.serverId).sort();
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+      await repo.upsertNode(nodeRow(PEER, '2', 'https://10.0.0.2:4747'));
+      await repo.upsertServer(serverRow('here', LOCAL));
+      await repo.upsertServer(serverRow('there-1', PEER));
+      await repo.upsertServer(serverRow('there-2', PEER));
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { ok: true } });
+    });
+
+    it('forgets the servers of the machine it removes, and keeps its own', async () => {
+      await service.resumeIfJoined();
+
+      await service.removeNode(PEER);
+
+      expect(await serverIds()).toEqual(['here']);
+    });
+
+    it('forgets what is left on a machine removed earlier, once the mesh can agree', async () => {
+      await repo.upsertNode({ ...nodeRow(GONE, '3', 'https://10.0.0.3:4747'), status: 'removed' });
+      await repo.upsertServer(serverRow('left-behind', GONE));
+      await service.resumeIfJoined();
+
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(await serverIds()).toEqual(['here', 'there-1', 'there-2']);
     });
   });
 
@@ -1950,7 +2057,7 @@ describe('MeshService', () => {
       });
     }
 
-    function command(operation: 'rcon' | 'save-ini' | 'set-ownership' | 'connect-rcon', args: Record<string, unknown>) {
+    function command(operation: 'rcon' | 'save-ini' | 'set-ownership' | 'connect-rcon' | 'ark-api', args: Record<string, unknown>) {
       return {
         commandId: `cmd-${operation}`, correlationId: 'c', actor: 'ada', targetNode: LOCAL, operation, serverId: 'isle', args,
         expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
@@ -2023,6 +2130,39 @@ describe('MeshService', () => {
 
       expect(localRuntime.rcon).toHaveBeenCalledWith('isle', 'ListPlayers');
       expect(result).toEqual({ success: true, detail: { response: 'No Players Connected' } });
+    });
+
+    // The ArkApi tab acted on the machine it was opened on, wherever the server ran.
+    it('answers an ArkApi read about a server it hosts, and refuses a change sent as a read', async () => {
+      await place('isle', LOCAL);
+      await service.resumeIfJoined();
+      jest.mocked(runArkApiAction).mockResolvedValue({ success: true, plugins: [] });
+      const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+
+      expect(await peer.onQuery!({ serverId: 'isle', query: 'ark-api', args: { action: 'list' } })).toEqual({ success: true, plugins: [] });
+      expect(runArkApiAction).toHaveBeenCalledWith('isle', 'list', { action: 'list' });
+      await expect(peer.onQuery!({ serverId: 'isle', query: 'ark-api', args: { action: 'remove', folderName: 'x' } })).rejects.toThrow(/not a read/);
+    });
+
+    it('makes an ArkApi change on the host and returns what came of it', async () => {
+      await place('isle', LOCAL);
+      await service.resumeIfJoined();
+      jest.mocked(runArkApiAction).mockResolvedValue({ success: true, folderName: 'Permissions' });
+
+      const result = await service.executeLocalCommand(command('ark-api', { action: 'remove', folderName: 'Permissions' }));
+
+      expect(runArkApiAction).toHaveBeenCalledWith('isle', 'remove', { action: 'remove', folderName: 'Permissions' });
+      expect(result).toMatchObject({ success: true, detail: { success: true, folderName: 'Permissions' } });
+    });
+
+    it('says why the host could not make an ArkApi change', async () => {
+      await place('isle', LOCAL);
+      await service.resumeIfJoined();
+      jest.mocked(runArkApiAction).mockResolvedValue({ success: false, error: 'That ZIP is larger than 50 MB.' });
+
+      const result = await service.executeLocalCommand(command('ark-api', { action: 'install-zip', zipData: 'x' }));
+
+      expect(result).toMatchObject({ success: false, error: 'That ZIP is larger than 50 MB.' });
     });
 
     it('saves an INI file on the host and records the merged config', async () => {

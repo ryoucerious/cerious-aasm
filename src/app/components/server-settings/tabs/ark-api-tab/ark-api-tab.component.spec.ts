@@ -40,6 +40,38 @@ describe('ArkApiTabComponent', () => {
     expect(component).toBeTruthy();
   });
 
+  // The web UI has no path to a chosen file, and said "Are you running in Electron?" instead.
+  describe('installing a plugin from a ZIP', () => {
+    function chose(file: File): Event {
+      const input = document.createElement('input');
+      input.type = 'file';
+      Object.defineProperty(input, 'files', { value: [file] });
+      return { target: input } as unknown as Event;
+    }
+
+    it('names the file where the desktop app knows where it is', async () => {
+      const file = new File(['zip'], 'plugin.zip');
+      Object.defineProperty(file, 'path', { value: 'C:/Downloads/plugin.zip' });
+      sendMessage.and.returnValue(of({ success: true }));
+
+      await component.onZipFileSelected(chose(file));
+
+      expect(sendMessage).toHaveBeenCalledWith('install-plugin-from-zip', { instanceId: 'test-server-1', zipPath: 'C:/Downloads/plugin.zip' });
+    });
+
+    it('sends the ZIP itself where there is no path, as in the web UI', async () => {
+      sendMessage.and.returnValue(of({ success: true }));
+
+      await component.onZipFileSelected(chose(new File([new Uint8Array([80, 75, 3, 4])], 'plugin.zip')));
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        'install-plugin-from-zip', { instanceId: 'test-server-1', zipData: 'UEsDBA==' }, jasmine.objectContaining({ timeoutMs: FILE_TRANSFER_TIMEOUT_MS })
+      );
+      expect(mockNotification.success as jasmine.Spy).toHaveBeenCalledWith('Plugin installed from ZIP.', 'ArkApi');
+      expect(mockNotification.error).not.toHaveBeenCalled();
+    });
+  });
+
   it('loads the plugins and the AsaApi status for the server', () => {
     expect(sendMessage).toHaveBeenCalledWith('list-ark-api-plugins', { instanceId: 'test-server-1' });
     expect(sendMessage).toHaveBeenCalledWith('get-asaapi-status', { instanceId: 'test-server-1' });

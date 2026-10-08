@@ -6,6 +6,7 @@ import { MessagingService } from '../../../core/services/messaging/messaging.ser
 import { NotificationService } from '../../../core/services/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { MockNotificationService } from '../../../../../test/mocks/mock-notification.service';
+import { BusyService } from '../../../core/services/busy.service';
 
 describe('MeshSettingsComponent', () => {
   let fixture: ComponentFixture<MeshSettingsComponent>;
@@ -497,6 +498,16 @@ describe('MeshSettingsComponent', () => {
       expect(sendMessage).toHaveBeenCalledWith('leave-mesh-anyway', {});
     });
 
+    // Beside the banner it went on showing the mesh it was no longer in: a warning, and the others as Unreachable.
+    it('shows only that it was removed, not the mesh it is no longer in', async () => {
+      const page = await open({ ...degraded(), removedFromMesh: true, warning: 'A mesh of fewer than 3 voting nodes cannot elect a new leader.' });
+
+      expect(page.querySelector('.mesh-removed')).not.toBeNull();
+      expect(page.querySelectorAll('.mesh-node-card').length).toBe(0);
+      expect(page.textContent).not.toContain('cannot elect a new leader');
+      expect(page.textContent).not.toContain('Check reachability');
+    });
+
     // Forced out while it was away: the others refuse it, and it says so.
     it('says when the others removed this machine, and offers to leave', async () => {
       const page = await open({ ...degraded(), removedFromMesh: true });
@@ -509,6 +520,83 @@ describe('MeshSettingsComponent', () => {
 
       expect(sendMessage).toHaveBeenCalledWith('leave-mesh-anyway', {});
     });
+  });
+
+  // A removal or a move of the database could take a minute, and the page went on taking clicks.
+  describe('while a change to the mesh is under way', () => {
+    const node = (nodeId: string, name: string, connected = true) =>
+      ({ nodeId, name, status: 'alive', maintenance: false, version: '1.2.2', connected, address: { host: '10.0.0.' + nodeId.slice(1), peerPort: 4747, raftPort: 4002 } });
+    const inMesh = (degraded = false) => ({
+      ...standalone, enabled: true, degraded, meshName: 'Mesh', voterCount: 3,
+      nodes: [node('n1', 'PC 1'), node('n2', 'Docker 1'), node('n3', 'asa-1', !degraded)]
+    });
+    /** What the app's overlay shows, or undefined while nothing is under way. */
+    const working = () => TestBed.inject(BusyService).message ?? undefined;
+    const modalButton = (page: HTMLElement, label: string) =>
+      Array.from(page.querySelectorAll<HTMLButtonElement>('.action-group-modal button')).find(button => button.textContent?.trim() === label)!;
+
+    it('covers the page with a spinner while a machine is removed, until the mesh answers', async () => {
+      const reply = new Subject<unknown>();
+      replies['remove-mesh-node'] = reply;
+      const page = await open(inMesh());
+
+      menuItem(page, 1, 'Remove')!.click();
+      fixture.detectChanges();
+      expect(working()).toContain('Removing Docker 1');
+
+      reply.next({ success: true });
+      fixture.detectChanges();
+      expect(working()).toBeUndefined();
+    });
+
+    it('says why a removal was refused, and lets go', async () => {
+      replies['remove-mesh-node'] = { success: false, error: 'Changes to the mesh need 2 of the 3 machines.' };
+      const error = spyOn(notification as unknown as { error(message: string): void }, 'error');
+      const page = await open(inMesh());
+
+      menuItem(page, 1, 'Remove')!.click();
+      fixture.detectChanges();
+
+      expect(error).toHaveBeenCalledWith('Changes to the mesh need 2 of the 3 machines.');
+      expect(working()).toBeUndefined();
+    });
+
+    it('shows it while this machine leaves, with the others or without them', async () => {
+      replies['remove-mesh-node'] = NEVER;
+      replies['leave-mesh-anyway'] = NEVER;
+      const page = await open(inMesh());
+
+      menuItem(page, 0, 'Leave')!.click();
+      fixture.detectChanges();
+      modalButton(page, 'Leave').click();
+      fixture.detectChanges();
+      expect(working()).toContain('Leaving the mesh');
+    });
+
+    it('shows it while machines that cannot be reached are forced out', async () => {
+      replies['force-remove-mesh-nodes'] = NEVER;
+      const page = await open({ ...inMesh(true), nodes: [node('n1', 'PC 1'), node('n2', 'Docker 1'), node('n3', 'asa-1', false)] });
+
+      menuItem(page, 2, 'Force remove')!.click();
+      fixture.detectChanges();
+      modalButton(page, 'Force remove').click();
+      fixture.detectChanges();
+
+      expect(working()).toContain('Forcing out asa-1');
+    });
+
+    it('shows it while every machine checks a new address', async () => {
+      replies['set-mesh-node-address'] = NEVER;
+      const page = await open(inMesh());
+
+      menuItem(page, 0, 'Change address')!.click();
+      fixture.detectChanges();
+      Array.from(page.querySelectorAll<HTMLButtonElement>('.mesh-address-actions button')).find(button => button.textContent?.includes('Save address'))!.click();
+      fixture.detectChanges();
+
+      expect(working()).toContain('Checking every machine can reach PC 1');
+    });
+
   });
 
   // "Drain" read like "pull every server onto this PC". It only keeps new servers off a machine.

@@ -31,11 +31,12 @@ export const COMMAND_PROTOCOL: Record<ControlCommand['operation'], number> = {
   'disconnect-rcon': 2,
   'save-ini': 2,
   'set-ownership': 2,
-  'set-address': 2
+  'set-address': 2,
+  'ark-api': 2
 };
 
 /** Read-only questions one node asks the node hosting a server. Not commands: never logged, no quorum. */
-export type MeshQuery = 'state' | 'logs' | 'players' | 'rcon-status' | 'online-players' | 'ini';
+export type MeshQuery = 'state' | 'logs' | 'players' | 'rcon-status' | 'online-players' | 'ini' | 'ark-api';
 export const QUERY_PROTOCOL = 2;
 
 /** Commands issued further from now than this are refused. Raft does not depend on this clock. */
@@ -274,7 +275,7 @@ export interface ControlCommand {
   targetNode: string;
   operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete' | 'move' | 'save-config'
     | 'start-all' | 'stop-all' | 'rcon' | 'connect-rcon' | 'disconnect-rcon' | 'save-ini' | 'set-ownership'
-    | 'update-ark' | 'update-app' | 'set-address';
+    | 'update-ark' | 'update-app' | 'set-address' | 'ark-api';
   serverId: string;
   /** Move only: the node that receives the server. */
   destinationNodeId?: string;
@@ -282,7 +283,10 @@ export interface ControlCommand {
   instance?: Record<string, unknown>;
   /** start-all and stop-all only: the servers on the target node to act on. */
   serverIds?: string[];
-  /** rcon: { command }. save-ini: { filename, content }. set-ownership: { operatorUserId, managerUserId }. set-address: a MeshAddress. */
+  /**
+   * rcon: { command }. save-ini: { filename, content }. set-ownership: { operatorUserId, managerUserId }.
+   * set-address: a MeshAddress. ark-api: { action } and what that action needs (see ark-api-actions).
+   */
   args?: Record<string, unknown>;
   expiry: number;
   issuedAt: number;

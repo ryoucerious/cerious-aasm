@@ -17,6 +17,8 @@ import { ModalComponent } from './components/modal/modal.component';
 import { TopbarComponent } from './components/topbar/topbar.component';
 import { SettingsPageComponent } from './pages/settings/settings.component';
 import { TooltipHostComponent } from './components/tooltip/tooltip-host.component';
+import { BusyOverlayComponent } from './components/busy-overlay/busy-overlay.component';
+import { BusyService } from './core/services/busy.service';
 
 export type ExitAction = 'shutdown' | 'exit' | 'cancel';
 
@@ -25,7 +27,7 @@ const FIRST_CONNECT_GRACE_MS = 5000;
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent],
+  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent, BusyOverlayComponent],
   templateUrl: './app.html'
 })
 export class App implements OnInit, OnDestroy {
@@ -55,6 +57,8 @@ export class App implements OnInit, OnDestroy {
     private serverLifecycle: ServerLifecycleService,
     private router: Router,
     private auth: AuthService,
+    /** While something is under way the app is inert behind the busy overlay. */
+    readonly busy: BusyService,
     // Eagerly instantiate NotificationService for global notifications
     _notification: NotificationService,
     // Eagerly instantiate ThemeService so the theme applies and keeps following the OS

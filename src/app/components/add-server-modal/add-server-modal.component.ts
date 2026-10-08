@@ -13,6 +13,7 @@ import { IpcService } from '../../core/services/ipc.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MessagingService, MOVE_TIMEOUT_MS } from '../../core/services/messaging/messaging.service';
 import type { DesktopFile } from '../../core/types/electron-api';
+import { fileToBase64 } from '../../core/utils/file.utils';
 
 export type ImportMode = 'create' | 'import' | 'clone';
 
@@ -172,7 +173,7 @@ export class AddServerModalComponent implements OnChanges {
       if (this.ipc.isElectron && this.selectedBackupFilePath) {
         result = this.serverInstanceService.importServerFromBackup(this.serverName, this.selectedBackupFilePath);
       } else if (this.selectedBackupFile) {
-        const fileData = await this.fileToBase64(this.selectedBackupFile);
+        const fileData = await fileToBase64(this.selectedBackupFile);
         result = this.serverInstanceService.importServerFromBackup(this.serverName, undefined, fileData, this.selectedBackupFile.name);
       } else {
         throw new Error('No backup file selected');
@@ -264,12 +265,4 @@ export class AddServerModalComponent implements OnChanges {
     this.busy = false;
   }
 
-  private fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve((reader.result as string).split(',')[1]);
-      reader.onerror = error => reject(error);
-    });
-  }
 }

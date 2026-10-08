@@ -26,6 +26,7 @@ import type { SenderIdentity } from '../auth/permission-gate';
 import { collectCapabilities, ensureNodeIdentity, nodeIdentityPath, readNodeIdentity, writeNodeIdentity, type NodeIdentityFile } from '../runtime/node-identity';
 import type { InstanceConfig } from '../../types/server-instance.types';
 import { localRuntime } from '../runtime/local-runtime';
+import { ArkApiAction, isReadOnlyArkApiAction, runArkApiAction } from '../ark-api-actions';
 import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
 import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateFingerprint, certificateIssuedBy, certificateSerial, normalizeSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
@@ -530,6 +531,7 @@ export class MeshService {
     if (!node) throw new Error('That node was not found.');
     if (node.certSerial) await this.repo!.revokeSerial(node.certSerial, Date.now());
     await this.repo!.upsertNode({ ...node, status: 'removed' });
+    await this.forgetServersOn([nodeId]);
     const localId = this.identity()?.nodeId;
     const others = (await this.repo!.listNodes(this.identity()?.meshId)).filter(item => item.status !== 'removed' && item.nodeId !== nodeId);
     const leaving = nodeId === localId || others.length === 0;
@@ -545,7 +547,62 @@ export class MeshService {
     // Leaving, or removing the last member, drops this install back to standalone.
     // The servers on this machine stay where they are.
     if (leaving) await this.leaveLocally();
-    else this.publishStatus();
+    else {
+      this.publishStatus();
+      await this.tellRemoved(node);
+    }
+  }
+
+  /**
+   * A removed machine's servers stay on that machine, where they are its own again, so the mesh
+   * forgets them: kept, hidden, they were in the way of that machine joining again and of the
+   * clusters they were in. A write, so it needs the mesh to agree.
+   */
+  private async forgetServersOn(nodeIds: string[]): Promise<void> {
+    if (!this.repo || !nodeIds.length) return;
+    const gone = new Set(nodeIds);
+    const servers = (await this.repo.listServers()).filter(server => gone.has(server.nodeId));
+    for (const server of servers) await this.repo.deleteServer(server.serverId);
+    if (servers.length) console.log(`[mesh] Forgot ${servers.length} server(s) of machine(s) no longer in the mesh.`);
+  }
+
+  /**
+   * Tells a removed machine, so it goes standalone on its own rather than finding out when the
+   * others refuse it and waiting to be told to leave. One that cannot be reached is removed all
+   * the same; it learns of it when it is back.
+   */
+  private async tellRemoved(node: NodeRecord): Promise<void> {
+    const certs = readCertPaths();
+    if (!certs) return;
+    try {
+      await peerRequest({
+        url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/removed`,
+        method: 'POST',
+        body: {},
+        ca: fs.readFileSync(certs.caCert, 'utf8'),
+        cert: fs.readFileSync(certs.nodeCert, 'utf8'),
+        key: fs.readFileSync(certs.nodeKey, 'utf8'),
+        timeoutMs: 5_000
+      });
+    } catch (error) {
+      console.warn(`[mesh] Could not tell ${node.name} it was removed:`, error instanceof Error ? error.message : error);
+    }
+  }
+
+  /**
+   * Another member removed this machine: it leaves the mesh, as Leave does. Its servers stay
+   * here, and so do the accounts it knows. Only a member's word counts.
+   */
+  private async takeRemoval(askerId: string): Promise<{ ok: true }> {
+    const asker = await this.repo?.getNode(askerId);
+    if (!asker || asker.status === 'removed' || askerId === this.identity()?.nodeId) {
+      throw new Error(`${asker?.name || 'That machine'} is not a member of the mesh, so it cannot say this one was removed.`);
+    }
+    console.warn(`[mesh] ${asker.name} removed this machine from the mesh; it is standalone again.`);
+    this.removedFromMesh = false;
+    // After the reply: leaving stops the peer server this request came in on.
+    setTimeout(() => { void this.leaveLocally(); }, 0);
+    return { ok: true };
   }
 
   /** Set while every machine this one reaches refuses it as no longer a member. */
@@ -612,6 +669,7 @@ export class MeshService {
       if (node.certSerial) await this.repo!.revokeSerial(node.certSerial, Date.now());
       await this.repo!.upsertNode({ ...node, status: 'removed' });
     }
+    await this.forgetServersOn(removing);
     await this.repo!.setClusterCredential({ user: HTTP_USER, pass: randomUUID() });
     this.publishStatus();
     for (const { node, refusal } of applied) {
@@ -865,6 +923,12 @@ export class MeshService {
       case 'rcon-status': return localRuntime.rconStatus(serverId);
       case 'online-players': return { instanceId: serverId, players: await localRuntime.onlinePlayers(serverId) };
       case 'ini': return { instanceId: serverId, content: localRuntime.readIni(serverId, String(args.filename || '')) };
+      case 'ark-api': {
+        // A query is not logged and needs no quorum, so only a read may come this way.
+        const action = String(args.action || '');
+        if (!isReadOnlyArkApiAction(action)) throw new Error('That ArkApi action is not a read.');
+        return runArkApiAction(serverId, action as ArkApiAction, args);
+      }
       default: throw new Error('Unknown query.');
     }
   }
@@ -1210,6 +1274,10 @@ export class MeshService {
         const disconnected = await localRuntime.disconnectRcon(current.serverId);
         localRuntime.announceRconDown(current.serverId);
         return { success: disconnected.success, detail: { connected: false } };
+      }
+      if (current.operation === 'ark-api') {
+        const outcome = await runArkApiAction(current.serverId, String(args.action || '') as ArkApiAction, args);
+        return { success: outcome.success !== false, error: typeof outcome.error === 'string' ? outcome.error : undefined, detail: outcome };
       }
       if (current.operation === 'save-ini') {
         const saved = await localRuntime.saveIni(current.serverId, String(args.filename || ''), String(args.content ?? ''));
@@ -2188,6 +2256,7 @@ export class MeshService {
         // Another member is about to change its address: whether this one reaches it there.
         onProbeAddress: (askerId, body) => this.probeAddress(askerId, body),
         onForceRemove: (askerId, body) => this.takePartInForceRemoval(askerId, body),
+        onRemoved: askerId => this.takeRemoval(askerId),
         // A move's destination stages the streamed files; they become the server when its placement arrives.
         onCheckpointBegin: body => beginStage(String(body.serverId || ''), {
           resume: body.resume === true,
@@ -2700,13 +2769,20 @@ export class MeshService {
         await this.flushPendingConfigs();
         await this.adoptLocalClusters();
       }
-      const [servers, users, clusters, storage, nodes] = await Promise.all([
+      const [listed, users, clusters, storage, nodes] = await Promise.all([
         this.repo.listServers(),
         this.repo.listUsers(),
         this.repo.listClusters(),
         this.repo.listStorage(),
         this.repo.listNodes(this.identity()?.meshId)
       ]);
+      let servers = listed;
+      // Left over from machines removed before Remove forgot their servers.
+      const removedIds = new Set(nodes.filter(node => node.status === 'removed').map(node => node.nodeId));
+      if (this.quorum && servers.some(server => removedIds.has(server.nodeId))) {
+        await this.forgetServersOn([...removedIds]);
+        servers = servers.filter(server => !removedIds.has(server.nodeId));
+      }
       // A server moved here arrives as staged files; they become the server once its placement does.
       for (const server of servers) {
         if (server.nodeId !== nodeId) continue;

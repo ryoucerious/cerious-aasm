@@ -1779,6 +1779,43 @@ app-window-controls {
   margin-top: 1.5rem;
 }
 
+// BusyOverlayComponent: over the whole window while something the app waits for is under way.
+// Above the settings drawer (1300/1301) and the modals over it (1400); below tooltips (2000) and
+// toasts (9999), so a failure still shows.
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  cursor: progress;
+}
+
+.busy-overlay-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 26rem;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+  .spinner {
+    flex: none;
+    margin-right: 0;
+    color: var(--primary);
+  }
+}
+
 // Replaces the native title tooltip, which is slow and ignores the theme. TooltipHostComponent
 // positions it in viewport coordinates.
 .tooltip-bubble {

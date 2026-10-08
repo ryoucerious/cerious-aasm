@@ -1,6 +1,7 @@
 import { messagingService } from '../services/messaging.service';
 import { arkApiPluginService } from '../services/ark-api-plugin.service';
 import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { meshService } from '../services/mesh/mesh-service';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
@@ -11,11 +12,17 @@ jest.mock('../services/ark-api-plugin.service', () => ({
     removePlugin: jest.fn(),
     getLatestAsaApiRelease: jest.fn(),
     downloadAsaApi: jest.fn(),
-    installPluginFromZipPath: jest.fn(),
+    readZipAsBase64: jest.fn(),
+    installPluginFromZipData: jest.fn(),
     installPluginFromUrl: jest.fn()
   }
 }));
 jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ isAsaApiLoaderInstalled: jest.fn() }));
+// A server this machine runs, unless a test says the mesh placed it on another.
+jest.mock('../services/mesh/mesh-service', () => ({
+  meshService: { queryRemote: jest.fn(async () => null), forwardIfRemote: jest.fn(async () => null) }
+}));
+const mockMesh = jest.mocked(meshService);
 
 const mockMessaging = jest.mocked(messagingService);
 const mockPlugins = jest.mocked(arkApiPluginService);
@@ -138,10 +145,13 @@ describe('ark-api-handler', () => {
   });
 
   describe('install-plugin-from-zip', () => {
-    it('installs from the local ZIP', async () => {
+    it('installs the ZIP the desktop names', async () => {
+      mockPlugins.readZipAsBase64.mockReturnValue('UEsDBA==');
+
       await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: '/tmp/plugin.zip', requestId: 'r1' }, sender);
 
-      expect(mockPlugins.installPluginFromZipPath).toHaveBeenCalledWith('a1', '/tmp/plugin.zip');
+      expect(mockPlugins.readZipAsBase64).toHaveBeenCalledWith('/tmp/plugin.zip');
+      expect(mockPlugins.installPluginFromZipData).toHaveBeenCalledWith('a1', 'UEsDBA==');
       expect(replies('install-plugin-from-zip')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
@@ -150,7 +160,7 @@ describe('ark-api-handler', () => {
 
       await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: 'C:/Users/x/evil.zip', requestId: 'r1' }, webClient);
 
-      expect(mockPlugins.installPluginFromZipPath).not.toHaveBeenCalled();
+      expect(mockPlugins.readZipAsBase64).not.toHaveBeenCalled();
       expect(replies('install-plugin-from-zip')).toEqual([{
         success: false,
         error: 'Only the desktop app can install a plugin from a file path. Use a download URL instead.',
@@ -158,8 +168,27 @@ describe('ark-api-handler', () => {
       }]);
     });
 
+    // The web UI has no path; the ZIP comes with the request, so it names nothing on the host.
+    it('installs a ZIP sent with the request, from the web UI too', async () => {
+      const webClient = { type: 'api-process', cid: 'c1', user: null, authEnabled: false, send: jest.fn() };
+
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipData: 'UEsDBA==', requestId: 'r1' }, webClient);
+
+      expect(mockPlugins.installPluginFromZipData).toHaveBeenCalledWith('a1', 'UEsDBA==');
+      expect(replies('install-plugin-from-zip')).toEqual([{ success: true, requestId: 'r1' }]);
+    });
+
+    it('refuses a ZIP larger than a plugin needs to be', async () => {
+      const tooLarge = 'A'.repeat(Math.ceil((50 * 1024 * 1024 + 1) / 3) * 4);
+
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipData: tooLarge, requestId: 'r1' }, sender);
+
+      expect(mockPlugins.installPluginFromZipData).not.toHaveBeenCalled();
+      expect(replies('install-plugin-from-zip')).toEqual([{ success: false, error: 'That ZIP is larger than 50 MB.', requestId: 'r1' }]);
+    });
+
     it('replies with the reason the install fails', async () => {
-      mockPlugins.installPluginFromZipPath.mockImplementationOnce(() => { throw new Error('Not a ZIP file'); });
+      mockPlugins.readZipAsBase64.mockImplementationOnce(() => { throw new Error('Not a ZIP file'); });
 
       await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: '/tmp/x', requestId: 'r1' }, sender);
 
@@ -186,12 +215,63 @@ describe('ark-api-handler', () => {
     });
   });
 
+  // The tab acted on the machine it was opened on, wherever the server ran.
+  describe('for a server on another machine in the mesh', () => {
+    it('asks that machine for its plugins and its AsaApi, and looks at nothing here', async () => {
+      mockMesh.queryRemote.mockResolvedValueOnce({ success: true, plugins: [{ folderName: 'Far' }] });
+
+      await handlers['list-ark-api-plugins']({ instanceId: 'a1', requestId: 'r1' }, sender);
+
+      expect(mockMesh.queryRemote).toHaveBeenCalledWith('a1', 'ark-api', { action: 'list' });
+      expect(mockPlugins.listPlugins).not.toHaveBeenCalled();
+      expect(replies('list-ark-api-plugins')).toEqual([{ success: true, plugins: [{ folderName: 'Far' }], requestId: 'r1' }]);
+    });
+
+    it('has that machine make the change, and passes on what came of it', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { success: true, folderName: 'Permissions' } });
+
+      await handlers['remove-ark-api-plugin']({ instanceId: 'a1', folderName: 'Permissions', requestId: 'r1' }, sender);
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('ark-api', 'a1', 'desktop', { folderName: 'Permissions', action: 'remove' });
+      expect(mockPlugins.removePlugin).not.toHaveBeenCalled();
+      expect(replies('remove-ark-api-plugin')).toEqual([{ success: true, folderName: 'Permissions', requestId: 'r1' }]);
+    });
+
+    it('says why that machine could not do it', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: false, error: 'The hosting node is not available.' });
+
+      await handlers['install-plugin-from-url']({ instanceId: 'a1', url: 'https://dl.zip', requestId: 'r1' }, sender);
+
+      expect(replies('install-plugin-from-url')).toEqual([{ success: false, error: 'The hosting node is not available.', requestId: 'r1' }]);
+    });
+
+    // That machine cannot open a path on this one.
+    it('sends it the contents of a ZIP the desktop names', async () => {
+      mockPlugins.readZipAsBase64.mockReturnValue('UEsDBA==');
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { success: true } });
+
+      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipPath: '/tmp/plugin.zip', requestId: 'r1' }, sender);
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('ark-api', 'a1', 'desktop', { zipData: 'UEsDBA==', action: 'install-zip' });
+      expect(mockPlugins.installPluginFromZipData).not.toHaveBeenCalled();
+    });
+
+    it('downloads AsaApi there, not here', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true, detail: { success: true } });
+
+      await handlers['download-asaapi']({ instanceId: 'a1', downloadUrl: 'https://dl/asaapi.zip', requestId: 'r1' }, sender);
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('ark-api', 'a1', 'desktop', { downloadUrl: 'https://dl/asaapi.zip', action: 'download-asaapi' });
+      expect(mockPlugins.downloadAsaApi).not.toHaveBeenCalled();
+    });
+  });
+
   describe.each([
     ['get-asaapi-status', () => isAsaApiLoaderInstalled],
     ['list-ark-api-plugins', () => mockPlugins.listPlugins],
     ['remove-ark-api-plugin', () => mockPlugins.removePlugin],
     ['download-asaapi', () => mockPlugins.downloadAsaApi],
-    ['install-plugin-from-zip', () => mockPlugins.installPluginFromZipPath],
+    ['install-plugin-from-zip', () => mockPlugins.installPluginFromZipData],
     ['install-plugin-from-url', () => mockPlugins.installPluginFromUrl]
   ])('%s', (channel, target) => {
     it.each([[{ instanceId: '../x', requestId: 'r1' }, 'r1'], [undefined, undefined]])(

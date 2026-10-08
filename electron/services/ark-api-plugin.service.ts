@@ -144,14 +144,20 @@ export class ArkApiPluginService {
     await this.downloadAndExtract(downloadUrl, path.join(win64Dir, '_asaapi_download.zip'), win64Dir);
   }
 
-  /** The ZIP should hold one top-level folder: the plugin. */
-  installPluginFromZipPath(instanceId: string, zipPath: string): void {
-    const pluginDir = this.getPluginDir(instanceId);
+  /** A ZIP the desktop names, read so it can be sent to whichever machine runs the server. */
+  readZipAsBase64(zipPath: string): string {
     if (!fs.existsSync(zipPath)) {
       throw new Error(`ZIP file not found: ${zipPath}`);
     }
+    return fs.readFileSync(zipPath).toString('base64');
+  }
+
+  /** A plugin ZIP, sent with the request: it should hold one top-level folder, the plugin. */
+  installPluginFromZipData(instanceId: string, base64: string): void {
+    const pluginDir = this.getPluginDir(instanceId);
+    const zip = new AdmZip(Buffer.from(base64, 'base64'));
     fs.mkdirSync(pluginDir, { recursive: true });
-    new AdmZip(zipPath).extractAllTo(pluginDir, true);
+    zip.extractAllTo(pluginDir, true);
   }
 
   async installPluginFromUrl(instanceId: string, url: string): Promise<void> {

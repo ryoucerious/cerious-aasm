@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { EMPTY, Subject, Subscription, catchError, defer, finalize, map, of, switchMap } from 'rxjs';
 import { FILE_TRANSFER_TIMEOUT_MS, MessagingService } from '../../../../core/services/messaging/messaging.service';
+import { fileToBase64 } from '../../../../core/utils/file.utils';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ModalComponent } from '../../../modal/modal.component';
 import type { DesktopFile } from '../../../../core/types/electron-api';
@@ -197,19 +198,34 @@ export class ArkApiTabComponent implements OnChanges, OnDestroy {
     }));
   }
 
-  onZipFileSelected(event: Event) {
+  /**
+   * The desktop app names the file, which it knows the path of. Elsewhere, as in the web UI, there
+   * is no path, so the ZIP itself goes with the request.
+   */
+  async onZipFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file: DesktopFile | undefined = input.files?.[0];
     const instanceId = this.serverInstance?.id;
     if (!file || !instanceId) return;
-    const zipPath = file.path;
-    if (!zipPath) {
-      this.notification.error('Could not read file path. Are you running in Electron?', 'ArkApi');
-      return;
-    }
     this.installingFromZip = true;
     this.cdr.markForCheck();
-    this.serverActions.add(this.messaging.sendMessage<ActionReply>('install-plugin-from-zip', { instanceId, zipPath }).subscribe({
+    let request;
+    if (file.path) {
+      request = this.messaging.sendMessage<ActionReply>('install-plugin-from-zip', { instanceId, zipPath: file.path });
+    } else {
+      let zipData: string;
+      try {
+        zipData = await fileToBase64(file);
+      } catch {
+        this.installingFromZip = false;
+        input.value = '';
+        this.notification.error('Could not read that ZIP.', 'ArkApi');
+        this.cdr.markForCheck();
+        return;
+      }
+      request = this.messaging.sendMessage<ActionReply>('install-plugin-from-zip', { instanceId, zipData }, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
+    }
+    this.serverActions.add(request.subscribe({
       next: res => {
         this.installingFromZip = false;
         input.value = '';

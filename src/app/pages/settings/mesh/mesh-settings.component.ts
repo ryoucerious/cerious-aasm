@@ -6,6 +6,7 @@ import { ModalComponent } from '../../../components/modal/modal.component';
 import { MESH_ADDRESS_TIMEOUT_MS, MessagingService } from '../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
+import { BusyService } from '../../../core/services/busy.service';
 import { PERMISSIONS } from '../../../core/models/auth.model';
 import { copyToClipboard } from '../../../core/utils/clipboard.utils';
 import { formatRelativeTime } from '../../../core/utils/format.utils';
@@ -88,6 +89,8 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   busy = false;
   updatingKey = '';
   showConfirmLeave = false;
+  /** Takes the app's overlay down once the mesh answers; null while nothing is under way. */
+  private doneWorking: (() => void) | null = null;
   /** Leave anyway: without the others, which cannot agree or removed this machine. */
   showLeaveAnyway = false;
   /** Force remove: the machines ticked to be taken out of a mesh that cannot agree. */
@@ -111,6 +114,7 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     private messaging: MessagingService,
     private notification: NotificationService,
     private auth: AuthService,
+    private busyOverlay: BusyService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -201,6 +205,11 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     } catch {
       this.notification.error(`Could not copy the ${what.toLowerCase()}. Select it and copy it instead.`);
     }
+  }
+
+  /** In a mesh that still counts this machine: removed by the others, there is only the way out. */
+  get inMesh(): boolean {
+    return !!this.status?.enabled && !this.status.removedFromMesh;
   }
 
   get canUpdate(): boolean {
@@ -485,18 +494,21 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   confirmForceRemove(): void {
     if (!this.forceRemovePlan.enough || this.forceRemoving) return;
     const nodeIds = [...this.forceRemoveIds];
+    const names = this.nodes.filter(node => this.forceRemoveIds.has(node.nodeId)).map(node => node.name).join(', ');
     this.forceRemoving = true;
-    this.cdr.markForCheck();
+    this.showForceRemove = false;
+    this.startWorking(`Forcing out ${names}… The machines that stay restart their part of the mesh, which can take a minute.`);
     this.messaging.sendMessage<{ success?: boolean; error?: string }>('force-remove-mesh-nodes', { nodeIds }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
       next: result => {
         this.forceRemoving = false;
-        this.showForceRemove = false;
+        this.stopWorking();
         if (result?.success) this.notification.success('Removed. The mesh can agree again.');
         else this.notification.error(result?.error || 'Could not force those machines out.');
         this.refresh();
       },
       error: () => {
         this.forceRemoving = false;
+        this.stopWorking();
         this.notification.error('Could not force those machines out.');
         this.refresh();
       }
@@ -515,15 +527,19 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
 
   confirmLeaveAnyway(): void {
     this.showLeaveAnyway = false;
+    this.startWorking('Leaving the mesh…');
     this.messaging.sendMessage<{ success?: boolean; error?: string }>('leave-mesh-anyway', {}).subscribe({
       next: result => {
+        this.stopWorking();
         if (result && result.success === false) this.notification.error(result.error || 'Could not leave the mesh.');
         this.refresh();
         void this.auth.refresh();
       },
-      error: () => this.notification.error('Could not leave the mesh.')
+      error: () => {
+        this.stopWorking();
+        this.notification.error('Could not leave the mesh.');
+      }
     });
-    this.cdr.markForCheck();
   }
 
   askRemove(node: MeshNode): void {
@@ -551,9 +567,38 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   }
 
   remove(node: MeshNode): void {
-    this.messaging.sendMessage('remove-mesh-node', { nodeId: node.nodeId }).subscribe({
-      next: () => this.refresh()
+    const leaving = node.nodeId === this.status?.nodeId;
+    const failed = leaving ? 'Could not leave the mesh.' : `Could not remove ${node.name}.`;
+    this.startWorking(leaving ? 'Leaving the mesh…' : `Removing ${node.name}…`);
+    this.messaging.sendMessage<{ success?: boolean; error?: string }>('remove-mesh-node', { nodeId: node.nodeId }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
+      next: result => {
+        this.stopWorking();
+        if (result && result.success === false) this.notification.error(result.error || failed);
+        this.refresh();
+        if (leaving) void this.auth.refresh();
+      },
+      error: () => {
+        this.stopWorking();
+        this.notification.error(failed);
+        this.refresh();
+      }
     });
+  }
+
+  /**
+   * Covers the whole app, settings included, with a spinner and `message` until the mesh answers:
+   * nothing else may be used while machines are joining it or leaving it.
+   */
+  private startWorking(message: string): void {
+    this.stopWorking();
+    this.doneWorking = this.busyOverlay.start(message);
+    this.cdr.markForCheck();
+  }
+
+  private stopWorking(): void {
+    this.doneWorking?.();
+    this.doneWorking = null;
+    this.cdr.markForCheck();
   }
 
   diagnostics(): void {
@@ -608,6 +653,7 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   /** Every other machine checks it can reach this one there first, then the mesh database moves: up to a minute or two. */
   saveAddress(node: MeshNode): void {
     this.savingAddress = true;
+    this.startWorking(`Checking every machine can reach ${node.name} at the new address… This can take a minute or two.`);
     this.messaging.sendMessage<{ success?: boolean; error?: string; status?: MeshStatus; detail?: { notAsked?: string[] } }>('set-mesh-node-address', {
       nodeId: node.nodeId,
       host: this.addressForm.host,
@@ -616,6 +662,7 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     }, { timeoutMs: MESH_ADDRESS_TIMEOUT_MS }).subscribe({
       next: result => {
         this.savingAddress = false;
+        this.stopWorking();
         if (!result?.success) {
           this.notification.error(result?.error || 'Could not change that machine\'s address.');
         } else {
@@ -630,6 +677,7 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
       },
       error: () => {
         this.savingAddress = false;
+        this.stopWorking();
         this.notification.error('Could not change that machine\'s address.');
         this.cdr.markForCheck();
       }

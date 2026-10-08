@@ -4,7 +4,8 @@
 
 <!-- Nothing of the app until access is confirmed: see showApp. -->
 <ng-container *ngIf="showApp; else notReady">
-  <div class="app-root-wrapper">
+  <!-- Inert under the busy overlay: nothing behind it can be clicked or typed into. -->
+  <div class="app-root-wrapper" [attr.inert]="busy.message !== null ? '' : null" [attr.aria-busy]="busy.message !== null">
     <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
     <div class="app-container">
@@ -41,6 +42,8 @@
 </ng-container>
 <!-- One tooltip for the whole app, in place of the browser's own -->
 <app-tooltip-host></app-tooltip-host>
+<!-- Over everything while something the app has to wait for is under way -->
+<app-busy-overlay></app-busy-overlay>
 
 <ng-template #notReady>
   <div *ngIf="showLoading" class="app-loading" role="status" aria-live="polite">

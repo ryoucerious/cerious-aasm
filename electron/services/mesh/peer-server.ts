@@ -71,6 +71,8 @@ export interface PeerHandlers {
    * it (apply). `nodeId` is the asking member, from its certificate. Throws with the reason to refuse.
    */
   onForceRemove?(nodeId: string, body: { phase?: unknown; removing?: unknown; members?: unknown }): Promise<{ ok: true }>;
+  /** A member removed this machine from the mesh. `nodeId` is that member, from its certificate. */
+  onRemoved?(nodeId: string): Promise<{ ok: true }>;
 }
 
 /** Whether a member could be reached at an address, on its peer port and on its Raft port. */
@@ -235,6 +237,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
     }
     if (req.method === 'POST' && url.pathname === '/v1/force-remove' && handlers.onForceRemove) {
       send(res, 200, await handlers.onForceRemove(nodeId, await readJson<{ phase?: unknown; removing?: unknown; members?: unknown }>(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/removed' && handlers.onRemoved) {
+      send(res, 200, await handlers.onRemoved(nodeId));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/health') {

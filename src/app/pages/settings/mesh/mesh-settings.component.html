@@ -24,7 +24,7 @@
       <ng-container *ngIf="canRemoveNodes && forceRemoveCandidates.length">A machine that is gone for good can be forced out from the ⋯ menu on its card.</ng-container>
     </span>
   </div>
-  <div class="ark-install-notice warning" *ngIf="status.warning">
+  <div class="ark-install-notice warning" *ngIf="status.warning && !status.removedFromMesh">
     <i class="material-icons">info</i>
     <span>{{ status.warning }}</span>
   </div>
@@ -98,7 +98,7 @@
     </div>
   </section>
 
-  <section class="settings-card" *ngIf="status.enabled">
+  <section class="settings-card" *ngIf="inMesh">
     <div class="settings-card-head">
       <div class="settings-card-head-text">
         <h3 class="settings-card-title">{{ status.meshName || 'Mesh' }}</h3>
@@ -223,7 +223,7 @@
     </div>
   </section>
 
-  <section class="settings-card" *ngIf="status.enabled">
+  <section class="settings-card" *ngIf="inMesh">
     <h3 class="settings-card-title">Reachability</h3>
     <p class="settings-card-hint">Checks the peer and Raft ports. The mesh does not require a VPN for this.</p>
     <div class="settings-card-actions">
@@ -234,7 +234,7 @@
     <pre class="mesh-output" *ngIf="diagnosticText">{{ diagnosticText }}</pre>
   </section>
 
-  <section class="settings-card" *ngIf="status.enabled">
+  <section class="settings-card" *ngIf="inMesh">
     <h3 class="settings-card-title">WireGuard</h3>
     <p class="settings-card-hint">Optional. Joining a mesh does not require WireGuard. Apply runs only when it is installed on this host.</p>
     <div class="settings-card-actions">

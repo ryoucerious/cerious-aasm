@@ -17,6 +17,7 @@ import { MockMessagingService } from '../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../test/mocks/mock-notification.service';
 import { MockServerInstanceService } from '../../test/mocks/mock-server-instance.service';
 import { ModalComponent } from './components/modal/modal.component';
+import { BusyService } from './core/services/busy.service';
 
 describe('App', () => {
   let ipc: { isElectron: boolean; on: jasmine.Spy; send: jasmine.Spy; invoke: jasmine.Spy };
@@ -313,6 +314,31 @@ describe('App', () => {
       connected$.next(true);
       fixture.detectChanges();
       expect((fixture.nativeElement as HTMLElement).querySelector('.sidebar-container')).toBeTruthy();
+    });
+
+    // The overlay only covers the app; inert is what keeps the keyboard out of it as well.
+    it('cannot be used while something is under way, settings included', () => {
+      const fixture = createApp();
+      connected$.next(true);
+      fixture.detectChanges();
+      const wrapper = (fixture.nativeElement as HTMLElement).querySelector('.app-root-wrapper')!;
+      expect(wrapper.hasAttribute('inert')).toBeFalse();
+
+      const done = TestBed.inject(BusyService).start('Removing Docker 1…');
+      fixture.detectChanges();
+      expect(wrapper.hasAttribute('inert')).toBeTrue();
+      expect(wrapper.getAttribute('aria-busy')).toBe('true');
+      expect(wrapper.querySelector('app-settings-page')).toBeTruthy();
+
+      done();
+      fixture.detectChanges();
+      expect(wrapper.hasAttribute('inert')).toBeFalse();
+    });
+
+    it('has the overlay for things under way', () => {
+      const fixture = createApp();
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('app-busy-overlay')).toBeTruthy();
     });
   });
 
