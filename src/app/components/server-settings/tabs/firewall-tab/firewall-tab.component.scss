@@ -73,3 +73,13 @@
     }
   }
 }
+
+// Whether Windows Firewall lets players reach the machine's server ports.
+.machine-ports-firewall {
+  margin: 0.5rem 0 0;
+  color: var(--success);
+
+  &.blocked {
+    color: var(--warning);
+  }
+}

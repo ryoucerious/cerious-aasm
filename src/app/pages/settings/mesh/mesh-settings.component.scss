@@ -117,6 +117,24 @@
   }
 }
 
+// Its firewall keeps players out: a server moved there could not be reached.
+.mesh-node-ports {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  color: var(--text-primary);
+
+  .material-icons {
+    flex: none;
+    font-size: 1rem;
+    color: var(--warning);
+  }
+
+  span + span::before {
+    content: none;
+  }
+}
+
 .mesh-node-pill {
   display: inline-flex;
   align-items: center;

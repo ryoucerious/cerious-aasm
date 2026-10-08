@@ -2,6 +2,9 @@ import { firewallService } from '../services/firewall.service';
 import { getPlatform } from '../utils/platform.utils';
 import { getDockerNetworkInfo } from '../utils/docker-network.utils';
 import { onRequest } from './handler.utils';
+import { serverPortsService } from '../services/server-ports.service';
+import { getServerPortRanges } from '../utils/server-ports.utils';
+import { isDesktopWindow } from '../services/auth/permission-gate';
 
 const ARK_FAILURE = 'Failed to generate ARK server firewall instructions';
 const WEB_FAILURE = 'Failed to generate web server firewall instructions';
@@ -51,14 +54,31 @@ onRequest('check-firewall-enabled', () => {
   const enabled = platform === 'linux';
   // In Docker the ports are decided by how the container is networked, not by ufw inside it.
   const docker = getDockerNetworkInfo();
+  // Where this machine's servers take their ports from, and whether its firewall lets players
+  // reach them (known on Windows once read), for each server's Firewall tab.
+  const { ranges, source } = getServerPortRanges();
   return {
     success: true,
     platform,
     enabled,
     message: enabled ? 'Firewall management available on Linux' : 'Firewall management not available on this platform',
-    ...(docker ? { docker } : {})
+    ...(docker ? { docker } : {}),
+    serverPorts: { ranges, source, portsOpen: serverPortsService.portsOpen() }
   };
 }, {
   fallbackError: CHECK_FAILURE,
   onError: error => ({ success: false, platform: getPlatform(), enabled: false, message: CHECK_FAILURE, error })
 });
+
+// Settings → Server ports: the ranges this machine's servers take their ports from.
+onRequest('get-server-ports', () => serverPortsService.state(), { fallbackError: 'Could not read the server ports' });
+
+onRequest('set-server-ports', payload => serverPortsService.setRanges(payload.ranges), { fallbackError: 'Could not save the server ports' });
+
+// Windows asks for permission on this machine's screen, where a web client's user may not be.
+onRequest('open-server-ports-firewall', (_payload, { sender }) => {
+  if (!isDesktopWindow(sender)) {
+    return { success: false, error: 'Open the ports from the desktop app on this machine: Windows asks for permission on its screen.' };
+  }
+  return serverPortsService.openFirewall();
+}, { fallbackError: 'Could not open the ports in Windows Firewall' });

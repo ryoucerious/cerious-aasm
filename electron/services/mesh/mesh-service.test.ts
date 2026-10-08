@@ -56,7 +56,7 @@ jest.mock('../runtime/local-runtime', () => ({
     applyConfig: jest.fn(),
     deleteInstance: jest.fn(),
     rcon: jest.fn(),
-    takeFreePortsIfShared: jest.fn(async () => null)
+    takeFreePortsIfNeeded: jest.fn(async () => null)
   }
 }));
 jest.mock('../server-instance/server-instance.service', () => ({
@@ -77,6 +77,10 @@ jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailable
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null) }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
 jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
+jest.mock('../automation/restart-countdown.service', () => ({
+  restartCountdowns: { begin: jest.fn(() => 900_000), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
+}));
+import { restartCountdowns } from '../automation/restart-countdown.service';
 jest.mock('../ark-api-actions', () => ({
   runArkApiAction: jest.fn(),
   isReadOnlyArkApiAction: jest.fn((action: string) => action === 'status' || action === 'list')
@@ -2031,6 +2035,76 @@ describe('MeshService', () => {
       expect((await repo.getServer('b'))?.desiredState).toBe('stopped');
     });
 
+    // Each machine counts down and restarts its own servers, at the same time as the others.
+    describe('restarts with a warning', () => {
+      const command = (operation: string, extra: Record<string, unknown> = {}) => ({
+        commandId: `r-${operation}`, correlationId: 'c', actor: 'ada', targetNode: LOCAL, operation, serverId: 'a',
+        expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null, ...extra
+      }) as never;
+
+      beforeEach(async () => {
+        await place('a', LOCAL);
+        await place('b', LOCAL);
+        await service.resumeIfJoined();
+        jest.mocked(restartCountdowns.begin).mockClear();
+        jest.mocked(localRuntime.stop).mockClear();
+      });
+
+      it('counts down a restart sent with minutes of warning, rather than restarting now', async () => {
+        const result = await service.executeLocalCommand(command('restart', { args: { warningMinutes: 15 } }));
+
+        expect(restartCountdowns.begin).toHaveBeenCalledWith(['a'], 15, false, expect.any(Function));
+        expect(localRuntime.stop).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ success: true, detail: { dueAt: 900_000 } });
+      });
+
+      it('cancels a server\'s restart', async () => {
+        const result = await service.executeLocalCommand(command('cancel-restart'));
+
+        expect(restartCountdowns.cancel).toHaveBeenCalledWith('a');
+        expect(result.success).toBe(true);
+      });
+
+      it('counts down the listed servers that are running, then stops them and starts them in order', async () => {
+        jest.mocked(localRuntime.state).mockImplementation(id => (id === 'a' ? 'running' : 'stopped'));
+        jest.mocked(localRuntime.stopAll).mockResolvedValue({ stopped: ['a'], failed: [] });
+        jest.mocked(localRuntime.startAll).mockResolvedValue({ started: ['a'], failed: [] });
+
+        const result = await service.executeLocalCommand(command('restart-all', { serverId: LOCAL, serverIds: ['a', 'b'], args: { warningMinutes: 15 } }));
+        expect(restartCountdowns.begin).toHaveBeenCalledWith(['a'], 15, true, expect.any(Function));
+        expect(result.success).toBe(true);
+
+        await jest.mocked(restartCountdowns.begin).mock.calls[0][3](['a']);
+        expect(localRuntime.stopAll).toHaveBeenCalledWith(['a']);
+        expect(localRuntime.startAll).toHaveBeenCalledWith(['a']);
+        expect((await repo.getServer('a'))?.desiredState).toBe('running');
+      });
+
+      it('restarts them at once when there is to be no warning', async () => {
+        jest.mocked(localRuntime.state).mockImplementation(() => 'running');
+        jest.mocked(localRuntime.stopAll).mockResolvedValue({ stopped: ['a', 'b'], failed: [] });
+        jest.mocked(localRuntime.startAll).mockResolvedValue({ started: ['a', 'b'], failed: [] });
+
+        await service.executeLocalCommand(command('restart-all', { serverId: LOCAL, serverIds: ['a', 'b'], args: { warningMinutes: 0 } }));
+
+        expect(restartCountdowns.begin).not.toHaveBeenCalled();
+        expect(localRuntime.startAll).toHaveBeenCalledWith(['a', 'b']);
+      });
+
+      it('cancels a restart of all', async () => {
+        const result = await service.executeLocalCommand(command('cancel-restart-all', { serverId: LOCAL }));
+
+        expect(restartCountdowns.cancelAll).toHaveBeenCalled();
+        expect(result).toMatchObject({ success: true, detail: { cancelled: ['a'] } });
+      });
+
+      it('sends the minutes of warning to each other machine', async () => {
+        await service.commandHosts('restart-all', new Map([[REMOTE, ['c']]]), 'ada', { warningMinutes: 15 });
+
+        expect(commands()[0].body).toMatchObject({ operation: 'restart-all', serverIds: ['c'], args: { warningMinutes: 15 } });
+      });
+    });
+
     it('stops the listed servers on the host and records the ones that stopped', async () => {
       await place('a', LOCAL);
       await repo.setDesiredState('a', LOCAL, 'running');
@@ -2257,6 +2331,15 @@ describe('MeshService', () => {
 
       expect(await peerBroadcast()).toHaveBeenCalledWith({
         type: 'server-event', nodeId: LOCAL, channel: 'server-instance-log', data: { instanceId: 'isle', log: 'Server started' }
+      });
+    });
+
+    // A countdown on a server hosted here shows on every machine.
+    it('relays a restart counting down on a server it hosts', async () => {
+      messagingService.broadcastTap!('server-restart-pending', { instanceId: 'isle', dueAt: 900_000, all: false });
+
+      expect(await peerBroadcast()).toHaveBeenCalledWith({
+        type: 'server-event', nodeId: LOCAL, channel: 'server-restart-pending', data: { instanceId: 'isle', dueAt: 900_000, all: false }
       });
     });
 
@@ -3034,7 +3117,7 @@ describe('MeshService', () => {
       await jest.advanceTimersByTimeAsync(5_000);
 
       expect(fs.existsSync(path.join(root, 'AASMServer', 'ShooterGame', 'Saved', 'Servers', 'arrived', 'config.json'))).toBe(true);
-      expect(localRuntime.takeFreePortsIfShared).toHaveBeenCalledWith('arrived');
+      expect(localRuntime.takeFreePortsIfNeeded).toHaveBeenCalledWith('arrived');
     });
   });
 

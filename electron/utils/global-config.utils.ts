@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDefaultInstallDir } from './platform.utils';
 import { readJsonOrQuarantine, writeJsonAtomic } from './fs.utils';
+import type { ServerPortRanges } from './ark/port-sets';
 
 export interface GlobalConfig {
   startWebServerOnLoad: boolean;
@@ -18,6 +19,8 @@ export interface GlobalConfig {
   /** Seconds between servers when several start together. */
   serverStartDelaySeconds?: number;
   curseForgeApiKey?: string;
+  /** Where this machine's servers take their ports from; unset means the defaults. Ignored in Docker. */
+  serverPorts?: ServerPortRanges;
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {

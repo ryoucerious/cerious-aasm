@@ -1,3 +1,6 @@
+import type { ServerPortRanges } from './ark/port-sets';
+import type { PortRange } from './docker-network.utils';
+
 /** Commands a Linux user can run to open an ARK server's ports with ufw or firewalld. */
 export function getLinuxFirewallInstructions(ports: { game: number; query?: number; rcon?: number }): string {
   const { game, query, rcon } = ports;
@@ -39,4 +42,24 @@ export function getLinuxWebFirewallInstructions(port: number): string {
   instructions += `sudo firewall-cmd --reload\n`;
 
   return instructions;
+}
+
+/**
+ * Commands that open this machine's server ports once for every server: the game range (with the
+ * peer ports) and the query range, over UDP. RCON stays closed; the panel reaches it locally.
+ */
+export function getLinuxServerPortsInstructions({ game, query }: ServerPortRanges): string {
+  const ufw = ({ start, end }: PortRange) => (start === end ? `${start}` : `${start}:${end}`);
+  const firewalld = ({ start, end }: PortRange) => (start === end ? `${start}` : `${start}-${end}`);
+  return [
+    '# UFW (Ubuntu/Debian):',
+    `sudo ufw allow ${ufw(game)}/udp  # Game and peer ports`,
+    `sudo ufw allow ${ufw(query)}/udp  # Query ports`,
+    '',
+    '# firewalld (Fedora/RHEL):',
+    `sudo firewall-cmd --permanent --add-port=${firewalld(game)}/udp`,
+    `sudo firewall-cmd --permanent --add-port=${firewalld(query)}/udp`,
+    'sudo firewall-cmd --reload',
+    ''
+  ].join('\n');
 }

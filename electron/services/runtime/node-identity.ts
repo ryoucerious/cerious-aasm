@@ -4,6 +4,8 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { getDefaultInstallDir, getFreeMemory, getPlatform, isRunningInDocker } from '../../utils/platform.utils';
 import type { NodeCapabilities } from '../../types/mesh.types';
+import { getServerPortRanges } from '../../utils/server-ports.utils';
+import { serverPortsService } from '../server-ports.service';
 
 export interface NodeIdentityFile {
   nodeId: string;
@@ -78,6 +80,7 @@ export function collectCapabilities(): NodeCapabilities {
     installPresent: fs.existsSync(path.join(getDefaultInstallDir(), 'AASMServer')),
     freeMemoryBytes: getFreeMemory(),
     freeDiskBytes,
-    cpuPercent: 0
+    cpuPercent: 0,
+    serverPorts: { ranges: getServerPortRanges().ranges, portsOpen: serverPortsService.portsOpen() }
   };
 }

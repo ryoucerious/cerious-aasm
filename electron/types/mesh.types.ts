@@ -1,3 +1,5 @@
+import type { ServerPortRanges } from '../utils/ark/port-sets';
+
 /**
  * Wire protocol. 2 adds the delete, move, save-config, start-all and stop-all commands and
  * streamed checkpoints. A peer on a newer version, or older than MIN_PROTOCOL_VERSION, is refused.
@@ -32,7 +34,10 @@ export const COMMAND_PROTOCOL: Record<ControlCommand['operation'], number> = {
   'save-ini': 2,
   'set-ownership': 2,
   'set-address': 2,
-  'ark-api': 2
+  'ark-api': 2,
+  'cancel-restart': 2,
+  'restart-all': 2,
+  'cancel-restart-all': 2
 };
 
 /** Read-only questions one node asks the node hosting a server. Not commands: never logged, no quorum. */
@@ -140,6 +145,12 @@ export interface NodeCapabilities {
   freeMemoryBytes: number;
   freeDiskBytes: number;
   cpuPercent: number;
+  /**
+   * The ranges its servers take their ports from, and whether its firewall lets players reach
+   * them: false while Windows Firewall keeps them out, null where that is not known. Absent from
+   * versions before it.
+   */
+  serverPorts?: { ranges: ServerPortRanges; portsOpen: boolean | null };
 }
 
 export interface UserRecord {
@@ -275,7 +286,7 @@ export interface ControlCommand {
   targetNode: string;
   operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete' | 'move' | 'save-config'
     | 'start-all' | 'stop-all' | 'rcon' | 'connect-rcon' | 'disconnect-rcon' | 'save-ini' | 'set-ownership'
-    | 'update-ark' | 'update-app' | 'set-address' | 'ark-api';
+    | 'update-ark' | 'update-app' | 'set-address' | 'ark-api' | 'cancel-restart' | 'restart-all' | 'cancel-restart-all';
   serverId: string;
   /** Move only: the node that receives the server. */
   destinationNodeId?: string;

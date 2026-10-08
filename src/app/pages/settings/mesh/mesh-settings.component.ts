@@ -37,6 +37,8 @@ interface MeshNode {
   lastContactAt?: number | null;
   /** How an ARK update on it is going, from its heartbeat. */
   arkUpdate?: { phase: string; message: string; minutesLeft?: number; percent?: number; at: number } | null;
+  /** From its heartbeat: portsOpen is false while Windows Firewall keeps players out of its server ports. */
+  capabilities?: { serverPorts?: { portsOpen: boolean | null } };
 }
 
 interface MeshStatus {
@@ -295,6 +297,17 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   }
 
   /** When another machine was last heard from; empty for this one, or when the backend does not say. */
+  /**
+   * A server moved onto a machine whose firewall keeps players out can't be reached, and nobody may
+   * be at that machine to answer Windows: one admin prompt there opens the ports for good.
+   */
+  portsText(node: MeshNode): string {
+    if (node.capabilities?.serverPorts?.portsOpen !== false) return '';
+    return node.nodeId === this.status?.nodeId
+      ? 'Windows Firewall keeps players out of the server ports here. Open them in Settings → Server ports.'
+      : `Windows Firewall keeps players out of its server ports. Open them in Settings → Server ports on ${node.name}.`;
+  }
+
   contactText(node: MeshNode): string {
     if (node.nodeId === this.status?.nodeId || node.lastContactAt === undefined) return '';
     return node.lastContactAt === null ? 'Never heard from' : `Last contact ${formatRelativeTime(node.lastContactAt)}`;

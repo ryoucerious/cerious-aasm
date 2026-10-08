@@ -4,6 +4,7 @@ import { filter } from 'rxjs/operators';
 import { MessagingService } from './messaging/messaging.service';
 import { WebSocketService } from './web-socket.service';
 import { IpcService } from './ipc.service';
+import type { ServerPortRanges } from './firewall.service';
 import { isLocalPageHost } from '../utils/format.utils';
 
 interface MeshMember {
@@ -14,6 +15,8 @@ interface MeshMember {
   connected?: boolean;
   /** The host other machines dial: a name, when one was given in Change address. */
   host?: string;
+  /** From its heartbeat: the ranges its servers take their ports from, and whether its firewall lets players in. */
+  capabilities?: { serverPorts?: { ranges: ServerPortRanges; portsOpen: boolean | null } };
 }
 
 interface MeshStatusMembers {
@@ -128,6 +131,16 @@ export class MeshNodesService implements OnDestroy {
     return !nodeId || !this.localNodeId || nodeId === this.localNodeId;
   }
 
+  /**
+   * The ranges a machine's servers take their ports from, and whether its firewall lets players
+   * reach them, with its name. Null for a machine that has not said, or outside a mesh.
+   */
+  serverPortsOf(nodeId: string): { name: string; ranges: ServerPortRanges; portsOpen: boolean | null } | null {
+    const member = this.members.find(item => item.nodeId === nodeId);
+    const ports = member?.capabilities?.serverPorts;
+    return member && ports?.ranges ? { name: member.name, ranges: ports.ranges, portsOpen: ports.portsOpen ?? null } : null;
+  }
+
   /** The machines of the mesh, to filter servers by; empty outside a mesh. */
   machines(): Array<{ nodeId: string; name: string }> {
     return this.members
@@ -148,7 +161,7 @@ export class MeshNodesService implements OnDestroy {
     const localNodeId = status.enabled ? status.nodeId || null : null;
     const health = healthOf(status, members);
     const fingerprint = JSON.stringify([localNodeId, health, members.map(member =>
-      [member.nodeId, member.name, member.status, !!member.maintenance, !!member.connected, member.host || ''])]);
+      [member.nodeId, member.name, member.status, !!member.maintenance, !!member.connected, member.host || '', member.capabilities?.serverPorts ?? null])]);
     if (fingerprint === this.fingerprint) return;
     this.fingerprint = fingerprint;
     this.members = members;

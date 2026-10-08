@@ -46,6 +46,10 @@ jest.mock('../services/server-instance/server-management.service', () => ({
   serverManagementService: { getAllInstances: jest.fn(), getInstance: jest.fn(), saveInstance: jest.fn(), deleteInstance: jest.fn() }
 }));
 jest.mock('../services/automation/automation.service', () => ({ automationService: { setManuallyStopped: jest.fn() } }));
+jest.mock('../services/automation/restart-countdown.service', () => ({
+  restartCountdowns: { begin: jest.fn(() => 900_000), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
+}));
+import { restartCountdowns } from '../services/automation/restart-countdown.service';
 jest.mock('../services/ark-config.service', () => ({
   arkConfigService: { readIniFile: jest.fn(), writeIniFile: jest.fn(), parseIniToConfig: jest.fn() }
 }));
@@ -237,6 +241,106 @@ describe('server-instance-handler', () => {
       await request('save-ini-file', undefined);
 
       expect(replies('save-ini-file')).toEqual([{ success: false, error: missingField.message, requestId: undefined }]);
+    });
+  });
+
+  // Players hear the same countdown a scheduled restart gives them, unless it is now.
+  describe('restarting with a warning', () => {
+    const countdowns = jest.mocked(restartCountdowns);
+
+    beforeEach(() => {
+      countdowns.begin.mockClear();
+      mockMesh.forwardIfRemote.mockResolvedValue(null);
+    });
+
+    it('counts down on a server here, then restarts it', async () => {
+      await request('restart-server-instance', { id: 'a', warningMinutes: 15, requestId: 'r1' });
+
+      expect(countdowns.begin).toHaveBeenCalledWith(['a'], 15, false, expect.any(Function));
+      expect(replies('restart-server-instance')).toContainEqual({ success: true, instanceId: 'a', dueAt: 900_000, requestId: 'r1' });
+      expect(mockLifecycle.stopServerInstance).not.toHaveBeenCalled();
+    });
+
+    it('asks the machine hosting the server to count down', async () => {
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true });
+
+      await request('restart-server-instance', { id: 'a', warningMinutes: 15, requestId: 'r1' });
+
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('restart', 'a', 'desktop', { warningMinutes: 15 });
+      expect(countdowns.begin).not.toHaveBeenCalled();
+    });
+
+    it('cancels a server\'s restart here, or on the machine hosting it', async () => {
+      await request('cancel-server-restart', { id: 'a', requestId: 'r1' });
+      expect(countdowns.cancel).toHaveBeenCalledWith('a');
+      expect(replies('cancel-server-restart')).toContainEqual({ success: true, instanceId: 'a', requestId: 'r1' });
+
+      mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true });
+      await request('cancel-server-restart', { id: 'b', requestId: 'r2' });
+      expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('cancel-restart', 'b', 'desktop');
+    });
+
+    it('lists the restarts counting down here', async () => {
+      countdowns.pending.mockReturnValueOnce([{ instanceId: 'a', dueAt: 900_000, all: false }]);
+
+      await request('get-pending-restarts', { requestId: 'r1' });
+
+      expect(replies('get-pending-restarts')).toContainEqual({ pending: [{ instanceId: 'a', dueAt: 900_000, all: false }], requestId: 'r1' });
+    });
+  });
+
+  // Catches mod updates: every running server restarts, each machine its own, in sidebar order.
+  describe('restart-all-instances', () => {
+    const states: Record<string, string> = { a: 'running', b: 'stopped', c: 'running' };
+    const countdowns = jest.mocked(restartCountdowns);
+
+    beforeEach(() => {
+      countdowns.begin.mockClear();
+      mockManagement.getAllInstances.mockResolvedValue({ instances: Object.keys(states).map(id => ({ id })) });
+      mockProcess.getNormalizedInstanceState.mockImplementation(id => states[id]);
+      mockLifecycle.stopAllInstances.mockResolvedValue({ stopped: ['a', 'c'], failed: [] });
+      mockLifecycle.startAllInstances.mockResolvedValue({ started: ['a', 'c'], failed: [] });
+      mockMesh.commandHosts.mockClear();
+    });
+
+    it('counts down on the running servers here, and tells every other machine to do the same', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a', 'b'], remote: new Map([['n2', ['c']]]) });
+
+      await request('restart-all-instances', { warningMinutes: 15, requestId: 'r1' });
+
+      expect(countdowns.begin).toHaveBeenCalledWith(['a'], 15, true, expect.any(Function));
+      expect(mockMesh.commandHosts).toHaveBeenCalledWith('restart-all', new Map([['n2', ['c']]]), 'desktop', { warningMinutes: 15 });
+      expect(replies('restart-all-instances')).toContainEqual({ success: true, restarting: ['a'], dueAt: 900_000, requestId: 'r1' });
+    });
+
+    it('when the time is up, stops them and starts them again in order', async () => {
+      await request('restart-all-instances', { warningMinutes: 15, requestId: 'r1' });
+      const restart = countdowns.begin.mock.calls[0][3];
+
+      await restart(['a', 'c']);
+
+      expect(mockLifecycle.stopAllInstances).toHaveBeenCalledWith(['a', 'c']);
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, ['a', 'c']);
+      expect(mockLifecycle.stopAllInstances.mock.invocationCallOrder[0]).toBeLessThan(mockLifecycle.startAllInstances.mock.invocationCallOrder[0]);
+      expect(mockMesh.noteDesired).toHaveBeenCalledWith('c', 'running');
+    });
+
+    it('restarts them at once when there is to be no warning', async () => {
+      await request('restart-all-instances', { warningMinutes: 0, requestId: 'r1' });
+
+      expect(countdowns.begin).not.toHaveBeenCalled();
+      expect(mockLifecycle.stopAllInstances).toHaveBeenCalledWith(['a', 'c']);
+      expect(mockLifecycle.startAllInstances).toHaveBeenCalledWith(undefined, ['a', 'c']);
+    });
+
+    it('cancels it here and on the other machines', async () => {
+      mockMesh.hostsOf.mockResolvedValueOnce({ local: ['a'], remote: new Map([['n2', ['c']]]) });
+
+      await request('cancel-restart-all', { requestId: 'r1' });
+
+      expect(countdowns.cancelAll).toHaveBeenCalled();
+      expect(mockMesh.commandHosts).toHaveBeenCalledWith('cancel-restart-all', new Map([['n2', ['c']]]), 'desktop');
+      expect(replies('cancel-restart-all')).toContainEqual({ success: true, cancelled: ['a'], requestId: 'r1' });
     });
   });
 

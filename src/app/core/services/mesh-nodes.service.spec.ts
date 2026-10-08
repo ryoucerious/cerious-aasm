@@ -157,6 +157,42 @@ describe('MeshNodesService', () => {
     });
   });
 
+  // A server's ports are checked against the machine it runs on, which publishes its ranges.
+  describe('a machine\'s server ports', () => {
+    const ranges = { game: { start: 8000, end: 8100 }, query: { start: 28000, end: 28010 }, rcon: { start: 28020, end: 28030 } };
+    const withPorts = (portsOpen: boolean | null) => ({
+      enabled: true, nodeId: 'n1',
+      nodes: [{ nodeId: 'n1', name: 'PC 1' }, { nodeId: 'n2', name: 'asa-1', capabilities: { serverPorts: { ranges, portsOpen } } }]
+    });
+
+    it('are its ranges, and whether its firewall lets players in, with its name', () => {
+      reply = withPorts(false);
+
+      expect(create().serverPortsOf('n2')).toEqual({ name: 'asa-1', ranges, portsOpen: false });
+    });
+
+    it('are not known for a machine that has not said, or one not in the mesh', () => {
+      reply = withPorts(false);
+      const nodes = create();
+
+      expect(nodes.serverPortsOf('n1')).toBeNull();
+      expect(nodes.serverPortsOf('gone')).toBeNull();
+    });
+
+    it('says when a machine\'s firewall changes', () => {
+      reply = withPorts(false);
+      const nodes = create();
+      const heard = jasmine.createSpy('changed');
+      nodes.changed$.subscribe(heard);
+      heard.calls.reset();
+
+      channels['mesh-status'].next(withPorts(true));
+
+      expect(nodes.serverPortsOf('n2')?.portsOpen).toBeTrue();
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // Players need a stable name to connect to, not whatever IP the panel was opened on.
   describe('the host players connect to', () => {
     const member = (nodeId: string, host: string) => ({ nodeId, name: nodeId, status: 'alive', maintenance: false, connected: true, host });

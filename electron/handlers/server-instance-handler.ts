@@ -6,6 +6,7 @@ import { serverMonitoringService } from '../services/server-instance/server-moni
 import { serverManagementService } from '../services/server-instance/server-management.service';
 import { serverProcessService } from '../services/server-instance/server-process.service';
 import { automationService } from '../services/automation/automation.service';
+import { restartCountdowns } from '../services/automation/restart-countdown.service';
 import { activityLogService } from '../services/activity-log.service';
 import { identifySender, isDesktopWindow, SenderIdentity } from '../services/auth/permission-gate';
 import { filterInstancesForUser } from '../services/auth/pool-access';
@@ -135,6 +136,39 @@ onRequest('stop-all-instances', async (_payload, { sender, afterReply }) => {
     await others;
   });
   return { success: true, stopping: eligible.map(instance => instance.id) };
+});
+
+/** Stops every server in `ids` together, then starts them again in sidebar order, the start delay apart. */
+async function restartAllHere(ids: string[]): Promise<void> {
+  await serverLifecycleService.stopAllInstances(ids);
+  const { started } = await serverLifecycleService.startAllInstances(undefined, ids);
+  for (const id of started) await meshService.noteDesired(id, 'running');
+}
+
+// Catches mod updates, which ARK fetches as a server starts. Each machine restarts its own running
+// servers, at the same time as the others, after the same countdown.
+onRequest('restart-all-instances', async (payload, { sender, afterReply }) => {
+  const identity = identifySender(sender);
+  const warningMinutes = warningMinutesOf(payload);
+  const { localVisible, remote } = await planAll(identity);
+  const running = localVisible.map(instance => instance.id).filter(id => UP.has(serverProcessService.getNormalizedInstanceState(id)));
+  const actor = identity.user?.username || 'desktop';
+  afterReply(() => meshService.commandHosts('restart-all', remote, actor, { warningMinutes }).then(results => reportHosts(results, 'restart', sender)));
+  if (!warningMinutes) {
+    afterReply(() => restartAllHere(running));
+    return { success: true, restarting: running };
+  }
+  const dueAt = running.length ? restartCountdowns.begin(running, warningMinutes, true, restartAllHere) : null;
+  return { success: true, restarting: running, dueAt };
+});
+
+onRequest('cancel-restart-all', async (_payload, { sender, afterReply }) => {
+  const identity = identifySender(sender);
+  const { remote } = await planAll(identity);
+  const cancelled = restartCountdowns.cancelAll();
+  afterReply(() => meshService.commandHosts('cancel-restart-all', remote, identity.user?.username || 'desktop')
+    .then(results => reportHosts(results, 'cancel the restart of', sender)));
+  return { success: true, cancelled };
 });
 
 onRequest('force-stop-server-instance', async (payload, { sender }) => {
@@ -455,21 +489,53 @@ onRequest('reorder-server-instances', async payload => {
   return { success: true };
 }, { fallbackError: 'Failed to reorder server instances' });
 
-onRequest('restart-server-instance', async (payload, { sender }) => {
-  const { id } = payload;
-  const remote = await forwardRemote('restart', id, sender);
-  if (remote) return remote;
+/** Minutes of warning asked for: whole, and none for anything that is not a number. */
+function warningMinutesOf(payload: { warningMinutes?: unknown }): number {
+  return Math.max(0, Math.floor(Number(payload?.warningMinutes) || 0));
+}
+
+/** Stops a server here and starts it again. */
+async function restartHere(id: string) {
   const stopped = await localRuntime.stop(id);
   if (!stopped.success) return { success: false, instanceId: id, error: stopped.error };
   const { onLog, onState } = getStandardEventCallbacks(id);
   const started = await localRuntime.start(id, onLog, onState);
   if (started.started) await meshService.noteDesired(id, 'running');
   return { success: started.started, instanceId: id, error: started.portError };
+}
+
+// With warningMinutes, the players hear the countdown a scheduled restart gives them first; it can be
+// cancelled until it ends. Without, it restarts now.
+onRequest('restart-server-instance', async (payload, { sender }) => {
+  const { id } = payload;
+  const warningMinutes = warningMinutesOf(payload);
+  const remote = await forwardRemote('restart', id, sender, warningMinutes ? { warningMinutes } : undefined);
+  if (remote) return remote;
+  if (warningMinutes) {
+    const dueAt = restartCountdowns.begin([id], warningMinutes, false, async ([serverId]) => { await restartHere(serverId); });
+    return { success: true, instanceId: id, dueAt };
+  }
+  return restartHere(id);
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
 
-async function forwardRemote(operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete', id: string, sender: MessageSender) {
+onRequest('cancel-server-restart', async (payload, { sender }) => {
+  const { id } = payload;
+  const remote = await forwardRemote('cancel-restart', id, sender);
+  if (remote) return remote;
+  return { success: restartCountdowns.cancel(id), instanceId: id };
+}, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
+
+/** The restarts counting down here. Those on other machines arrive as their countdowns start. */
+onRequest('get-pending-restarts', () => ({ pending: restartCountdowns.pending() }));
+
+async function forwardRemote(
+  operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'cancel-restart' | 'delete',
+  id: string,
+  sender: MessageSender,
+  args?: Record<string, unknown>
+) {
   const actor = identifySender(sender).user?.username || 'desktop';
-  const remote = await meshService.forwardIfRemote(operation, id, actor);
+  const remote = args ? await meshService.forwardIfRemote(operation, id, actor, args) : await meshService.forwardIfRemote(operation, id, actor);
   if (!remote) return null;
   return { success: remote.success, instanceId: id, error: remote.error };
 }

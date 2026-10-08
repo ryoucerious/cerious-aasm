@@ -27,6 +27,7 @@ import { collectCapabilities, ensureNodeIdentity, nodeIdentityPath, readNodeIden
 import type { InstanceConfig } from '../../types/server-instance.types';
 import { localRuntime } from '../runtime/local-runtime';
 import { ArkApiAction, isReadOnlyArkApiAction, runArkApiAction } from '../ark-api-actions';
+import { restartCountdowns } from '../automation/restart-countdown.service';
 import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
 import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateFingerprint, certificateIssuedBy, certificateSerial, normalizeSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
@@ -67,11 +68,11 @@ const QUERY_TIMEOUT_MS = 15_000;
 /** Live per-server events the hosting node relays, so another node can show the server live. */
 const RELAY_CHANNELS = new Set([
   'server-instance-log', 'server-instance-state', 'server-instance-players', 'server-instance-memory',
-  'server-instance-cpu', 'rcon-status', 'clear-server-instance-logs', 'server-move-progress'
+  'server-instance-cpu', 'rcon-status', 'clear-server-instance-logs', 'server-move-progress', 'server-restart-pending'
 ]);
 /** Commands about one server. The node running one must be the node hosting that server. */
 const SERVER_COMMANDS = new Set<ControlCommand['operation']>([
-  'start', 'stop', 'force-stop', 'restart', 'delete', 'move', 'rcon', 'connect-rcon', 'disconnect-rcon', 'save-ini', 'set-ownership'
+  'start', 'stop', 'force-stop', 'restart', 'cancel-restart', 'delete', 'move', 'rcon', 'connect-rcon', 'disconnect-rcon', 'save-ini', 'set-ownership'
 ]);
 /** The figure each live channel reports, kept for a server on another node. */
 const LIVE_FIGURES: Record<string, 'players' | 'cpu' | 'memory'> = {
@@ -1299,6 +1300,13 @@ export class MeshService {
         if (started.started) await this.noteDesired(current.serverId, 'running');
         return { success: started.started, error: started.portError };
       }
+      // With minutes of warning, the players hear the countdown a scheduled restart gives them first.
+      const warningMinutes = Math.max(0, Math.floor(Number(args.warningMinutes) || 0));
+      if (current.operation === 'restart' && warningMinutes) {
+        const dueAt = restartCountdowns.begin([current.serverId], warningMinutes, false, async ([id]) => { await this.restartHosted(id); });
+        return { success: true, detail: { dueAt } };
+      }
+      if (current.operation === 'cancel-restart') return { success: restartCountdowns.cancel(current.serverId) };
       if (current.operation === 'stop' || current.operation === 'restart') {
         const stopped = await localRuntime.stop(current.serverId);
         if (!stopped.success) return { success: false, error: stopped.error };
@@ -1320,6 +1328,8 @@ export class MeshService {
       if (current.operation === 'move') return this.moveOut(current.serverId, current.destinationNodeId);
       if (current.operation === 'save-config') return this.saveHosted(current.instance || {});
       if (current.operation === 'start-all' || current.operation === 'stop-all') return this.allHere(current.operation, current.serverIds || []);
+      if (current.operation === 'restart-all') return this.restartAllHere(current.serverIds || [], warningMinutes);
+      if (current.operation === 'cancel-restart-all') return { success: true, detail: { cancelled: restartCountdowns.cancelAll() } };
       if (current.operation === 'delete') {
         const deleted = await this.deleteHostedServer(current.serverId, () => localRuntime.deleteInstance(current.serverId));
         if (deleted.success) void serverInstanceService.broadcastInstances();
@@ -1489,9 +1499,10 @@ export class MeshService {
 
   /** Start All or Stop All on other nodes: one command per node, naming its servers. */
   async commandHosts(
-    operation: 'start-all' | 'stop-all',
+    operation: 'start-all' | 'stop-all' | 'restart-all' | 'cancel-restart-all',
     remote: Map<string, string[]>,
-    actor: string
+    actor: string,
+    args?: Record<string, unknown>
   ): Promise<Array<{ nodeId: string; nodeName: string; result: CommandResult }>> {
     if (!this.repo || remote.size === 0) return [];
     const decision = partitionDecision(this.quorum, 'remote-command');
@@ -1508,12 +1519,43 @@ export class MeshService {
         operation,
         serverId: nodeId,
         serverIds,
+        ...(args ? { args } : {}),
         expiry: Date.now() + 60_000,
         issuedAt: Date.now(),
         expectedRevision: null
       }, ALL_TIMEOUT_MS);
       return { nodeId, nodeName, result };
     }));
+  }
+
+  /** Stops a server hosted here and starts it again: the end of a restart's countdown. */
+  private async restartHosted(id: string): Promise<void> {
+    const stopped = await localRuntime.stop(id);
+    if (!stopped.success) {
+      console.error(`[mesh] Could not stop ${id} to restart it: ${stopped.error}`);
+      return;
+    }
+    const started = await localRuntime.start(id);
+    if (started.started) await this.noteDesired(id, 'running');
+  }
+
+  /**
+   * Host side of restart-all: the listed servers running here stop together, then start again in
+   * sidebar order, the start delay apart. After the countdown when there are minutes of warning.
+   */
+  private async restartAllHere(ids: string[], warningMinutes: number): Promise<CommandResult> {
+    const running = ids.filter(id => UP_STATES.has(localRuntime.state(id)));
+    const restart = async (restarting: string[]) => {
+      await localRuntime.stopAll(restarting);
+      const { started } = await localRuntime.startAll(restarting);
+      for (const id of started) await this.noteDesired(id, 'running');
+    };
+    if (warningMinutes) {
+      const dueAt = running.length ? restartCountdowns.begin(running, warningMinutes, true, restart) : null;
+      return { success: true, detail: { restarting: running, dueAt } };
+    }
+    await restart(running);
+    return { success: true, detail: { restarting: running } };
   }
 
   /** Host side of start-all and stop-all. Each server that changed is recorded as desired. */
@@ -2788,10 +2830,11 @@ export class MeshService {
         if (server.nodeId !== nodeId) continue;
         try {
           if (promoteStaged(server.serverId)) {
-            // Its ports are free on the machine it left; here a server may already use them.
-            const ports = await localRuntime.takeFreePortsIfShared(server.serverId);
+            // Its ports were free on the machine it left; here a server may already use them, or
+            // this machine's firewall may open other ranges.
+            const ports = await localRuntime.takeFreePortsIfNeeded(server.serverId);
             if (ports) {
-              console.log(`[mesh] ${server.name} moved here onto ports a server here uses; it now uses game ${ports.gamePort}, query ${ports.queryPort}, RCON ${ports.rconPort}.`);
+              console.log(`[mesh] ${server.name} moved here onto ports a server here uses, or outside this machine's server ports; it now uses game ${ports.gamePort}, query ${ports.queryPort}, RCON ${ports.rconPort}.`);
             }
             void serverInstanceService.broadcastInstances();
           }

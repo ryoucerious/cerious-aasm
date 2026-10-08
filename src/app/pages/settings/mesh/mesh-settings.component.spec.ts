@@ -222,6 +222,24 @@ describe('MeshSettingsComponent', () => {
       expect(contact(3)).toBe('Never heard from');
     });
 
+    // A server moved onto a machine whose firewall keeps players out can't be reached, and nobody
+    // there may be at the machine to answer Windows.
+    it('warns about a machine whose firewall keeps players out of its server ports', async () => {
+      const ports = (portsOpen: boolean | null) => ({ capabilities: { serverPorts: { ranges: {}, portsOpen } } });
+      const page = await open(inMesh([
+        node('n1', 'PC 1', ports(false)),
+        node('n2', 'asa-1', ports(false)),
+        node('n3', 'Docker 1', ports(null)),
+        node('n4', 's001', ports(true))
+      ]));
+      const warning = (index: number) => cardAt(page, index).querySelector('.mesh-node-ports span')?.textContent?.trim();
+
+      expect(warning(0)).toBe('Windows Firewall keeps players out of the server ports here. Open them in Settings → Server ports.');
+      expect(warning(1)).toBe('Windows Firewall keeps players out of its server ports. Open them in Settings → Server ports on asa-1.');
+      expect(warning(2)).withContext('not known').toBeUndefined();
+      expect(warning(3)).toBeUndefined();
+    });
+
     // A machine's record holds '0' from its enrollment until its first heartbeat is written.
     it('says a machine has not reported its version yet, rather than Version 0', async () => {
       const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'asa-1', { version: '0', connected: false })]));

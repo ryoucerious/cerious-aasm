@@ -13,22 +13,20 @@
           <div class="automation-status-row">
             <div class="status-item-inline">
               <span class="status-label">Firewall Status:</span>
-              <span class="status-badge" [ngClass]="dockerPublished ? 'status-running' : 'status-stopping'">
-                {{ dockerPublished ? 'Managed by Docker' : 'Manual Configuration Required' }}
+              <span class="status-badge" [ngClass]="(dockerPublished && !otherMachine) || portsOpen === true ? 'status-running' : 'status-stopping'">
+                {{ statusLabel }}
               </span>
             </div>
             <div class="status-item-inline">
               <span class="status-label">Platform:</span>
-              <span class="status-badge status-stopping">
-                {{ dockerPublished ? 'Linux (Docker)' : dockerHost ? 'Linux (Docker, Host Networking)' : 'Linux' }}
-              </span>
+              <span class="status-badge status-stopping">{{ platformLabel }}</span>
             </div>
           </div>
         </div>
 
         <!-- Docker, published ports: Docker decides what is reachable, so show the ranges and
              check this server's ports against them instead of ufw commands. -->
-        <ng-container *ngIf="dockerPublished && docker as d">
+        <ng-container *ngIf="dockerPublished && !otherMachine && docker as d">
           <div class="form-group page-intro">
             <h4>Ports Published by Docker</h4>
             <p class="form-control-label desc">
@@ -89,6 +87,33 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
           </div>
         </ng-container>
 
+        <!-- Outside Docker's published ports: the server ports of the machine it runs on, which its
+             firewall opens once for every server (Settings → Server ports). -->
+        <div class="form-group page-intro machine-ports" *ngIf="(!dockerPublished || otherMachine) && portChecks.length">
+          <h4>This Server's Ports</h4>
+          <ul class="docker-port-checks">
+            <li *ngFor="let check of portChecks" [class.out-of-range]="!check.ok">
+              <i class="material-icons">{{ check.ok ? 'check_circle' : 'error' }}</i>
+              <span><strong>{{ check.label }}: </strong><span class="mono">{{ check.port }}</span> ({{ check.protocol }})</span>
+              <span class="docker-port-verdict" *ngIf="check.ok">inside {{ machineLabel }} server ports {{ formatRange(check.range) }}</span>
+              <span class="docker-port-verdict" *ngIf="!check.ok">
+                outside {{ machineLabel }} server ports {{ formatRange(check.range) }}, so its firewall won't let players reach it
+              </span>
+            </li>
+          </ul>
+          <div class="form-control-label desc" *ngIf="portsOutOfRange > 0">
+            Change the port in this server's settings to one inside the range, or widen the ranges in
+            Settings → Server ports{{ otherMachine ? ' on ' + otherMachine : '' }}.
+          </div>
+          <p class="machine-ports-firewall" *ngIf="portsOpen === true">
+            Windows Firewall lets players reach {{ machineLabel }} server ports.
+          </p>
+          <p class="machine-ports-firewall blocked" *ngIf="portsOpen === false">
+            Windows Firewall keeps players out of {{ machineLabel }} server ports. Open them in
+            Settings → Server ports{{ otherMachine ? ' on ' + otherMachine : '' }}: Windows asks for permission once.
+          </p>
+        </div>
+
         <div class="form-group page-intro" *ngIf="!dockerPublished">
           <h4>Server Port Configuration</h4>
           <div class="port-info">
@@ -109,7 +134,7 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
         </div>
 
         <!-- Native Linux, or Docker sharing the host network. -->
-        <div class="form-group page-intro" *ngIf="!dockerPublished">
+        <div class="form-group page-intro" *ngIf="showLinuxCommands">
           <h4>{{ dockerHost ? 'Host Firewall Configuration' : 'Linux Firewall Configuration' }}</h4>
           <div class="linux-firewall-instructions">
             <p *ngIf="dockerHost">

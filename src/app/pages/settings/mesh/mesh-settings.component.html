@@ -149,6 +149,9 @@
               <span class="mesh-node-contact" *ngIf="contactText(node)">{{ contactText(node) }}</span>
             </p>
             <p class="mesh-node-meta mesh-node-ark-update" *ngIf="arkUpdateText(node)">{{ arkUpdateText(node) }}</p>
+            <p class="mesh-node-meta mesh-node-ports" *ngIf="portsText(node)">
+              <i class="material-icons" aria-hidden="true">warning_amber</i><span>{{ portsText(node) }}</span>
+            </p>
           </div>
           <div class="mesh-node-status">
             <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>

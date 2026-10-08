@@ -39,6 +39,13 @@ describe('channel-permissions', () => {
   // Starting with the computer is a setting of this machine's app, like the web server's.
   it('lets whoever views settings see whether the app starts with the computer, and whoever manages them switch it', () => {
     expect(permissionForChannel('get-run-at-startup')).toBe('settings.view');
+    expect(permissionForChannel('get-server-ports')).toBe('settings.view');
+    expect(permissionForChannel('restart-all-instances')).toBe('servers.control');
+    expect(permissionForChannel('cancel-restart-all')).toBe('servers.control');
+    expect(permissionForChannel('cancel-server-restart')).toBe('servers.control');
+    expect(permissionForChannel('get-pending-restarts')).toBe('servers.view');
+    expect(permissionForChannel('set-server-ports')).toBe('settings.manage');
+    expect(permissionForChannel('open-server-ports-firewall')).toBe('settings.manage');
     expect(permissionForChannel('set-run-at-startup')).toBe('settings.manage');
   });
 

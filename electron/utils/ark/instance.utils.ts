@@ -5,7 +5,8 @@ import { getDefaultInstallDir } from '../platform.utils';
 import { loadGlobalConfig } from '../global-config.utils';
 import { validateInstanceId } from '../validation.utils';
 import { writeJsonAtomic } from '../fs.utils';
-import { findPortConflict, nextFreePortSet, type PortSet } from './port-sets';
+import { findPortConflict, nextFreePortsIn, portsOutsideRanges, type PortCarrier, type PortSet, type ServerPortRanges } from './port-sets';
+import { getServerPortRanges } from '../server-ports.utils';
 import { notifyInstancesChanged } from './instance-changes';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
@@ -91,19 +92,34 @@ export function getInstance(id: string) {
   return { ...readInstanceConfig(id), id };
 }
 
+/** A server's ports need moving when a server here uses one, or one is outside this machine's ranges. */
+function needsOtherPorts(server: PortCarrier, others: PortCarrier[], ranges: ServerPortRanges): boolean {
+  return !!findPortConflict(server, others) || portsOutsideRanges(server, ranges).length > 0;
+}
+
+function describeRanges({ game, query, rcon }: ServerPortRanges): string {
+  const range = (r: { start: number; end: number }) => (r.start === r.end ? `${r.start}` : `${r.start}–${r.end}`);
+  return `game ${range(game)}, query ${range(query)}, RCON ${range(rcon)}`;
+}
+
 /**
  * A server moved here from another machine keeps its ports unless a server here already uses
- * one: then it takes the next free set, as a new server would, so it can start. Returns the set
- * it took, or null when it kept its own (or no set is free).
+ * one, or one is outside this machine's ranges: then it takes the lowest free ports inside them,
+ * as a new server would, so it can start and be reached. Returns the ports it took, or null when
+ * it kept its own (or none are free).
  */
-export async function takeFreePortsIfShared(id: string): Promise<PortSet | null> {
+export async function takeFreePortsIfNeeded(id: string): Promise<PortSet | null> {
   const all = await getAllInstances();
   const self = all.find(inst => inst.id === id);
   if (!self) return null;
   const others = all.filter(inst => inst.id !== id);
-  if (!findPortConflict(self, others)) return null;
-  const free = nextFreePortSet(others);
-  if (!free) return null;
+  const { ranges } = getServerPortRanges();
+  if (!needsOtherPorts(self, others, ranges)) return null;
+  const free = nextFreePortsIn(ranges, others);
+  if (!free) {
+    console.warn(`[instance-utils] No ports are free in this machine's server ports (${describeRanges(ranges)}) for ${self.name || id}; it keeps its own.`);
+    return null;
+  }
   const saved = await saveInstance({ ...self, gamePort: free.gamePort, queryPort: free.queryPort, rconPort: free.rconPort });
   return saved.error !== undefined ? null : free;
 }
@@ -128,14 +144,18 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
     delete config[field];
   }
 
-  // A new server arrives with the default ports and takes the next free set. Shared ports never
-  // stop a save: two servers on one port can be kept, and only one of them run at a time, which
-  // starting checks. A server moved here from another machine comes with ports a server here
-  // may already use.
+  // A new server takes the lowest free ports inside this machine's ranges when its own are taken
+  // or outside them: the ranges are what the firewall opens. Shared ports never stop the save of
+  // an existing server: two servers on one port can be kept, and only one of them run at a time,
+  // which starting checks.
   const others = all.filter(inst => inst.id !== id);
-  if (!all.some(inst => inst.id === id) && findPortConflict(config, others)) {
-    const free = nextFreePortSet(others);
-    if (free) {
+  if (!all.some(inst => inst.id === id)) {
+    const { ranges } = getServerPortRanges();
+    if (needsOtherPorts(config, others, ranges)) {
+      const free = nextFreePortsIn(ranges, others);
+      if (!free) {
+        return { error: `No ports are left in this machine's server ports (${describeRanges(ranges)}). Widen them in Settings → Server ports.` };
+      }
       config.gamePort = free.gamePort;
       config.queryPort = free.queryPort;
       config.rconPort = free.rconPort;

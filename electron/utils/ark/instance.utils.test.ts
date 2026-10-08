@@ -9,7 +9,7 @@ import {
   getAllInstances,
   getInstance,
   saveInstance,
-  takeFreePortsIfShared,
+  takeFreePortsIfNeeded,
   deleteInstance,
   getInstanceSaveDir
 } from './instance.utils';
@@ -19,6 +19,7 @@ jest.mock('../fs.utils');
 jest.mock('../global-config.utils', () => ({
   loadGlobalConfig: jest.fn(() => ({ serverDataDir: '' }))
 }));
+import { loadGlobalConfig } from '../global-config.utils';
 
 const mockedFs = jest.mocked(fs);
 const mockedPath = jest.mocked(path);
@@ -332,21 +333,30 @@ describe('instance.utils', () => {
       );
     });
 
-    it('moves a new server onto the next free port set when its ports collide', async () => {
+    it('moves a new server onto the lowest free ports in this machine\'s ranges when its ports collide', async () => {
       onDisk(one);
 
       const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
-      expect(result).toEqual(expect.objectContaining({ gamePort: 7787, queryPort: 27025, rconPort: 27030 }));
-      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ gamePort: 7787 }));
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7779, queryPort: 27016, rconPort: 27021 }));
+      expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ gamePort: 7779 }));
     });
 
-    it('keeps the ports of a new server when nothing else uses them', async () => {
+    it('keeps the ports of a new server when they are free and inside the ranges', async () => {
       onDisk(one);
 
-      const result = await saveInstance({ name: 'New', gamePort: 7800, queryPort: 27100, rconPort: 27200 });
+      const result = await saveInstance({ name: 'New', gamePort: 7800, queryPort: 27025, rconPort: 27040 });
 
-      expect(result).toEqual(expect.objectContaining({ gamePort: 7800, queryPort: 27100, rconPort: 27200 }));
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7800, queryPort: 27025, rconPort: 27040 }));
+    });
+
+    // The ranges are what this machine's firewall opens: a port outside them can't be reached.
+    it('moves a new server whose ports are outside this machine\'s ranges inside them', async () => {
+      onDisk(one);
+
+      const result = await saveInstance({ name: 'New', gamePort: 7967, queryPort: 27015, rconPort: 27020 });
+
+      expect(result).toEqual(expect.objectContaining({ gamePort: 7779, queryPort: 27016, rconPort: 27021 }));
     });
 
     // Only one of them can run at a time, which starting checks. A server moved here from
@@ -360,33 +370,46 @@ describe('instance.utils', () => {
       expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(expect.stringContaining(`${two.id}/config.json`), expect.objectContaining({ gamePort: 7777 }));
     });
 
-    it('saves a new server with the ports it came with when every port set is taken', async () => {
-      const taken = Array.from({ length: 25 }, (_unused, index) => ({
-        id: `s${index}`, name: `S${index}`, gamePort: 7777 + index * 10, queryPort: 27015 + index * 10, rconPort: 27020 + index * 10
-      }));
-      onDisk(...taken);
+    it('refuses a new server when no ports are left in this machine\'s ranges', async () => {
+      const tight = { game: { start: 7777, end: 7778 }, query: { start: 27015, end: 27015 }, rcon: { start: 27020, end: 27020 } };
+      jest.mocked(loadGlobalConfig).mockImplementation(() => ({ serverDataDir: '', serverPorts: tight }) as any);
+      try {
+        onDisk(one);
 
-      const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+        const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
-      expect(result).toEqual(expect.objectContaining({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 }));
+        expect(result).toEqual({
+          error: 'No ports are left in this machine\'s server ports (game 7777–7778, query 27015, RCON 27020). Widen them in Settings → Server ports.'
+        });
+        expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
+      } finally {
+        jest.mocked(loadGlobalConfig).mockImplementation(() => ({ serverDataDir: '' }) as any);
+      }
     });
 
     // A server moved onto a machine whose server already used 7777 kept 7777 and could not start.
     describe('a server moved here', () => {
-      it('takes the next free port set when a server here uses its ports', async () => {
+      it('takes the lowest free ports here when a server here uses its ports', async () => {
         onDisk(one, { id: 'moved', name: 'Moved', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
-        await expect(takeFreePortsIfShared('moved')).resolves.toEqual(expect.objectContaining({ gamePort: 7787, queryPort: 27025, rconPort: 27030 }));
+        await expect(takeFreePortsIfNeeded('moved')).resolves.toEqual(expect.objectContaining({ gamePort: 7779, queryPort: 27016, rconPort: 27021 }));
         expect(mockedWriteJsonAtomic).toHaveBeenCalledWith(
           `${mockInstancesBaseDir}/moved/config.json`,
-          expect.objectContaining({ id: 'moved', gamePort: 7787, queryPort: 27025, rconPort: 27030 })
+          expect.objectContaining({ id: 'moved', gamePort: 7779, queryPort: 27016, rconPort: 27021 })
         );
       });
 
-      it('keeps its own ports when no server here uses them', async () => {
+      // Machines can have different ranges: the one it left may have opened other ports.
+      it('takes ports inside this machine\'s ranges when it arrives with ports outside them', async () => {
+        onDisk(one, { id: 'moved', name: 'Moved', gamePort: 7967, queryPort: 27025, rconPort: 27030 });
+
+        await expect(takeFreePortsIfNeeded('moved')).resolves.toEqual(expect.objectContaining({ gamePort: 7779, queryPort: 27016, rconPort: 27021 }));
+      });
+
+      it('keeps its own ports when they are free here and inside the ranges', async () => {
         onDisk(one, { id: 'moved', name: 'Moved', gamePort: 7787, queryPort: 27025, rconPort: 27030 });
 
-        await expect(takeFreePortsIfShared('moved')).resolves.toBeNull();
+        await expect(takeFreePortsIfNeeded('moved')).resolves.toBeNull();
         expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
       });
     });

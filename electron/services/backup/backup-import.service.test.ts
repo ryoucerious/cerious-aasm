@@ -11,7 +11,8 @@ import * as instanceUtils from '../../utils/ark/instance.utils';
 import { BackupImportService } from './backup-import.service';
 
 jest.mock('../../utils/global-config.utils', () => ({ loadGlobalConfig: jest.fn() }));
-jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn() }));
+// A new server takes its ports from this machine's ranges, which come from Docker when it runs there.
+jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn(), isRunningInDocker: jest.fn(() => false) }));
 
 const { loadGlobalConfig } = jest.requireMock('../../utils/global-config.utils') as { loadGlobalConfig: jest.Mock };
 

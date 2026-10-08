@@ -158,9 +158,9 @@ export class LocalRuntime {
     }
   }
 
-  /** A server moved here takes the next free port set when a server here already uses its ports. */
-  takeFreePortsIfShared(id: string) {
-    return instanceUtils.takeFreePortsIfShared(id);
+  /** A server moved here takes free ports in this machine's ranges when its own are taken or outside them. */
+  takeFreePortsIfNeeded(id: string) {
+    return instanceUtils.takeFreePortsIfNeeded(id);
   }
 
   appliedRevision(id: string): number {

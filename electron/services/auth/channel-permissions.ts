@@ -47,6 +47,9 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-log-file-path': null,
   'get-run-at-startup': PERMISSIONS.SETTINGS_VIEW,
   'set-run-at-startup': PERMISSIONS.SETTINGS_MANAGE,
+  'get-server-ports': PERMISSIONS.SETTINGS_VIEW,
+  'set-server-ports': PERMISSIONS.SETTINGS_MANAGE,
+  'open-server-ports-firewall': PERMISSIONS.SETTINGS_MANAGE,
   'get-host-resources': null,
   'get-player-history': null,
   'check-firewall-enabled': null,
@@ -71,6 +74,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'force-stop-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
   'start-all-instances': PERMISSIONS.SERVERS_CONTROL,
   'stop-all-instances': PERMISSIONS.SERVERS_CONTROL,
+  'restart-all-instances': PERMISSIONS.SERVERS_CONTROL,
+  'cancel-restart-all': PERMISSIONS.SERVERS_CONTROL,
   'connect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
   'disconnect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
 
@@ -206,6 +211,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'mesh-node-update': PERMISSIONS.APP_INSTALL,
   'backup-mesh': PERMISSIONS.MESH_CONFIGURE,
   'restart-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
+  'cancel-server-restart': byId(PERMISSIONS.SERVERS_CONTROL),
+  'get-pending-restarts': PERMISSIONS.SERVERS_VIEW,
   'get-mesh-audit': PERMISSIONS.MESH_VIEW
 };
 

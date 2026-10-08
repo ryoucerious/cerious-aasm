@@ -6,7 +6,7 @@ jest.unmock('crypto');
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ensureNodeIdentity, readNodeIdentity } from './node-identity';
+import { collectCapabilities, ensureNodeIdentity, readNodeIdentity } from './node-identity';
 
 jest.mock('../../utils/platform.utils', () => ({
   getDefaultInstallDir: jest.fn(),
@@ -15,7 +15,16 @@ jest.mock('../../utils/platform.utils', () => ({
   isRunningInDocker: jest.fn(() => false)
 }));
 
+jest.mock('../server-ports.service', () => ({ serverPortsService: { portsOpen: jest.fn(() => null) } }));
+jest.mock('../../utils/server-ports.utils', () => ({
+  getServerPortRanges: jest.fn(() => ({
+    ranges: { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } },
+    source: 'settings'
+  }))
+}));
+
 import { getDefaultInstallDir } from '../../utils/platform.utils';
+import { serverPortsService } from '../server-ports.service';
 
 describe('node identity', () => {
   let dir: string;
@@ -27,6 +36,17 @@ describe('node identity', () => {
 
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A server moved onto a machine whose firewall keeps players out can't be reached: the others
+  // show it on that machine's card.
+  it('tells the others which ports its servers take, and whether its firewall lets players in', () => {
+    jest.mocked(serverPortsService.portsOpen).mockReturnValue(false);
+
+    expect(collectCapabilities().serverPorts).toEqual({
+      ranges: { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } },
+      portsOpen: false
+    });
   });
 
   it('creates a local node id without a mesh id and does not start a store', () => {
