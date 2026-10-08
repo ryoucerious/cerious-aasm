@@ -54,17 +54,36 @@ function clearStuckArkManifest(installDir: string): void {
   }
 }
 
+/**
+ * SteamCMD's "Update state (0x61) downloading, progress: 42.57 (bytes / total)" lines, by the
+ * state's name. Downloading and staging share one count: an update went to staging a few seconds
+ * in, and while only downloading was read the percentage on screen stopped there. Checking the
+ * files already there comes first; verifying and committing come after the download, with counts
+ * of their own, so the bar stays full and the message says how each is going. The newest line wins
+ * when one chunk holds several.
+ */
 function parseSteamCmdProgress(chunk: string): InstallProgress | null {
-  if (chunk.includes('Update state (0x61) downloading')) {
-    const match = /progress: (\d+(?:\.\d+)?)/i.exec(chunk);
-    if (!match) return null;
-    const percent = Math.min(parseFloat(match[1]), 100);
-    return { percent: Math.floor(percent), step: 'downloading', message: `Downloading Ark Server (${percent.toFixed(1)}%)` };
+  const lines = [...chunk.matchAll(/Update state \(0x[0-9a-f]+\) ([a-z ]+?), progress: (\d+(?:\.\d+)?)/gi)];
+  const newest = lines[lines.length - 1];
+  if (!newest) return null;
+  const state = newest[1].toLowerCase();
+  const progress = Math.min(parseFloat(newest[2]), 100);
+  const shown = `${progress.toFixed(1)}%`;
+  switch (state) {
+    case 'downloading':
+    case 'staging':
+      return { percent: Math.floor(progress), step: 'downloading', message: `Downloading Ark Server (${shown})` };
+    case 'verifying update':
+      return { percent: 100, step: 'downloading', message: `Verifying Ark Server installation (${shown})` };
+    case 'committing':
+      return { percent: 100, step: 'downloading', message: `Finishing Ark Server installation (${shown})` };
+    case 'verifying install':
+      return { percent: 0, step: 'downloading', message: `Checking the installed files (${shown})` };
+    case 'preallocating':
+      return { percent: 0, step: 'downloading', message: `Making room for the download (${shown})` };
+    default:
+      return null;
   }
-  if (chunk.includes('Update state (0x81) verifying')) {
-    return { percent: 100, step: 'downloading', message: 'Verifying Ark Server installation...' };
-  }
-  return null;
 }
 
 export function isArkServerInstalled(): boolean {

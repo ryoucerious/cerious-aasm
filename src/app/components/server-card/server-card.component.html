@@ -2,7 +2,7 @@
   <div class="server-card-hero" [style.background-image]="visual.layered">
     <div class="server-card-hero-shade"></div>
     <span class="server-card-drag material-icons" data-tooltip="Drag to reorder" aria-label="Drag to reorder">drag_indicator</span>
-    <div class="server-card-title">
+    <div class="server-card-title" *ngIf="view !== 'list'">
       <div class="server-card-name-row">
         <h3 class="server-card-name" [attr.data-tooltip]="server.name">{{ server.name }}</h3>
         <span class="status-badge card-status" [ngClass]="status.cssClass" [attr.data-tooltip]="status.label">{{ status.label }}</span>
@@ -12,6 +12,14 @@
   </div>
 
   <div class="server-card-body">
+    <!-- In a list row the picture is a thumbnail, so the name sits beside it rather than on it. -->
+    <div class="server-card-list-title" *ngIf="view === 'list'">
+      <div class="server-card-name-row">
+        <h3 class="server-card-name" [attr.data-tooltip]="server.name">{{ server.name }}</h3>
+        <span class="status-badge card-status" [ngClass]="status.cssClass" [attr.data-tooltip]="status.label">{{ status.label }}</span>
+      </div>
+      <div class="server-card-map" [attr.data-tooltip]="listMeta">{{ listMeta }}</div>
+    </div>
     <div class="server-card-details" *ngIf="sessionName || showOperator || showAssignee || connectAddress || nodeLabel">
       <div class="server-card-details-main">
         <div class="server-card-session" *ngIf="sessionName" [attr.data-tooltip]="sessionName">

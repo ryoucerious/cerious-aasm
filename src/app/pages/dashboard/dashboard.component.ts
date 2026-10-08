@@ -49,6 +49,10 @@ interface MeshNodeView {
   host?: string;
   /** From its last heartbeat; null once that is stale. */
   resources?: HostResources | null;
+  connected?: boolean;
+  version?: string;
+  /** When this machine last heard from it; null when never. */
+  lastContactAt?: number | null;
 }
 
 interface MeshStatusView {
@@ -72,6 +76,9 @@ export interface NodeResourceRow {
   memoryLabel: string;
   diskPercent: number;
   diskLabel: string;
+  connected: boolean;
+  /** Under the name: how many of its servers run, its version, and when last heard from if it cannot be reached. */
+  detail: string;
 }
 
 export type ServerFilter = 'all' | 'online' | 'offline';
@@ -218,7 +225,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
       this.meshNodes = (status.nodes || []).filter(node => node.status !== 'removed');
       this.localNodeId = status.nodeId || null;
-      this.meshBanner = status.degraded ? 'Mesh Degraded. Local servers can still be controlled.' : (status.warning || '');
+      // A degraded mesh shows in the top bar, on every page.
+      this.meshBanner = status.warning || '';
       this.machineOptions = [{ value: 'all', label: 'All machines' }, ...this.meshNodes.map(node => ({ value: node.nodeId, label: node.name }))];
       // A machine since removed would leave nothing to show and no way to pick it again.
       if (this.machine !== 'all' && !this.meshNodes.some(node => node.nodeId === this.machine)) this.machine = 'all';
@@ -289,11 +297,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
   onFilterChange(): void {
     this.refreshVisible();
     this.saveViewPreferences();
+    this.cdr.markForCheck();
   }
 
   onSortChange(): void {
     this.refreshVisible();
     this.saveViewPreferences();
+    this.cdr.markForCheck();
   }
 
   onSearchChange(): void {
@@ -401,12 +411,34 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /** Every member's CPU, memory and disk, this machine's as it is polled here. Empty unless the mesh has another member. */
+  /** The machines of the mesh, for the Machines card; empty outside a mesh. */
   get resourceNodes(): NodeResourceRow[] {
-    if (this.meshNodes.length < 2) return [];
+    if (!this.meshNodes.length) return [];
     return this.meshNodes.map(node => {
       const local = node.nodeId === this.localNodeId;
-      return resourceRow(node.nodeId, node.name, local, local ? this.hostResources : node.resources || null);
+      const connected = local || !!node.connected;
+      return {
+        ...resourceRow(node.nodeId, node.name, local, local ? this.hostResources : node.resources || null),
+        connected,
+        detail: this.machineDetail(node, connected)
+      };
     });
+  }
+
+  private machineDetail(node: MeshNodeView, connected: boolean): string {
+    const servers = this.servers.filter(server => this.machineOf(server) === node.nodeId);
+    const running = servers.filter(server => LiveServersService.isOnline(server)).length;
+    const parts = [servers.length ? `${running} of ${servers.length} server${servers.length === 1 ? '' : 's'} running` : 'No servers'];
+    // A machine's record holds '0' until its first heartbeat is written.
+    if (node.version && node.version !== '0') parts.push(`Version ${node.version}`);
+    if (!connected && node.lastContactAt !== undefined) {
+      parts.push(node.lastContactAt === null ? 'Never heard from' : `Last contact ${formatRelativeTime(node.lastContactAt, this.now)}`);
+    }
+    return parts.join(' · ');
+  }
+
+  openMeshSettings(): void {
+    this.settingsDrawer.open('mesh');
   }
 
   trackNode(_index: number, node: NodeResourceRow): string {
@@ -660,13 +692,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return bar.server.id;
   }
 
+  /** Server Uptime shows the longest-running few until asked for every server. */
+  showAllUptime = false;
+  readonly uptimeTop = UPTIME_TOP;
+
+  /** The servers Server Uptime is about: those on the machine chosen for the server list. */
+  private get uptimeServers(): ServerInstance[] {
+    return this.filteringByMachine ? this.servers.filter(server => this.machineOf(server) === this.machine) : this.servers;
+  }
+
+  get uptimeTotal(): number {
+    return this.uptimeServers.length;
+  }
+
+  toggleUptime(): void {
+    this.showAllUptime = !this.showAllUptime;
+    this.cdr.markForCheck();
+  }
+
+  /** Longest-running first; with many servers a list in the sidebar's order said little. */
   get uptimeBars(): { server: ServerInstance; percent: number; label: string }[] {
-    const uptimes = this.servers.map(server => ({
+    const uptimes = this.uptimeServers.map(server => ({
       server,
       ms: LiveServersService.isOnline(server) && server.startedAt ? Math.max(0, this.now - server.startedAt) : 0
-    }));
+    })).sort((a, b) => b.ms - a.ms);
     const max = Math.max(1, ...uptimes.map(item => item.ms));
-    return uptimes.map(item => ({
+    return (this.showAllUptime ? uptimes : uptimes.slice(0, UPTIME_TOP)).map(item => ({
       server: item.server,
       percent: item.ms > 0 ? Math.max(4, (item.ms / max) * 100) : 0,
       label: item.ms > 0 ? formatUptime(this.now - item.ms, this.now) : '0m'
@@ -728,6 +779,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 }
 
+/** How many servers Server Uptime shows before "Show all". */
+const UPTIME_TOP = 10;
+
 function cpuPercentOf(resources: HostResources | null | undefined): number {
   return resources ? Math.max(0, Math.min(100, resources.cpuPercent)) : 0;
 }
@@ -746,7 +800,7 @@ function diskLabelOf(resources: HostResources | null | undefined): string {
   return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
 }
 
-function resourceRow(nodeId: string, name: string, local: boolean, resources: HostResources | null): NodeResourceRow {
+function resourceRow(nodeId: string, name: string, local: boolean, resources: HostResources | null): Omit<NodeResourceRow, 'connected' | 'detail'> {
   return {
     nodeId,
     name,

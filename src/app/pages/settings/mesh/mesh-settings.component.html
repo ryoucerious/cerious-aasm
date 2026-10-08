@@ -146,6 +146,7 @@
             <p class="mesh-node-meta">
               <span>{{ versionText(node) }}</span>
               <span class="mesh-node-address" *ngIf="node.address">{{ addressText(node.address) }}</span>
+              <span class="mesh-node-contact" *ngIf="contactText(node)">{{ contactText(node) }}</span>
             </p>
             <p class="mesh-node-meta mesh-node-ark-update" *ngIf="arkUpdateText(node)">{{ arkUpdateText(node) }}</p>
           </div>

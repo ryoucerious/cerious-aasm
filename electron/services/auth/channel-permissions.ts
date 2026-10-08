@@ -45,6 +45,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   // Reads every signed-in user needs
   'get-system-info': null,
   'get-log-file-path': null,
+  'get-run-at-startup': PERMISSIONS.SETTINGS_VIEW,
+  'set-run-at-startup': PERMISSIONS.SETTINGS_MANAGE,
   'get-host-resources': null,
   'get-player-history': null,
   'check-firewall-enabled': null,

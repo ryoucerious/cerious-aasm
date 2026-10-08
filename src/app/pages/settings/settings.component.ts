@@ -266,7 +266,46 @@ export class SettingsPageComponent implements OnInit {
     this.settingsDrawer.close();
   }
 
+  /** Whether this machine's app starts when someone logs in to it; null until the machine says. */
+  runAtStartup: { supported: boolean; enabled: boolean } | null = null;
+
+  onRunAtStartupChange(event: Event): void {
+    const box = event.target as HTMLInputElement;
+    const enabled = box.checked;
+    this.messaging.sendMessage<{ supported?: boolean; enabled?: boolean }>('set-run-at-startup', { enabled })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: reply => {
+          this.runAtStartup = { supported: !!reply?.supported, enabled: !!reply?.enabled };
+          // The box shows what the machine did: the click alone left it on when the change failed.
+          box.checked = this.runAtStartup.enabled;
+          if (this.runAtStartup.enabled !== enabled) {
+            this.notification.error('Could not change whether the app starts with this computer.', 'Startup');
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.notification.error('Could not change whether the app starts with this computer.', 'Startup');
+          this.loadRunAtStartup();
+        }
+      });
+  }
+
+  private loadRunAtStartup(): void {
+    this.messaging.sendMessage<{ supported?: boolean; enabled?: boolean }>('get-run-at-startup', {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: reply => {
+          this.runAtStartup = reply ? { supported: !!reply.supported, enabled: !!reply.enabled } : null;
+          this.cdr.markForCheck();
+        },
+        // The switch stays hidden.
+        error: () => undefined
+      });
+  }
+
   private loadSystemInfo(): void {
+    this.loadRunAtStartup();
     this.messaging.sendMessage<SystemInfoReply>('get-system-info', {}).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: info => {
         this.backendNodeVersion = info?.nodeVersion || null;

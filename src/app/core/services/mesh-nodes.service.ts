@@ -21,6 +21,25 @@ interface MeshStatusMembers {
   /** This machine. */
   nodeId?: string | null;
   nodes?: MeshMember[];
+  /** Too few machines can be reached for the mesh to agree on a change. */
+  degraded?: boolean;
+  voterCount?: number;
+  /** In a mesh, not yet back in touch with it after a restart. */
+  reconnecting?: boolean;
+  /** Every machine this one reaches refuses it: the others removed it. */
+  removedFromMesh?: boolean;
+}
+
+/**
+ * How the mesh stands, in a word and a count: every machine reachable, only some while the
+ * mesh can still agree, too few to agree, this machine reconnecting, or removed by the others.
+ */
+export interface MeshHealth {
+  state: 'healthy' | 'partial' | 'degraded' | 'reconnecting' | 'removed';
+  reachable: number;
+  total: number;
+  /** How many must be reached for the mesh to agree on a change: a majority. */
+  needed: number;
 }
 
 /** A machine a server can be moved to. */
@@ -38,6 +57,7 @@ export interface MoveDestination {
 export class MeshNodesService implements OnDestroy {
   private members: MeshMember[] = [];
   private localNodeId: string | null = null;
+  private meshHealth: MeshHealth | null = null;
   private fingerprint = '';
   private readonly changes = new BehaviorSubject<void>(undefined);
   private readonly subs: Subscription[] = [];
@@ -58,6 +78,11 @@ export class MeshNodesService implements OnDestroy {
   /** Emits whenever a name, or what a machine can take, may have changed. */
   get changed$(): Observable<void> {
     return this.changes.asObservable();
+  }
+
+  /** How the mesh stands; null outside a mesh. */
+  get health(): MeshHealth | null {
+    return this.meshHealth;
   }
 
   /** The machine's name; empty outside a mesh or for a machine no longer in it. */
@@ -121,12 +146,27 @@ export class MeshNodesService implements OnDestroy {
     if (!status || typeof status.enabled !== 'boolean') return;
     const members = status.enabled ? (status.nodes || []) : [];
     const localNodeId = status.enabled ? status.nodeId || null : null;
-    const fingerprint = JSON.stringify([localNodeId, members.map(member =>
+    const health = healthOf(status, members);
+    const fingerprint = JSON.stringify([localNodeId, health, members.map(member =>
       [member.nodeId, member.name, member.status, !!member.maintenance, !!member.connected, member.host || ''])]);
     if (fingerprint === this.fingerprint) return;
     this.fingerprint = fingerprint;
     this.members = members;
     this.localNodeId = localNodeId;
+    this.meshHealth = health;
     this.changes.next();
   }
+}
+
+function healthOf(status: MeshStatusMembers, members: MeshMember[]): MeshHealth | null {
+  if (!status.enabled) return status.reconnecting ? { state: 'reconnecting', reachable: 0, total: 0, needed: 0 } : null;
+  const current = members.filter(member => member.status !== 'removed');
+  const total = status.voterCount || current.length;
+  const reachable = current.filter(member => member.connected).length;
+  const needed = Math.floor(total / 2) + 1;
+  const state = status.removedFromMesh ? 'removed'
+    : status.degraded ? 'degraded'
+    : reachable < current.length ? 'partial'
+    : 'healthy';
+  return { state, reachable, total, needed };
 }

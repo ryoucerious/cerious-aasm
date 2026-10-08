@@ -647,6 +647,34 @@ describe('MeshService', () => {
   });
 
   // The machine that was forced out, back again: the others refuse it, and Leave works without them.
+  // The mesh page said Connected or Unreachable, but not since when.
+  describe('last contact with each machine', () => {
+    const PEER = '22222222-2222-4222-8222-222222222222';
+    const QUIET = '33333333-3333-4333-8333-333333333333';
+    const quietRecordedAt = 1_700_000_000_000;
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+      await repo.upsertNode({ ...nodeRow(PEER, '2', 'https://10.0.0.2:4747'), lastSeen: quietRecordedAt - 60_000 });
+      await repo.upsertNode({ ...nodeRow(QUIET, '3', 'https://10.0.0.3:4747'), lastSeen: quietRecordedAt });
+      jest.mocked(peerRequest).mockRejectedValue(new Error('connect ETIMEDOUT'));
+      await service.resumeIfJoined();
+    });
+
+    it('is now for this machine, its last heartbeat for one heard from, and its last record for one not heard from', async () => {
+      jest.mocked(startPeerServer).mock.calls[0][1].onHeartbeat(PEER, Date.now());
+      const heardAt = Date.now();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      const nodes = (await service.status()).nodes as Array<NodeRecord & { lastContactAt?: number | null }>;
+      const lastContact = (nodeId: string) => nodes.find(node => node.nodeId === nodeId)?.lastContactAt;
+
+      expect(lastContact(LOCAL)).toBe(Date.now());
+      expect(lastContact(PEER)).toBe(heardAt);
+      expect(lastContact(QUIET)).toBe(quietRecordedAt);
+    });
+  });
+
   describe('a machine the others removed', () => {
     const PEER = '22222222-2222-4222-8222-222222222222';
 

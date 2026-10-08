@@ -204,6 +204,23 @@ describe('MeshSettingsComponent', () => {
       expect(cardAt(page, 1).querySelector('.mesh-node-menu-note')?.textContent?.trim()).toBe('Change address waits until asa-1 can be reached.');
     });
 
+    // Connected or Unreachable said nothing about since when.
+    it('says when each other machine was last heard from', async () => {
+      const hour = 3600_000;
+      const page = await open(inMesh([
+        node('n1', 'PC 1', { lastContactAt: Date.now() }),
+        node('n2', 'asa-1', { connected: false, lastContactAt: Date.now() - 3 * hour }),
+        node('n3', 'Docker 1', { lastContactAt: Date.now() - 5_000 }),
+        node('n4', 's001', { connected: false, lastContactAt: null })
+      ]));
+      const contact = (index: number) => cardAt(page, index).querySelector('.mesh-node-contact')?.textContent?.trim();
+
+      expect(contact(0)).withContext('this machine').toBeUndefined();
+      expect(contact(1)).toBe('Last contact 3 hours ago');
+      expect(contact(2)).toBe('Last contact just now');
+      expect(contact(3)).toBe('Never heard from');
+    });
+
     // A machine's record holds '0' from its enrollment until its first heartbeat is written.
     it('says a machine has not reported its version yet, rather than Version 0', async () => {
       const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'asa-1', { version: '0', connected: false })]));

@@ -36,7 +36,7 @@ if (isHeadlessMode && isLinux && !hasDisplay) {
   }
 }
 
-import { app, BrowserWindow, IpcMainEvent, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, IpcMainEvent, ipcMain, screen, shell } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -75,6 +75,7 @@ import { userDatabaseService } from './services/auth/user-database.service';
 import { scopeBroadcast } from './services/auth/pool-broadcast';
 import { cleanupAllRconConnections } from './utils/rcon.utils';
 import { loadGlobalConfig } from './utils/global-config.utils';
+import { readWindowState, trackWindowState } from './utils/window-state.utils';
 import { releaseInstallLockIfHeld } from './utils/installer.utils';
 import { setArkUpdateService } from './handlers/ark-update-handler';
 import { initializeBackupSystem } from './handlers/backup-handler';
@@ -420,11 +421,16 @@ function createWindow(): void {
   }
   const isDev = process.env.NODE_ENV === 'development';
   const indexPath = path.join(app.getAppPath(), 'dist', 'cerious-aasm', 'browser', 'index.html');
+  // Where and how large it was left, kept to the monitors connected now.
+  const windowStateFile = path.join(app.getPath('userData'), 'window-state.json');
+  const sizes = { width: 1024, height: 768, minWidth: 940, minHeight: 600 };
+  const saved = readWindowState(windowStateFile, screen.getAllDisplays().map(display => display.workArea), sizes);
   const win = new BrowserWindow({
-    width: 1024,
-    height: 768,
-    minWidth: 940,
-    minHeight: 600,
+    ...(saved.x !== undefined && saved.y !== undefined ? { x: saved.x, y: saved.y } : {}),
+    width: saved.width,
+    height: saved.height,
+    minWidth: sizes.minWidth,
+    minHeight: sizes.minHeight,
     // The app draws its own title bar (see WindowControlsComponent), so the native frame
     // is off. The window stays resizable; Electron keeps the invisible resize border.
     frame: false,
@@ -439,6 +445,8 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  if (saved.maximized) win.maximize();
+  trackWindowState(win, windowStateFile);
 
   messagingService.addWebContents(win.webContents);
   registerWindowControlHandlers(win);

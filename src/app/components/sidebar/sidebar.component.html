@@ -1,11 +1,12 @@
 <nav class="sidenav" aria-label="Main navigation">
-  <div class="sidenav-scroll">
+  <!-- Not one scrolling column: the server list and the server's pages each scroll on their own. -->
+  <div class="sidenav-body">
     <button type="button" class="nav-item" [class.active]="isRouteActive('/dashboard')" (click)="goToDashboard()">
       <span class="material-icons">home</span>
       <span class="nav-item-label">Dashboard</span>
     </button>
 
-    <div class="nav-section">
+    <div class="nav-section sidenav-servers" [class.alone]="!selectedServer">
       <div class="nav-section-header" (click)="showServers = !showServers">
         <span class="nav-section-title">
           Servers <span class="nav-count" *ngIf="servers.length">{{ servers.length }}</span>
@@ -78,7 +79,7 @@
       </div>
     </div>
 
-    <div class="nav-section" *ngIf="selectedServer">
+    <div class="nav-section sidenav-pages" *ngIf="selectedServer">
       <div class="nav-section-header static">
         <span class="nav-section-title nav-section-server" [title]="selectedServer.name">{{ selectedServer.name }}</span>
       </div>

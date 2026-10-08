@@ -281,6 +281,55 @@ describe('SettingsPageComponent', () => {
     expect(notices().map(itemCount)).toEqual([2]);
   });
 
+  // After every reboot the app had to be started by hand, and the servers set to start with it too.
+  describe('starting with the computer', () => {
+    const toggle = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.run-at-startup input');
+
+    function openServerDefaults(reply: unknown): void {
+      replies['get-run-at-startup'] = reply;
+      ipc.isElectron = true;
+      create();
+      fixture.detectChanges();
+      TestBed.inject(SettingsDrawerService).open('servers');
+      fixture.detectChanges();
+    }
+
+    it('offers the switch where this machine can start the app, showing whether it does', () => {
+      openServerDefaults({ supported: true, enabled: true });
+
+      expect(toggle()?.checked).toBeTrue();
+      expect((fixture.nativeElement as HTMLElement).querySelector('.run-at-startup')?.textContent).toContain('Start Cerious AASM when this computer starts');
+    });
+
+    it('switches it, showing what the machine reports back', () => {
+      openServerDefaults({ supported: true, enabled: false });
+      replies['set-run-at-startup'] = { supported: true, enabled: true };
+
+      toggle()!.click();
+      fixture.detectChanges();
+
+      expect(sent('set-run-at-startup')).toEqual([['set-run-at-startup', { enabled: true }]]);
+      expect(toggle()!.checked).toBeTrue();
+    });
+
+    it('says so when the machine could not change it', () => {
+      openServerDefaults({ supported: true, enabled: false });
+      replies['set-run-at-startup'] = { supported: true, enabled: false };
+
+      toggle()!.click();
+      fixture.detectChanges();
+
+      expect(notification.error).toHaveBeenCalled();
+      expect(toggle()!.checked).toBeFalse();
+    });
+
+    it('is not offered where the app cannot start with the computer, such as in Docker', () => {
+      openServerDefaults({ supported: false, enabled: false });
+
+      expect(toggle()).toBeNull();
+    });
+  });
+
   it('does not ask for the settings itself, since GlobalConfigService loads them when the connection is up', () => {
     fixture.detectChanges();
     expect(sent('get-global-config')).toEqual([]);

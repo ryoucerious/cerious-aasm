@@ -2024,6 +2024,7 @@ export class MeshService {
           || this.reachable(node.nodeId)
         ),
         host: hostOf(node.endpoints.peerUrl),
+        lastContactAt: this.lastContactAt(node, identity.nodeId),
         resources: node.nodeId === identity.nodeId ? this.localResources : this.reportedResources(node.nodeId),
         clusterSync: node.nodeId === identity.nodeId ? this.clusterSync?.summary() ?? {} : this.reportedClusterSync(node.nodeId),
         arkUpdate: node.nodeId === identity.nodeId ? arkUpdateProgress() : this.reportedArkUpdate(node.nodeId),
@@ -2925,6 +2926,16 @@ export class MeshService {
   private reportedResources(nodeId: string): NodeResources | null {
     const reported = this.nodeResources.get(nodeId);
     return reported && reported.at >= Date.now() - HEARTBEAT_FRESH_MS ? reported.resources : null;
+  }
+
+  /**
+   * When this machine last heard from a node: now for itself, else its latest heartbeat here or the
+   * last time its own record was written, whichever is later. Null for one never heard from at all.
+   */
+  private lastContactAt(node: NodeRecord, localNodeId: string): number | null {
+    if (node.nodeId === localNodeId) return Date.now();
+    const latest = Math.max(this.seenHeartbeats.get(node.nodeId)?.at ?? 0, node.lastSeen || 0);
+    return latest > 0 ? latest : null;
   }
 
   /** This machine, or a node that answered or sent a heartbeat recently. */

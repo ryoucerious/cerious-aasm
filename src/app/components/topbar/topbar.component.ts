@@ -1,6 +1,6 @@
 import {
   Component, EventEmitter, Input, Output, OnInit, OnDestroy, ChangeDetectorRef,
-  ChangeDetectionStrategy, HostListener, ViewChild, ElementRef
+  ChangeDetectionStrategy, HostListener, ViewChild, ElementRef, inject
 } from '@angular/core';
 import { NgIf, NgFor, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -16,6 +16,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { MeshHealth, MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { AuthenticatedUser } from '../../core/models/auth.model';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { formatRelativeTime, initialOf } from '../../core/utils/format.utils';
@@ -74,6 +75,10 @@ export class TopbarComponent implements OnInit, OnDestroy {
 
   private servers: ServerInstance[] = [];
   private subs: Subscription[] = [];
+  private readonly meshNodes = inject(MeshNodesService);
+
+  /** How the mesh stands, for the indicator beside the actions; null outside a mesh. */
+  meshHealth: MeshHealth | null = null;
 
   readonly activityIcons = ACTIVITY_ICONS;
 
@@ -114,6 +119,10 @@ export class TopbarComponent implements OnInit, OnDestroy {
       this.userName = name;
       this.cdr.markForCheck();
     }));
+    this.subs.push(this.meshNodes.changed$.subscribe(() => {
+      this.meshHealth = this.meshNodes.health;
+      this.cdr.markForCheck();
+    }));
     this.subs.push(this.auth.identity$.subscribe(identity => {
       this.account = identity.user;
       this.applyRole();
@@ -124,6 +133,43 @@ export class TopbarComponent implements OnInit, OnDestroy {
       this.authenticationEnabled = !!config?.authenticationEnabled;
       this.applyRole();
     }));
+  }
+
+  get meshText(): string {
+    const health = this.meshHealth;
+    if (!health) return '';
+    if (health.state === 'reconnecting') return 'Mesh reconnecting';
+    if (health.state === 'removed') return 'Removed from the mesh';
+    const count = `${health.reachable} of ${health.total} machine${health.total === 1 ? '' : 's'}`;
+    return health.state === 'degraded' ? `Mesh degraded · ${count}` : `Mesh · ${count}`;
+  }
+
+  get meshTone(): string {
+    switch (this.meshHealth?.state) {
+      case 'healthy': return 'tone-success';
+      case 'partial': return 'tone-warning';
+      case 'degraded':
+      case 'removed': return 'tone-danger';
+      default: return 'tone-muted';
+    }
+  }
+
+  /** What the state means, and what still works. */
+  get meshTitle(): string {
+    const health = this.meshHealth;
+    if (!health) return '';
+    const unreachable = health.total - health.reachable;
+    switch (health.state) {
+      case 'healthy': return 'Every machine in the mesh can be reached.';
+      case 'partial': return `${unreachable} machine${unreachable === 1 ? '' : 's'} cannot be reached. The mesh can still agree on changes.`;
+      case 'degraded': return `Only ${health.reachable} of ${health.total} machines can be reached, and changes to the mesh need ${health.needed}. Each machine's own servers can still be controlled.`;
+      case 'reconnecting': return 'This machine is getting back in touch with the mesh after a restart.';
+      case 'removed': return 'The other machines removed this one from the mesh. Open Settings → Mesh to leave it.';
+    }
+  }
+
+  openMeshSettings(): void {
+    this.settingsDrawer.open('mesh');
   }
 
   ngOnDestroy(): void {

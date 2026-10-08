@@ -246,10 +246,11 @@
   gap: 0.75rem;
 }
 
-// The search takes the room the filters leave; short of room, it gets a row of its own.
+/// The search takes the room the filters leave, down to 140px; only short of that does it get a
+// row of its own. A wider starting size wrapped it while one row still had room.
 .dash-toolbar .dash-search {
-  flex: 1 1 220px;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: 140px;
   max-width: 420px;
 }
 
@@ -267,9 +268,12 @@
   gap: 1.25rem;
   min-height: 120px;
 
+  // Rows as tall as their content: one server alone does not stretch to the grid's height.
   &.list-view {
     grid-template-columns: 1fr;
     gap: 0.75rem;
+    align-content: start;
+    min-height: 0;
   }
 }
 
@@ -308,7 +312,7 @@
   }
 
   &.online .server-card-hero-shade {
-    background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0.55) 100%);
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.15) 40%, rgba(0, 0, 0, 0.75) 100%);
   }
 }
 
@@ -321,10 +325,11 @@
   background-repeat: no-repeat;
 }
 
+// Darkest at the bottom, where the name and status sit; the top of the art stays clear.
 .server-card-hero-shade {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0.65) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.1) 0%, rgba(0, 0, 0, 0.25) 40%, rgba(0, 0, 0, 0.82) 100%);
 }
 
 .server-card-drag {
@@ -357,7 +362,7 @@
   font-size: 1.15rem;
   font-weight: $font-bold;
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
   @include text-ellipsis;
   min-width: 0;
 }
@@ -369,6 +374,9 @@
   font-size: 0.72rem;
   padding: 0.15rem 0.6rem;
   flex-shrink: 0;
+
+  // On the artwork an outline alone left the light theme's brown on a dark picture.
+  &.status-unreachable { background: var(--surface); }
 }
 
 // Session name, operator and assignee on the left; the join address on the right.
@@ -596,60 +604,73 @@ $server-card-detail-gap: 0.25rem;
 }
 
 // List view: hero becomes a slim left strip, everything else flows in one row
+// One compact row: a map thumbnail, the name beside it, the stats on one line.
 .server-card.list-view {
   flex-direction: row;
-  align-items: stretch;
+  align-items: center;
 
   .server-card-hero {
-    width: 220px;
-    height: auto;
-    min-height: 96px;
+    width: 88px;
+    height: 56px;
     flex-shrink: 0;
+    margin: 0.5rem 0 0.5rem 0.6rem;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .server-card-drag {
+    top: 3px;
+    right: 3px;
+    font-size: 16px;
   }
 
   .server-card-body {
     flex-direction: row;
     align-items: center;
     gap: 1.25rem;
-    padding: 0.75rem 1rem;
+    padding: 0.5rem 0.9rem;
+    min-width: 0;
   }
+
+  .server-card-list-title {
+    flex: 1 1 12rem;
+    min-width: 0;
+
+    .server-card-map { @include text-ellipsis; }
+  }
+
+  // Folded into the line under the name; a column of its own squeezed the name and stats.
+  .server-card-details { display: none; }
+
+  // On the card, not the picture: the colours and shadow meant for the artwork come off.
+  .server-card-name {
+    font-size: 1rem;
+    color: var(--text-strong);
+    text-shadow: none;
+  }
+
+  .server-card-map {
+    color: var(--text-secondary);
+    text-shadow: none;
+  }
+
+  .server-card-details-main { min-height: 0; }
 
   // A quarter of the leftover width is not enough for "0 / 70 Players", so in a row the
   // stats take their natural width and wrap instead of ellipsing to a single character.
   .server-card-stats {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem 1.5rem;
-    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 0.35rem 1.25rem;
   }
 
   .server-stat {
     flex: 0 0 auto;
   }
 
-  // In a row the session name is one item among several, so it gives up width before the
-  // stats do and steps out entirely once the row is tight rather than being run over.
-  .server-card-details {
-    flex: 0 1 14rem;
-    min-width: 0;
-  }
-
-  @media (max-width: 1100px) {
-    .server-card-details { display: none; }
-  }
-
-  // The sparkline is the least important thing in the row, so it gives up its width first
-  // and drops out entirely once the row is tight.
-  .server-card-spark {
-    flex: 0 1 160px;
-    min-width: 0;
-    margin-top: 0;
-  }
-
-  @media (max-width: 1100px) {
-    .server-card-spark { display: none; }
-  }
+  // The least useful thing in a row, and the name needs the room more.
+  .server-card-spark { display: none; }
 
   .server-card-actions {
     margin-top: 0;
@@ -768,13 +789,22 @@ $server-card-detail-gap: 0.25rem;
 
 // Name, bar, uptime: a row per server. Rows keep their size as servers are added and the list
 // scrolls, where vertical bars got thinner until neither the uptime nor the name could be read.
+// The top ten in full; every server scrolls within the card.
 .dash-uptime-bars {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  max-height: 220px;
-  overflow-y: auto;
   padding-right: 0.25rem;
+
+  &.show-all {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+}
+
+.dash-uptime-more {
+  margin-top: 0.6rem;
+  align-self: flex-start;
 }
 
 .dash-uptime-bar {
@@ -820,6 +850,17 @@ $server-card-detail-gap: 0.25rem;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
+}
+
+.dash-action-group + .dash-action-group { margin-top: 0.9rem; }
+
+.dash-action-group-title {
+  margin-bottom: 0.45rem;
+  font-size: 0.7rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .dash-action {
@@ -990,6 +1031,26 @@ $server-card-detail-gap: 0.25rem;
   border: 1px solid var(--border-muted);
   border-radius: 999px;
 }
+
+// Connected or Unreachable, at the end of the machine's row; the tone class colours it.
+.dash-node-pill {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: $font-semibold;
+  white-space: nowrap;
+}
+
+// How many of its servers run, its version, and when last heard from if it cannot be reached.
+.dash-node-detail {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dash-node-quiet { display: block; margin-bottom: 0.25rem; }
 
 .dash-node-meter {
   display: grid;
@@ -1258,12 +1319,12 @@ $server-card-detail-gap: 0.25rem;
   .dash-bottom { grid-template-columns: 1fr; }
   .dash-side { grid-template-columns: 1fr; }
 
+  // Still a row with its thumbnail: the name takes a line, the stats and buttons wrap below it.
   .server-card.list-view {
-    flex-direction: column;
+    align-items: flex-start;
 
-    .server-card-hero { width: auto; height: 110px; }
-    .server-card-body { flex-direction: column; align-items: stretch; }
-    .server-card-spark { width: auto; }
+    .server-card-body { flex-wrap: wrap; gap: 0.5rem 1rem; }
+    .server-card-list-title { flex: 1 1 100%; }
   }
 
   .server-header {

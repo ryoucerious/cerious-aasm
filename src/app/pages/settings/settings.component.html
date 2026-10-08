@@ -148,6 +148,20 @@
     </div>
 
     <div *ngIf="activeTab === 'servers'" class="settings-pane">
+      <!-- Only where this machine can do it: not in Docker, which starts the app itself. -->
+      <section class="settings-card run-at-startup" *ngIf="runAtStartup?.supported">
+        <h3 class="settings-card-title">Startup</h3>
+        <p class="settings-card-hint">
+          Servers set to auto-start on app launch, in their Automation settings, then start with it.
+        </p>
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="runAtStartup?.enabled" (change)="onRunAtStartupChange($event)" tabindex="0" />
+            <span class="slider"></span>
+            <span class="toggle-text">Start Cerious AASM when this computer starts</span>
+          </div>
+        </div>
+      </section>
       <section class="settings-card">
         <h3 class="settings-card-title">Starting Servers</h3>
         <p class="settings-card-hint">

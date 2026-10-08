@@ -36,6 +36,12 @@ describe('channel-permissions', () => {
     expect(isChannelAllowed('force-remove-mesh-nodes', ['nodes.manage'], false)).toBe(false);
   });
 
+  // Starting with the computer is a setting of this machine's app, like the web server's.
+  it('lets whoever views settings see whether the app starts with the computer, and whoever manages them switch it', () => {
+    expect(permissionForChannel('get-run-at-startup')).toBe('settings.view');
+    expect(permissionForChannel('set-run-at-startup')).toBe('settings.manage');
+  });
+
   it('names a permission for the refusal text of an object rule', () => {
     expect(permissionForChannel('get-users')).toBe('users.manage');
     expect(permissionForChannel('assign-server-manager')).toBe('servers.create');

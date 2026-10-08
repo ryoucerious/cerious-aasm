@@ -8,6 +8,7 @@ import { NotificationService } from '../../../core/services/notification.service
 import { AuthService } from '../../../core/services/auth.service';
 import { PERMISSIONS } from '../../../core/models/auth.model';
 import { copyToClipboard } from '../../../core/utils/clipboard.utils';
+import { formatRelativeTime } from '../../../core/utils/format.utils';
 
 /** Where other machines reach one: a host, and the TCP ports they dial. */
 interface MeshAddress {
@@ -31,6 +32,8 @@ interface MeshNode {
   version: string;
   connected?: boolean;
   address?: MeshAddress | null;
+  /** When this machine last heard from it; null when never. */
+  lastContactAt?: number | null;
   /** How an ARK update on it is going, from its heartbeat. */
   arkUpdate?: { phase: string; message: string; minutesLeft?: number; percent?: number; at: number } | null;
 }
@@ -280,6 +283,12 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     // Every other machine checks it can reach the new address first, through the machine itself.
     if (this.canManageNodes && !node.connected) return `Change address waits until ${node.name} can be reached.`;
     return '';
+  }
+
+  /** When another machine was last heard from; empty for this one, or when the backend does not say. */
+  contactText(node: MeshNode): string {
+    if (node.nodeId === this.status?.nodeId || node.lastContactAt === undefined) return '';
+    return node.lastContactAt === null ? 'Never heard from' : `Last contact ${formatRelativeTime(node.lastContactAt)}`;
   }
 
   /** A machine's record holds '0' from its enrollment until its first heartbeat is written. */

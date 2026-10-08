@@ -25,6 +25,31 @@ describe('ServerCardComponent', () => {
     expect(buttons.filter(button => !button.disabled).map(button => button.textContent?.trim())).toEqual([]);
   });
 
+  // A list row was 120px tall: the artwork took 220px of it, so the stats wrapped onto two lines.
+  // In a narrow window (as here, under 860px) it became a stacked card 192px tall. The wide row is
+  // checked by eye: the test page cannot be made wider than that.
+  it('is a compact row in the list: a small map picture, the name beside it, every stat on one line', () => {
+    const host = fixture.nativeElement as HTMLElement;
+    host.style.display = 'block';
+    host.style.width = '720px';
+    fixture.componentRef.setInput('server', { ...component.server, gamePort: 7777 });
+    fixture.componentRef.setInput('joinHost', 'ark.example.com');
+    fixture.componentRef.setInput('view', 'list');
+    fixture.detectChanges();
+
+    // The details column would squeeze the name and stats; in a row it is one line under the name.
+    expect(host.querySelector<HTMLElement>('.server-card-details')?.offsetParent ?? null).toBeNull();
+    expect(host.querySelector('.server-card-list-title .server-card-map')?.textContent?.trim()).toBe('Aberration · ark.example.com:7777');
+
+    const card = host.querySelector<HTMLElement>('.server-card')!;
+    const tops = Array.from(host.querySelectorAll<HTMLElement>('.server-stat')).map(stat => Math.round(stat.getBoundingClientRect().top));
+    expect(card.getBoundingClientRect().height).toBeLessThanOrEqual(140);
+    expect(new Set(tops).size).withContext('stats on one line').toBe(1);
+    expect(host.querySelector('.server-card-hero .server-card-name')).toBeNull();
+    expect(host.querySelector('.server-card-list-title .server-card-name')?.textContent).toContain('Aberration');
+    expect(host.querySelector('.server-card-list-title .card-status')?.textContent?.trim()).toBe('Online');
+  });
+
   it('should create and render the name, map and status', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('.server-card-name')?.textContent).toContain('Aberration');

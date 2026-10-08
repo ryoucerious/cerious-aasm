@@ -6,6 +6,7 @@ import { ServerInstanceService } from '../../core/services/server-instance.servi
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('AddServerModalComponent', () => {
@@ -16,10 +17,16 @@ describe('AddServerModalComponent', () => {
   let notification: MockNotificationService;
   let ipc: { isElectron: boolean };
   let machines: Array<{ nodeId: string; name: string; skipping: boolean }>;
+  /** What other channels answer, by channel. */
+  let replies: Record<string, unknown>;
+  let sendMessage: jasmine.Spy;
+  let created: jasmine.Spy;
 
   beforeEach(async () => {
     ipc = { isElectron: false };
     machines = [];
+    replies = {};
+    sendMessage = jasmine.createSpy('sendMessage').and.callFake((channel: string) => of(replies[channel] ?? null));
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
     serverInstanceService = {
@@ -37,12 +44,16 @@ describe('AddServerModalComponent', () => {
         { provide: ServerInstanceService, useValue: serverInstanceService },
         { provide: NotificationService, useValue: notification },
         { provide: IpcService, useValue: ipc },
-        { provide: MeshNodesService, useValue: { placementChoices: () => machines, changed$: of(undefined) } }
+        // node-1 is this machine.
+        { provide: MeshNodesService, useValue: { placementChoices: () => machines, changed$: of(undefined), isHere: (nodeId: string) => nodeId === 'node-1' } },
+        { provide: MessagingService, useValue: { sendMessage } }
       ]
     }).compileComponents();
 
     fixture = TestBed.createComponent(AddServerModalComponent);
     component = fixture.componentInstance;
+    created = jasmine.createSpy('created');
+    component.created.subscribe(created);
     fixture.detectChanges();
   });
 
@@ -114,6 +125,74 @@ describe('AddServerModalComponent', () => {
       const page = opened();
 
       expect(page.textContent).not.toContain('Machine');
+    });
+
+    // Only a new server could be placed; a clone or an import always landed where it did.
+    it('places a clone on the machine chosen, not the source\'s, or lets Auto-select pick', () => {
+      machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }, { nodeId: 'node-2', name: 'Dallas01', skipping: false }];
+      const page = opened();
+      component.setImportMode('clone');
+      fixture.detectChanges();
+      expect(page.textContent).toContain('Machine');
+      expect(component.machineOptions.map(option => option.label)).toEqual(['Auto-select', 'PC 1', 'Dallas01']);
+
+      component.serverName = 'Copy';
+      component.selectedServerToClone = { id: 'src', name: 'Source', nodeId: 'node-1' } as any;
+      component.selectedNodeId = 'node-2';
+      component.onAddServer();
+      expect(serverInstanceService.save.calls.mostRecent().args[0].nodeId).toBe('node-2');
+
+      // Again from the start: the first clone closed the dialog.
+      opened();
+      component.setImportMode('clone');
+      component.serverName = 'Copy 2';
+      component.selectedServerToClone = { id: 'src', name: 'Source', nodeId: 'node-1' } as any;
+      component.onAddServer();
+      expect(serverInstanceService.save).toHaveBeenCalledTimes(2);
+      expect('nodeId' in serverInstanceService.save.calls.mostRecent().args[0]).toBeFalse();
+    });
+
+    describe('for an import', () => {
+      beforeEach(() => {
+        machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }, { nodeId: 'node-2', name: 'Dallas01', skipping: false }];
+        opened();
+        component.setImportMode('import');
+        component.serverName = 'Restored';
+        component.selectedBackupFilePath = 'C:/backup.zip';
+        ipc.isElectron = true;
+      });
+
+      // The backup is restored here; another machine has nothing to restore it from.
+      it('offers this machine first, and the others it can move the server to', () => {
+        expect(component.machineOptions.map(option => option.label)).toEqual(['This machine', 'Dallas01']);
+      });
+
+      it('restores it here, then moves it to the machine chosen', async () => {
+        replies['move-server'] = { success: true };
+        component.selectedNodeId = 'node-2';
+
+        await component.onAddServer();
+
+        expect(sendMessage).toHaveBeenCalledWith('move-server', { serverId: 'imp', nodeId: 'node-2' }, jasmine.anything());
+        expect(created).toHaveBeenCalled();
+      });
+
+      it('leaves it here, and says why, when it cannot be moved', async () => {
+        replies['move-server'] = { success: false, error: 'Dallas01 cannot be reached.' };
+        const warning = spyOn(notification as unknown as { warning(message: string): void }, 'warning');
+        component.selectedNodeId = 'node-2';
+
+        await component.onAddServer();
+
+        expect(warning).toHaveBeenCalledWith('Imported on this machine. It could not be moved to Dallas01: Dallas01 cannot be reached.');
+        expect(created).toHaveBeenCalled();
+      });
+
+      it('moves nothing when it stays on this machine', async () => {
+        await component.onAddServer();
+
+        expect(sendMessage).not.toHaveBeenCalledWith('move-server', jasmine.anything(), jasmine.anything());
+      });
     });
   });
 

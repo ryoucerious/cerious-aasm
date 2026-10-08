@@ -28,11 +28,6 @@
                placeholder="Enter server name"
                (keyup.enter)="onAddServer()" />
       </div>
-      <div class="form-group" *ngIf="placementOptions.length">
-        <label class="form-control-label">Machine</label>
-        <app-dropdown [options]="placementOptions" [(ngModel)]="selectedNodeId" name="placement" ariaLabel="Machine"></app-dropdown>
-        <div class="form-control-label desc">Auto-select picks the machine with the most free memory, disk and CPU.</div>
-      </div>
     </div>
 
     <div *ngIf="importMode === 'import'">
@@ -61,6 +56,17 @@
         <label class="form-control-label">Clone From</label>
         <app-dropdown [options]="cloneOptions" [(ngModel)]="selectedServerToClone" name="selectedServerToClone" placeholder="Select a server to clone..."></app-dropdown>
         <div class="form-control-label desc">Choose an existing server to copy all settings from. The new server will have identical configuration but a different name.</div>
+      </div>
+    </div>
+
+    <!-- In a mesh, for every way of adding a server. -->
+    <div class="form-group" *ngIf="machineOptions.length">
+      <label class="form-control-label">Machine</label>
+      <app-dropdown [options]="machineOptions" [(ngModel)]="selectedNodeId" name="placement" ariaLabel="Machine"></app-dropdown>
+      <div class="form-control-label desc">
+        {{ importMode === 'import'
+          ? 'The backup is restored on this machine; the server then moves to the one chosen.'
+          : 'Auto-select picks the machine with the most free memory, disk and CPU.' }}
       </div>
     </div>
   </div>

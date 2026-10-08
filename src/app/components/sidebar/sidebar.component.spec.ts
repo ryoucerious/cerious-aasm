@@ -468,6 +468,46 @@ describe('SidebarComponent', () => {
         expect(box()).not.toBeNull();
       });
 
+      // With 38 servers the list pushed the server's own pages far down; a scrolling list inside a
+      // scrolling sidebar then gave two scrollbars. Each part scrolls on its own instead.
+      it('scrolls the server list and the server\'s pages each on their own, not the whole sidebar', () => {
+        const host = page();
+        host.style.display = 'block';
+        host.style.height = '600px';
+        servers$.next(many(30));
+        fixture.detectChanges();
+
+        const body = host.querySelector<HTMLElement>('.sidenav-body')!;
+        const list = host.querySelector<HTMLElement>('.server-list')!;
+        const pages = host.querySelector<HTMLElement>('.sidenav-pages')!;
+        expect(['auto', 'scroll']).not.toContain(getComputedStyle(body).overflowY);
+        expect(getComputedStyle(list).overflowY).toBe('auto');
+        expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+        expect(getComputedStyle(pages).overflowY).toBe('auto');
+        // The list has at most half; the server's pages keep the rest.
+        expect(host.querySelector<HTMLElement>('.sidenav-servers')!.offsetHeight).toBeLessThanOrEqual(body.clientHeight / 2 + 1);
+        expect(pages.offsetHeight).toBeGreaterThan(100);
+      });
+
+      // The selected server's name scrolled away with its pages.
+      it('keeps the selected server\'s name in place while its pages scroll', () => {
+        const host = page();
+        host.style.display = 'block';
+        host.style.height = '420px';
+        servers$.next(many(30));
+        fixture.detectChanges();
+
+        const pages = host.querySelector<HTMLElement>('.sidenav-pages')!;
+        const name = () => pages.querySelector<HTMLElement>('.nav-section-header')!.getBoundingClientRect().top;
+        expect(pages.scrollHeight).withContext('the pages need to scroll for this').toBeGreaterThan(pages.clientHeight);
+        const before = name();
+
+        pages.scrollTop = 60;
+
+        expect(pages.scrollTop).toBeGreaterThan(0);
+        expect(name()).toBeCloseTo(before, 0);
+      });
+
       it('lets go of a search once the list is too short for the box', () => {
         servers$.next(many(10));
         component.onSearch('Server 3');

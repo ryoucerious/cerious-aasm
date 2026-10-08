@@ -213,6 +213,11 @@ export class ServerCardComponent implements OnDestroy {
    * desktop app loads from localhost, so a MultiHome address replaces that when one is set. The
    * password is never part of it.
    */
+  /** Under the name in a list row: the map, the machine in a mesh, and the address players use. */
+  get listMeta(): string {
+    return [this.visual.label, this.nodeLabel, this.connectAddress].filter(Boolean).join(' · ');
+  }
+
   get connectAddress(): string {
     return joinAddress(this.server, this.joinHost ?? this.pageHostname());
   }

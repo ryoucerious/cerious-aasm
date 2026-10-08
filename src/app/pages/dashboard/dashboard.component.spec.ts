@@ -158,6 +158,23 @@ describe('DashboardComponent', () => {
       fixture.detectChanges();
     }
 
+    // White text meant for the artwork sat on the page background: unreadable in light theme.
+    it('leaves a degraded mesh to the top bar, and shows any other mesh warning as a notice', () => {
+      open([desk, box]);
+      component['applyMesh']({ enabled: true, degraded: true, nodeId: 'desk', nodes: [desk, box] });
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+      expect(page.textContent).not.toContain('Mesh Degraded');
+      expect(page.querySelector('.dash-mesh-warning')).toBeNull();
+
+      component['applyMesh']({ enabled: true, nodeId: 'desk', nodes: [desk, box], warning: 'Docker 1 runs an older app version.' });
+      fixture.detectChanges();
+
+      const notice = page.querySelector('.dash-mesh-warning');
+      expect(notice?.textContent).toContain('Docker 1 runs an older app version.');
+      expect(notice?.classList).toContain('ark-install-notice');
+    });
+
     it('shows the resources of every member, this machine\'s as it polls them', () => {
       open([desk, box, gone]);
 
@@ -166,6 +183,51 @@ describe('DashboardComponent', () => {
         ['b3e6', false, '50%', '8 GB / 16 GB', '150 GB / 1000 GB']
       ]);
       expect(fixture.nativeElement.querySelectorAll('.dash-node-resources').length).toBe(2);
+    });
+
+    // In a mesh the card showed each machine's meters only: not whether it could be reached,
+    // what it runs, or since when it has been quiet.
+    describe('the Machines card', () => {
+      const hour = 3600_000;
+      const card = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.dash-machines-card');
+      const pills = () => Array.from(card()?.querySelectorAll('.dash-node-pill') || []).map(pill => pill.textContent?.trim());
+
+      it('says of each machine whether it can be reached, how many of its servers run, and its version', () => {
+        open([{ ...desk, connected: true, version: '1.2.2' }, { ...box, connected: true, version: '1.2.1' }]);
+
+        expect(card()?.querySelector('h3')?.textContent?.trim()).toBe('Machines');
+        expect(pills()).toEqual(['Connected', 'Connected']);
+        expect(component.resourceNodes.map(node => node.detail)).toEqual([
+          '0 of 1 server running · Version 1.2.2',
+          '1 of 1 server running · Version 1.2.1'
+        ]);
+      });
+
+      it('says when a machine that cannot be reached was last heard from', () => {
+        open([{ ...desk, connected: true, version: '1.2.2' }, { ...box, connected: false, version: '0', resources: null, lastContactAt: Date.now() - 3 * hour }]);
+
+        expect(pills()).toEqual(['Connected', 'Unreachable']);
+        expect(component.resourceNodes[1].detail).toBe('1 of 1 server running · Last contact 3 hours ago');
+      });
+
+      it('says when a machine runs no servers', () => {
+        open([{ ...desk, connected: true, version: '1.2.2' }, { ...box, connected: true, version: '1.2.2' }, { nodeId: 'spare', name: 'Spare', status: 'alive', connected: true, version: '1.2.2' }]);
+
+        expect(component.resourceNodes[2].detail).toBe('No servers · Version 1.2.2');
+      });
+
+      it('opens Settings at the Mesh page from Manage', () => {
+        open([{ ...desk, connected: true }, { ...box, connected: true }]);
+
+        card()!.querySelector<HTMLButtonElement>('.dash-machines-manage')!.click();
+
+        expect(settingsDrawer.open).toHaveBeenCalledWith('mesh');
+      });
+
+      it('stays System Resources, for this machine alone, outside a mesh', () => {
+        expect(card()).toBeNull();
+        expect((fixture.nativeElement as HTMLElement).textContent).toContain('System Resources');
+      });
     });
 
     it('shows a member that has stopped reporting as not reporting', () => {
@@ -345,6 +407,21 @@ describe('DashboardComponent', () => {
       expect(page().querySelector<HTMLInputElement>('.dash-search')!.value).toBe('');
     });
 
+    // At 875px, with a filter on and the machine dropdown, the search took a row to itself: it
+    // asked for 220px before shrinking. (The test page is narrower, so this measures without them.)
+    it('keeps the search and the filters on one row while there is room, and wraps only when there is not', () => {
+      open([alpha, beta]);
+      const head = page().querySelector<HTMLElement>('.dash-servers-head')!;
+      const rowOf = (selector: string) => Math.round(page().querySelector<HTMLElement>(selector)!.getBoundingClientRect().top);
+      const sameRow = () => Math.abs(rowOf('.dash-search') - rowOf('.dash-toolbar-filters')) < 12;
+
+      head.style.width = '600px';
+      expect(sameRow()).withContext('600px').toBeTrue();
+
+      head.style.width = '480px';
+      expect(sameRow()).withContext('480px').toBeFalse();
+    });
+
     it('remembers the machine but not the search, and forgets a machine no longer in the mesh', () => {
       open([alpha, beta], [desk, box]);
       component.machine = 'box';
@@ -360,6 +437,61 @@ describe('DashboardComponent', () => {
       expect(component.machine).toBe('all');
       expect(visible()).toEqual(['a', 'b']);
     });
+  });
+
+  // With 38 servers Server Uptime was a long scrolling list of tiny bars, in the order of the list.
+  describe('server uptime', () => {
+    const hour = 3600_000;
+    /** Twelve servers: s0 started 12 hours ago, s11 an hour ago; two more are stopped. */
+    const fleet = [
+      ...Array.from({ length: 12 }, (_, index) => ({ id: `s${index}`, name: `Server ${index}`, state: 'running', startedAt: now - (12 - index) * hour, sortOrder: index })),
+      { id: 'x1', name: 'Stopped 1', state: 'stopped', sortOrder: 12 },
+      { id: 'x2', name: 'Stopped 2', state: 'stopped', sortOrder: 13, nodeId: 'box' }
+    ];
+    const bars = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.dash-uptime-name')).map(name => name.textContent?.trim());
+    const more = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.dash-uptime-more');
+
+    beforeEach(() => {
+      servers$.next(fleet);
+      fixture.detectChanges();
+    });
+
+    it('shows the ten longest-running servers, longest first', () => {
+      expect(bars()).toEqual(Array.from({ length: 10 }, (_, index) => `Server ${index}`));
+      expect(more()?.textContent?.trim()).toBe('Show all 14');
+    });
+
+    it('shows them all on request, and fewer again', () => {
+      more()!.click();
+      fixture.detectChanges();
+      expect(bars().length).toBe(14);
+      expect(bars().slice(-2)).toEqual(['Stopped 1', 'Stopped 2']);
+      expect(more()?.textContent?.trim()).toBe('Show fewer');
+
+      more()!.click();
+      fixture.detectChanges();
+      expect(bars().length).toBe(10);
+    });
+
+    it('follows the machine chosen for the server list', () => {
+      component['applyMesh']({ enabled: true, nodeId: 'desk', nodes: [{ nodeId: 'desk', name: 'Desk' }, { nodeId: 'box', name: 'Box' }] });
+      component.machine = 'box';
+      component.onFilterChange();
+      fixture.detectChanges();
+
+      expect(bars()).toEqual(['Stopped 2']);
+      expect(more()).toBeNull();
+    });
+  });
+
+  // "Create Backup" sat among the all-servers actions, though it backs up one server.
+  it('keeps the actions on every server apart from the rest, and says the backup is of one server', () => {
+    const groups = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.dash-action-group'));
+    const labels = (group: Element) => Array.from(group.querySelectorAll('.dash-action')).map(action => action.textContent?.replace(/^\s*\S+\s+/, '').trim());
+
+    expect(groups.map(group => group.querySelector('.dash-action-group-title')?.textContent?.trim())).toEqual(['All servers', 'More']);
+    expect(labels(groups[0])).toEqual(['Start All Servers', 'Stop All Servers']);
+    expect(labels(groups[1])).toEqual(['Back Up a Server…', 'Add Server', 'Settings']);
   });
 
   it('reorders cards', () => {
@@ -467,6 +599,8 @@ describe('DashboardComponent', () => {
     })));
     const card = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.dash-uptime-card')!;
     card.style.width = '360px';
+    // Every row, not just the longest-running ten.
+    component.toggleUptime();
     fixture.detectChanges();
 
     const texts = Array.from(card.querySelectorAll<HTMLElement>('.dash-uptime-value, .dash-uptime-name'));

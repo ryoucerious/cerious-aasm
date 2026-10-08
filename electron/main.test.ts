@@ -11,6 +11,7 @@ jest.mock('electron', () => {
   return {
     app: Object.assign(new EventEmitter(), {
       getAppPath: jest.fn(() => '/app'),
+      getPath: jest.fn((name: string) => `/${name}`),
       quit: jest.fn(),
       exit: jest.fn(),
       requestSingleInstanceLock: jest.fn(() => true),
@@ -20,8 +21,14 @@ jest.mock('electron', () => {
     BrowserWindow: jest.fn(),
     ipcMain: Object.assign(new EventEmitter(), { handle: jest.fn(), removeHandler: jest.fn() }),
     shell: { openExternal: jest.fn(() => Promise.resolve()) },
+    screen: { getAllDisplays: jest.fn(() => [{ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }]) },
   };
 });
+
+jest.mock('./utils/window-state.utils', () => ({
+  readWindowState: jest.fn(() => ({ width: 1024, height: 768, maximized: false })),
+  trackWindowState: jest.fn(),
+}));
 
 jest.mock('./utils/logger', () => ({ getLogFilePath: jest.fn(() => '/logs/cerious-aasm.log') }));
 jest.mock('./utils/rcon.utils', () => ({ cleanupAllRconConnections: jest.fn() }));
@@ -114,6 +121,7 @@ class FakeWindow extends EventEmitter {
   readonly loadURL = jest.fn(() => { this.webContents.emit('did-finish-load'); });
   readonly loadFile = jest.fn(() => { this.webContents.emit('did-finish-load'); });
   readonly isMaximized = jest.fn(() => false);
+  readonly maximize = jest.fn();
   readonly isMinimized = jest.fn(() => false);
   readonly restore = jest.fn();
   readonly show = jest.fn();
@@ -346,6 +354,24 @@ describe('main', () => {
       process.env.NODE_ENV = 'development';
       const dev = await emitReady(loadMain());
       expect(dev.loadURL).toHaveBeenCalledWith('http://localhost:4200');
+    });
+
+    // It opened at 1024x768 every time, wherever and however large it had been left.
+    it('opens where and as large as it was left, maximized if it was, and keeps track as it changes', async () => {
+      const main = loadMain();
+      const windowState = jest.requireMock<typeof import('./utils/window-state.utils')>('./utils/window-state.utils');
+      jest.mocked(windowState.readWindowState).mockReturnValue({ x: 200, y: 100, width: 1400, height: 900, maximized: true });
+
+      const win = await emitReady(main);
+
+      expect(windowState.readWindowState).toHaveBeenCalledWith(
+        path.join('/userData', 'window-state.json'),
+        [{ x: 0, y: 0, width: 1920, height: 1040 }],
+        { width: 1024, height: 768, minWidth: 940, minHeight: 600 }
+      );
+      expect(win.options).toEqual(expect.objectContaining({ x: 200, y: 100, width: 1400, height: 900, minWidth: 940, minHeight: 600 }));
+      expect(win.maximize).toHaveBeenCalled();
+      expect(windowState.trackWindowState).toHaveBeenCalledWith(win, path.join('/userData', 'window-state.json'));
     });
 
     it('opens no window when headless', async () => {

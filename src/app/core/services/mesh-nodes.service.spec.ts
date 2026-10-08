@@ -63,6 +63,57 @@ describe('MeshNodesService', () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
+  // "Mesh Degraded" was a line under the dashboard banner; the top bar shows it on every page now.
+  describe('the health of the mesh', () => {
+    const member = (nodeId: string, connected: boolean, status = 'alive') => ({ nodeId, name: nodeId, status, connected });
+
+    it('counts the machines it can reach, and how many changes to the mesh need', () => {
+      reply = {
+        enabled: true, degraded: true, voterCount: 4,
+        nodes: [member('n1', true), member('n2', true), member('n3', false), member('n4', false), member('old', false, 'removed')]
+      };
+
+      expect(create().health).toEqual({ state: 'degraded', reachable: 2, total: 4, needed: 3 });
+    });
+
+    it('says whether every machine can be reached, or only some while the mesh can still agree', () => {
+      reply = { enabled: true, degraded: false, voterCount: 3, nodes: [member('n1', true), member('n2', true), member('n3', true)] };
+      const nodes = create();
+      expect(nodes.health?.state).toBe('healthy');
+
+      channels['mesh-status'].next({ enabled: true, degraded: false, voterCount: 3, nodes: [member('n1', true), member('n2', true), member('n3', false)] });
+      expect(nodes.health).toEqual({ state: 'partial', reachable: 2, total: 3, needed: 2 });
+    });
+
+    it('says when this machine is reconnecting, or the others removed it', () => {
+      reply = { enabled: false, reconnecting: true, nodes: [] };
+      const nodes = create();
+      expect(nodes.health?.state).toBe('reconnecting');
+
+      channels['mesh-status'].next({ enabled: true, removedFromMesh: true, degraded: true, voterCount: 2, nodes: [member('n1', true), member('n2', false)] });
+      expect(nodes.health?.state).toBe('removed');
+    });
+
+    it('is nothing outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().health).toBeNull();
+    });
+
+    it('says when the health changes, though the machines did not', () => {
+      reply = { enabled: true, degraded: false, voterCount: 2, nodes: [member('n1', true), member('n2', true)] };
+      const nodes = create();
+      const heard = jasmine.createSpy('changed');
+      nodes.changed$.subscribe(heard);
+      heard.calls.reset();
+
+      channels['mesh-status'].next({ enabled: true, degraded: true, voterCount: 2, nodes: [member('n1', true), member('n2', true)] });
+
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(nodes.health?.state).toBe('degraded');
+    });
+  });
+
   it('asks the web server once its socket is up, when a request can be answered', () => {
     reply = inMesh;
     const nodes = create(false);
