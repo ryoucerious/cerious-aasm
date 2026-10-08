@@ -1160,6 +1160,22 @@ body.drawer-open {
   app-region: drag;
 }
 
+// The sign-in and loading pages come before the top bar: a bar of their own, empty but for the
+// window controls, where the top bar will be.
+.window-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: $topbar-height;
+  padding: 0 1.25rem;
+  display: flex;
+  justify-content: flex-end;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
 .topbar button,
 .topbar a,
 .topbar input,

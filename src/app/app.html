@@ -1,4 +1,6 @@
 <div *ngIf="isLoginPage" class="login-page-container">
+  <!-- The window is frameless and its title bar is the app's top bar: until that shows, this one moves and closes it. -->
+  <div *ngIf="isElectron" class="window-titlebar"><app-window-controls></app-window-controls></div>
   <router-outlet></router-outlet>
 </div>
 
@@ -46,6 +48,7 @@
 <app-busy-overlay></app-busy-overlay>
 
 <ng-template #notReady>
+  <div *ngIf="isElectron && showLoading" class="window-titlebar"><app-window-controls></app-window-controls></div>
   <div *ngIf="showLoading" class="app-loading" role="status" aria-live="polite">
     <img class="app-loading-logo" src="assets/logo-square-256.png" alt="" />
     <h1 class="app-loading-title">Cerious AASM</h1>

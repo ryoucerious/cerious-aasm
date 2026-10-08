@@ -72,6 +72,15 @@ describe('App', () => {
     return fixture;
   };
 
+  /** In fakeAsync: the app on the sign-in page, once the router's first navigation (to '/') is over. */
+  const signInPage = () => {
+    const fixture = createApp();
+    fixture.detectChanges();
+    flushMicrotasks();
+    fixture.componentInstance.isLoginPage = true;
+    return fixture;
+  };
+
   describe('in the desktop app', () => {
     beforeEach(() => setUp(true));
 
@@ -258,6 +267,40 @@ describe('App', () => {
 
       expect(shown(fixture)).toEqual({ loading: true, app: false });
     }));
+
+    // The window is frameless and the top bar, its title bar, is part of the app. Before the app
+    // shows, the window still has to be moved, and closed, from somewhere.
+    describe('a title bar until the app shows', () => {
+      const onSignInPage = signInPage;
+      const titleBar = (fixture: ComponentFixture<App>) => {
+        fixture.detectChanges();
+        return (fixture.nativeElement as HTMLElement).querySelector('.window-titlebar');
+      };
+
+      it('is on the sign-in page, with the window controls', fakeAsync(() => {
+        const fixture = onSignInPage();
+
+        const bar = titleBar(fixture);
+
+        expect(bar?.closest('.login-page-container')).toBeTruthy();
+        expect(bar?.querySelector('app-window-controls')).toBeTruthy();
+      }));
+
+      it('is on the loading page', () => {
+        const fixture = createApp();
+
+        expect(titleBar(fixture)?.querySelector('app-window-controls')).toBeTruthy();
+      });
+
+      it('goes once the app, with its own top bar, shows', fakeAsync(() => {
+        const fixture = createApp();
+
+        finishReady();
+        flushMicrotasks();
+
+        expect(titleBar(fixture)).toBeNull();
+      }));
+    });
   });
 
   describe('in the web UI', () => {
@@ -307,6 +350,16 @@ describe('App', () => {
       tick(5000);
       expect(navigate).toHaveBeenCalledWith(['/login']);
       expect(fixture.componentInstance.connectionLost).toBeFalse();
+    }));
+
+    it('has no title bar on the sign-in page: the browser is the window', fakeAsync(() => {
+      connected$.next(true);
+      const fixture = signInPage();
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+
+      expect(page.querySelector('.login-page-container')).toBeTruthy();
+      expect(page.querySelector('.window-titlebar')).toBeNull();
     }));
 
     it('should render main app content once connected', () => {
