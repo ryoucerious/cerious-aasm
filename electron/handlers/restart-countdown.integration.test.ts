@@ -89,7 +89,7 @@ describe('restarting from the app', () => {
     jest.mocked(serverInstanceService.startServerInstance).mockImplementation(async (id: string) => {
       events.push(`start ${id}`);
       states.set(id, 'running');
-      return { started: true, instanceName: id };
+      return { started: true, instanceId: id, instanceName: id };
     });
     jest.mocked(serverLifecycleService.stopAllInstances).mockImplementation(async (ids?: string[]) => {
       events.push(`stop all ${ids?.join(',')}`);

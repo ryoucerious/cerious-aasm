@@ -1,6 +1,9 @@
 {
   "extends": "./tsconfig.electron.json",
   "compilerOptions": {
+    // Tests run under Jest on Node 20, which compiles them as ES2022 (tsconfig.json). The app
+    // itself stays checked at ES2020 by tsconfig.electron.json.
+    "target": "ES2022",
     "rootDir": ".",
     "types": ["jest", "node"],
     "esModuleInterop": true,

@@ -643,7 +643,7 @@ describe('server-instance-handler', () => {
 
     it('stops, starts, and records the server as meant to be running', async () => {
       mockLifecycle.stopServerInstance.mockResolvedValue({ success: true, instanceId: 'a1' });
-      mockInstance.startServerInstance.mockResolvedValue({ started: true, instanceName: 'Alpha' });
+      mockInstance.startServerInstance.mockResolvedValue({ started: true, instanceId: 'a1', instanceName: 'Alpha' });
 
       await request('restart-server-instance', { id: 'a1', requestId: 'r1' });
 

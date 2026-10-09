@@ -1839,7 +1839,7 @@ describe('MeshService', () => {
       const contents: Array<[string, string]> = [['config.json', '{"id":"isle"}'], [SAVE, 'world']];
 
       await peer.onCheckpointBegin!({ serverId: 'isle' });
-      for (const [rel, text] of contents) await peer.onCheckpointFile!('isle', rel, Readable.from(Buffer.from(text)));
+      for (const [rel, text] of contents) await peer.onCheckpointFile!('isle', rel, Readable.from(Buffer.from(text)), 0);
       expect(await peer.onCheckpointFinish!({ serverId: 'isle', rels: contents.map(([rel]) => rel) })).toEqual({ checksum: checksumOf(contents) });
       await jest.advanceTimersByTimeAsync(5_000);
       expect(fs.existsSync(path.join(servers, 'isle'))).toBe(false);

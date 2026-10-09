@@ -10,7 +10,7 @@ describe('RestartCountdownService', () => {
     jest.useFakeTimers({ now: 1_000_000 });
     running = new Set(['a', 'b']);
     deps = {
-      broadcast: jest.fn(async () => true),
+      broadcast: jest.fn(async (_serverId: string, _message: string): Promise<boolean> => true),
       isRunning: jest.fn((id: string) => running.has(id)),
       publish: jest.fn(),
       now: jest.fn(() => Date.now())
