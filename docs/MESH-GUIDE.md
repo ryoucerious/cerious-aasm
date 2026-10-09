@@ -1,8 +1,6 @@
 # Cerious AASM Mesh Guide
 
-This guide covers the mesh: several machines running Cerious AASM, joined so you can run them as one. It also covers the other new features in this release, most of which work on a single machine too.
-
-It is written for people who run ARK servers with the app. You won't need to know how the mesh works inside. Every button, page and message named here is what you'll see in the app.
+This guide covers the mesh: several machines running Cerious AASM, joined so you can run them as one.
 
 ## Contents
 
@@ -37,7 +35,7 @@ You might want a mesh if you:
 
 ### If you don't use a mesh
 
-Nothing changes unless you create or join a mesh. A standalone install works as it always has: the desktop app doesn't ask you to sign in, there's no machine picker when you add a server, and none of the mesh's background work runs. Most of the other new features in this release ([restarts and changing a running server](#restarts-changing-a-running-server-and-backup-copies), [server ports and the firewall](#server-ports-and-the-firewall), the [dashboard and sidebar changes](#other-new-features), starting with the computer) work the same on a single machine.
+Nothing changes unless you create or join a mesh. A standalone install works as it always has: the desktop app doesn't ask you to sign in, there's no machine picker when you add a server, and none of the mesh's background work runs.
 
 ### A word about "majority"
 
@@ -581,58 +579,6 @@ For players outside your network, forward the game and query ranges (UDP) on you
 ### The Firewall page of a server
 
 Each server has a **Firewall** page. **This Server's Ports** checks each of its ports against the ranges, for example "inside this machine's server ports 7777–7900", or "outside … so its firewall won't let players reach it". On Windows, its **Firewall Status** shows **Open** or **Blocked by Windows Firewall**. For a server on another mesh machine, it checks against that machine's ranges and firewall.
-
----
-
-## Other new features
-
-These work on a single machine as well as in a mesh.
-
-### Dashboard
-
-- **Search servers**: type to filter the server cards by name, session name, map, machine or operator.
-- **Filters**: **All Servers**, **Online** or **Offline**. In a mesh there's also a machine filter (**All machines**, or one machine).
-- **Sort**: **Custom order** (your own order; drag cards to change it), **Name (A–Z)**, **Name (Z–A)**, **Status** or **Players**. Dragging works in **Custom order** with no search or filter applied.
-- **Grid view** and **List view**: the buttons next to the sort let you switch between cards and compact rows.
-- If nothing matches, "No servers match." appears, with **Clear search and filters**.
-- The view, filter, sort and machine you pick are remembered in this browser.
-- **Server Uptime** ranks servers by how long they've been running, longest first. It shows the top ten, with **Show all** for the rest, and follows the machine filter.
-- In a mesh, the **Machines** card (described in [Health and reachability](#the-machines-card-on-the-dashboard)) replaces **System Resources**.
-
-### Sidebar
-
-- Once you have 10 or more servers, a **Search servers** box appears above the server list. It searches names, maps, machines and who a server is assigned to.
-- The server list and the selected server's pages scroll separately, so a long server list never pushes a server's pages out of reach. **Settings** stays at the bottom.
-
-### The window remembers where you left it
-
-The desktop window reopens at the size and position you left it, maximised if it was. If that position is on a monitor that's no longer connected, it opens centred on your screen instead.
-
-### Start Cerious AASM when this computer starts
-
-In **Settings → Server Defaults → Startup**, turn on **Start Cerious AASM when this computer starts**. Servers set to start when the app launches (on each server's **Automation** page) then start with it.
-
-The app starts when you sign in to Windows (or to your Linux desktop), not before. For a machine nobody sits at, such as a mesh machine in a cupboard, set Windows to sign in automatically, or the app waits at the Windows sign-in screen.
-
-This switch doesn't appear in Docker, where the container starts the app, or in a headless install. Changing it needs an Admin.
-
-### The sign-in page's title bar
-
-When the desktop app asks you to sign in (in a mesh), the page has its own title bar: drag it to move the window, and use **Minimize**, **Maximize** and **Close** at the top right.
-
-### Users & Roles
-
-**Settings → Users & Roles** shows each account as a card with its **Role**, **Pool** and **Last sign-in**, and **Edit** and **Delete** buttons. Switch between **Users** and **Roles** at the top. **Add User** asks for a **Username**, an optional **Display name**, a **Password** and a **Role**:
-
-- For roles that belong to a pool, you'll also see **Pool**.
-- For a Machine Admin, you'll also see **Machine** and **May update ARK and the app on every machine**.
-- Turn off **Account is active** to stop someone signing in without deleting their account.
-
-Built-in roles can be viewed but not edited. **Add Role** makes your own.
-
-### Tooltips
-
-Hover over a button, an icon or a status for a moment to see what it does. Greyed-out buttons explain why they're unavailable, for example "*name* cannot be reached." on **Update ARK**.
 
 ---
 
