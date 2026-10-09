@@ -54,12 +54,11 @@
              [ngClass]="'server-depth-' + row.depth"
              cdkDrag
              [class.selected]="selectedServerId === server.id"
-             (click)="onServerClick(server)">
+             (click)="onServerClick(server)"
+             (dblclick)="onServerNameDoubleClick(server, $event)">
           <span class="server-status-dot" [ngClass]="getServerStatusClass(server)" [title]="getServerStatusLabel(server)"></span>
           <span class="server-name-block" *ngIf="editingServerId !== server.id">
-            <span class="server-name"
-                  [title]="server.name"
-                  (dblclick)="onServerNameDoubleClick(server, $event)">
+            <span class="server-name" [title]="server.name">
               {{ server.name }}
             </span>
             <span class="server-item-manager" *ngIf="subtitle(server) as label" [title]="label">{{ label }}</span>

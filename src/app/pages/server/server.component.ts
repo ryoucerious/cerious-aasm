@@ -27,7 +27,7 @@ const DEFAULT_RESTART_WARNING_MINUTES = 5;
 
 /** Settings that take effect at once, or are not ARK's: never waiting for a restart. */
 const APPLIED_AT_ONCE = new Set([
-  'id', 'nodeId', 'state', 'status', 'players', 'memory', 'cpu', 'startedAt', 'message', 'configRevision', 'sortOrder',
+  'id', 'name', 'nodeId', 'state', 'status', 'players', 'memory', 'cpu', 'startedAt', 'message', 'configRevision', 'sortOrder',
   'operatorUserId', 'managerUserId', 'autoStartOnAppLaunch', 'autoStartOnBoot', 'crashDetectionEnabled',
   'crashDetectionInterval', 'maxRestartAttempts', 'scheduledRestartEnabled', 'restartFrequency', 'restartTime',
   'restartTimes', 'restartDays', 'restartWarningMinutes', 'broadcastConfig', 'discordConfig'

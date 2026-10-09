@@ -156,6 +156,12 @@ export interface NodeCapabilities {
    * versions before it.
    */
   serverPorts?: { ranges: ServerPortRanges; portsOpen: boolean | null };
+  /**
+   * Its ARK install against Steam's latest build, from its own update checks: a build is null
+   * until known, and updateAvailable is true only once both are known and differ. Absent from
+   * versions before it, and until its checks have started.
+   */
+  ark?: { installedBuild: string | null; latestBuild: string | null; updateAvailable: boolean };
 }
 
 export interface UserRecord {

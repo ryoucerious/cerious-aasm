@@ -165,7 +165,7 @@ Before anything changes, every other machine checks that it can reach the machin
 
 ### Checking connections
 
-The **Reachability** card on **Settings → Mesh** has a **Check reachability** button. It tries the connection port of every other machine and lists the answers in plain words, such as "asa-1 answered in 12 ms." or "s001 did not answer: connect ECONNREFUSED". It also checks the clocks: a machine whose clock is 2 seconds or more off gets a line such as "asa-1's clock is 5 seconds ahead of this machine's." Fix the clock (turn on **Set time automatically** in Windows), as a clock far off upsets sign-ins. A Docker container on Docker Desktop uses the clock of Docker's own virtual machine, which can drift by minutes after the computer sleeps. Restarting Docker Desktop sets it right.
+The **Reachability** card on **Settings → Mesh** has a **Check reachability** button. It tries the connection port of every other machine and lists the answers in plain words, such as "asa-1 answered in 12 ms." or "s001 did not answer: connect ECONNREFUSED". It also checks the clocks: a machine whose clock is 2 seconds or more off gets a line such as "asa-1's clock is 5 seconds ahead of this machine's." The check can only tell that two clocks disagree, not which one is wrong, so compare each machine with a clock you trust, such as your phone. Then fix the wrong one, as a clock far off upsets sign-ins: on Windows, open **Settings → Time & language → Date & time**, turn on **Set time automatically** and choose **Sync now**. A Docker container takes its time from the computer it runs on, so fix that computer's clock.
 
 The **WireGuard** card is optional. **Show config** gives you a WireGuard configuration for this machine, and **Apply on this host** applies it when WireGuard is installed.
 
@@ -366,6 +366,8 @@ The machine holding copies lists them under **Settings → Storage**, in **Backu
 Each machine updates its own ARK install and its own app. Start both from the machine's card in **Settings → Mesh**. **Update one machine at a time.**
 
 ### Update ARK
+
+**Update ARK** is only offered for a machine whose ARK is behind Steam's latest build. Each machine checks Steam itself and tells the others. Otherwise the button is greyed out, and hovering over it says why, for example "ARK is up to date on PC 1 (build 25763660)."
 
 1. Choose **Update ARK** on the machine's card.
 2. Confirm. The dialog explains: "The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for that machine's warning time (Settings → Updates on that machine, 15 minutes unless changed), then its servers stop, the new files go in, and they start again. If none of its servers is running, the update starts at once."

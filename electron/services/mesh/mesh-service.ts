@@ -2970,6 +2970,8 @@ export class MeshService {
   }
 
   private accountsFingerprint = '';
+  /** Each account's security version at the last mirror: a rise is a change of access. */
+  private mirroredSecurityVersions = new Map<string, number>();
 
   /**
    * Makes this machine's account database match the mesh's accounts and custom roles, so the
@@ -3000,10 +3002,20 @@ export class MeshService {
         ...changedUserIds.map(userId => ({ userId, roleId: undefined })),
         ...changedRoleIds.map(roleId => ({ userId: undefined, roleId }))
       ];
+      // Sessions end only when access changed: the account is gone, or its security version rose (a
+      // new password, role, pool or machine). Its password stored better at its first sign-in, or a
+      // new display name, is not: that ended the session which had just signed in.
+      const versions = new Map(users.map(user => [user.userId, user.securityVersion]));
+      const accessChanged = (userId: string): boolean => {
+        const now = versions.get(userId);
+        const before = this.mirroredSecurityVersions.get(userId);
+        return now === undefined || before === undefined || now > before;
+      };
       for (const change of changes) {
         messagingService.sendToAll('users-changed', change);
-        messagingService.invalidateWebSessions(change);
+        if (!change.userId || accessChanged(change.userId)) messagingService.invalidateWebSessions(change);
       }
+      this.mirroredSecurityVersions = versions;
     } catch (error) {
       console.error('[mesh] Could not bring the accounts on this machine up to date with the mesh:', error);
     }

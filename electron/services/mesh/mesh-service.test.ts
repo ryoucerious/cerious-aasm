@@ -76,7 +76,7 @@ jest.mock('../auth/user-database.service', () => ({
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
 // The reachability probe opens a real connection; the clock arithmetic stays real.
 jest.mock('./diagnostics', () => ({ ...jest.requireActual('./diagnostics'), probeTcp: jest.fn(async () => ({ ok: true, rttMs: 1 })) }));
-jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null) }));
+jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null), arkBuildStatus: jest.fn(() => null) }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
 jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
 jest.mock('../../utils/ark/started-config.utils', () => ({ readStartedConfig: jest.fn(() => ({ id: 'isle', maxPlayers: 70 })) }));
@@ -389,6 +389,40 @@ describe('MeshService', () => {
       });
       expect(messagingService.invalidateWebSessions).toHaveBeenCalledWith({ userId: 'u1', roleId: undefined });
       expect(messagingService.sendToAll).toHaveBeenCalledWith('users-changed', { userId: 'u1', roleId: undefined });
+    });
+
+    // The first sign-in stored the password better (bcrypt to Argon2id), and the account sync took
+    // that for a new password: the session that had just signed in was ended.
+    it('ends no session over a change that leaves access as it was', async () => {
+      await meshUser();
+      jest.mocked(userDatabaseService.applyMeshAccounts).mockReturnValue({ changedUserIds: ['u1'], changedRoleIds: [] });
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+      jest.mocked(messagingService.invalidateWebSessions).mockClear();
+
+      await meshUser({ passwordHash: 'stored-better', displayName: 'Ada L.', updatedAt: 3 });
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(messagingService.invalidateWebSessions).not.toHaveBeenCalled();
+      expect(messagingService.sendToAll).toHaveBeenCalledWith('users-changed', { userId: 'u1', roleId: undefined });
+    });
+
+    it('ends the sessions of an account whose access changed, or that is gone', async () => {
+      await meshUser();
+      await repo.upsertUser({
+        userId: 'u2', username: 'bo', displayName: 'Bo', passwordHash: verifier, passwordParameters: 'argon2id', hashAlg: 'argon2id',
+        enabled: true, securityVersion: 1, roleId: 'moderators', ownerUserId: null, createdAt: 1, updatedAt: 2
+      });
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+      jest.mocked(messagingService.invalidateWebSessions).mockClear();
+
+      jest.mocked(userDatabaseService.applyMeshAccounts).mockReturnValue({ changedUserIds: ['u1', 'u2'], changedRoleIds: [] });
+      await meshUser({ securityVersion: 4, roleId: 'admin', updatedAt: 3 });
+      await repo.deleteUser('u2');
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(jest.mocked(messagingService.invalidateWebSessions).mock.calls.map(([change]) => change.userId)).toEqual(['u1', 'u2']);
     });
 
     it('rewrites the account database only when the mesh accounts change', async () => {

@@ -9,7 +9,7 @@ import { ServerInstance } from '../../core/models/server-instance.model';
 import { ServerInstanceService, withoutRuntimeFields } from '../../core/services/server-instance.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
-import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus, isBusyStatus } from '../../core/utils/server-status';
+import { serverStatusKey, serverStatusClass, serverStatusLabel, isOnlineStatus } from '../../core/utils/server-status';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
@@ -441,10 +441,17 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
+  /**
+   * A double-click anywhere on the server's row renames it: with a subtitle under it, the name is
+   * only the row's top half. Not on its delete button, nor in the name box being typed in.
+   */
   onServerNameDoubleClick(server: ServerInstance, event: Event): void {
     event.stopPropagation();
-    // A rename of a server whose machine cannot be reached would not get there.
-    if (!this.canRenameServer || this.isServerBusy(server) || serverStatusKey(server.state) === 'unreachable') return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.delete-server-btn, .editing-server-name')) return;
+    // Running or not: the server is known by its id, and ARK takes its own Session Name. A rename of
+    // a server whose machine cannot be reached would not get there.
+    if (!this.canRenameServer || serverStatusKey(server.state) === 'unreachable') return;
     this.editingServerId = server.id;
     this.editingServerName = server.name;
     this.cdr.markForCheck();
@@ -494,10 +501,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   isServerRunning(server: ServerInstance): boolean {
     return isOnlineStatus(server.state);
-  }
-
-  isServerBusy(server: ServerInstance): boolean {
-    return isBusyStatus(server.state);
   }
 
   getServerStatusClass(server: ServerInstance): string {

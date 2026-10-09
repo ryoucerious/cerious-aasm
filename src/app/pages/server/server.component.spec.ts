@@ -133,7 +133,10 @@ describe('ServerComponent', () => {
     const started = { id: 'a', name: 'Island', maxPlayers: 70, restartTime: '02:00', broadcastConfig: { enabled: false } };
 
     beforeEach(() => {
-      component.activeServerInstance = { ...started, state: 'running', maxPlayers: 50, restartTime: '04:00', broadcastConfig: { enabled: true } } as never;
+      // Renamed while it runs too: the name is the app's label, so it is never waiting for a restart.
+      component.activeServerInstance = {
+        ...started, name: 'Island Two', state: 'running', maxPlayers: 50, restartTime: '04:00', broadcastConfig: { enabled: true }
+      } as never;
       spyOn(TestBed.inject(LiveServersService), 'find').and.returnValue({ id: 'a', name: 'Island', state: 'running', startedAt: 1_000 } as never);
     });
 

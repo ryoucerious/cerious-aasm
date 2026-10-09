@@ -16,6 +16,8 @@ jest.mock('../../utils/platform.utils', () => ({
 }));
 
 jest.mock('../server-ports.service', () => ({ serverPortsService: { portsOpen: jest.fn(() => null) } }));
+jest.mock('../ark-update.service', () => ({ arkBuildStatus: jest.fn(() => null) }));
+import { arkBuildStatus } from '../ark-update.service';
 jest.mock('../../utils/server-ports.utils', () => ({
   getServerPortRanges: jest.fn(() => ({
     ranges: { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } },
@@ -40,6 +42,19 @@ describe('node identity', () => {
 
   // A server moved onto a machine whose firewall keeps players out can't be reached: the others
   // show it on that machine's card.
+  // Update ARK was offered for every machine in a mesh, up to date or not.
+  it('tells the others which ARK build it has, and whether Steam has a newer one', () => {
+    jest.mocked(arkBuildStatus).mockReturnValue({ installedBuildId: '25763660', latestBuildId: '25790000', updateAvailable: true, lastCheckedAt: 1 });
+
+    expect(collectCapabilities().ark).toEqual({ installedBuild: '25763660', latestBuild: '25790000', updateAvailable: true });
+  });
+
+  it('says nothing of ARK until its update checks have started', () => {
+    jest.mocked(arkBuildStatus).mockReturnValue(null);
+
+    expect(collectCapabilities()).not.toHaveProperty('ark');
+  });
+
   it('tells the others which ports its servers take, and whether its firewall lets players in', () => {
     jest.mocked(serverPortsService.portsOpen).mockReturnValue(false);
 

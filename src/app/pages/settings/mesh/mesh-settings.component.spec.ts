@@ -355,8 +355,10 @@ describe('MeshSettingsComponent', () => {
 
   // "Update ARK Server fires blind": no word before it started, nothing while it ran.
   describe('updating ARK on a machine', () => {
+    /** Behind Steam's latest build unless a test says otherwise: only then is Update ARK offered. */
+    const outOfDate = { ark: { installedBuild: '25763660', latestBuild: '25790000', updateAvailable: true } };
     const node = (nodeId: string, name: string, extra: Record<string, unknown> = {}) =>
-      ({ nodeId, name, status: 'alive', maintenance: false, version: '1.2.2', connected: true, ...extra });
+      ({ nodeId, name, status: 'alive', maintenance: false, version: '1.2.2', connected: true, capabilities: outOfDate, ...extra });
     const inMesh = (nodes: unknown[]) => ({ ...standalone, enabled: true, meshName: 'Mesh', nodes });
     const updateButtons = (page: HTMLElement) => Array.from(page.querySelectorAll<HTMLButtonElement>('.mesh-node-card button'))
       .filter(button => button.textContent?.trim() === 'Update ARK');
@@ -459,6 +461,32 @@ describe('MeshSettingsComponent', () => {
       const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'Dallas01', { arkUpdate: { phase: 'updating', message: '', at: 1 } })]));
 
       expect(updateButtons(page).every(button => button.disabled)).toBeTrue();
+    });
+
+    // Update ARK was offered for every machine, whether or not Steam had anything newer for it.
+    it('offers to update ARK only on a machine behind Steam\'s latest build', async () => {
+      const upToDate = { capabilities: { ark: { installedBuild: '25763660', latestBuild: '25763660', updateAvailable: false } } };
+      const page = await open(inMesh([node('n1', 'PC 1', upToDate), node('n2', 'Docker 1')]));
+
+      expect(cardButton(page, 0, 'Update ARK').disabled).toBeTrue();
+      expect(cardButton(page, 0, 'Update ARK').title).toBe('ARK is up to date on PC 1 (build 25763660).');
+      expect(cardButton(page, 0, 'Update app').disabled).toBeFalse();
+      expect(cardButton(page, 1, 'Update ARK').disabled).toBeFalse();
+    });
+
+    it('says why it cannot tell yet, or that ARK is not installed there', async () => {
+      const page = await open(inMesh([
+        node('n1', 'PC 1', { capabilities: {} }),
+        node('n2', 'Docker 1', { capabilities: { ark: { installedBuild: '25763660', latestBuild: null, updateAvailable: false } } }),
+        node('n3', 'asa-1', { capabilities: { ark: { installedBuild: null, latestBuild: '25790000', updateAvailable: false } } })
+      ]));
+
+      expect([0, 1, 2].map(index => cardButton(page, index, 'Update ARK').disabled)).toEqual([true, true, true]);
+      expect([0, 1, 2].map(index => cardButton(page, index, 'Update ARK').title)).toEqual([
+        'PC 1 has not reported its ARK build yet.',
+        'Docker 1 has not checked Steam for a new ARK build yet.',
+        'ARK is not installed on asa-1.'
+      ]);
     });
   });
 

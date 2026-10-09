@@ -212,8 +212,8 @@
           </label>
           <div class="mesh-node-updates">
             <button type="button" class="btn btn-ghost btn-sm" (click)="askArkUpdate(node)"
-                    [disabled]="!canUpdate || !!updatingKey || arkUpdateRunning || !!updateBlock(node)"
-                    [title]="updateBlock(node) || (arkUpdateRunning ? 'A machine is updating ARK. Update one machine at a time.' : '')">
+                    [disabled]="!canUpdate || !!updatingKey || !!arkUpdateBlock(node)"
+                    [title]="arkUpdateBlock(node)">
               Update ARK
             </button>
             <button type="button" class="btn btn-ghost btn-sm" (click)="askAppUpdate(node)" [disabled]="!canUpdate || !!updatingKey || !!updateBlock(node)"

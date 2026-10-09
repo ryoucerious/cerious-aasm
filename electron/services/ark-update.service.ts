@@ -758,3 +758,8 @@ export async function beginClusterUpdate(): Promise<{ success: boolean; error?: 
 export function arkUpdateProgress(): ArkUpdateProgress | null {
   return boundArkUpdate?.progress() ?? null;
 }
+
+/** ARK on this machine against Steam's latest build, for its heartbeat; null before the service starts. */
+export function arkBuildStatus(): ReturnType<ArkUpdateService['getStatus']> | null {
+  return boundArkUpdate?.getStatus() ?? null;
+}

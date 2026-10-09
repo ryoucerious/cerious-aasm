@@ -37,8 +37,14 @@ interface MeshNode {
   lastContactAt?: number | null;
   /** How an ARK update on it is going, from its heartbeat. */
   arkUpdate?: { phase: string; message: string; minutesLeft?: number; percent?: number; at: number } | null;
-  /** From its heartbeat: portsOpen is false while Windows Firewall keeps players out of its server ports. */
-  capabilities?: { serverPorts?: { portsOpen: boolean | null } };
+  /**
+   * From its heartbeat: portsOpen is false while Windows Firewall keeps players out of its server
+   * ports; ark is its ARK build against Steam's latest, absent until it reports one.
+   */
+  capabilities?: {
+    serverPorts?: { portsOpen: boolean | null };
+    ark?: { installedBuild: string | null; latestBuild: string | null; updateAvailable: boolean };
+  };
 }
 
 interface MeshStatus {
@@ -245,6 +251,22 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   updateBlock(node: MeshNode): string {
     if (!node.connected) return `${node.name} cannot be reached.`;
     if (node.nodeId !== this.status?.nodeId && this.status?.degraded) return 'Updating another machine waits until enough machines can be reached.';
+    return '';
+  }
+
+  /**
+   * Why ARK on a machine cannot be updated now; empty when it can. Only a machine whose ARK is
+   * behind Steam's latest build, by its own check, is offered the update.
+   */
+  arkUpdateBlock(node: MeshNode): string {
+    const blocked = this.updateBlock(node);
+    if (blocked) return blocked;
+    if (this.arkUpdateRunning) return 'A machine is updating ARK. Update one machine at a time.';
+    const ark = node.capabilities?.ark;
+    if (!ark) return `${node.name} has not reported its ARK build yet.`;
+    if (!ark.installedBuild) return `ARK is not installed on ${node.name}.`;
+    if (!ark.latestBuild) return `${node.name} has not checked Steam for a new ARK build yet.`;
+    if (!ark.updateAvailable) return `ARK is up to date on ${node.name} (build ${ark.installedBuild}).`;
     return '';
   }
 

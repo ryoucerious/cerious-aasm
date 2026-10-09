@@ -6,6 +6,7 @@ import { getDefaultInstallDir, getFreeMemory, getPlatform, isRunningInDocker } f
 import type { NodeCapabilities } from '../../types/mesh.types';
 import { getServerPortRanges } from '../../utils/server-ports.utils';
 import { serverPortsService } from '../server-ports.service';
+import { arkBuildStatus } from '../ark-update.service';
 
 export interface NodeIdentityFile {
   nodeId: string;
@@ -61,6 +62,13 @@ export function writeNodeIdentity(identity: NodeIdentityFile): void {
   fs.renameSync(tmp, file);
 }
 
+/** Which ARK build it has and whether Steam has a newer one, so the others offer Update ARK only then. */
+function arkCapability(): Pick<NodeCapabilities, 'ark'> {
+  const build = arkBuildStatus();
+  if (!build) return {};
+  return { ark: { installedBuild: build.installedBuildId, latestBuild: build.latestBuildId, updateAvailable: build.updateAvailable } };
+}
+
 export function collectCapabilities(): NodeCapabilities {
   let freeDiskBytes = 0;
   try {
@@ -81,6 +89,7 @@ export function collectCapabilities(): NodeCapabilities {
     freeMemoryBytes: getFreeMemory(),
     freeDiskBytes,
     cpuPercent: 0,
-    serverPorts: { ranges: getServerPortRanges().ranges, portsOpen: serverPortsService.portsOpen() }
+    serverPorts: { ranges: getServerPortRanges().ranges, portsOpen: serverPortsService.portsOpen() },
+    ...arkCapability()
   };
 }

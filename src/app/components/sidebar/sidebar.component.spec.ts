@@ -170,6 +170,27 @@ describe('SidebarComponent', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('.server-item-manager')?.textContent).toContain('Basement Box');
   });
 
+  // With a subtitle the name took the top half of the row, and a double-click below it did nothing.
+  it('renames on a double-click anywhere on the server\'s row, its subtitle too', () => {
+    machineNames = { box: 'Basement Box' };
+    servers$.next([{ ...stopped, nodeId: 'box' }]);
+    meshNodesChanged$.next();
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector('.server-item-manager')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+    expect(component.editingServerId).toBe('1');
+  });
+
+  it('does not rename on a double-click of the row\'s delete button', () => {
+    servers$.next([stopped, { ...stopped, id: '2', name: 'Beta' }]);
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector('.delete-server-btn')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+    expect(component.editingServerId).toBeNull();
+  });
+
   it('groups the visible tabs into overview, configuration and features', () => {
     expect(component.overviewTabs.map(t => t.id)).toEqual(['console']);
     expect(component.configTabs.map(t => t.id)).toEqual(['general', 'rates']);
@@ -274,10 +295,11 @@ describe('SidebarComponent', () => {
     expect(appUpdate.install).toHaveBeenCalled();
   });
 
-  it('should not allow editing server name if busy', () => {
+  // The name is the app's label: the server is known by its id, and ARK takes its own Session Name.
+  it('renames a running server too', () => {
     const event = { stopPropagation: jasmine.createSpy() } as any;
     component.onServerNameDoubleClick(running as any, event);
-    expect(component.editingServerId).toBeNull();
+    expect(component.editingServerId).toBe('2');
   });
 
   it('should allow editing server name if not busy', () => {
