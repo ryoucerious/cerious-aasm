@@ -196,7 +196,8 @@ describe('MeshService', () => {
     setMeshDesktopMode(false);
     jest.useRealTimers();
     db.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    // Retried: on a Windows runner a virus scanner can hold a file it is reading for a moment.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function nodeRow(nodeId: string, certSerial = '1', peerUrl = 'https://127.0.0.1:4747'): NodeRecord {

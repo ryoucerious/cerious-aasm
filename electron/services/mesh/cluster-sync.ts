@@ -95,6 +95,9 @@ export class ClusterSync {
   private readonly summaries = new Map<string, ClusterSyncSummary>();
   private running = false;
   private again = false;
+  /** The pass under way, for stop() to wait on. */
+  private passing: Promise<void> | null = null;
+  private stopped = false;
   private lastCleanup = 0;
 
   constructor(private readonly options: ClusterSyncOptions) {
@@ -110,21 +113,35 @@ export class ClusterSync {
     return Object.fromEntries(this.summaries);
   }
 
-  /** One pass over every cluster. A pass asked for while one runs follows it. */
+  /** One pass over every cluster. A pass asked for while one runs follows it. None once stopped. */
   async syncOnce(): Promise<void> {
+    if (this.stopped) return;
     if (this.running) {
       this.again = true;
       return;
     }
     this.running = true;
-    try {
-      do {
-        this.again = false;
-        await this.syncAll();
-      } while (this.again);
-    } finally {
-      this.running = false;
-    }
+    this.passing = (async () => {
+      try {
+        do {
+          this.again = false;
+          await this.syncAll();
+        } while (this.again && !this.stopped);
+      } finally {
+        this.running = false;
+        this.passing = null;
+      }
+    })();
+    return this.passing;
+  }
+
+  /**
+   * Starts no more passes, and resolves once the one under way has ended, after the cluster it is
+   * on: nothing is written into a cluster folder after this, which leaving the mesh may delete.
+   */
+  async stop(): Promise<void> {
+    this.stopped = true;
+    await this.passing?.catch(() => undefined);
   }
 
   private async syncAll(): Promise<void> {
@@ -132,6 +149,7 @@ export class ClusterSync {
     const managed = new Set(storage.filter(profile => profile.mode === 'managed').map(profile => profile.storageProfileId));
     const ids = clusters.filter(cluster => cluster.storageProfileId && managed.has(cluster.storageProfileId)).map(cluster => cluster.clusterId);
     for (const id of ids) {
+      if (this.stopped) break;
       try {
         await this.syncCluster(id);
       } catch (error) {

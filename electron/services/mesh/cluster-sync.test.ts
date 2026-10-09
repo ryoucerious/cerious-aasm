@@ -344,6 +344,47 @@ describe('cluster sync', () => {
   });
 
   // What a player's upload notice is built on: which machine recorded a change, and which have it.
+  // Leaving a mesh let go of the sync without waiting: a pass under way went on writing files into
+  // a cluster folder, which on a slow machine was already being deleted.
+  describe('stopping', () => {
+    it('waits for the pass under way to end, and starts no other', async () => {
+      machine('A');
+      write('A', PLAYER, 'from A');
+      await settle('A');
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      let fetching!: () => void;
+      const fetchStarted = new Promise<void>(resolve => { fetching = resolve; });
+      const bRoot = (clusterId: string) => path.join(root, 'B', 'MeshClusters', clusterId);
+      const b = new ClusterSync({
+        nodeId: 'B', repo, rootOf: bRoot, workDir: path.join(root, 'B', 'work'), announce: jest.fn(),
+        fetch: async (hash, _origin, dest) => {
+          fetching();
+          await held;
+          fs.copyFileSync(nodes.get('A')!.sync.objectPath(hash)!, dest);
+          return true;
+        }
+      });
+
+      const pass = b.syncOnce();
+      await fetchStarted;
+      let stopped = false;
+      const stopping = b.stop().then(() => { stopped = true; });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(stopped).toBe(false);
+
+      release();
+      await pass;
+      await stopping;
+      expect(stopped).toBe(true);
+
+      write('A', 'clusters/MyCluster/later', 'after stopping');
+      await settle('A');
+      await b.syncOnce();
+      expect(fs.existsSync(path.join(bRoot('c1'), 'clusters/MyCluster/later'))).toBe(false);
+    });
+  });
+
   describe('saying what happened to a file', () => {
     it('says when it recorded a change made here, with the size before and after', async () => {
       const onRecorded = jest.fn();

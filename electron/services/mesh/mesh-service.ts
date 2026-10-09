@@ -2367,6 +2367,7 @@ export class MeshService {
   }
 
   async stop(): Promise<void> {
+    // Every timer first, so no check starts while this waits below.
     if (this.resumeTimer) clearTimeout(this.resumeTimer);
     this.resumeTimer = null;
     this.waitingCopy = null;
@@ -2374,6 +2375,11 @@ export class MeshService {
     this.timer = null;
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.statusTimer = null;
+    if (this.clusterTimer) clearInterval(this.clusterTimer);
+    this.clusterTimer = null;
+    // Then, while the mesh database still answers: the pass under way reads and writes the
+    // cluster folders, which leaving may delete next.
+    await this.clusterSync?.stop();
     if (this.peer) await new Promise<void>(resolve => this.peer!.close(() => resolve()));
     this.peer = null;
     await this.supervisor.stop();
@@ -2386,8 +2392,6 @@ export class MeshService {
     this.nodeResources.clear();
     this.nodeClusterSync.clear();
     this.nodeArkUpdate.clear();
-    if (this.clusterTimer) clearInterval(this.clusterTimer);
-    this.clusterTimer = null;
     this.clusterSync = null;
     this.notices = null;
     this.accountsFingerprint = '';
@@ -2407,7 +2411,12 @@ export class MeshService {
   private async leaveLocally(): Promise<void> {
     noteMeshListenPorts(null);
     const identity = this.identity();
-    if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
+    if (identity?.meshId) {
+      const left = { ...identity, meshId: '' };
+      writeNodeIdentity(left);
+      // The copy a check under way writes from, too: keeping its name, it put the mesh back.
+      if (this.attachedIdentity) this.attachedIdentity = left;
+    }
     await this.stop();
     noteLocalNode(null);
     setMeshMember(false);
