@@ -1,11 +1,12 @@
 <nav class="sidenav" aria-label="Main navigation">
-  <div class="sidenav-scroll">
+  <!-- Not one scrolling column: the server list and the server's pages each scroll on their own. -->
+  <div class="sidenav-body">
     <button type="button" class="nav-item" [class.active]="isRouteActive('/dashboard')" (click)="goToDashboard()">
       <span class="material-icons">home</span>
       <span class="nav-item-label">Dashboard</span>
     </button>
 
-    <div class="nav-section">
+    <div class="nav-section sidenav-servers" [class.alone]="!selectedServer">
       <div class="nav-section-header" (click)="showServers = !showServers">
         <span class="nav-section-title">
           Servers <span class="nav-count" *ngIf="servers.length">{{ servers.length }}</span>
@@ -17,6 +18,9 @@
           <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="stopAllServers()">
             <span class="material-icons">stop</span>
           </button>
+          <button type="button" class="nav-mini-btn" title="Restart all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="restartAllServers()">
+            <span class="material-icons">restart_alt</span>
+          </button>
           <button type="button" class="nav-mini-btn" title="Add server" *ngIf="canCreateServer" (click)="onAddServerClick()">
             <span class="material-icons">add</span>
           </button>
@@ -24,20 +28,40 @@
         <span class="material-icons nav-section-chevron">{{ showServers ? 'expand_more' : 'chevron_right' }}</span>
       </div>
 
-      <div class="server-list" *ngIf="showServers" cdkDropList (cdkDropListDropped)="onDrop($event)">
-        <div *ngFor="let server of servers; trackBy: trackByServerId"
+      <!-- A restart of every server counting down: the players are hearing the warnings. -->
+      <div class="restart-all-pending" *ngIf="restartAllText" role="status">
+        <span class="material-icons spinner" aria-hidden="true">autorenew</span>
+        <span class="restart-all-pending-text">{{ restartAllText }}</span>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRestartAll()">Cancel</button>
+      </div>
+
+      <div class="server-list-tools" *ngIf="showServers && servers.length >= searchFrom">
+        <input type="search" class="form-control server-search" placeholder="Search servers" aria-label="Search servers"
+               [ngModel]="searchText" (ngModelChange)="onSearch($event)" />
+      </div>
+
+      <div class="server-list" *ngIf="showServers" cdkDropList [cdkDropListDisabled]="!reorderable" (cdkDropListDropped)="onDrop($event)">
+        <ng-container *ngFor="let row of serverRows; trackBy: trackByRow">
+        <button type="button" class="server-group" *ngIf="row.kind === 'group'" [ngClass]="'server-depth-' + row.depth"
+                [attr.aria-expanded]="row.open" (click)="toggleGroup(row.key)">
+          <span class="material-icons server-group-chevron">{{ row.open ? 'expand_more' : 'chevron_right' }}</span>
+          <span class="server-group-name">{{ row.label }}</span>
+          <span class="server-group-note" *ngIf="row.note">{{ row.note }}</span>
+          <span class="server-group-count">{{ row.count }}</span>
+        </button>
+        <div *ngIf="row.kind === 'server' && row.server as server"
              class="server-item"
+             [ngClass]="'server-depth-' + row.depth"
              cdkDrag
              [class.selected]="selectedServerId === server.id"
-             (click)="onServerClick(server)">
+             (click)="onServerClick(server)"
+             (dblclick)="onServerNameDoubleClick(server, $event)">
           <span class="server-status-dot" [ngClass]="getServerStatusClass(server)" [title]="getServerStatusLabel(server)"></span>
           <span class="server-name-block" *ngIf="editingServerId !== server.id">
-            <span class="server-name"
-                  [title]="server.name"
-                  (dblclick)="onServerNameDoubleClick(server, $event)">
+            <span class="server-name" [title]="server.name">
               {{ server.name }}
             </span>
-            <span class="server-item-manager" *ngIf="listLabel(server) as label" [title]="label">{{ label }}</span>
+            <span class="server-item-manager" *ngIf="subtitle(server) as label" [title]="label">{{ label }}</span>
           </span>
           <input *ngIf="editingServerId === server.id"
                  type="text"
@@ -55,6 +79,8 @@
             <span class="material-icons">close</span>
           </button>
         </div>
+        </ng-container>
+        <div class="server-list-empty" *ngIf="servers.length && !serverRows.length">No servers match.</div>
         <div class="server-list-empty" *ngIf="!servers.length">
           No servers yet.
           <button type="button" class="link-btn" *ngIf="canCreateServer" (click)="onAddServerClick()">Add one</button>
@@ -62,7 +88,7 @@
       </div>
     </div>
 
-    <div class="nav-section" *ngIf="selectedServer">
+    <div class="nav-section sidenav-pages" *ngIf="selectedServer">
       <div class="nav-section-header static">
         <span class="nav-section-title nav-section-server" [title]="selectedServer.name">{{ selectedServer.name }}</span>
       </div>
@@ -142,6 +168,20 @@
   <div class="action-group-modal">
     <button type="button" (click)="showConfirmStartAllModal = false" class="btn">Cancel</button>
     <button type="button" (click)="onConfirmStartAll()" class="btn btn-primary">Start All</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Restart All Servers'" [show]="showConfirmRestartAllModal" [maxWidth]="'520px'" (close)="showConfirmRestartAllModal = false">
+  <p>
+    Players on every running server are warned in game for {{ restartAllWarningMinutes }} {{ restartAllWarningMinutes === 1 ? 'minute' : 'minutes' }}.
+    Then each machine restarts its servers in order, the start delay apart, which also picks up mod updates.
+    You can cancel it until then.
+  </p>
+  <p class="form-control-label desc">The warning time is the one ARK updates use, in Settings → Updates.</p>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="showConfirmRestartAllModal = false">Cancel</button>
+    <button type="button" class="btn" (click)="onConfirmRestartAll(false)">Restart all now</button>
+    <button type="button" class="btn btn-primary" (click)="onConfirmRestartAll(true)">Warn players and restart all</button>
   </div>
 </app-modal>
 

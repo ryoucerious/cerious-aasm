@@ -48,7 +48,8 @@ export class LiveServersService implements OnDestroy {
           this.patch(msg.instanceId, server => {
             const state = String(msg.state).toLowerCase();
             const next: Partial<ServerInstance> = { state };
-            if (state === 'running' && !server.startedAt) next.startedAt = Date.now();
+            // A server on another node comes with its host's start time.
+            if (state === 'running') next.startedAt = msg.startedAt ?? server.startedAt ?? Date.now();
             if (state !== 'running') {
               next.cpu = null;
               next.startedAt = null;
@@ -176,13 +177,17 @@ export class LiveServersService implements OnDestroy {
   private mergeWithExisting(instance: ServerInstance): ServerInstance {
     const existing = this.find(instance.id);
     const state = LiveServersService.normalizeState(instance.state);
+    // Live figures a refresh leaves out are kept only while the server runs: not once it stops,
+    // nor once its mesh machine cannot be reached and nothing about it is known.
+    const running = state === 'running';
     return {
       ...existing,
       ...instance,
       state,
-      cpu: instance.cpu ?? (state === 'running' ? existing?.cpu ?? null : null),
-      startedAt: instance.startedAt ?? (state === 'running' ? existing?.startedAt ?? null : null),
-      players: typeof instance.players === 'number' ? instance.players : (existing?.players ?? 0)
+      cpu: instance.cpu ?? (running ? existing?.cpu ?? null : null),
+      memory: instance.memory ?? (running ? existing?.memory : undefined),
+      startedAt: instance.startedAt ?? (running ? existing?.startedAt ?? null : null),
+      players: typeof instance.players === 'number' ? instance.players : (running ? existing?.players ?? 0 : 0)
     };
   }
 

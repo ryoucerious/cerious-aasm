@@ -8,8 +8,10 @@ export interface AutomationSettings {
   scheduledRestartEnabled: boolean;
   /** 'custom' is what older versions stored for weekly on chosen days; 'none' never restarts. */
   restartFrequency: 'none' | 'daily' | 'weekly' | 'custom';
-  /** HH:MM, host local time. */
+  /** HH:MM, host local time. The first of restartTimes, kept for older versions. */
   restartTime: string;
+  /** Every HH:MM a day (or chosen day) to restart at, host local time. Unset in older versions. */
+  restartTimes?: string[];
   /** Weekdays for a weekly restart, 0 = Sunday. */
   restartDays: number[];
   restartWarningMinutes: number;

@@ -91,6 +91,7 @@ describe('AutomationInstancesService', () => {
         scheduledRestartEnabled: false,
         restartFrequency: 'daily',
         restartTime: '02:00',
+        restartTimes: ['02:00'],
         restartDays: [1],
         restartWarningMinutes: 5
       },

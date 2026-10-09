@@ -2,6 +2,7 @@ import { messagingService } from '../services/messaging.service';
 import { automationService } from '../services/automation/automation.service';
 import { schedulerService } from '../services/scheduler.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
+import { setHostRouter } from '../services/host-routing';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
@@ -44,6 +45,8 @@ describe('automation-handler', () => {
       { enabled: true, checkInterval: 30000, maxRestartAttempts: 3 }, [true, 30000, 3]],
     ['configure-scheduled-restart', mockAutomation.configureScheduledRestart,
       { enabled: true, frequency: 'daily', time: '04:00', days: [1], warningMinutes: 5 }, [true, 'daily', '04:00', [1], 5]],
+    ['configure-scheduled-restart', mockAutomation.configureScheduledRestart,
+      { enabled: true, frequency: 'daily', time: '04:00', times: ['04:00', '16:00'], days: [1], warningMinutes: 5 }, [true, 'daily', ['04:00', '16:00'], [1], 5]],
     ['get-automation-status', mockAutomation.getAutomationStatus, {}, []]
   ] as const)('%s', (channel, serviceMethod, settings, args) => {
     const method = serviceMethod as jest.Mock;
@@ -228,6 +231,23 @@ describe('automation-handler', () => {
       await handlers['auto-start-on-app-launch'](undefined, sender);
 
       expect(replies('auto-start-on-app-launch')).toEqual([{ success: true, requestId: undefined }]);
+    });
+  });
+
+  // A server on another machine: its automation runs there.
+  describe('a server hosted on another machine', () => {
+    const router = jest.fn(async () => ({ success: true, there: true }));
+    beforeEach(() => { router.mockClear(); setHostRouter(router); });
+    afterEach(() => setHostRouter(null));
+
+    it.each([
+      ['get-automation-status', true], ['configure-autostart', false], ['configure-crash-detection', false],
+      ['configure-discord-webhook', false], ['configure-broadcasts', false], ['configure-scheduled-restart', false]
+    ])('runs %s on that machine', async (channel, read) => {
+      await handlers[channel]({ serverId: 'far', requestId: 'r1' }, sender);
+
+      expect(router).toHaveBeenCalledWith(channel, 'far', { serverId: 'far' }, read, sender);
+      expect(replies(channel)).toContainEqual({ success: true, there: true, requestId: 'r1' });
     });
   });
 });

@@ -1,6 +1,6 @@
 import { setupIPCHandlers } from './ipc-handlers';
 import { messagingService } from '../services/messaging.service';
-import { getAuthConfig, updateAuthConfig } from './auth-config';
+import { getAuthConfig, setMeshSignInRequired, updateAuthConfig } from './auth-config';
 import { resolveAuthVerify } from './user-bridge';
 import { invalidateSessionsFor } from '../utils/session-store.utils';
 import type { MainToChildMessage } from '../types/messaging.types';
@@ -8,7 +8,7 @@ import type { MainToChildMessage } from '../types/messaging.types';
 jest.mock('../services/messaging.service', () => ({
   messagingService: { sendToWebSocket: jest.fn(), sendToAllWebSockets: jest.fn(), closeWebSockets: jest.fn() }
 }));
-jest.mock('./auth-config', () => ({ updateAuthConfig: jest.fn(), getAuthConfig: jest.fn() }));
+jest.mock('./auth-config', () => ({ updateAuthConfig: jest.fn(), getAuthConfig: jest.fn(), setMeshSignInRequired: jest.fn() }));
 jest.mock('./user-bridge', () => ({ resolveAuthVerify: jest.fn() }));
 jest.mock('../utils/session-store.utils', () => ({ invalidateSessionsFor: jest.fn(() => []) }));
 
@@ -109,6 +109,24 @@ describe('ipc-handlers', () => {
     receive({ type: 'update-auth-config', authConfig });
 
     expect(updateAuthConfig).toHaveBeenCalledWith({ enabled: false, username: 'admin', passwordHash: 'hash' });
+  });
+
+  it('makes every socket sign in again when joining a mesh turns sign-in on', () => {
+    jest.mocked(getAuthConfig).mockReturnValueOnce(off).mockReturnValueOnce(on);
+
+    receive({ type: 'mesh-sign-in', required: true });
+
+    expect(setMeshSignInRequired).toHaveBeenCalledWith(true);
+    expect(messagingService.closeWebSockets).toHaveBeenCalledWith(1012, 'Sign-in settings changed');
+  });
+
+  it('leaves the sockets open when the mesh does not change who may sign in', () => {
+    jest.mocked(getAuthConfig).mockReturnValue(on);
+
+    receive({ type: 'mesh-sign-in', required: false });
+
+    expect(setMeshSignInRequired).toHaveBeenCalledWith(false);
+    expect(messagingService.closeWebSockets).not.toHaveBeenCalled();
   });
 
   it('ignores messages it does not know', () => {

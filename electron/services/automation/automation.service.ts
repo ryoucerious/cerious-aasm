@@ -68,7 +68,7 @@ export class AutomationService {
     serverId: string,
     enabled: boolean,
     frequency: AutomationSettings['restartFrequency'],
-    time: string,
+    time: string | string[],
     days: number[],
     warningMinutes: number
   ): Promise<AutomationConfigResult> {

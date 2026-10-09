@@ -240,15 +240,40 @@
   &.dash-select-wide { width: 170px; }
 }
 
+.dash-servers-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/// The search takes the room the filters leave, down to 140px; only short of that does it get a
+// row of its own. A wider starting size wrapped it while one row still had room.
+.dash-toolbar .dash-search {
+  flex: 1 1 0;
+  min-width: 140px;
+  max-width: 420px;
+}
+
+.dash-toolbar-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
 .server-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1.25rem;
   min-height: 120px;
 
+  // Rows as tall as their content: one server alone does not stretch to the grid's height.
   &.list-view {
     grid-template-columns: 1fr;
     gap: 0.75rem;
+    align-content: start;
+    min-height: 0;
   }
 }
 
@@ -287,7 +312,7 @@
   }
 
   &.online .server-card-hero-shade {
-    background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0.55) 100%);
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.15) 40%, rgba(0, 0, 0, 0.75) 100%);
   }
 }
 
@@ -300,10 +325,11 @@
   background-repeat: no-repeat;
 }
 
+// Darkest at the bottom, where the name and status sit; the top of the art stays clear.
 .server-card-hero-shade {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0.65) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.1) 0%, rgba(0, 0, 0, 0.25) 40%, rgba(0, 0, 0, 0.82) 100%);
 }
 
 .server-card-drag {
@@ -336,7 +362,7 @@
   font-size: 1.15rem;
   font-weight: $font-bold;
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
   @include text-ellipsis;
   min-width: 0;
 }
@@ -348,6 +374,9 @@
   font-size: 0.72rem;
   padding: 0.15rem 0.6rem;
   flex-shrink: 0;
+
+  // On the artwork an outline alone left the light theme's brown on a dark picture.
+  &.status-unreachable { background: var(--surface); }
 }
 
 // Session name, operator and assignee on the left; the join address on the right.
@@ -453,8 +482,12 @@ $server-card-detail-gap: 0.25rem;
   gap: 0.4rem;
   min-width: 0;
 
+  // A fixed box, so the value keeps its width even before the icon font has loaded and the
+  // ligature still reads as a word.
   .material-icons {
     font-size: 18px;
+    width: 18px;
+    overflow: hidden;
     color: var(--text-secondary);
     flex-shrink: 0;
   }
@@ -561,63 +594,83 @@ $server-card-detail-gap: 0.25rem;
   }
 
   &.danger { color: var(--danger); .material-icons { color: var(--danger); } }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+
+    &:hover { background: none; color: var(--text-primary); }
+  }
 }
 
 // List view: hero becomes a slim left strip, everything else flows in one row
+// One compact row: a map thumbnail, the name beside it, the stats on one line.
 .server-card.list-view {
   flex-direction: row;
-  align-items: stretch;
+  align-items: center;
 
   .server-card-hero {
-    width: 220px;
-    height: auto;
-    min-height: 96px;
+    width: 88px;
+    height: 56px;
     flex-shrink: 0;
+    margin: 0.5rem 0 0.5rem 0.6rem;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .server-card-drag {
+    top: 3px;
+    right: 3px;
+    font-size: 16px;
   }
 
   .server-card-body {
     flex-direction: row;
     align-items: center;
     gap: 1.25rem;
-    padding: 0.75rem 1rem;
+    padding: 0.5rem 0.9rem;
+    min-width: 0;
   }
+
+  .server-card-list-title {
+    flex: 1 1 12rem;
+    min-width: 0;
+
+    .server-card-map { @include text-ellipsis; }
+  }
+
+  // Folded into the line under the name; a column of its own squeezed the name and stats.
+  .server-card-details { display: none; }
+
+  // On the card, not the picture: the colours and shadow meant for the artwork come off.
+  .server-card-name {
+    font-size: 1rem;
+    color: var(--text-strong);
+    text-shadow: none;
+  }
+
+  .server-card-map {
+    color: var(--text-secondary);
+    text-shadow: none;
+  }
+
+  .server-card-details-main { min-height: 0; }
 
   // A quarter of the leftover width is not enough for "0 / 70 Players", so in a row the
   // stats take their natural width and wrap instead of ellipsing to a single character.
   .server-card-stats {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem 1.5rem;
-    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 0.35rem 1.25rem;
   }
 
   .server-stat {
     flex: 0 0 auto;
   }
 
-  // In a row the session name is one item among several, so it gives up width before the
-  // stats do and steps out entirely once the row is tight rather than being run over.
-  .server-card-details {
-    flex: 0 1 14rem;
-    min-width: 0;
-  }
-
-  @media (max-width: 1100px) {
-    .server-card-details { display: none; }
-  }
-
-  // The sparkline is the least important thing in the row, so it gives up its width first
-  // and drops out entirely once the row is tight.
-  .server-card-spark {
-    flex: 0 1 160px;
-    min-width: 0;
-    margin-top: 0;
-  }
-
-  @media (max-width: 1100px) {
-    .server-card-spark { display: none; }
-  }
+  // The least useful thing in a row, and the name needs the room more.
+  .server-card-spark { display: none; }
 
   .server-card-actions {
     margin-top: 0;
@@ -734,54 +787,62 @@ $server-card-detail-gap: 0.25rem;
   p { margin: 0; }
 }
 
+// Name, bar, uptime: a row per server. Rows keep their size as servers are added and the list
+// scrolls, where vertical bars got thinner until neither the uptime nor the name could be read.
+// The top ten in full; every server scrolls within the card.
 .dash-uptime-bars {
   display: flex;
-  align-items: flex-end;
-  gap: 0.75rem;
-  height: 170px;
-  padding-top: 0.25rem;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding-right: 0.25rem;
+
+  &.show-all {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+}
+
+.dash-uptime-more {
+  margin-top: 0.6rem;
+  align-self: flex-start;
 }
 
 .dash-uptime-bar {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(2rem, 1fr) auto;
   align-items: center;
-  gap: 0.35rem;
-  height: 100%;
+  gap: 0.6rem;
 }
 
 .dash-uptime-value {
   font-size: 0.72rem;
   color: var(--text-primary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 3.25rem;
 }
 
 .dash-uptime-track {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: 44px;
+  height: 8px;
   display: flex;
-  align-items: flex-end;
   background: var(--surface-base);
-  border-radius: 6px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .dash-uptime-fill {
-  width: 100%;
-  border-radius: 6px 6px 0 0;
-  background: linear-gradient(180deg, var(--success) 0%, var(--success-2) 100%);
-  transition: height 0.4s ease;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--success-2) 0%, var(--success) 100%);
+  transition: width 0.4s ease;
 
-  &.empty { height: 3px !important; background: var(--border-muted); }
+  &.empty { width: 3px !important; background: var(--border-muted); }
 }
 
 .dash-uptime-name {
   font-size: 0.72rem;
   color: var(--text-secondary);
-  max-width: 100%;
   @include text-ellipsis;
 }
 
@@ -789,6 +850,17 @@ $server-card-detail-gap: 0.25rem;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
+}
+
+.dash-action-group + .dash-action-group { margin-top: 0.9rem; }
+
+.dash-action-group-title {
+  margin-bottom: 0.45rem;
+  font-size: 0.7rem;
+  font-weight: $font-semibold;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .dash-action {
@@ -903,6 +975,100 @@ $server-card-detail-gap: 0.25rem;
   &.tone-primary { background: var(--primary); }
   &.tone-violet  { background: var(--violet); }
   &.tone-success { background: var(--success); }
+}
+
+// System Resources in a mesh: one block per member.
+.dash-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.dash-node-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+
+  & + & {
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-muted);
+  }
+}
+
+.dash-node-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-bottom: 0.1rem;
+
+  .material-icons {
+    font-size: 16px;
+    color: var(--text-secondary);
+  }
+}
+
+.dash-node-name {
+  font-size: 0.85rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-node-tag,
+.dash-node-quiet {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dash-node-tag {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-muted);
+  border-radius: 999px;
+}
+
+// Connected or Unreachable, at the end of the machine's row; the tone class colours it.
+.dash-node-pill {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: $font-semibold;
+  white-space: nowrap;
+}
+
+// How many of its servers run, its version, and when last heard from if it cannot be reached.
+.dash-node-detail {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dash-node-quiet { display: block; margin-bottom: 0.25rem; }
+
+.dash-node-meter {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(2rem, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dash-node-meter-name,
+.dash-node-meter-value {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dash-node-meter-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .dash-activity {
@@ -1021,10 +1187,72 @@ $server-card-detail-gap: 0.25rem;
   small { font-size: 0.72rem; line-height: 1.2; font-weight: $font-normal; color: var(--text-secondary); }
 }
 
+// What players type to connect, with a compact copy button.
+.server-header-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+
+  code {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+  }
+
+  .server-header-copy {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.1rem 0.25rem;
+
+    .material-icons { font-size: 15px; }
+  }
+}
+
 .server-header-actions {
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+.server-header-more-anchor {
+  position: relative;
+  display: flex;
+}
+
+// As tall as the buttons beside it, just narrower (.btn-icon-only reserves a taller box).
+// A restart counting down from the app: the players are hearing the warnings.
+.server-header-restart {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+
+  .material-icons {
+    font-size: 1.1rem;
+    margin-right: 0;
+  }
+}
+
+.server-header-actions .server-header-more {
+  min-width: 0;
+  min-height: 0;
+  padding: 0.4rem 0.55rem;
+}
+
+// The header does not clip, so the menu hangs from its button rather than the viewport.
+.card-menu.server-header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+}
+
+.server-header-menu-note {
+  margin: 0.15rem 0.65rem 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .settings-toolbar {
@@ -1048,6 +1276,44 @@ $server-card-detail-gap: 0.25rem;
     font-size: 1.15rem;
     font-weight: $font-semibold;
     color: var(--text-strong);
+  }
+}
+
+// Saved since the server started: takes effect at its next restart.
+.pending-mark {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+// The notices above a server's settings leave room before the page's first heading.
+.server-ports-closed,
+.settings-pending,
+.settings-unreachable {
+  margin-bottom: 1rem;
+}
+
+.settings-pending,
+.server-ports-closed {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+
+  span {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .btn {
+    flex: none;
   }
 }
 
@@ -1107,12 +1373,12 @@ $server-card-detail-gap: 0.25rem;
   .dash-bottom { grid-template-columns: 1fr; }
   .dash-side { grid-template-columns: 1fr; }
 
+  // Still a row with its thumbnail: the name takes a line, the stats and buttons wrap below it.
   .server-card.list-view {
-    flex-direction: column;
+    align-items: flex-start;
 
-    .server-card-hero { width: auto; height: 110px; }
-    .server-card-body { flex-direction: column; align-items: stretch; }
-    .server-card-spark { width: auto; }
+    .server-card-body { flex-wrap: wrap; gap: 0.5rem 1rem; }
+    .server-card-list-title { flex: 1 1 100%; }
   }
 
   .server-header {

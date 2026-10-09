@@ -43,6 +43,7 @@ export class AppUpdateService implements OnDestroy {
     // is dropped and never repeated. The desktop app has no socket and asks once.
     this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.requestStatus()));
     if (ipc.isElectron) this.requestStatus();
+    this.subs.push(this.messaging.receiveMessage('mesh-auth-changed').subscribe(() => this.requestStatus()));
   }
 
   ngOnDestroy(): void {

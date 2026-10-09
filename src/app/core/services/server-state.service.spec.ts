@@ -33,10 +33,13 @@ describe('ServerStateService', () => {
     expect(service.mapServerState('custom')).toBe('Custom');
   });
 
+  // Saved while it runs, a change takes effect at the next start; only a machine out of reach locks them.
   it('should determine if settings are locked', () => {
-    expect(service.areSettingsLocked('starting')).toBeTrue();
-    expect(service.areSettingsLocked('stopping')).toBeTrue();
-    expect(service.areSettingsLocked('running')).toBeTrue();
+    expect(service.areSettingsLocked('starting')).toBeFalse();
+    expect(service.areSettingsLocked('stopping')).toBeFalse();
+    expect(service.areSettingsLocked('running')).toBeFalse();
+    // Its machine cannot be reached: a change would not get there.
+    expect(service.areSettingsLocked('unreachable')).toBeTrue();
     expect(service.areSettingsLocked('stopped')).toBeFalse();
   });
 

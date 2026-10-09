@@ -45,6 +45,14 @@ describe('LiveServersService', () => {
     expect(service.servers[1].state).toBe('running');
   });
 
+  it('times uptime from when the host says the server started, which another node sends', () => {
+    instances$.next([{ id: 'a', name: 'A', state: 'starting' }]);
+
+    channels['server-instance-state'].next({ instanceId: 'a', state: 'running', startedAt: 1_000 });
+
+    expect(service.find('a')?.startedAt).toBe(1_000);
+  });
+
   it('applies live state, player, memory and cpu updates', () => {
     instances$.next([{ id: 'a', name: 'A', state: 'stopped', maxPlayers: 10 }]);
     channels['server-instance-state'].next({ instanceId: 'a', state: 'running' });
@@ -78,6 +86,15 @@ describe('LiveServersService', () => {
     instances$.next([{ id: 'a', name: 'A', state: 'running' }]);
     expect(service.find('a')?.cpu).toBe(5);
     expect(service.find('a')?.startedAt).toBe(100);
+  });
+
+  // Players, memory and uptime from before its machine went quiet are no longer known.
+  it('keeps nothing it last knew of a server whose machine cannot be reached', () => {
+    instances$.next([{ id: 'a', name: 'A', state: 'running', startedAt: 100, cpu: 5, memory: 900, players: 7 }]);
+
+    instances$.next([{ id: 'a', name: 'A', state: 'unreachable' }]);
+
+    expect(service.find('a')).toEqual(jasmine.objectContaining({ state: 'unreachable', players: 0, cpu: null, memory: undefined, startedAt: null }));
   });
 
   it('merges configuration updates without touching state', () => {

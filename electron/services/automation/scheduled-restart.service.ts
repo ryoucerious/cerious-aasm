@@ -6,8 +6,14 @@ import { getStandardEventCallbacks } from '../server-instance/instance-events';
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { serverLifecycleService } from '../server-instance/server-lifecycle.service';
 import { serverProcessService } from '../server-instance/server-process.service';
+import { warningMarks } from '../../utils/warning-marks.utils';
 
 const MINUTE_MS = 60 * 1000;
+/**
+ * A mark reached later than this (a host busy, or waking from sleep, as the timer was due) is passed
+ * over: announcing it then would give the players the wrong time.
+ */
+const LATE_MARK_MS = 30 * 1000;
 
 /** The warning countdown of a restart in progress; finishing it early lets the restart see it was cancelled. */
 interface Countdown {
@@ -15,7 +21,14 @@ interface Countdown {
   finish: () => void;
 }
 
-/** Restarts servers on their schedule: warns the players over RCON, stops gracefully, starts again. */
+function warningText(minutes: number): string {
+  return `Server will restart in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}!`;
+}
+
+/**
+ * Restarts servers on their schedule, at the time entered: warns the players over RCON, counting down
+ * to that time, then stops gracefully and starts again.
+ */
 export class ScheduledRestartService {
   private automations: Map<string, ServerAutomation>;
   // Every (un)schedule starts a new generation. A restart in progress checks it after the warning,
@@ -49,7 +62,7 @@ export class ScheduledRestartService {
     const automation = this.automations.get(serverId);
     if (!automation) return;
 
-    const nextRestart = computeNextRun(restartSchedule(automation.settings), after);
+    const nextRestart = nextRestartAt(automation.settings, after);
     if (!nextRestart) {
       console.warn(`[scheduled-restart] Not scheduling restarts for ${serverId}: a "${automation.settings.restartFrequency}" schedule with these settings never runs`);
       return;
@@ -57,14 +70,17 @@ export class ScheduledRestartService {
 
     automation.status.isScheduled = true;
     automation.status.nextRestart = nextRestart;
+    // The countdown starts the warning period before the restart, or now when that has begun.
+    const marks = warningMarks(automation.settings.restartWarningMinutes);
+    const countdownStart = nextRestart.getTime() - marks[0] * MINUTE_MS;
     automation.scheduledRestartTimer = setTimeout(() => {
-      void this.runScheduledRestart(serverId, generation, nextRestart);
-    }, nextRestart.getTime() - Date.now());
+      void this.runScheduledRestart(serverId, generation, nextRestart, marks);
+    }, Math.max(0, countdownStart - Date.now()));
   }
 
-  private async runScheduledRestart(serverId: string, generation: number, due: Date): Promise<void> {
+  private async runScheduledRestart(serverId: string, generation: number, due: Date, marks: number[]): Promise<void> {
     try {
-      await this.restart(serverId, generation);
+      if (await this.countDown(serverId, generation, due.getTime(), marks)) await this.restart(serverId);
     } catch (error) {
       console.error(`[scheduled-restart] Scheduled restart of ${serverId} failed:`, error);
     }
@@ -73,19 +89,31 @@ export class ScheduledRestartService {
     }
   }
 
-  private async restart(serverId: string, generation: number): Promise<void> {
-    const automation = this.automations.get(serverId);
-    if (!automation || serverProcessService.getInstanceState(serverId) !== 'running') {
+  /**
+   * Warns the players of a running server at each mark still ahead, and waits until the restart is
+   * due. False when the schedule was changed or turned off meanwhile.
+   */
+  private async countDown(serverId: string, generation: number, due: number, marks: number[]): Promise<boolean> {
+    for (const minutes of marks) {
+      const markAt = due - minutes * MINUTE_MS;
+      if (markAt > Date.now()) await this.waitForCountdown(serverId, markAt - Date.now());
+      if (this.generations.get(serverId) !== generation) return false;
+      if (minutes === 0) return true;
+      if (Date.now() - markAt > LATE_MARK_MS) continue;
+      if (serverProcessService.getInstanceState(serverId) !== 'running') continue;
+      // Not waited for: a warning that fails, or is slow to go out, does not move the restart.
+      void this.broadcast(serverId, warningText(minutes)).then(sent => {
+        if (!sent) console.warn(`[scheduled-restart] Could not warn the players on ${serverId} of its restart in ${minutes} min`);
+      });
+    }
+    return true;
+  }
+
+  private async restart(serverId: string): Promise<void> {
+    if (!this.automations.has(serverId) || serverProcessService.getInstanceState(serverId) !== 'running') {
       console.log(`[scheduled-restart] ${serverId} is not running; skipping its scheduled restart`);
       return;
     }
-
-    const warningMinutes = automation.settings.restartWarningMinutes;
-    if (warningMinutes > 0 && await this.broadcast(serverId, `Server will restart in ${warningMinutes} minutes!`)) {
-      await this.waitForCountdown(serverId, warningMinutes * MINUTE_MS);
-    }
-    if (this.generations.get(serverId) !== generation) return;
-    if (serverProcessService.getInstanceState(serverId) !== 'running') return;
 
     await this.broadcast(serverId, 'Server restarting now!');
     // Through the graceful stop, which marks the server stopping first: its exit is then a stop,
@@ -110,8 +138,13 @@ export class ScheduledRestartService {
   }
 
   private async broadcast(serverId: string, message: string): Promise<boolean> {
-    const result = await rconService.executeRconCommand(serverId, `broadcast ${message}`);
-    return result.success;
+    try {
+      const result = await rconService.executeRconCommand(serverId, `broadcast ${message}`);
+      return result.success;
+    } catch (error) {
+      console.warn(`[scheduled-restart] Broadcast to ${serverId} failed:`, error);
+      return false;
+    }
   }
 
   private waitForCountdown(serverId: string, ms: number): Promise<void> {
@@ -125,6 +158,21 @@ export class ScheduledRestartService {
       this.countdowns.set(serverId, { timer, finish });
     });
   }
+}
+
+/** The restart times; older versions saved only one, as restartTime. */
+export function restartTimesOf(settings: Pick<AutomationSettings, 'restartTime' | 'restartTimes'>): string[] {
+  const times = (settings.restartTimes || []).filter(time => typeof time === 'string' && time);
+  return times.length ? times : [settings.restartTime];
+}
+
+/** The soonest of the restart times after `after`, or null when the schedule never runs. */
+function nextRestartAt(settings: AutomationSettings, after: Date): Date | null {
+  const schedule = restartSchedule(settings);
+  const next = restartTimesOf(settings)
+    .map(time => computeNextRun({ ...schedule, time }, after))
+    .filter((date): date is Date => date !== null);
+  return next.length ? new Date(Math.min(...next.map(date => date.getTime()))) : null;
 }
 
 // Only daily and weekly are offered; the UI shows 'custom' as the chosen days at the chosen time.

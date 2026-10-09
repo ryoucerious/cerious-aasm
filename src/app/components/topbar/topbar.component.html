@@ -48,6 +48,10 @@
   </div>
 
   <div class="topbar-actions">
+    <button type="button" class="topbar-mesh" *ngIf="meshHealth" [ngClass]="meshTone" [title]="meshTitle" (click)="openMeshSettings()">
+      <span class="topbar-mesh-dot"></span>
+      <span class="topbar-mesh-text">{{ meshText }}</span>
+    </button>
     <button type="button" class="topbar-icon-btn" (click)="toggleTheme()" [title]="themeTitle" aria-label="Toggle theme">
       <span class="material-icons">{{ themeIcon }}</span>
     </button>

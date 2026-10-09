@@ -1,0 +1,58 @@
+.move-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.move-dialog-intro {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.move-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.move-dialog-step,
+.move-dialog-resumed,
+.move-dialog-note,
+.move-dialog-error,
+.move-dialog-hint {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.move-dialog-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.move-dialog-meter {
+  display: block;
+}
+
+.move-dialog-resumed,
+.move-dialog-note,
+.move-dialog-hint {
+  color: var(--text-secondary);
+}
+
+.move-dialog-error {
+  color: var(--danger);
+}
+
+.move-dialog-spinner {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-muted);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}

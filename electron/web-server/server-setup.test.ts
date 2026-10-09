@@ -10,7 +10,7 @@ import { setupIPCHandlers } from './ipc-handlers';
 import { installSocketAuth } from './socket-auth';
 
 jest.mock('express', () => {
-  const app = { use: jest.fn(), get: jest.fn(), post: jest.fn(), listen: jest.fn() };
+  const app = { use: jest.fn(), get: jest.fn(), post: jest.fn(), listen: jest.fn(), set: jest.fn() };
   const factory = Object.assign(jest.fn(() => app), {
     json: jest.fn(() => 'json-middleware'),
     static: jest.fn(() => 'static-middleware')
@@ -32,6 +32,36 @@ describe('server-setup', () => {
 
     beforeEach(() => {
       app = createApp() as unknown as typeof app;
+    });
+
+    describe('behind a reverse proxy', () => {
+      afterEach(() => { delete process.env.AASM_TRUST_PROXY; });
+
+      function trusted(value?: string): unknown {
+        if (value === undefined) delete process.env.AASM_TRUST_PROXY;
+        else process.env.AASM_TRUST_PROXY = value;
+        const made = createApp() as unknown as { set: jest.Mock };
+        const call = made.set.mock.calls.find(([name]) => name === 'trust proxy');
+        made.set.mockClear();
+        return call ? call[1] : 'not set';
+      }
+
+      it('ignores X-Forwarded headers unless a proxy is named, since any client could send them', () => {
+        expect(trusted()).toBe('not set');
+        expect(trusted('  ')).toBe('not set');
+      });
+
+      it('believes them from the proxies named', () => {
+        expect(trusted('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
+      });
+
+      it('reads a number as the count of proxies in front', () => {
+        expect(trusted('1')).toBe(1);
+      });
+
+      it('reads true as trusting whatever connects', () => {
+        expect(trusted('true')).toBe(true);
+      });
     });
 
     it('sets the security headers that work over plain HTTP on a LAN', () => {

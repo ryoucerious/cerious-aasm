@@ -1,0 +1,260 @@
+import { TestBed } from '@angular/core/testing';
+import { BehaviorSubject, Subject, of } from 'rxjs';
+import { MeshNodesService } from './mesh-nodes.service';
+import { MessagingService } from './messaging/messaging.service';
+import { WebSocketService } from './web-socket.service';
+import { IpcService } from './ipc.service';
+
+describe('MeshNodesService', () => {
+  let channels: Record<string, Subject<unknown>>;
+  let reply: unknown;
+  let sendMessage: jasmine.Spy;
+  let connected$: BehaviorSubject<boolean>;
+
+  const inMesh = { enabled: true, nodes: [{ nodeId: 'n1', name: 'Jareds-PC' }, { nodeId: 'n2', name: 'Basement Box' }] };
+
+  function create(isElectron = true): MeshNodesService {
+    channels = {};
+    connected$ = new BehaviorSubject(false);
+    sendMessage = jasmine.createSpy('sendMessage').and.callFake(() => of(reply));
+    TestBed.configureTestingModule({
+      providers: [
+        MeshNodesService,
+        {
+          provide: MessagingService,
+          useValue: {
+            sendMessage,
+            receiveMessage: (channel: string) => (channels[channel] = channels[channel] || new Subject<unknown>()).asObservable()
+          }
+        },
+        { provide: WebSocketService, useValue: { connected$ } },
+        { provide: IpcService, useValue: { isElectron } }
+      ]
+    });
+    return TestBed.inject(MeshNodesService);
+  }
+
+  it('names the machine each server runs on', () => {
+    reply = inMesh;
+    const nodes = create();
+
+    expect(nodes.nameOf('n2')).toBe('Basement Box');
+    expect(nodes.nameOf('unknown')).toBe('');
+    expect(nodes.nameOf(undefined)).toBe('');
+  });
+
+  it('names nothing outside a mesh', () => {
+    reply = { enabled: false, nodes: [] };
+
+    expect(create().nameOf('n1')).toBe('');
+  });
+
+  it('follows renames and a machine leaving the mesh, and says when they happen', () => {
+    reply = inMesh;
+    const nodes = create();
+    const heard = jasmine.createSpy('changed');
+    nodes.changed$.subscribe(heard);
+    heard.calls.reset();
+
+    channels['mesh-status'].next({ enabled: true, nodes: [{ nodeId: 'n1', name: 'Desk' }] });
+
+    expect(nodes.nameOf('n1')).toBe('Desk');
+    expect(nodes.nameOf('n2')).toBe('');
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  // "Mesh Degraded" was a line under the dashboard banner; the top bar shows it on every page now.
+  describe('the health of the mesh', () => {
+    const member = (nodeId: string, connected: boolean, status = 'alive') => ({ nodeId, name: nodeId, status, connected });
+
+    it('counts the machines it can reach, and how many changes to the mesh need', () => {
+      reply = {
+        enabled: true, degraded: true, voterCount: 4,
+        nodes: [member('n1', true), member('n2', true), member('n3', false), member('n4', false), member('old', false, 'removed')]
+      };
+
+      expect(create().health).toEqual({ state: 'degraded', reachable: 2, total: 4, needed: 3 });
+    });
+
+    it('says whether every machine can be reached, or only some while the mesh can still agree', () => {
+      reply = { enabled: true, degraded: false, voterCount: 3, nodes: [member('n1', true), member('n2', true), member('n3', true)] };
+      const nodes = create();
+      expect(nodes.health?.state).toBe('healthy');
+
+      channels['mesh-status'].next({ enabled: true, degraded: false, voterCount: 3, nodes: [member('n1', true), member('n2', true), member('n3', false)] });
+      expect(nodes.health).toEqual({ state: 'partial', reachable: 2, total: 3, needed: 2 });
+    });
+
+    it('says when this machine is reconnecting, or the others removed it', () => {
+      reply = { enabled: false, reconnecting: true, nodes: [] };
+      const nodes = create();
+      expect(nodes.health?.state).toBe('reconnecting');
+
+      channels['mesh-status'].next({ enabled: true, removedFromMesh: true, degraded: true, voterCount: 2, nodes: [member('n1', true), member('n2', false)] });
+      expect(nodes.health?.state).toBe('removed');
+    });
+
+    it('is nothing outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().health).toBeNull();
+    });
+
+    it('says when the health changes, though the machines did not', () => {
+      reply = { enabled: true, degraded: false, voterCount: 2, nodes: [member('n1', true), member('n2', true)] };
+      const nodes = create();
+      const heard = jasmine.createSpy('changed');
+      nodes.changed$.subscribe(heard);
+      heard.calls.reset();
+
+      channels['mesh-status'].next({ enabled: true, degraded: true, voterCount: 2, nodes: [member('n1', true), member('n2', true)] });
+
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(nodes.health?.state).toBe('degraded');
+    });
+  });
+
+  it('asks the web server once its socket is up, when a request can be answered', () => {
+    reply = inMesh;
+    const nodes = create(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    connected$.next(true);
+
+    expect(nodes.nameOf('n1')).toBe('Jareds-PC');
+  });
+
+  describe('where a server can move to', () => {
+    const member = (nodeId: string, extra: object = {}) => ({ nodeId, name: nodeId.toUpperCase(), status: 'alive', maintenance: false, connected: true, ...extra });
+
+    it('offers the connected members that are not draining, other than the one hosting it', () => {
+      reply = {
+        enabled: true,
+        nodeId: 'here',
+        nodes: [
+          member('here'), member('box'),
+          member('draining', { maintenance: true, status: 'maintenance' }),
+          member('down', { connected: false }),
+          member('gone', { status: 'removed', connected: false })
+        ]
+      };
+      const nodes = create();
+
+      expect(nodes.destinationsFor({ nodeId: 'here' })).toEqual([{ nodeId: 'box', name: 'BOX' }]);
+      expect(nodes.destinationsFor({ nodeId: 'box' })).toEqual([{ nodeId: 'here', name: 'HERE' }]);
+    });
+
+    it('treats a server without a node as one on this machine', () => {
+      reply = { enabled: true, nodeId: 'here', nodes: [member('here'), member('box')] };
+
+      expect(create().destinationsFor({})).toEqual([{ nodeId: 'box', name: 'BOX' }]);
+    });
+
+    it('offers nowhere outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().destinationsFor({ nodeId: 'here' })).toEqual([]);
+    });
+  });
+
+  // A server's ports are checked against the machine it runs on, which publishes its ranges.
+  describe('a machine\'s server ports', () => {
+    const ranges = { game: { start: 8000, end: 8100 }, query: { start: 28000, end: 28010 }, rcon: { start: 28020, end: 28030 } };
+    const withPorts = (portsOpen: boolean | null) => ({
+      enabled: true, nodeId: 'n1',
+      nodes: [{ nodeId: 'n1', name: 'PC 1' }, { nodeId: 'n2', name: 'asa-1', capabilities: { serverPorts: { ranges, portsOpen } } }]
+    });
+
+    it('are its ranges, and whether its firewall lets players in, with its name', () => {
+      reply = withPorts(false);
+
+      expect(create().serverPortsOf('n2')).toEqual({ name: 'asa-1', ranges, portsOpen: false });
+    });
+
+    it('are not known for a machine that has not said, or one not in the mesh', () => {
+      reply = withPorts(false);
+      const nodes = create();
+
+      expect(nodes.serverPortsOf('n1')).toBeNull();
+      expect(nodes.serverPortsOf('gone')).toBeNull();
+    });
+
+    it('says when a machine\'s firewall changes', () => {
+      reply = withPorts(false);
+      const nodes = create();
+      const heard = jasmine.createSpy('changed');
+      nodes.changed$.subscribe(heard);
+      heard.calls.reset();
+
+      channels['mesh-status'].next(withPorts(true));
+
+      expect(nodes.serverPortsOf('n2')?.portsOpen).toBeTrue();
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Players need a stable name to connect to, not whatever IP the panel was opened on.
+  describe('the host players connect to', () => {
+    const member = (nodeId: string, host: string) => ({ nodeId, name: nodeId, status: 'alive', maintenance: false, connected: true, host });
+
+    beforeEach(() => {
+      reply = { enabled: true, nodeId: 'here', nodes: [member('here', 'ark.example.com'), member('dallas', 'dallas.example.com')] };
+    });
+
+    it('is the address of the machine running the server', () => {
+      expect(create().joinHostFor({ nodeId: 'dallas' }, 'panel.example.com')).toBe('dallas.example.com');
+    });
+
+    it('is the name the page was opened by, for a server here, when other machines can use that name', () => {
+      expect(create().joinHostFor({ nodeId: 'here' }, 'panel.example.com')).toBeNull();
+    });
+
+    it('is this machine\'s address, for a server here, from the desktop app or localhost', () => {
+      expect(create().joinHostFor({ nodeId: 'here' }, 'localhost')).toBe('ark.example.com');
+    });
+
+    it('is not known outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().joinHostFor({}, 'localhost')).toBeNull();
+    });
+  });
+
+  describe('where a new server can go', () => {
+    const member = (nodeId: string, extra: object = {}) => ({ nodeId, name: nodeId.toUpperCase(), status: 'alive', maintenance: false, connected: true, ...extra });
+
+    it('offers each reachable member, saying which skip new servers', () => {
+      reply = {
+        enabled: true,
+        nodeId: 'here',
+        nodes: [
+          member('here'),
+          member('skipping', { maintenance: true, status: 'maintenance' }),
+          member('down', { connected: false }),
+          member('gone', { status: 'removed', connected: false })
+        ]
+      };
+
+      expect(create().placementChoices()).toEqual([
+        { nodeId: 'here', name: 'HERE', skipping: false },
+        { nodeId: 'skipping', name: 'SKIPPING', skipping: true }
+      ]);
+    });
+
+    it('offers no choice outside a mesh', () => {
+      reply = { enabled: false, nodes: [] };
+
+      expect(create().placementChoices()).toEqual([]);
+    });
+  });
+
+  it('asks again after a sign-in', () => {
+    reply = { enabled: false };
+    const nodes = create();
+    reply = inMesh;
+
+    channels['mesh-auth-changed'].next({});
+
+    expect(nodes.nameOf('n1')).toBe('Jareds-PC');
+  });
+});

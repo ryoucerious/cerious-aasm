@@ -1,5 +1,6 @@
 import { messagingService } from '../services/messaging.service';
 import { asPayload, errorMessage, onRequest, RequestContext, RequestOptions, RequestPayload } from './handler.utils';
+import { runForwardedRequest, setHostRouter } from '../services/host-routing';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: {
@@ -207,5 +208,69 @@ describe('onRequest', () => {
     await listener({ requestId: 'r1' }, sender);
 
     expect(later).not.toHaveBeenCalled();
+  });
+});
+
+// A page about a server on another machine of the mesh: the request runs on that machine.
+describe('onRequest for a server hosted elsewhere', () => {
+  const listenerFor = (channel: string) =>
+    mockMessaging.on.mock.calls.filter(([registered]) => registered === channel).at(-1)![1] as (payload: unknown, sender: unknown) => Promise<void>;
+  let router: jest.Mock;
+
+  beforeEach(() => {
+    mockMessaging.sendToOriginator.mockReset();
+    router = jest.fn(async () => null);
+    setHostRouter(router);
+  });
+
+  afterEach(() => setHostRouter(null));
+
+  it('answers with what the machine hosting the server answered, without running here', async () => {
+    const handler = jest.fn(async () => ({ success: true, here: true }));
+    onRequest('routed-read', handler, { host: { idKey: 'instanceId', read: true } });
+    router.mockResolvedValueOnce({ success: true, there: true });
+
+    await listenerFor('routed-read')({ instanceId: 'far', requestId: 'r1' }, sender);
+
+    expect(router).toHaveBeenCalledWith('routed-read', 'far', { instanceId: 'far' }, true, sender);
+    expect(handler).not.toHaveBeenCalled();
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('routed-read', { success: true, there: true, requestId: 'r1' }, sender);
+  });
+
+  it('runs here for a server hosted here', async () => {
+    const handler = jest.fn(async () => ({ success: true, here: true }));
+    onRequest('routed-write', handler, { host: { idKey: 'serverId' } });
+
+    await listenerFor('routed-write')({ serverId: 'isle', requestId: 'r2' }, sender);
+
+    expect(router).toHaveBeenCalledWith('routed-write', 'isle', { serverId: 'isle' }, false, sender);
+    expect(handler).toHaveBeenCalled();
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('routed-write', { success: true, here: true, requestId: 'r2' }, sender);
+  });
+
+  it('says why when the machine hosting the server cannot be asked', async () => {
+    onRequest('routed-down', async () => ({ success: true }), { host: { idKey: 'instanceId', read: true }, fallbackError: 'Could not read it' });
+    router.mockRejectedValueOnce(new Error('The node hosting that server is not available.'));
+
+    await listenerFor('routed-down')({ instanceId: 'far', requestId: 'r3' }, sender);
+
+    expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('routed-down', {
+      success: false, error: 'The node hosting that server is not available.', requestId: 'r3'
+    }, sender);
+  });
+
+  it('runs a request another machine forwarded, for a channel that allows it', async () => {
+    onRequest('forwardable', async payload => ({ success: true, got: payload.instanceId }), { host: { idKey: 'instanceId' } });
+
+    await expect(runForwardedRequest('forwardable', { instanceId: 'isle' }, false)).resolves.toEqual({ success: true, got: 'isle' });
+  });
+
+  // Only what each handler opted into: never any channel another machine names.
+  it('refuses a channel that did not opt in, and a change sent as a read', async () => {
+    onRequest('plain', async () => ({ success: true }));
+    onRequest('change-only', async () => ({ success: true }), { host: { idKey: 'instanceId' } });
+
+    await expect(runForwardedRequest('plain', {}, false)).rejects.toThrow('plain cannot be run for another machine.');
+    await expect(runForwardedRequest('change-only', { instanceId: 'isle' }, true)).rejects.toThrow('change-only cannot be run for another machine.');
   });
 });

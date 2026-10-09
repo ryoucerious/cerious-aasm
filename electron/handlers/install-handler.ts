@@ -1,5 +1,6 @@
 import { messagingService } from '../services/messaging.service';
 import { installService } from '../services/install.service';
+import { serverProcessService } from '../services/server-instance/server-process.service';
 import { onRequest } from './handler.utils';
 
 onRequest('check-install-requirements', payload => installService.checkInstallRequirements(payload.target));
@@ -11,6 +12,13 @@ onRequest('install', async (payload, { sender, requestId }) => {
   const report = (data: unknown) => {
     messagingService.sendToOriginator('install', { target: target || 'unknown', data, requestId }, sender);
   };
+
+  // SteamCMD cannot replace files a running server holds open. The page checks too, but only
+  // for the servers it knows of; this is this machine's own processes.
+  if (target === 'server' && serverProcessService.getActiveInstanceIds().length > 0) {
+    const error = 'Stop this machine\'s servers before installing or updating ARK.';
+    return { target, data: { error, message: error, step: 'error', phase: 'error', requestId } };
+  }
 
   const result = await installService.installComponent(target, progress => {
     if (typeof progress === 'string' && progress.startsWith('Error:')) {

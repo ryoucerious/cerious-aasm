@@ -9,6 +9,7 @@ import { MockMessagingService } from '../../../../../../test/mocks/mock-messagin
 import { MockNotificationService } from '../../../../../../test/mocks/mock-notification.service';
 import { MockServerInstanceService } from '../../../../../../test/mocks/mock-server-instance.service';
 import { MockGlobalConfigService } from '../../../../../../test/mocks/mock-global-config.service';
+import { MeshNodesService } from '../../../../core/services/mesh-nodes.service';
 
 describe('FirewallTabComponent', () => {
   let component: FirewallTabComponent;
@@ -103,6 +104,66 @@ describe('FirewallTabComponent', () => {
       expect(component.portsOutOfRange).toBe(2);
       expect(text()).toContain('outside the published range');
       expect(text()).toContain('Peer: 7901');
+    });
+  });
+
+  // Every machine has ranges its servers' ports come from, which its firewall opens once.
+  describe('this machine\'s server ports', () => {
+    const ranges = { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } };
+    const windows = (portsOpen: boolean | null): FirewallStatus =>
+      ({ enabled: false, platform: 'windows', serverPorts: { ranges, source: 'settings', portsOpen } });
+
+    it('checks the server\'s ports against them outside Docker too', () => {
+      render(windows(true), { gamePort: 7967, queryPort: 27015, rconPort: 27020 });
+
+      expect(component.portChecks.filter(c => !c.ok).map(c => [c.label, c.port])).toEqual([['Game', 7967], ['Peer', 7968]]);
+      expect(text()).toContain('outside this machine\'s server ports 7777–7900');
+    });
+
+    it('on Windows, says Windows Firewall keeps players out and where to open the ports, instead of Linux commands', () => {
+      render(windows(false), { gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+
+      expect(text()).toContain('Windows Firewall keeps players out of this machine\'s server ports');
+      expect(text()).toContain('Settings → Server Defaults → Server Ports');
+      expect(text()).not.toContain('sudo ufw');
+      expect(text()).not.toContain('Linux Firewall Configuration');
+    });
+
+    it('on Windows, says when players can get in', () => {
+      render(windows(true), { gamePort: 7777, queryPort: 27015, rconPort: 27020 });
+
+      expect(text()).toContain('Windows Firewall lets players reach this machine\'s server ports');
+    });
+  });
+
+  // The ports are checked against the machine the server runs on, not the one showing the page.
+  describe('a server on another machine of the mesh', () => {
+    const theirs = { game: { start: 8000, end: 8100 }, query: { start: 28000, end: 28010 }, rcon: { start: 28020, end: 28030 } };
+
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [FirewallTabComponent],
+        providers: [
+          { provide: MeshNodesService, useValue: {
+            isHere: (nodeId?: string | null) => !nodeId || nodeId === 'here',
+            serverPortsOf: (nodeId: string) => (nodeId === 'n2' ? { name: 'asa-1', ranges: theirs, portsOpen: false } : null)
+          } }
+        ]
+      });
+      fixture = TestBed.createComponent(FirewallTabComponent);
+      component = fixture.componentInstance;
+    });
+
+    it('checks its ports against that machine\'s ranges, and says where to open them', () => {
+      render({ enabled: true, platform: 'linux', serverPorts: { ranges: dockerStatus('published').docker as never, source: 'settings', portsOpen: null } },
+        { nodeId: 'n2', gamePort: 7777, queryPort: 28000, rconPort: 28020 });
+
+      expect(component.portChecks.filter(c => !c.ok).map(c => c.label)).toEqual(['Game', 'Peer']);
+      expect(text()).toContain('outside asa-1\'s server ports 8000–8100');
+      expect(text()).toContain('Windows Firewall keeps players out of asa-1\'s server ports');
+      expect(text()).toContain('Settings → Server Defaults → Server Ports on asa-1');
+      expect(text()).not.toContain('sudo ufw');
     });
   });
 

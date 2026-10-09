@@ -44,6 +44,87 @@ interface PackageManager {
   update: string[];
 }
 
+/**
+ * Where ldconfig is, looked at before the PATH: on Ubuntu it is /usr/sbin/ldconfig, and the PATH of
+ * an account that is not root has no /usr/sbin or /sbin, so a bare "ldconfig" is not found.
+ */
+export const LDCONFIG_PATHS = ['/usr/sbin/ldconfig', '/sbin/ldconfig'];
+/** The 32-bit loader, which the 32-bit C library installs on every distribution. */
+const LIBC32_FILES = ['/lib/ld-linux.so.2', '/lib32/ld-linux.so.2', '/usr/lib32/ld-linux.so.2'];
+const LIBASOUND_FILES = ['/usr/lib64/libasound.so.2', '/lib64/libasound.so.2', '/usr/lib/x86_64-linux-gnu/libasound.so.2', '/usr/lib/libasound.so.2'];
+/**
+ * A 32-bit C library in ldconfig's list. Debian's multiarch path names i386; Debian's libc6-i386
+ * (/lib32) and Fedora's glibc.i686 (/lib) do not, but only a 32-bit entry lacks the x86-64 tag.
+ */
+const LIBC32_LDCONFIG = 'libc\\.so\\.6 .*(i[36]86|x32)|libc\\.so\\.6 \\(libc6(\\)|, OS ABI)';
+
+/** Where a check looks: ldconfig before the PATH, and the files to look for when there is no ldconfig. */
+export interface LibraryLookup {
+  ldconfig: readonly string[];
+  files: readonly string[];
+}
+
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Shell lines that end the check: whether ldconfig lists the library, or, with no ldconfig on this
+ * machine at all, whether one of its files is there. A missing ldconfig is not a missing library.
+ */
+function findLibrary(ldconfigPattern: string, lookup: LibraryLookup): string[] {
+  return [
+    'ldconfig=""',
+    `for candidate in ${lookup.ldconfig.map(shellQuote).join(' ')}; do`,
+    '  if [ -x "$candidate" ]; then ldconfig="$candidate"; break; fi',
+    'done',
+    'if [ -z "$ldconfig" ]; then ldconfig="$(command -v ldconfig)"; fi',
+    'if [ -n "$ldconfig" ]; then',
+    `  "$ldconfig" -p | grep -qE ${shellQuote(ldconfigPattern)}`,
+    '  exit $?',
+    'fi',
+    `for file in ${lookup.files.map(shellQuote).join(' ')}; do`,
+    '  if [ -e "$file" ]; then exit 0; fi',
+    'done',
+    'exit 1'
+  ];
+}
+
+/**
+ * Whether the 32-bit C library SteamCMD runs on is installed. On apt dpkg answers: libc6:i386, or
+ * libc6-i386, which lib32gcc-s1 brings without the i386 architecture.
+ */
+export function libc32CheckCommand(lookup: LibraryLookup = { ldconfig: LDCONFIG_PATHS, files: LIBC32_FILES }): string {
+  return [
+    'if command -v dpkg >/dev/null 2>&1; then',
+    '  for package in libc6:i386 libc6-i386; do',
+    '    if dpkg -s "$package" 2>/dev/null | grep -q \'^Status: install ok installed\'; then exit 0; fi',
+    '  done',
+    'fi',
+    ...findLibrary(LIBC32_LDCONFIG, lookup)
+  ].join('\n');
+}
+
+// Ubuntu 23.04+ renamed libasound2 to libasound2t64 (64-bit time_t transition), so t64 is tried
+// first. A transitional libasound2 stub on 24.04 shows as installed without providing
+// snd_device_name_get_hint, which crashes Electron at startup. The check therefore:
+//   - passes when libasound2t64 is installed;
+//   - fails when it is in the apt cache but not installed (the stub must not count);
+//   - otherwise passes when libasound2 ships libasound.so.2 (Debian Bookworm, Ubuntu 22.04).
+//     dpkg -L rejects the 24.04 stub even when the apt lists are gone;
+//   - off apt, looks for the .so with ldconfig, or for the file when there is no ldconfig.
+export function alsaCheckCommand(lookup: LibraryLookup = { ldconfig: LDCONFIG_PATHS, files: LIBASOUND_FILES }): string {
+  return [
+    'if command -v dpkg >/dev/null 2>&1; then',
+    '  if dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; then exit 0; fi',
+    '  if apt-cache show libasound2t64 >/dev/null 2>&1; then exit 1; fi',
+    '  dpkg -L libasound2 2>/dev/null | grep -q \'libasound\\.so\\.2\'',
+    'else',
+    ...findLibrary('libasound\\.so\\.2', lookup).map(line => `  ${line}`),
+    'fi'
+  ].join('\n');
+}
+
 // Required dependencies for ARK server on Linux
 export const LINUX_DEPENDENCIES: LinuxDependency[] = [
   {
@@ -89,7 +170,7 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
       'pacman': 'lib32-glibc',
       'zypper': 'glibc-32bit'
     },
-    checkCommand: 'ldconfig -p | grep -E "libc\\.so\\.6.*i[36]86|libc\\.so\\.6.*x32"',
+    checkCommand: libc32CheckCommand(),
     description: '32-bit C library support required for SteamCMD (downloads ARK server files)',
     required: true
   },
@@ -102,24 +183,8 @@ export const LINUX_DEPENDENCIES: LinuxDependency[] = [
       'pacman': 'alsa-lib',
       'zypper': 'alsa'
     },
-    // Ubuntu 23.04+ renamed libasound2 to libasound2t64 (64-bit time_t transition), so t64 is
-    // tried first. A transitional libasound2 stub on 24.04 shows as installed without providing
-    // snd_device_name_get_hint, which crashes Electron at startup. The check therefore:
-    //   - passes when libasound2t64 is installed;
-    //   - fails when it is in the apt cache but not installed (the stub must not count);
-    //   - otherwise passes when libasound2 ships libasound.so.2 (Debian Bookworm, Ubuntu 22.04).
-    //     dpkg -L rejects the 24.04 stub even when the apt lists are gone;
-    //   - off apt, looks for the .so with ldconfig.
     aptAlternatives: ['libasound2t64', 'libasound2'],
-    checkCommand: [
-      'if command -v dpkg >/dev/null 2>&1; then',
-      '  if dpkg -l libasound2t64 2>/dev/null | grep -q \'^ii\'; then exit 0; fi',
-      '  if apt-cache show libasound2t64 >/dev/null 2>&1; then exit 1; fi',
-      '  dpkg -L libasound2 2>/dev/null | grep -q \'libasound\\.so\\.2\'',
-      'else',
-      '  ldconfig -p | grep -q \'libasound\\.so\\.2\'',
-      'fi'
-    ].join('\n'),
+    checkCommand: alsaCheckCommand(),
     description: 'ALSA audio library required by Electron (audio output is disabled at runtime)',
     required: true
   },

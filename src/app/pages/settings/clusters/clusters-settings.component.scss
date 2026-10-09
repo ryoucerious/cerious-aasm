@@ -1,0 +1,137 @@
+.cluster-create-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0 1rem;
+}
+
+.cluster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cluster-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.85rem;
+}
+
+.cluster-identity { min-width: 0; }
+
+.cluster-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cluster-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+
+  code { font-size: 0.78rem; }
+}
+
+.cluster-rename-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+
+  .cluster-rename-input {
+    flex: 1 1 10rem;
+    min-width: 0;
+  }
+}
+
+.cluster-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.cluster-servers,
+.cluster-sync {
+  margin-top: 0.75rem;
+}
+
+.cluster-servers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+
+  .cluster-label {
+    flex: 0 0 100%;
+    margin-bottom: 0;
+  }
+}
+
+.cluster-server {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.cluster-server-machine { color: var(--text-secondary); }
+
+.cluster-empty {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.cluster-sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  font-size: 0.82rem;
+
+  & + & { border-top: 1px solid var(--border-muted-1); }
+}
+
+.cluster-sync-machine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.cluster-sync-pill {
+  flex: 0 1 auto;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.cluster-sync-hint { margin-top: 0.4rem; }
+
+.cluster-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-muted-1);
+
+  .btn-danger { margin-left: auto; }
+}
+
+.cluster-notify {
+  margin-top: 0.75rem;
+
+  .settings-card-hint { margin: 0.25rem 0 0; }
+}

@@ -58,6 +58,9 @@ export class MessagingService extends EventEmitter {
    */
   scopeBroadcast: BroadcastScoper | null = null;
 
+  /** Sees every broadcast after it is sent. The mesh relays its servers' live events through it. */
+  broadcastTap: ((channel: string, data: unknown) => void) | null = null;
+
   /** The web server child that relays web clients, or null while it is not running. */
   setApiProcess(child: ChildProcess | null): void {
     this.apiProcess = child;
@@ -271,6 +274,11 @@ export class MessagingService extends EventEmitter {
     this.notifyObserver(observer => observer.recordFromBroadcast(channel, data));
     this.sendToAllRenderers(channel, data);
     this.broadcastToWebClients(channel, data);
+    try {
+      this.broadcastTap?.(channel, data);
+    } catch (error) {
+      console.error('[messaging] The broadcast relay failed:', error);
+    }
   }
 
   /** Send to every renderer and web client except the sender. */
@@ -294,6 +302,14 @@ export class MessagingService extends EventEmitter {
   private openSockets(): Socket[] {
     if (!this.wsServer) return [];
     return Array.from(this.wsServer.clients as Set<Socket>).filter(client => client.readyState === WebSocket.OPEN);
+  }
+
+  /**
+   * Credits something another machine of the mesh asked for here, as if it had come in on this
+   * channel, so the activity feed names whoever asked. The bus itself never saw the request.
+   */
+  noteForwardedAction(channel: string, payload: unknown, username: string | null): void {
+    this.notifyObserver(observer => observer.noteAction(channel, payload, username));
   }
 
   private notifyObserver(call: (observer: BusObserver) => void): void {

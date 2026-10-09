@@ -5,7 +5,7 @@ configuring, and running ARK: Survival Ascended dedicated servers on Windows and
 
 ## Features
 
-- Install and update ARK servers via SteamCMD
+- Install and update ARK servers via SteamCMD; an update downloads while the servers keep running
 - Manage multiple server instances, including clusters
 - Live player count, server status, and port checks
 - RCON command support

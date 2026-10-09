@@ -9,6 +9,7 @@ import {
   UNMATCHABLE_BCRYPT_HASH, effectivePermissions
 } from '../../types/auth.types';
 import type { ActivityEntry, ActivityKind } from '../activity-log.service';
+import { verifyArgon2id } from '../mesh/passwords';
 
 const SALT_ROUNDS = 12;
 const SCHEMA_VERSION = 1;
@@ -24,6 +25,8 @@ interface UserRow {
   active: number;
   owner_user_id?: string | null;
   cli_locked: number;
+  machine_node_id?: string | null;
+  updates_any_machine?: number | null;
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
@@ -48,6 +51,32 @@ interface RoleRow {
   updated_at: number;
 }
 
+/** An account as the mesh stores it. In a mesh this database mirrors those. */
+export interface MeshAccount {
+  userId: string;
+  username: string;
+  displayName: string;
+  /** bcrypt or Argon2id; the hash itself says which. */
+  passwordHash: string;
+  enabled: boolean;
+  roleId: string;
+  ownerUserId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** For a machine admin: its machine, and whether it may update every machine. */
+  machineNodeId?: string | null;
+  updatesAnyMachine?: boolean;
+}
+
+/** How long an account made or changed here is kept while its copy to the mesh is under way. */
+const UNSYNCED_GRACE_MS = 60_000;
+
+export interface MeshAccountRole {
+  roleId: string;
+  name: string;
+  permissions: string[];
+}
+
 export interface CreateUserInput {
   username: string;
   password: string;
@@ -56,6 +85,10 @@ export interface CreateUserInput {
   active?: boolean;
   /** The operator whose pool this account joins. Null is the admin pool. Ignored for admins and operators. */
   ownerUserId?: string | null;
+  /** For a machine admin, the machine it looks after; required for one, ignored for every other role. */
+  machineNodeId?: string | null;
+  /** For a machine admin: it may update ARK and the app on every machine, not only its own. */
+  updatesAnyMachine?: boolean;
 }
 
 export interface UpdateUserInput {
@@ -68,6 +101,10 @@ export interface UpdateUserInput {
   password?: string;
   /** When present, moves the account to that operator's pool; null is the admin pool. */
   ownerUserId?: string | null;
+  /** When present, the machine a machine admin looks after. */
+  machineNodeId?: string | null;
+  /** When present, whether a machine admin may update every machine. */
+  updatesAnyMachine?: boolean;
 }
 
 export interface RoleInput {
@@ -276,6 +313,11 @@ export class UserDatabaseService {
     if (!columns.some(column => column.name === 'owner_user_id')) {
       this.conn.run('ALTER TABLE users ADD COLUMN owner_user_id TEXT');
     }
+    // Installs created before machine admins.
+    if (!columns.some(column => column.name === 'machine_node_id')) {
+      this.conn.run('ALTER TABLE users ADD COLUMN machine_node_id TEXT');
+      this.conn.run('ALTER TABLE users ADD COLUMN updates_any_machine INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   private seedBuiltInRoles(): void {
@@ -465,6 +507,38 @@ export class UserDatabaseService {
     return rows.map(row => this.toUser(row));
   }
 
+  /**
+   * In-process copy for mesh import. The hash stays in the main process; the renderer never
+   * receives it. Standalone login continues to use verifyCredentials.
+   */
+  exportCredentialRows(): Array<{
+    id: string;
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    roleId: string;
+    active: boolean;
+    ownerUserId: string | null;
+    cliLocked: boolean;
+    machineNodeId: string | null;
+    updatesAnyMachine: boolean;
+  }> {
+    this.ensureOpen();
+    // Oldest first: the first admin is the one a machine joining a mesh takes with it.
+    return this.queryAll<UserRow>('SELECT * FROM users ORDER BY created_at ASC').map(row => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      passwordHash: row.password_hash,
+      roleId: row.role_id,
+      active: row.active === 1,
+      ownerUserId: row.owner_user_id || null,
+      cliLocked: !!row.cli_locked,
+      machineNodeId: row.machine_node_id || null,
+      updatesAnyMachine: !!row.updates_any_machine
+    }));
+  }
+
   getUser(id: string): User | null {
     this.ensureOpen();
     const row = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
@@ -497,14 +571,18 @@ export class UserDatabaseService {
     }
     const owner = this.normalizeOwner(input.roleId, input.ownerUserId);
     if (owner.error) return { success: false, error: owner.error };
+    const machine = this.normalizeMachine(input.roleId, input.machineNodeId, input.updatesAnyMachine);
+    if (machine.error) return { success: false, error: machine.error };
 
     const now = Date.now();
     const id = randomUUID();
     const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
     this.conn.run(
-      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, owner_user_id, created_at, updated_at, last_login_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, owner.id, now, now]
+      `INSERT INTO users (id, username, password_hash, display_name, role_id, active, owner_user_id, machine_node_id, updates_any_machine,
+         created_at, updated_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [id, username, passwordHash, (input.displayName || '').trim(), input.roleId, input.active === false ? 0 : 1, owner.id,
+        machine.nodeId, machine.updatesAny ? 1 : 0, now, now]
     );
     return { success: true, data: this.getUser(id)! };
   }
@@ -529,6 +607,12 @@ export class UserDatabaseService {
       ? this.normalizeOwner(roleId, input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId)
       : { id: existing.ownerUserId };
     if (owner.error) return { success: false, error: owner.error };
+    const machine = this.normalizeMachine(
+      roleId,
+      input.machineNodeId !== undefined ? input.machineNodeId : existing.machineNodeId,
+      input.updatesAnyMachine ?? existing.updatesAnyMachine
+    );
+    if (machine.error) return { success: false, error: machine.error };
 
     const active = input.active ?? existing.active;
     // Never allow the last active admin to be demoted or disabled: that would lock everyone out.
@@ -555,12 +639,12 @@ export class UserDatabaseService {
       ? await bcrypt.hash(input.password, SALT_ROUNDS)
       : null;
 
+    const values = [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id,
+      machine.nodeId, machine.updatesAny ? 1 : 0, Date.now()];
     this.conn.run(
-      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, updated_at = ?
-       ${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
-      passwordHash
-        ? [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), passwordHash, input.id]
-        : [username, (input.displayName ?? existing.displayName).trim(), roleId, active ? 1 : 0, owner.id, Date.now(), input.id]
+      `UPDATE users SET username = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?, machine_node_id = ?,
+         updates_any_machine = ?, updated_at = ?${passwordHash ? ', password_hash = ?' : ''} WHERE id = ?`,
+      passwordHash ? [...values, passwordHash, input.id] : [...values, input.id]
     );
     return { success: true, data: this.getUser(input.id)! };
   }
@@ -593,13 +677,7 @@ export class UserDatabaseService {
       ? this.queryOne<UserRow>('SELECT * FROM users WHERE username = ? COLLATE NOCASE', [name])
       : undefined;
 
-    const hash = row?.password_hash || UNMATCHABLE_BCRYPT_HASH;
-    let ok = false;
-    try {
-      ok = await bcrypt.compare(password || '', hash);
-    } catch {
-      ok = false;
-    }
+    const ok = await this.passwordMatches(password || '', row?.password_hash || UNMATCHABLE_BCRYPT_HASH);
 
     if (!row || !ok || !row.active) return null;
 
@@ -617,7 +695,7 @@ export class UserDatabaseService {
       return { success: false, error: 'This password is set on the command line and cannot be changed in the app.' };
     }
 
-    const ok = await bcrypt.compare(currentPassword || '', row.password_hash).catch(() => false);
+    const ok = await this.passwordMatches(currentPassword || '', row.password_hash);
     if (!ok) return { success: false, error: 'Current password is incorrect.' };
 
     const validation = this.validateCredentials(row.username, newPassword);
@@ -686,6 +764,18 @@ export class UserDatabaseService {
     return { id: owner.id };
   }
 
+  /** A machine admin must name its machine; every other role stores none. */
+  private normalizeMachine(
+    roleId: string,
+    machineNodeId: string | null | undefined,
+    updatesAny: boolean | undefined
+  ): { nodeId: string | null; updatesAny: boolean; error?: string } {
+    if (roleId !== ROLE_IDS.MACHINE_ADMIN) return { nodeId: null, updatesAny: false };
+    const nodeId = typeof machineNodeId === 'string' ? machineNodeId.trim() : '';
+    if (!nodeId) return { nodeId: null, updatesAny: false, error: 'Choose the machine this admin looks after.' };
+    return { nodeId, updatesAny: !!updatesAny };
+  }
+
   private countOtherActiveAdmins(excludeUserId: string): number {
     const row = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ? AND active = 1 AND id != ?', [ROLE_IDS.ADMIN, excludeUserId]);
     return row?.count ?? 0;
@@ -711,6 +801,110 @@ export class UserDatabaseService {
   private slugify(name: string): string {
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     return base || `role-${Date.now()}`;
+  }
+
+  /**
+   * Makes this database match the mesh's accounts and custom roles. Accounts and roles the mesh
+   * no longer has are removed; built-in roles keep their fixed permissions; an account set from
+   * the command line stays local and is left alone. The last sign-in time is this machine's
+   * own and is kept. Returns the ids that changed.
+   */
+  applyMeshAccounts(input: { users: MeshAccount[]; roles: MeshAccountRole[] }, now = Date.now()): { changedUserIds: string[]; changedRoleIds: string[] } {
+    this.ensureOpen();
+    const changedUserIds: string[] = [];
+    const changedRoleIds: string[] = [];
+    const meshUsers = new Map(input.users.map(user => [user.userId, user]));
+    const meshRoles = new Map(input.roles.map(role => [role.roleId, role]));
+    const meshNames = new Set(input.users.map(user => user.username.toLowerCase()));
+    this.conn.exec('BEGIN');
+    try {
+      const localUsers = this.queryAll<UserRow>('SELECT * FROM users');
+      const cliNames = new Set(localUsers.filter(row => row.cli_locked).map(row => row.username.toLowerCase()));
+      // Removed first, so a name the mesh now uses for another account or role is free.
+      for (const row of localUsers) {
+        if (meshUsers.has(row.id) || row.cli_locked) continue;
+        // Made or changed here moments ago: its copy to the mesh is on the way. A mesh account
+        // with the same name wins, though; the mesh would refuse this one.
+        if (now - row.updated_at < UNSYNCED_GRACE_MS && !meshNames.has(row.username.toLowerCase())) continue;
+        this.conn.run('DELETE FROM users WHERE id = ?', [row.id]);
+        changedUserIds.push(row.id);
+      }
+      for (const row of this.queryAll<RoleRow>('SELECT * FROM roles WHERE built_in = 0')) {
+        if (meshRoles.has(row.id)) continue;
+        const inUse = this.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM users WHERE role_id = ?', [row.id])?.count ?? 0;
+        if (inUse > 0) continue;
+        this.conn.run('DELETE FROM roles WHERE id = ?', [row.id]);
+        changedRoleIds.push(row.id);
+      }
+      for (const role of input.roles) {
+        const existing = this.queryOne<RoleRow>('SELECT * FROM roles WHERE id = ?', [role.roleId]);
+        if (existing?.built_in) continue;
+        const permissions = JSON.stringify(this.sanitizePermissions(role.permissions as Permission[]));
+        if (existing && existing.name === role.name && existing.permissions === permissions) continue;
+        if (existing) {
+          this.conn.run('UPDATE roles SET name = ?, permissions = ?, updated_at = ? WHERE id = ?', [role.name, permissions, now, role.roleId]);
+        } else {
+          this.conn.run('DELETE FROM roles WHERE name = ? COLLATE NOCASE AND built_in = 0', [role.name]);
+          this.conn.run(
+            'INSERT INTO roles (id, name, description, permissions, built_in, created_at, updated_at) VALUES (?, ?, \'\', ?, 0, ?, ?)',
+            [role.roleId, role.name, permissions, now, now]
+          );
+        }
+        changedRoleIds.push(role.roleId);
+      }
+      for (const user of input.users) {
+        const existing = this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [user.userId]);
+        if (existing?.cli_locked || (!existing && cliNames.has(user.username.toLowerCase()))) continue;
+        // Changed here moments ago, after the mesh's copy was written: that change is on its way.
+        // Only for that minute, so a node whose clock runs behind cannot be ignored for good.
+        if (existing && existing.updated_at > user.updatedAt && now - existing.updated_at < UNSYNCED_GRACE_MS) continue;
+        const machineNodeId = user.machineNodeId || null;
+        const updatesAny = user.updatesAnyMachine ? 1 : 0;
+        const values = [user.username, user.passwordHash, user.displayName, user.roleId, user.enabled ? 1 : 0, user.ownerUserId,
+          machineNodeId, updatesAny, user.createdAt, user.updatedAt];
+        if (existing && existing.username === user.username && existing.password_hash === user.passwordHash
+          && existing.display_name === user.displayName && existing.role_id === user.roleId && !!existing.active === user.enabled
+          && (existing.owner_user_id || null) === user.ownerUserId && (existing.machine_node_id || null) === machineNodeId
+          && (existing.updates_any_machine ? 1 : 0) === updatesAny) continue;
+        if (existing) {
+          this.conn.run(
+            `UPDATE users SET username = ?, password_hash = ?, display_name = ?, role_id = ?, active = ?, owner_user_id = ?,
+               machine_node_id = ?, updates_any_machine = ?, created_at = ?, updated_at = ? WHERE id = ?`,
+            [...values, user.userId]
+          );
+        } else {
+          this.conn.run(
+            `INSERT INTO users (username, password_hash, display_name, role_id, active, owner_user_id, machine_node_id, updates_any_machine,
+               created_at, updated_at, id, cli_locked, last_login_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+            [...values, user.userId]
+          );
+        }
+        changedUserIds.push(user.userId);
+      }
+      this.conn.exec('COMMIT');
+    } catch (error) {
+      this.conn.exec('ROLLBACK');
+      throw error;
+    }
+    return { changedUserIds, changedRoleIds };
+  }
+
+  /** A consistent copy of the whole database in `dest`, which must not exist yet. */
+  snapshotTo(dest: string): void {
+    this.ensureOpen();
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    this.conn.run('VACUUM INTO ?', [dest]);
+  }
+
+  /** bcrypt for accounts made on this machine, Argon2id for accounts the mesh has re-hashed. */
+  private async passwordMatches(password: string, hash: string): Promise<boolean> {
+    if (hash.startsWith('$argon2')) return verifyArgon2id(password, hash);
+    try {
+      return await bcrypt.compare(password, hash);
+    } catch {
+      return false;
+    }
   }
 
   private toRole(row: RoleRow): Role {
@@ -741,6 +935,8 @@ export class UserDatabaseService {
       active: !!row.active,
       ownerUserId: row.owner_user_id || null,
       cliLocked: !!row.cli_locked,
+      machineNodeId: row.machine_node_id || null,
+      updatesAnyMachine: !!row.updates_any_machine,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       lastLoginAt: row.last_login_at

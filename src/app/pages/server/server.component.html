@@ -16,8 +16,28 @@
     [rconConnected]="rconConnected"
     (startServer)="startServer()"
     (stopServer)="stopServer()"
-    (forceStopServer)="forceStopServer()">
+    [canMove]="canMoveServer"
+    [restartDueAt]="restartDueAt"
+    (forceStopServer)="forceStopServer()"
+    (restartServer)="askRestart()"
+    (cancelRestart)="cancelRestart()"
+    (moveServer)="openMove()">
   </app-server-header>
+
+  <app-modal [show]="showRestart" [title]="'Restart ' + (activeServerInstance.name || 'Server')" [maxWidth]="'520px'" (close)="showRestart = false">
+    <p>
+      Players are warned in game for {{ restartWarningMinutes }} {{ restartWarningMinutes === 1 ? 'minute' : 'minutes' }},
+      counting down to the restart, then the server saves and starts again. You can cancel it until then.
+    </p>
+    <p class="form-control-label desc">Restart now skips the warnings: use it when nobody is playing.</p>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="showRestart = false">Cancel</button>
+      <button type="button" class="btn" (click)="confirmRestart(false)">Restart now</button>
+      <button type="button" class="btn btn-primary" (click)="confirmRestart(true)">Warn players and restart</button>
+    </div>
+  </app-modal>
+
+  <app-move-server-dialog [server]="movingServer" (closed)="closeMove()"></app-move-server-dialog>
 
   <div class="page-panel settings-panel" *ngIf="activeTab === 'console'">
     <div class="settings-toolbar">
@@ -56,6 +76,9 @@
     [serverInstance]="activeServerInstance"
     [activeTab]="activeTab"
     [isLocked]="settingsLocked"
+    [pendingKeys]="pendingKeys"
+    (restartRequested)="askRestart()"
+    [machineUnreachable]="unreachable"
     [generalFields]="generalFields"
     [ratesFields]="ratesFields"
     [structuresFields]="structuresPvpFields"
@@ -90,6 +113,7 @@
     (restoreBackup)="restoreBackup($event)"
     (downloadBackup)="downloadBackup($event)"
     (deleteBackup)="deleteBackup($event)"
+    (backupsChanged)="loadBackupList()"
     (saveAutoStartSettings)="saveAutoStartSettings()"
     (saveCrashDetectionSettings)="saveCrashDetectionSettings()"
     (saveScheduledRestartSettings)="saveScheduledRestartSettings()">

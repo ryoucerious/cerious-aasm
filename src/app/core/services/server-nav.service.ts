@@ -39,7 +39,7 @@ export const SERVER_TABS: ServerTabDef[] = [
   { id: 'automation', label: 'Automation',         icon: 'schedule',      group: 'features' },
   { id: 'broadcasts', label: 'Broadcasts',         icon: 'campaign',      group: 'features' },
   { id: 'discord',    label: 'Discord',            icon: 'chat',          group: 'features' },
-  { id: 'firewall',   label: 'Firewall',           icon: 'security',      group: 'features', linuxOnly: true },
+  { id: 'firewall',   label: 'Firewall',           icon: 'security',      group: 'features' },
   { id: 'backup',     label: 'Backup',             icon: 'backup',        group: 'features' }
 ];
 
@@ -110,7 +110,7 @@ export class ServerNavService implements OnDestroy {
 
   /**
    * Tabs to show for the current mode. Expert mode swaps the managed configuration pages for
-   * the raw INI editors; Firewall only appears on Linux hosts.
+   * the raw INI editors.
    */
   visibleTabs(expertMode = this.expertMode, isLinux = this.isLinux): ServerTabDef[] {
     return SERVER_TABS.filter(tab => {

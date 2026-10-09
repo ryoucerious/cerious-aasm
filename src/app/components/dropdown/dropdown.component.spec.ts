@@ -25,6 +25,11 @@ describe('DropdownComponent', () => {
 
   const button = () => fixture.nativeElement.querySelector('button') as HTMLButtonElement;
   const items = () => Array.from(fixture.nativeElement.querySelectorAll('.dropdown-menu div[role="option"]')) as HTMLElement[];
+  /** Places the open list again now its height is known, as the frame after opening does. */
+  const settle = () => {
+    dropdown.onViewportChange();
+    fixture.detectChanges();
+  };
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({ imports: [HostComponent] }).compileComponents();
@@ -115,7 +120,24 @@ describe('DropdownComponent', () => {
   it('follows the field when the page scrolls', () => {
     button().click();
     fixture.detectChanges();
+    settle();
     const before = { ...(dropdown as any).menuPosition };
+
+    (dropdown as any).menuPosition = { left: -999, top: -999 };
+    dropdown.onViewportChange();
+
+    expect((dropdown as any).menuPosition).toEqual(before);
+  });
+
+  // Failed now and then in the full run: where the field sat on the test page decided whether
+  // the list flipped above it, and the opening placement had not flipped yet.
+  it('follows the field when the list opens above it', () => {
+    (fixture.nativeElement as HTMLElement).style.cssText = 'position: fixed; left: 0; bottom: 4px;';
+    button().click();
+    fixture.detectChanges();
+    settle();
+    const before = { ...(dropdown as any).menuPosition };
+    expect(before.top).toBeLessThan(button().getBoundingClientRect().top);
 
     (dropdown as any).menuPosition = { left: -999, top: -999 };
     dropdown.onViewportChange();

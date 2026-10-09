@@ -4,35 +4,6 @@
     <p class="form-control-label desc">Configure the essential server settings including name, map, passwords, and basic gameplay options.</p>
   </div>
 
-  <div class="settings-section ownership-section" *ngIf="showOwnership">
-    <h5>Ownership</h5>
-    <p class="section-desc">Which operator's pool this server is in, and who runs it.</p>
-
-    <div class="form-group">
-      <label class="form-control-label">Pool</label>
-      <app-dropdown *ngIf="canChooseOperator; else operatorText"
-                    [options]="operatorOptions"
-                    [ngModel]="serverInstance?.operatorUserId || ''"
-                    (ngModelChange)="onOperatorChange($event)"
-                    [disabled]="ownershipBusy"
-                    ariaLabel="Pool"></app-dropdown>
-      <ng-template #operatorText><div class="form-control-static">{{ operatorLabel }}</div></ng-template>
-      <div class="form-control-label desc">Only accounts in this pool can see the server. Admins see every pool.</div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-control-label">Assigned to</label>
-      <app-dropdown *ngIf="canChooseAssignee; else assigneeText"
-                    [options]="assigneeOptions"
-                    [ngModel]="serverInstance?.managerUserId || ''"
-                    (ngModelChange)="onAssigneeChange($event)"
-                    [disabled]="ownershipBusy"
-                    ariaLabel="Assigned to"></app-dropdown>
-      <ng-template #assigneeText><div class="form-control-static">{{ assigneeLabel }}</div></ng-template>
-      <div class="form-control-label desc">The server manager or attendant who runs this server. They have to be in the same pool.</div>
-    </div>
-  </div>
-
   <div class="settings-section">
     <h5>Server Settings</h5>
     <p class="section-desc">Configure your server's basic properties and settings.</p>
@@ -40,7 +11,7 @@
     <ng-container *ngFor="let field of generalFields">
       <div class="form-group">
         <ng-container *ngIf="field.type === 'multi-toggle'; else defaultField">
-          <label class="form-control-label">{{ field.label }}</label>
+          <label class="form-control-label">{{ field.label }} <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
           <div class="toggle-group" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; align-items: flex-start;">
             <ng-container *ngFor="let opt of textOptions(field)">
               <span style="display: inline-flex; align-items: center;">
@@ -56,10 +27,10 @@
         <ng-template #defaultField>
           <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
             <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-            <span class="toggle-text">{{ field.label }}</span>
+            <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
           </div>
           <label *ngIf="field.type !== 'boolean'" class="form-control-label">
-            <span>{{ field.label }}</span>
+            <span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
           </label>
           <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min || null" [max]="field.max || null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
           <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
@@ -147,6 +118,35 @@
         <span class="toggle-text">Enable BattlEye Anti-Cheat</span>
       </div>
       <div class="form-control-label desc">Enable BattlEye anti-cheat system to detect and prevent cheating. Recommended for public servers.</div>
+    </div>
+  </div>
+
+  <div class="settings-section ownership-section" *ngIf="showOwnership">
+    <h5>Ownership</h5>
+    <p class="section-desc">Which operator's pool this server is in, and who runs it.</p>
+
+    <div class="form-group">
+      <label class="form-control-label">Pool</label>
+      <app-dropdown *ngIf="canChooseOperator; else operatorText"
+                    [options]="operatorOptions"
+                    [ngModel]="serverInstance?.operatorUserId || ''"
+                    (ngModelChange)="onOperatorChange($event)"
+                    [disabled]="ownershipBusy"
+                    ariaLabel="Pool"></app-dropdown>
+      <ng-template #operatorText><div class="form-control-static">{{ operatorLabel }}</div></ng-template>
+      <div class="form-control-label desc">Only accounts in this pool can see the server. Admins see every pool.</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-control-label">Assigned to</label>
+      <app-dropdown *ngIf="canChooseAssignee; else assigneeText"
+                    [options]="assigneeOptions"
+                    [ngModel]="serverInstance?.managerUserId || ''"
+                    (ngModelChange)="onAssigneeChange($event)"
+                    [disabled]="ownershipBusy"
+                    ariaLabel="Assigned to"></app-dropdown>
+      <ng-template #assigneeText><div class="form-control-static">{{ assigneeLabel }}</div></ng-template>
+      <div class="form-control-label desc">The server manager or attendant who runs this server. They have to be in the same pool.</div>
     </div>
   </div>
 </div>

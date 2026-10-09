@@ -3,6 +3,15 @@ import { fetchLatestRelease, isNewerVersion, LATEST_RELEASE_PAGE } from '../util
 import { messagingService } from './messaging.service';
 import { linuxPackageUpdaterService } from './linux-package-updater.service';
 import { platformService } from './platform.service';
+import { stageDockerRuntimeUpdate } from './docker-runtime-update';
+import { isRunningInDocker } from '../utils/platform.utils';
+
+export interface AppUpdateApplyResult {
+  success: boolean;
+  error?: string;
+  relaunch?: boolean;
+  version?: string;
+}
 
 type UpdateStatus = Record<string, unknown>;
 
@@ -174,7 +183,47 @@ export class AutoUpdateService {
     sendAt(3000 + (steps + 1) * 500, { status: 'downloaded', ...release });
   }
 
-  /** Quits and installs a downloaded update. */
+  /**
+   * Downloads a newer release and installs it on this machine.
+   * A Docker node stages the runtime archive and relaunches the app process. The container stays up.
+   */
+  async applyAvailableUpdate(): Promise<AppUpdateApplyResult> {
+    if (isRunningInDocker()) {
+      try {
+        const staged = await stageDockerRuntimeUpdate(this.currentVersion());
+        return { success: true, relaunch: true, version: staged.version };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Could not update the app.' };
+      }
+    }
+    if (this.manualOnly || !this.supported) {
+      return { success: false, error: 'This install cannot update itself. Install the latest package, then restart the service.' };
+    }
+    if (this.useLinuxPackageUpdater) {
+      await linuxPackageUpdaterService.checkForUpdates();
+      if (!linuxPackageUpdaterService.isUpdateReady()) {
+        return { success: false, error: 'No newer package is ready to install.' };
+      }
+      return { success: true, relaunch: true };
+    }
+    try {
+      const checked = await autoUpdater.checkForUpdates();
+      const remote = checked?.updateInfo?.version || '';
+      if (!remote || !isNewerVersion(remote, this.currentVersion())) {
+        return { success: false, error: 'This install is already on the latest version.' };
+      }
+      await autoUpdater.downloadUpdate();
+      this.updateDownloaded = true;
+      return { success: true, relaunch: true, version: remote };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Could not update the app.' };
+    }
+  }
+
+  /**
+   * Quits and installs a downloaded update, then starts the app again. Silently: the update may
+   * come from another machine in the mesh, or the web interface, with no one here to click Next.
+   */
   quitAndInstall(): void {
     if (this.manualOnly) return;
 
@@ -185,7 +234,7 @@ export class AutoUpdateService {
 
     if (this.updateDownloaded) {
       console.log('[auto-update] Quitting to install the update');
-      autoUpdater.quitAndInstall();
+      autoUpdater.quitAndInstall(true, true);
     } else {
       console.warn('[auto-update] No update downloaded yet.');
     }
@@ -253,9 +302,10 @@ export class AutoUpdateService {
   private manualInstructions(version: string): string {
     if (platformService.isRunningInDocker()) {
       return [
-        `Version ${version} is available. This container cannot install it.`,
+        `Version ${version} is available.`,
         '',
-        'On the machine that runs Docker:',
+        'Settings, Mesh can apply it on this container: the app process restarts and the container stays up.',
+        'That needs the runtime archive from the release. When a release does not include one, on the Docker host:',
         '',
         'docker compose pull',
         'docker compose up -d',

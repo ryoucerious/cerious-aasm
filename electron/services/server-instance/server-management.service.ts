@@ -23,11 +23,28 @@ import type {
 } from '../../types/server-instance.types';
 import { arkConfigService } from '../ark-config.service';
 import { backupService } from '../backup/backup.service';
+import { carryClusterData } from '../clusters/cluster-import';
 import { validateDiscordConfig } from '../discord.service';
 import { schedulerService } from '../scheduler.service';
 import { whitelistService } from '../whitelist.service';
 import { serverMonitoringService } from './server-monitoring.service';
+import { changedPortsOutsideRanges } from '../../utils/ark/port-sets';
+import { recordStartedConfig } from '../../utils/ark/started-config.utils';
+import { getServerPortRanges } from '../../utils/server-ports.utils';
 import { serverProcessService } from './server-process.service';
+
+const PORT_NAMES = { Game: 'game port', Peer: 'peer port', Query: 'query port', RCON: 'RCON port' } as const;
+const RANGE_NAMES = { Game: 'game', Peer: 'game', Query: 'query', RCON: 'RCON' } as const;
+
+/** Why an edit cannot move a port outside this machine's ranges, which its firewall opens. */
+function refusePortsOutsideRanges(stored: Partial<InstanceConfig>, next: Partial<InstanceConfig>): string | null {
+  const [outside] = changedPortsOutsideRanges(stored, next, getServerPortRanges().ranges);
+  if (!outside) return null;
+  const { start, end } = outside.range;
+  const range = start === end ? `${start}` : `${start}–${end}`;
+  const port = outside.label === 'Peer' ? `${outside.port}, always the game port + 1,` : `${outside.port}`;
+  return `The ${PORT_NAMES[outside.label]} ${port} is outside this machine's ${RANGE_NAMES[outside.label]} ports (${range}). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.`;
+}
 
 export class ServerManagementService {
   /** Every instance's config.json merged with its live state, memory, CPU, uptime and players. */
@@ -94,6 +111,10 @@ export class ServerManagementService {
         return { success: false, error: 'Invalid port number' };
       }
       const stored = instance.id ? instanceUtils.getInstance(instance.id) : null;
+      const portRefusal = stored ? refusePortsOutsideRanges(stored, { ...stored, ...instance }) : null;
+      if (portRefusal) {
+        return { success: false, error: portRefusal };
+      }
       const invalidDiscordConfig = validateDiscordConfig(instance.discordConfig, stored?.discordConfig?.webhookUrl);
       if (invalidDiscordConfig) {
         return { success: false, error: invalidDiscordConfig };
@@ -223,14 +244,21 @@ export class ServerManagementService {
     }
 
     // Keeps an isolated instance writing its worlds where backups and restore expect them.
-    if (await linkInstanceSaveDir(instanceDir, getInstanceRuntimeRoot(instanceId))) {
+    const runtimeRoot = getInstanceRuntimeRoot(instanceId);
+    if (await linkInstanceSaveDir(instanceDir, runtimeRoot)) {
       console.log(`[server-management] Linked the runtime save directory for ${instanceId}`);
     }
+
+    // Before ARK reads the cluster: what its players uploaded under an ID of its own goes with it.
+    carryClusterData(instance, { instanceDir, runtimeRoot });
 
     if (!instance.rconPassword) {
       instance.rconPassword = generateRandomPassword(16);
       await this.saveGeneratedRconPassword(instanceId, instance.rconPassword);
     }
+
+    // What it starts with: settings saved while it runs wait for the next start, and the page marks them.
+    recordStartedConfig(instanceId, instance);
 
     try {
       arkConfigService.writeArkConfigFiles(instanceDir, instance, instanceId);

@@ -1,4 +1,5 @@
 import { isRunningInDocker } from './platform.utils';
+import { DEFAULT_SERVER_PORT_RANGES } from './ark/port-sets';
 
 export interface PortRange {
   start: number;
@@ -23,9 +24,9 @@ export interface DockerNetworkInfo {
 
 // The defaults in docker-compose.yml. Compose passes the same variables it publishes, so an
 // image started some other way still describes the standard setup.
-const DEFAULT_GAME_PORTS: PortRange = { start: 7777, end: 7900 };
-const DEFAULT_QUERY_PORTS: PortRange = { start: 27015, end: 27030 };
-const DEFAULT_RCON_PORTS: PortRange = { start: 27020, end: 27050 };
+const DEFAULT_GAME_PORTS: PortRange = DEFAULT_SERVER_PORT_RANGES.game;
+const DEFAULT_QUERY_PORTS: PortRange = DEFAULT_SERVER_PORT_RANGES.query;
+const DEFAULT_RCON_PORTS: PortRange = DEFAULT_SERVER_PORT_RANGES.rcon;
 const DEFAULT_WEB_PORT = 3000;
 
 const isPort = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;

@@ -10,8 +10,9 @@
  * compares against 'Running', and changing its words would change behaviour.
  */
 
+/** unreachable: on a mesh machine that has stopped answering, so its last known state may be stale. */
 export type ServerStatusKey =
-  | 'running' | 'stopped' | 'starting' | 'queued' | 'stopping' | 'crashed' | 'error';
+  | 'running' | 'stopped' | 'starting' | 'queued' | 'stopping' | 'crashed' | 'error' | 'unreachable';
 
 const LABELS: Record<ServerStatusKey, string> = {
   running: 'Online',
@@ -20,7 +21,8 @@ const LABELS: Record<ServerStatusKey, string> = {
   queued: 'Queued',
   stopping: 'Stopping',
   crashed: 'Crashed',
-  error: 'Error'
+  error: 'Error',
+  unreachable: 'Unreachable'
 };
 
 const CSS_CLASSES: Record<ServerStatusKey, string> = {
@@ -30,7 +32,8 @@ const CSS_CLASSES: Record<ServerStatusKey, string> = {
   queued: 'status-starting',
   stopping: 'status-stopping',
   crashed: 'status-error',
-  error: 'status-error'
+  error: 'status-error',
+  unreachable: 'status-unreachable'
 };
 
 /** Normalise any spelling of a state to one key. Anything unrecognised counts as offline. */
@@ -44,6 +47,7 @@ export function serverStatusKey(state: string | null | undefined): ServerStatusK
     case 'stopping': return 'stopping';
     case 'crashed': return 'crashed';
     case 'error': return 'error';
+    case 'unreachable': return 'unreachable';
     case 'stopped':
     case '':
     case 'unknown':

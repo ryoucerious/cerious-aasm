@@ -1,0 +1,17 @@
+// One row per restart time: the time, and a button to remove it once there is more than one.
+.restart-times {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.restart-time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+
+  input {
+    width: 9rem;
+  }
+}

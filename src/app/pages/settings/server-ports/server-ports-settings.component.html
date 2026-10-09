@@ -1,0 +1,70 @@
+<section class="settings-card server-ports" *ngIf="state">
+  <h3 class="settings-card-title">Server Ports</h3>
+  <p class="settings-card-hint">
+    New servers on this machine take their ports from these ranges, so the firewall only has to open
+    them once. A server moved here gets ports inside them too.
+  </p>
+
+  <div class="server-ports-ranges">
+    <ng-container *ngFor="let row of rows">
+      <label class="form-control-label" [attr.for]="row.key + '-start'">
+        {{ row.label }} <span class="server-ports-protocol">{{ row.protocol }}</span>
+      </label>
+      <input type="number" class="form-control input" [id]="row.key + '-start'" [attr.name]="row.key + '-start'"
+             min="1" max="65535" [(ngModel)]="form[row.key].start" [disabled]="docker"
+             [attr.aria-label]="row.label + ' from'" />
+      <span class="server-ports-to">to</span>
+      <input type="number" class="form-control input" [attr.name]="row.key + '-end'"
+             min="1" max="65535" [(ngModel)]="form[row.key].end" [disabled]="docker"
+             [attr.aria-label]="row.label + ' to'" />
+    </ng-container>
+  </div>
+  <label class="form-control-label desc">
+    Each server also uses the port after its game port. RCON stays closed to the internet: the panel reaches it on this machine.
+  </label>
+
+  <p class="form-control-label desc server-ports-docker" *ngIf="docker">
+    Set by docker-compose.yml, which publishes them: change AASM_GAME_PORTS, AASM_QUERY_PORTS and
+    AASM_RCON_PORTS there, then recreate the container.
+  </p>
+  <div class="settings-card-actions" *ngIf="!docker">
+    <button type="button" class="btn btn-primary" [disabled]="!changed || saving" (click)="save()">Save</button>
+  </div>
+
+  <div class="server-ports-firewall" *ngIf="state.windowsFirewall || state.windowsFirewallError">
+    <h4>Windows Firewall</h4>
+    <p class="server-ports-firewall-status" [class.ok]="!needsOpening && !state.windowsFirewallError">
+      <i class="material-icons" aria-hidden="true">{{ needsOpening || state.windowsFirewallError ? 'error_outline' : 'check_circle' }}</i>
+      <span>{{ firewallText }}</span>
+    </p>
+    <p class="server-ports-blocked" *ngIf="blockedText">{{ blockedText }}</p>
+    <ng-container *ngIf="needsOpening">
+      <div class="settings-card-actions" *ngIf="isDesktop">
+        <button type="button" class="btn btn-primary" (click)="openFirewall()">Open in Windows Firewall</button>
+      </div>
+      <label class="form-control-label desc" *ngIf="isDesktop">Windows asks for permission once. After that it doesn't ask about new servers here.</label>
+      <label class="form-control-label desc" *ngIf="state.meshPorts as mesh">
+        The ports the other machines of the mesh reach this one on, {{ mesh.peer }} and {{ mesh.raft }} (TCP), are opened too.
+      </label>
+      <label class="form-control-label desc" *ngIf="!isDesktop">
+        Open them from the desktop app on this machine: Windows asks for permission on its screen.
+      </label>
+    </ng-container>
+  </div>
+
+  <div class="server-ports-linux" *ngIf="state.linuxCommands">
+    <h4>Linux Firewall</h4>
+    <label class="form-control-label desc">Run these once on this machine. Your router still needs to forward the same ports.</label>
+    <pre class="firewall-commands">{{ state.linuxCommands }}</pre>
+  </div>
+
+  <div class="server-ports-outside" *ngIf="state.outside.length">
+    <h4>Servers Outside These Ports</h4>
+    <label class="form-control-label desc">
+      The firewall won't let players reach these ports. Change them in each server's settings, or widen the ranges.
+    </label>
+    <ul>
+      <li *ngFor="let server of state.outside">{{ server.name }}: {{ describePorts(server.ports) }}</li>
+    </ul>
+  </div>
+</section>

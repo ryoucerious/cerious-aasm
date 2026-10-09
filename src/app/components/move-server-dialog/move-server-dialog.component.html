@@ -1,0 +1,43 @@
+<app-modal [show]="!!server" [title]="title" maxWidth="460px" (close)="cancel()">
+  <div class="move-dialog" *ngIf="server">
+    <p class="move-dialog-intro">
+      The machine hosting this server copies its settings and saves to the machine you choose, which hosts it from
+      then on. It arrives stopped. The old copy is kept aside on the machine it leaves for 14 days.
+    </p>
+
+    <div class="form-group" *ngIf="destinations.length; else nowhere">
+      <label class="form-control-label">Move to</label>
+      <app-dropdown [options]="destinationOptions" [(ngModel)]="destinationId" name="destination"
+                    placeholder="Choose a machine" ariaLabel="Move to" [disabled]="moving"></app-dropdown>
+    </div>
+    <ng-template #nowhere>
+      <p class="move-dialog-error">No other machine can take it right now: every other member is unreachable or skipping new servers.</p>
+    </ng-template>
+
+    <div class="move-dialog-progress" *ngIf="moving" role="status" aria-live="polite">
+      <ng-container *ngIf="!copying; else copyingFiles">
+        <p class="move-dialog-step">
+          <span class="move-dialog-spinner" aria-hidden="true"></span>
+          {{ progress ? status : 'Copying ' + server.name + ' to ' + destinationName + '…' }}
+        </p>
+      </ng-container>
+      <ng-template #copyingFiles>
+        <p class="move-dialog-step">Copying {{ server.name }} to {{ destinationName }}: {{ copiedLabel }}</p>
+        <span class="meter move-dialog-meter"><span class="meter-fill tone-primary" [style.width.%]="percent"></span></span>
+      </ng-template>
+      <p class="move-dialog-resumed" *ngIf="resumedLabel">{{ resumedLabel }}</p>
+      <p class="move-dialog-note">A large world can take several minutes.</p>
+    </div>
+    <p class="move-dialog-error" *ngIf="error" role="alert">{{ error }}</p>
+    <p class="move-dialog-hint" *ngIf="error && canCarryOn">
+      What arrived on {{ destinationName }} is kept for a day. Move again to carry on from where this attempt stopped.
+    </p>
+
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancel()" [disabled]="moving">Cancel</button>
+      <button type="button" class="btn btn-primary move-dialog-confirm" (click)="move()" [disabled]="moving || !destinationId">
+        {{ moving ? 'Moving…' : 'Move' }}
+      </button>
+    </div>
+  </div>
+</app-modal>

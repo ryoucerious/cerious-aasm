@@ -29,6 +29,32 @@ describe('channel-permissions', () => {
     ]);
   });
 
+  // Forcing machines out, or leaving without the others, changes who is in the mesh: removing machines.
+  it('needs the remove-machines permission to force machines out or leave without the others', () => {
+    expect(permissionForChannel('force-remove-mesh-nodes')).toBe('nodes.remove');
+    expect(permissionForChannel('leave-mesh-anyway')).toBe('nodes.remove');
+    expect(isChannelAllowed('force-remove-mesh-nodes', ['nodes.manage'], false)).toBe(false);
+  });
+
+  // Starting with the computer is a setting of this machine's app, like the web server's.
+  it('lets whoever views settings see whether the app starts with the computer, and whoever manages them switch it', () => {
+    expect(permissionForChannel('get-run-at-startup')).toBe('settings.view');
+    expect(permissionForChannel('get-server-ports')).toBe('settings.view');
+    expect(permissionForChannel('restart-all-instances')).toBe('servers.control');
+    expect(permissionForChannel('cancel-restart-all')).toBe('servers.control');
+    expect(permissionForChannel('cancel-server-restart')).toBe('servers.control');
+    expect(permissionForChannel('get-pending-restarts')).toBe('servers.view');
+    expect(permissionForChannel('get-started-config')).toBe('servers.configure');
+    expect(permissionForChannel('get-backup-copy')).toBe('backups.view');
+    expect(permissionForChannel('fetch-backup-copy')).toBe('backups.restore');
+    expect(permissionForChannel('list-held-backup-copies')).toBe('backups.view');
+    expect(permissionForChannel('restore-backup-copy')).toBe('servers.create');
+    // Narrowed in the handler: settings.manage, or the Machine Admin of the machine.
+    expect(permissionForChannel('set-server-ports')).toBe('settings.view');
+    expect(permissionForChannel('open-server-ports-firewall')).toBe('settings.view');
+    expect(permissionForChannel('set-run-at-startup')).toBe('settings.manage');
+  });
+
   it('names a permission for the refusal text of an object rule', () => {
     expect(permissionForChannel('get-users')).toBe('users.manage');
     expect(permissionForChannel('assign-server-manager')).toBe('servers.create');
@@ -69,6 +95,15 @@ describe('channel-permissions', () => {
     expect(instanceKeyForChannel('get-server-instances')).toBeUndefined();
     expect(instanceKeyForChannel('get-asaapi-latest')).toBeUndefined();
     expect(instanceKeyForChannel('auto-start-on-app-launch')).toBeUndefined();
+  });
+
+  it('lets whoever manages nodes rename a member', () => {
+    expect(isChannelAllowed('rename-mesh-node', ['nodes.manage'], false)).toBe(true);
+    expect(isChannelAllowed('rename-mesh-node', ['nodes.view'], false)).toBe(false);
+    expect(isChannelAllowed('set-mesh-node-address', ['nodes.manage'], false)).toBe(true);
+    expect(isChannelAllowed('set-mesh-node-address', ['nodes.view'], false)).toBe(false);
+    expect(isChannelAllowed('set-cluster-upload-notices', ['clusters.manage'], false)).toBe(true);
+    expect(isChannelAllowed('set-cluster-upload-notices', ['clusters.view'], false)).toBe(false);
   });
 
   it('leaves set-server-operator to admins and opens list-pool-labels to anyone who can view servers', () => {

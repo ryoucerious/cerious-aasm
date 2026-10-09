@@ -75,6 +75,16 @@ describe('MessagingService', () => {
       expect(observer.noteAction).toHaveBeenCalledWith('get-server-instances', {}, 'viewer1');
     });
 
+    // A stop another machine of the mesh asked for never came in on this bus, so it named nobody.
+    it('credits an action another machine asked for to whoever asked', () => {
+      const observer = { noteAction: jest.fn(), recordFromBroadcast: jest.fn() };
+      service.setObserver(observer);
+
+      service.noteForwardedAction('stop-server-instance', { instanceId: 'isle' }, 'ada');
+
+      expect(observer.noteAction).toHaveBeenCalledWith('stop-server-instance', { instanceId: 'isle' }, 'ada');
+    });
+
     it('does not let a failing observer stop a message', () => {
       const debug = jest.spyOn(console, 'debug').mockImplementation(() => {});
       service.setObserver({ noteAction: () => { throw new Error('db locked'); }, recordFromBroadcast: jest.fn() });
@@ -170,6 +180,27 @@ describe('MessagingService', () => {
       expect(renderer.send).toHaveBeenCalledWith('chan', { foo: 1 });
       expect(child.send).toHaveBeenCalledWith({ type: 'broadcast-web', channel: 'chan', data: { foo: 1 }, excludeCid: undefined });
       expect(observer.recordFromBroadcast).toHaveBeenCalledWith('chan', { foo: 1 });
+    });
+
+    it('sendToAll hands each broadcast to the relay tap', () => {
+      const tap = jest.fn();
+      service.broadcastTap = tap;
+
+      service.sendToAll('server-instance-log', { instanceId: 's1', log: 'x' });
+
+      expect(tap).toHaveBeenCalledWith('server-instance-log', { instanceId: 's1', log: 'x' });
+      service.broadcastTap = null;
+    });
+
+    it('still delivers a broadcast when the relay tap throws', () => {
+      const renderer = { send: jest.fn(), on: jest.fn() };
+      service.addWebContents(renderer as never);
+      service.broadcastTap = () => { throw new Error('peer gone'); };
+
+      service.sendToAll('chan', { foo: 1 });
+
+      expect(renderer.send).toHaveBeenCalledWith('chan', { foo: 1 });
+      service.broadcastTap = null;
     });
 
     it('sendToAllOthers skips the sender', () => {

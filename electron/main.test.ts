@@ -11,6 +11,7 @@ jest.mock('electron', () => {
   return {
     app: Object.assign(new EventEmitter(), {
       getAppPath: jest.fn(() => '/app'),
+      getPath: jest.fn((name: string) => `/${name}`),
       quit: jest.fn(),
       exit: jest.fn(),
       requestSingleInstanceLock: jest.fn(() => true),
@@ -20,8 +21,14 @@ jest.mock('electron', () => {
     BrowserWindow: jest.fn(),
     ipcMain: Object.assign(new EventEmitter(), { handle: jest.fn(), removeHandler: jest.fn() }),
     shell: { openExternal: jest.fn(() => Promise.resolve()) },
+    screen: { getAllDisplays: jest.fn(() => [{ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }]) },
   };
 });
+
+jest.mock('./utils/window-state.utils', () => ({
+  readWindowState: jest.fn(() => ({ width: 1024, height: 768, maximized: false })),
+  trackWindowState: jest.fn(),
+}));
 
 jest.mock('./utils/logger', () => ({ getLogFilePath: jest.fn(() => '/logs/cerious-aasm.log') }));
 jest.mock('./utils/rcon.utils', () => ({ cleanupAllRconConnections: jest.fn() }));
@@ -31,7 +38,7 @@ jest.mock('./services/automation/automation.service', () => ({
 }));
 jest.mock('./utils/ark/ark-server/ark-server-cleanup.utils', () => ({ cleanupOrphanedArkProcesses: jest.fn() }));
 jest.mock('./services/server-instance/server-process.service', () => ({
-  serverProcessService: { killAllProcesses: jest.fn(), getActiveProcessCount: jest.fn(() => 0) },
+  serverProcessService: { killAllProcesses: jest.fn(), getActiveProcessCount: jest.fn(() => 0), getActiveInstanceIds: jest.fn(() => []) },
 }));
 jest.mock('./services/server-instance/server-management.service', () => ({
   serverManagementService: { getAllInstances: jest.fn(async () => ({ instances: [] })) },
@@ -45,6 +52,7 @@ jest.mock('./services/application.service', () => ({
 jest.mock('./services/log.service', () => ({ LogService: { clearArkLogFiles: jest.fn() } }));
 jest.mock('./services/ark-update.service', () => ({
   ArkUpdateService: jest.fn(() => ({ initialize: jest.fn(async () => undefined), stop: jest.fn() })),
+  bindArkUpdateService: jest.fn(),
   stopSteamCmdQuery: jest.fn(),
 }));
 jest.mock('./utils/installer.utils', () => ({ releaseInstallLockIfHeld: jest.fn() }));
@@ -87,6 +95,10 @@ jest.mock('./handlers/host-resources-handler', () => ({}));
 jest.mock('./handlers/user-handler', () => ({}));
 jest.mock('./handlers/activity-handler', () => ({}));
 jest.mock('./handlers/player-history-handler', () => ({}));
+jest.mock('./handlers/mesh-handler', () => ({}));
+jest.mock('./services/mesh/mesh-service', () => ({
+  meshService: { noteMembership: jest.fn(), resumeIfJoined: jest.fn(async () => undefined), stop: jest.fn(async () => undefined) },
+}));
 
 class FakeWebContents extends EventEmitter {
   readonly send = jest.fn();
@@ -109,6 +121,7 @@ class FakeWindow extends EventEmitter {
   readonly loadURL = jest.fn(() => { this.webContents.emit('did-finish-load'); });
   readonly loadFile = jest.fn(() => { this.webContents.emit('did-finish-load'); });
   readonly isMaximized = jest.fn(() => false);
+  readonly maximize = jest.fn();
   readonly isMinimized = jest.fn(() => false);
   readonly restore = jest.fn();
   readonly show = jest.fn();
@@ -167,6 +180,7 @@ function loadMain({ lockGranted = true } = {}) {
     automationService: jest.mocked(jest.requireMock<typeof import('./services/automation/automation.service')>('./services/automation/automation.service').automationService),
     autoUpdateService: jest.mocked(jest.requireMock<typeof import('./services/auto-update.service')>('./services/auto-update.service').autoUpdateService),
     webServerService: jest.mocked(jest.requireMock<typeof import('./services/web-server.service')>('./services/web-server.service').webServerService),
+    meshService: jest.mocked(jest.requireMock<typeof import('./services/mesh/mesh-service')>('./services/mesh/mesh-service').meshService),
     cleanupAllRconConnections: jest.mocked(jest.requireMock<typeof import('./utils/rcon.utils')>('./utils/rcon.utils').cleanupAllRconConnections),
     stopSteamCmdQuery: jest.mocked(jest.requireMock<typeof import('./services/ark-update.service')>('./services/ark-update.service').stopSteamCmdQuery),
     releaseInstallLockIfHeld: jest.mocked(jest.requireMock<typeof import('./utils/installer.utils')>('./utils/installer.utils').releaseInstallLockIfHeld),
@@ -211,6 +225,17 @@ describe('main', () => {
       const main = loadMain();
 
       expect(main.cleanupOrphanedArkProcesses).toHaveBeenCalled();
+    });
+
+    // The web server starts with the application and the window asks who is signed in as soon as
+    // it opens; a mesh member must already be asking for a mesh account by then.
+    it('notes mesh membership before the web server or the window can start', async () => {
+      const main = loadMain();
+
+      await emitReady(main);
+
+      expect(main.meshService.noteMembership.mock.invocationCallOrder[0])
+        .toBeLessThan(main.applicationService.initializeApplication.mock.invocationCallOrder[0]);
     });
 
     it('takes the single-instance lock before looking for orphaned ARK processes', () => {
@@ -331,6 +356,24 @@ describe('main', () => {
       expect(dev.loadURL).toHaveBeenCalledWith('http://localhost:4200');
     });
 
+    // It opened at 1024x768 every time, wherever and however large it had been left.
+    it('opens where and as large as it was left, maximized if it was, and keeps track as it changes', async () => {
+      const main = loadMain();
+      const windowState = jest.requireMock<typeof import('./utils/window-state.utils')>('./utils/window-state.utils');
+      jest.mocked(windowState.readWindowState).mockReturnValue({ x: 200, y: 100, width: 1400, height: 900, maximized: true });
+
+      const win = await emitReady(main);
+
+      expect(windowState.readWindowState).toHaveBeenCalledWith(
+        path.join('/userData', 'window-state.json'),
+        [{ x: 0, y: 0, width: 1920, height: 1040 }],
+        { width: 1024, height: 768, minWidth: 940, minHeight: 600 }
+      );
+      expect(win.options).toEqual(expect.objectContaining({ x: 200, y: 100, width: 1400, height: 900, minWidth: 940, minHeight: 600 }));
+      expect(win.maximize).toHaveBeenCalled();
+      expect(windowState.trackWindowState).toHaveBeenCalledWith(win, path.join('/userData', 'window-state.json'));
+    });
+
     it('opens no window when headless', async () => {
       const main = loadMain();
       main.applicationService.isHeadless.mockReturnValue(true);
@@ -400,6 +443,15 @@ describe('main', () => {
       jest.useFakeTimers();
       main = loadMain();
       win = await emitReady(main);
+    });
+
+    // In a mesh the window lists every machine's servers; quitting stops only this machine's.
+    it('tells the renderer which servers run on this machine when it asks', () => {
+      main.serverProcessService.getActiveInstanceIds.mockReturnValue(['a1', 'b2']);
+
+      win.close();
+
+      expect(win.webContents.send).toHaveBeenCalledWith('app-close-request', { runningHere: ['a1', 'b2'] });
     });
 
     it('asks the renderer first and keeps the window open', () => {

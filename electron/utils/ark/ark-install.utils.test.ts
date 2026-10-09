@@ -53,6 +53,14 @@ describe('ark-install.utils', () => {
       await expect(getCurrentInstalledVersion()).resolves.toBe('19934105');
     });
 
+    // An update downloads into a copy of the install beside it; its build is read from there.
+    it('reads the build of another install folder', async () => {
+      existing('/ark-update/steamapps/appmanifest_2430930.acf');
+      mockFs.readFileSync.mockReturnValue('"buildid"\t\t"20000000"');
+
+      await expect(getCurrentInstalledVersion('/ark-update')).resolves.toBe('20000000');
+    });
+
     it('falls back to version.txt when there is no manifest', async () => {
       existing('/ark/version.txt');
       mockFs.readFileSync.mockReturnValue('1.2.3\n');
@@ -103,6 +111,15 @@ describe('ark-install.utils', () => {
         stallTimeoutMs: 30 * 60 * 1000
       }));
       expect(done).toHaveBeenCalledWith(null);
+    });
+
+    it('runs SteamCMD against another install folder when given one', () => {
+      existing('/steamcmd/steamcmd.exe');
+      mockRunInstaller.mockImplementation((_options, _onProgress, onDone) => onDone(null));
+
+      installArkServer(jest.fn(), undefined, undefined, '/ark-update');
+
+      expect(lastOptions().args.slice(0, 2)).toEqual(['+force_install_dir', '/ark-update']);
     });
 
     it('requests the Windows depot on Linux and removes a stuck app manifest first', () => {
@@ -194,14 +211,40 @@ describe('ark-install.utils', () => {
         });
       });
 
-      it('treats verification as the end of the download', () => {
+      // An update went from "downloading" to "staging" a few seconds in, and the percentage on
+      // screen stopped there for the rest of the download.
+      it('keeps counting while SteamCMD stages the download', () => {
+        expect(parse(' Update state (0x41) staging, progress: 20.66 (2437753874 / 11801276714)\r\n')).toEqual({
+          percent: 20, step: 'downloading', message: 'Downloading Ark Server (20.7%)'
+        });
+      });
+
+      it('reads the newest line when one chunk holds several', () => {
+        const chunk = ' Update state (0x61) downloading, progress: 5.97 (1 / 2)\r\n Update state (0x41) staging, progress: 7.05 (1 / 2)\r\n';
+        expect(parse(chunk)?.percent).toBe(7);
+      });
+
+      it('treats verification and committing as the end of the download, saying how each is going', () => {
         expect(parse(' Update state (0x81) verifying update, progress: 3.10 (1 / 2)\r\n')).toEqual({
-          percent: 100, step: 'downloading', message: 'Verifying Ark Server installation...'
+          percent: 100, step: 'downloading', message: 'Verifying Ark Server installation (3.1%)'
+        });
+        expect(parse(' Update state (0x101) committing, progress: 44.26 (1 / 2)\r\n')).toEqual({
+          percent: 100, step: 'downloading', message: 'Finishing Ark Server installation (44.3%)'
+        });
+      });
+
+      it('says when SteamCMD checks the files already there, before downloading', () => {
+        expect(parse(' Update state (0x5) verifying install, progress: 12.50 (1 / 2)\r\n')).toEqual({
+          percent: 0, step: 'downloading', message: 'Checking the installed files (12.5%)'
+        });
+        expect(parse(' Update state (0x11) preallocating, progress: 60.00 (1 / 2)\r\n')).toEqual({
+          percent: 0, step: 'downloading', message: 'Making room for the download (60.0%)'
         });
       });
 
       it('ignores other output', () => {
         expect(parse('Logging in user anonymous to Steam Public...OK\r\n')).toBeNull();
+        expect(parse(' Update state (0x0) unknown, progress: 0.00 (0 / 0)\r\n')).toBeNull();
         expect(parse('[ 45%] Downloading update (12,345 of 67,890 KB)...\r\n')).toBeNull();
       });
     });

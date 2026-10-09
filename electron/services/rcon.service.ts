@@ -1,5 +1,6 @@
 import { RconCommandNotSentError, connectRcon, disconnectRcon, getRconPassword, isRconConnected, sendRconCommand } from '../utils/rcon.utils';
 import * as instanceUtils from '../utils/ark/instance.utils';
+import { forRcon } from '../utils/ark/started-config.utils';
 
 export interface RconConnectionResult {
   success: boolean;
@@ -23,6 +24,14 @@ export interface RconStatusResult {
   instanceId: string;
 }
 
+/** A player on a server, by name and the ID ARK knows them by: their EOS ID in ASA. */
+export interface OnlinePlayer {
+  name: string;
+  playerId: string;
+  /** The same ID, under the name older clients and mesh members read. */
+  steamId: string;
+}
+
 export class RconService {
   /** Resolves once the connect attempt finishes, which can take up to 90 s while a server boots. */
   async connectRcon(instanceId: string): Promise<RconConnectionResult> {
@@ -31,10 +40,12 @@ export class RconService {
         return { success: false, connected: false, instanceId: instanceId || '', error: 'Invalid instance ID' };
       }
 
-      const instance = instanceUtils.getInstance(instanceId);
-      if (!instance) {
+      const saved = instanceUtils.getInstance(instanceId);
+      if (!saved) {
         return { success: false, connected: false, instanceId, error: 'Instance not found' };
       }
+      // The port and password it started with: one saved since waits for its next start.
+      const instance = forRcon(saved);
       if (!instance.rconPort || !getRconPassword(instance)) {
         return { success: false, connected: false, instanceId, error: 'RCON not configured for this instance' };
       }
@@ -64,7 +75,8 @@ export class RconService {
    */
   async reconnectRcon(instanceId: string, timeoutMs: number): Promise<boolean> {
     try {
-      const instance = instanceUtils.getInstance(instanceId);
+      const saved = instanceUtils.getInstance(instanceId);
+      const instance = saved ? forRcon(saved) : null;
       if (!instance?.rconPort || !getRconPassword(instance)) return false;
       return await new Promise<boolean>(resolve => {
         // Cancelling the attempt answers the callback below with false.
@@ -123,16 +135,21 @@ export class RconService {
     }
   }
 
-  async getOnlinePlayers(instanceId: string): Promise<{ name: string; steamId: string }[]> {
+  /**
+   * The players on a server, from ListPlayers: "0. Name, 0002a1b2c3d4e5f60718293a4b5c6d7e".
+   * ASA names each by their EOS ID, 32 hex characters; the ID is everything after the last comma,
+   * so a name with a comma in it stays whole. `steamId` repeats the ID for older clients and
+   * mesh members.
+   */
+  async getOnlinePlayers(instanceId: string): Promise<OnlinePlayer[]> {
     const result = await this.executeRconCommand(instanceId, 'ListPlayers');
     if (!result.success || !result.response || result.response.includes('No Players Connected')) return [];
 
-    const players: { name: string; steamId: string }[] = [];
+    const players: OnlinePlayer[] = [];
     for (const line of result.response.split('\n')) {
-      // "0. PlayerName, 12345678"
-      const match = line.match(/\d+\.\s+(.+),\s+(\d+)/);
+      const match = line.match(/^\s*\d+\.\s+(.+),\s*([0-9A-Za-z]+)\s*$/);
       if (match) {
-        players.push({ name: match[1], steamId: match[2] });
+        players.push({ name: match[1].trim(), playerId: match[2], steamId: match[2] });
       }
     }
     return players;

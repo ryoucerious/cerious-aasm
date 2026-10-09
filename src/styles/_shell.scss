@@ -119,6 +119,35 @@ $sidenav-width: 248px;
   margin-left: auto;
 }
 
+// How the mesh stands, on every page; it opens Settings → Mesh. The tone class colours it.
+.topbar-mesh {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: $font-semibold;
+  white-space: nowrap;
+
+  &:hover { filter: brightness(1.15); }
+
+  .topbar-mesh-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  // On a narrow screen the dot alone; its title still says what it means.
+  @include mobile-only {
+    padding: 0.45rem;
+    .topbar-mesh-text { display: none; }
+  }
+}
+
 .topbar-icon-btn {
   position: relative;
   @include button-reset;
@@ -412,11 +441,50 @@ $sidenav-width: 248px;
   border-right: 1px solid var(--border-muted-1);
 }
 
-.sidenav-scroll {
+// Dashboard at the top; below it the servers, then the selected server's pages, each scrolling
+// on its own. One scrolling column with a scrolling list inside it gave two scrollbars.
+.sidenav-body {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem 0.5rem 0;
+}
+
+// As tall as the list, up to half the sidebar, the list scrolling inside; all of it with no server open.
+.sidenav-servers {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 50%;
+  display: flex;
+  flex-direction: column;
+
+  &.alone { max-height: none; }
+
+  .server-list {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+/// The rest of the sidebar, scrolling on its own.
+.sidenav-pages {
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 0.75rem 0.5rem;
+  // The section's top spacing moves into the name, so nothing shows above it as the pages scroll.
+  padding-top: 0;
+  padding-bottom: 0.75rem;
+
+  // The server's name stays above its pages as they scroll under it.
+  > .nav-section-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
+    padding-top: 1rem;
+  }
 }
 
 .nav-item {
@@ -722,6 +790,8 @@ $sidenav-width: 248px;
   &.status-starting { background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
   &.status-stopping { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
   &.status-error    { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+  // Hollow: nothing is known about it while its machine cannot be reached.
+  &.status-unreachable { background: transparent; box-shadow: inset 0 0 0 2px var(--warning); }
 }
 
 .server-list-empty {
@@ -729,6 +799,142 @@ $sidenav-width: 248px;
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
+
+// The search above the server list: compact, to keep the list in view.
+// Settings → Storage: a copy kept here of another machine's server backup.
+.held-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+
+  .held-copy-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .btn {
+    flex: none;
+  }
+}
+
+// The Backup tab: where another machine keeps the latest backup.
+.backup-copy-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+
+  .material-icons {
+    color: var(--success);
+  }
+
+  .backup-copy-text {
+    flex: 1;
+    min-width: 12rem;
+  }
+}
+
+// A restart of every server counting down, under the Servers heading.
+.restart-all-pending {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0.75rem 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--warning);
+
+  .material-icons {
+    font-size: 1rem;
+    margin-right: 0;
+  }
+
+  .restart-all-pending-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .btn {
+    padding: 0.1rem 0.5rem;
+  }
+}
+
+.server-list-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem 0.4rem;
+
+  .form-control {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    min-height: 0;
+  }
+}
+
+// A group in the server tree: a machine of a mesh, or an operator. It folds its servers away.
+.sidenav .server-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  margin: 0.25rem 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
+  .server-group-chevron {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .server-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .server-group-note {
+    font-weight: 400;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .server-group-count {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    font-weight: 500;
+  }
+}
+
+// Each level of the tree steps in a little.
+.sidenav .server-group.server-depth-1 { padding-left: 1.35rem; }
+.sidenav .server-item.server-depth-1 { padding-left: 1.6rem; }
+.sidenav .server-item.server-depth-2 { padding-left: 2.35rem; }
 
 .sidenav-footer {
   display: flex;
@@ -1020,6 +1226,22 @@ body.drawer-open {
   app-region: drag;
 }
 
+// The sign-in and loading pages come before the top bar: a bar of their own, empty but for the
+// window controls, where the top bar will be.
+.window-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: $topbar-height;
+  padding: 0 1.25rem;
+  display: flex;
+  justify-content: flex-end;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
 .topbar button,
 .topbar a,
 .topbar input,
@@ -1146,19 +1368,78 @@ app-window-controls {
   .users-actions { white-space: nowrap; }
 }
 
-// The columns that take the leftover width: name and role for accounts, the description
-// column for roles. The rest keep to their content.
-.accounts-table {
-  th:nth-child(1) { width: 45%; }
-  th:nth-child(2) { width: 35%; }
-}
-
+// The description column takes the leftover width; the rest keep to their content.
 .roles-table th:first-child { width: 100%; }
 
-.user-cell {
+// Accounts, a card each: two across when the drawer is wide enough, one when it is narrow.
+.user-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.user-card {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.75rem;
+}
+
+.user-card-top {
+  display: flex;
+  align-items: flex-start;
   gap: 0.6rem;
+}
+
+.user-card-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.user-card-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: $font-semibold;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.user-card-display,
+.user-card-note {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.user-card-status { flex: 0 0 auto; }
+
+// Label and value in two columns, lined up across the rows.
+.user-card-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.3rem 0.9rem;
+  margin: 0.75rem 0;
+  font-size: 0.82rem;
+
+  .user-card-fact { display: contents; }
+  dt { color: var(--text-secondary); }
+  dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+}
+
+// At the foot of the card, level across a row of cards of different heights.
+.user-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: auto;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border-muted-1);
 }
 
 .user-avatar {
@@ -1173,12 +1454,6 @@ app-window-controls {
   font-weight: $font-semibold;
   font-size: 0.85rem;
   flex-shrink: 0;
-}
-
-.user-cell-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 
 .user-cell-name {
@@ -1584,6 +1859,43 @@ app-window-controls {
 
 .profile-settings .settings-section {
   margin-top: 1.5rem;
+}
+
+// BusyOverlayComponent: over the whole window while something the app waits for is under way.
+// Above the settings drawer (1300/1301) and the modals over it (1400); below tooltips (2000) and
+// toasts (9999), so a failure still shows.
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  cursor: progress;
+}
+
+.busy-overlay-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 26rem;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+  .spinner {
+    flex: none;
+    margin-right: 0;
+    color: var(--primary);
+  }
 }
 
 // Replaces the native title tooltip, which is slow and ignores the theme. TooltipHostComponent

@@ -122,14 +122,14 @@ const CATEGORY_KEYS: Record<string, string[]> = {
     'bServerGameLogEnabled', 'bShowCreativeMode', 'bUseCorpseLocator', 'bUseSingleplayerSettings',
   ],
   cluster: [
-    'clusterId', 'clusterName', 'clusterOrder', 'clusterRole',
+    'clusterRef', 'clusterId', 'clusterName', 'clusterOrder', 'clusterRole',
     'clusterDirOverride', 'noTransferFromFiltering',
   ],
   mods: ['mods', 'enabledMods', 'modSettings'],
   automation: [
     'autoStartOnAppLaunch', 'crashDetectionEnabled', 'crashDetectionInterval',
     'maxRestartAttempts', 'scheduledRestartEnabled', 'restartFrequency',
-    'restartTime', 'restartDays', 'restartWarningMinutes',
+    'restartTime', 'restartTimes', 'restartDays', 'restartWarningMinutes',
   ],
   whitelist: [
     'useExclusiveList', 'exclusiveJoinPlayerIds', 'exclusiveJoinPlayers', 'whitelistKickMessage',

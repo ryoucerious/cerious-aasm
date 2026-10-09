@@ -15,6 +15,41 @@ describe('ServerCardComponent', () => {
     fixture.detectChanges();
   });
 
+  it('offers no button at all while its machine cannot be reached', () => {
+    fixture.componentRef.setInput('server', { ...component.server, state: 'unreachable', gamePort: 7777 });
+    component.canMove = true;
+    fixture.detectChanges();
+
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'));
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.filter(button => !button.disabled).map(button => button.textContent?.trim())).toEqual([]);
+  });
+
+  // A list row was 120px tall: the artwork took 220px of it, so the stats wrapped onto two lines.
+  // In a narrow window (as here, under 860px) it became a stacked card 192px tall. The wide row is
+  // checked by eye: the test page cannot be made wider than that.
+  it('is a compact row in the list: a small map picture, the name beside it, every stat on one line', () => {
+    const host = fixture.nativeElement as HTMLElement;
+    host.style.display = 'block';
+    host.style.width = '720px';
+    fixture.componentRef.setInput('server', { ...component.server, gamePort: 7777 });
+    fixture.componentRef.setInput('joinHost', 'ark.example.com');
+    fixture.componentRef.setInput('view', 'list');
+    fixture.detectChanges();
+
+    // The details column would squeeze the name and stats; in a row it is one line under the name.
+    expect(host.querySelector<HTMLElement>('.server-card-details')?.offsetParent ?? null).toBeNull();
+    expect(host.querySelector('.server-card-list-title .server-card-map')?.textContent?.trim()).toBe('Aberration · ark.example.com:7777');
+
+    const card = host.querySelector<HTMLElement>('.server-card')!;
+    const tops = Array.from(host.querySelectorAll<HTMLElement>('.server-stat')).map(stat => Math.round(stat.getBoundingClientRect().top));
+    expect(card.getBoundingClientRect().height).toBeLessThanOrEqual(140);
+    expect(new Set(tops).size).withContext('stats on one line').toBe(1);
+    expect(host.querySelector('.server-card-hero .server-card-name')).toBeNull();
+    expect(host.querySelector('.server-card-list-title .server-card-name')?.textContent).toContain('Aberration');
+    expect(host.querySelector('.server-card-list-title .card-status')?.textContent?.trim()).toBe('Online');
+  });
+
   it('should create and render the name, map and status', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('.server-card-name')?.textContent).toContain('Aberration');
@@ -29,6 +64,22 @@ describe('ServerCardComponent', () => {
     expect(component.memory).toBe('6.2 GB');
     component.hostMemoryTotalBytes = 32 * 1024 ** 3;
     expect(component.memoryTotal).toBe('/ 32 GB');
+  });
+
+  // The icon font comes from Google Fonts. Until it loads, or where it is blocked, each icon is
+  // its ligature word ("schedule"), which took the value's room and cut "3d 14h" to "3d…".
+  it('shows every stat whole on the narrowest card', () => {
+    const host = fixture.nativeElement as HTMLElement;
+    host.style.display = 'block';
+    host.style.width = '300px';
+    component.hostMemoryTotalBytes = 128 * 1024 ** 3;
+    fixture.detectChanges();
+
+    const cut = Array.from(host.querySelectorAll<HTMLElement>('.server-stat-value, .server-stat-label'))
+      .filter(text => text.scrollWidth > text.clientWidth)
+      .map(text => text.textContent?.trim());
+
+    expect(cut).toEqual([]);
   });
 
   it('shows dashes and zero players when offline', () => {
@@ -81,6 +132,45 @@ describe('ServerCardComponent', () => {
     expect(component.menuOpen).toBeFalse();
   });
 
+  describe('moving to another machine', () => {
+    function menuItems(): string[] {
+      component.toggleMenu({ stopPropagation: () => {} } as any);
+      (component as unknown as { cdr: { markForCheck(): void } }).cdr.markForCheck();
+      fixture.detectChanges();
+      return Array.from(fixture.nativeElement.querySelectorAll('.card-menu-item') as NodeListOf<HTMLElement>)
+        .map(item => item.textContent?.trim() || '');
+    }
+
+    it('is offered for a server that is off, when it may be moved', () => {
+      component.server = { ...component.server, state: 'stopped' } as any;
+      component.canMove = true;
+      spyOn(component.move, 'emit');
+
+      expect(menuItems()).toContain('drive_file_move Move to…');
+      (Array.from(fixture.nativeElement.querySelectorAll('.card-menu-item') as NodeListOf<HTMLButtonElement>)
+        .find(item => item.textContent?.includes('Move to'))!).click();
+
+      expect(component.move.emit).toHaveBeenCalledWith(component.server);
+      expect(component.menuOpen).toBeFalse();
+    });
+
+    it('is not offered while the server is running or busy', () => {
+      component.canMove = true;
+      for (const state of ['running', 'starting', 'stopping', 'queued']) {
+        component.server = { ...component.server, state } as any;
+        component.menuOpen = false;
+        expect(menuItems().some(item => item.includes('Move to'))).withContext(state).toBeFalse();
+      }
+    });
+
+    it('is not offered when the server may not be moved, or there is nowhere to move it', () => {
+      component.server = { ...component.server, state: 'stopped' } as any;
+      component.canMove = false;
+
+      expect(menuItems().some(item => item.includes('Move to'))).toBeFalse();
+    });
+  });
+
   it('toggles the menu and closes it on outside clicks', () => {
     component.toggleMenu({ stopPropagation: () => {} } as any);
     expect(component.menuOpen).toBeTrue();
@@ -118,6 +208,14 @@ describe('ServerCardComponent', () => {
       spyOn(component as any, 'pageHostname').and.returnValue('ark.example.org');
       component.server = { ...component.server, gamePort: 7787 } as any;
       expect(component.connectAddress).toBe('ark.example.org:7787');
+    });
+
+    // In a mesh the server can run on another machine than the one this page came from.
+    it('is the address of the machine hosting the server, when the page says which', () => {
+      spyOn(component as any, 'pageHostname').and.returnValue('localhost');
+      component.server = { ...component.server, gamePort: 7787 } as any;
+      component.joinHost = '192.168.1.155';
+      expect(component.connectAddress).toBe('192.168.1.155:7787');
     });
 
     it('falls back to the MultiHome address when the panel runs on localhost', () => {

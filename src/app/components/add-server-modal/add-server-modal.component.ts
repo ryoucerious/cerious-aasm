@@ -1,4 +1,5 @@
-import { Component, EventEmitter, Input, Output, ViewChild, ElementRef, ChangeDetectorRef, ChangeDetectionStrategy, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, Output, ViewChild, ElementRef, ChangeDetectorRef, ChangeDetectionStrategy, OnChanges, SimpleChanges, DestroyRef, inject } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -9,7 +10,10 @@ import { SaveInstanceResult, ServerInstance } from '../../core/models/server-ins
 import { ImportServerResult, ServerInstanceService, withoutRuntimeFields } from '../../core/services/server-instance.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { MessagingService, MOVE_TIMEOUT_MS } from '../../core/services/messaging/messaging.service';
 import type { DesktopFile } from '../../core/types/electron-api';
+import { fileToBase64 } from '../../core/utils/file.utils';
 
 export type ImportMode = 'create' | 'import' | 'clone';
 
@@ -28,6 +32,13 @@ export type ImportMode = 'create' | 'import' | 'clone';
 export class AddServerModalComponent implements OnChanges {
   @Input() show = false;
   @Input() servers: ServerInstance[] = [];
+  /** Mesh nodes the operator may place a new server on. Empty on a standalone install. */
+    /** The machines of the mesh, from MeshNodesService: the same wherever the dialog is opened from. */
+  selectedNodeId = '';
+  placementOptions: DropdownOption<string>[] = [];
+  /** For an import: this machine, where the backup is restored, then the others it can move to. */
+  importOptions: DropdownOption<string>[] = [];
+  private readonly messaging = inject(MessagingService);
 
   /**
    * The clone source picker lists the existing servers by name. Rebuilt when the list
@@ -52,8 +63,25 @@ export class AddServerModalComponent implements OnChanges {
     private serverInstanceService: ServerInstanceService,
     private notificationService: NotificationService,
     private ipc: IpcService,
-    private cdr: ChangeDetectorRef
-  ) {}
+    private cdr: ChangeDetectorRef,
+    private meshNodes: MeshNodesService,
+    private destroyRef: DestroyRef
+  ) {
+    // Built when the machines change, not on every check: options rebuilt each check stopped clicks registering.
+    this.meshNodes.changed$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.buildPlacementOptions());
+  }
+
+  private buildPlacementOptions(): void {
+    const choices = this.meshNodes.placementChoices();
+    this.placementOptions = choices.length
+      ? [{ value: '', label: 'Auto-select' }, ...choices.map(node => ({ value: node.nodeId, label: node.skipping ? `${node.name} (skipping new servers)` : node.name }))]
+      : [];
+    this.importOptions = choices.length
+      // A move refuses a machine skipping new servers, so an import could only fail there.
+      ? [{ value: '', label: 'This machine' }, ...choices.filter(node => !this.meshNodes.isHere(node.nodeId) && !node.skipping).map(node => ({ value: node.nodeId, label: node.name }))]
+      : [];
+    this.cdr.markForCheck();
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['servers']) {
@@ -61,12 +89,19 @@ export class AddServerModalComponent implements OnChanges {
     }
     if (changes['show'] && this.show) {
       this.reset();
+      this.buildPlacementOptions();
       setTimeout(() => this.serverNameInput?.nativeElement.focus(), 0);
     }
   }
 
+  /** Where the server goes, in a mesh: Auto-select or a machine for a new server or a clone; for an import, see importOptions. */
+  get machineOptions(): DropdownOption<string>[] {
+    return this.importMode === 'import' ? this.importOptions : this.placementOptions;
+  }
+
   setImportMode(mode: ImportMode): void {
     this.importMode = mode;
+    this.selectedNodeId = '';
     this.serverName = '';
     this.selectedBackupFile = null;
     this.selectedBackupFilePath = '';
@@ -107,10 +142,14 @@ export class AddServerModalComponent implements OnChanges {
     this.backupFileInput?.nativeElement.click();
   }
 
+  private placementFields(): { nodeId?: string } {
+    return this.selectedNodeId ? { nodeId: this.selectedNodeId } : {};
+  }
+
   private createNewServer(): void {
     this.busy = true;
     this.serverInstanceService.getDefaultInstanceFromMeta().pipe(
-      switchMap(defaults => this.serverInstanceService.save({ ...defaults, name: this.serverName, sessionName: this.serverName }))
+      switchMap(defaults => this.serverInstanceService.save({ ...defaults, name: this.serverName, sessionName: this.serverName, ...this.placementFields() }))
     ).subscribe({
       next: result => this.handleSaveResult(result, 'Failed to create server'),
       error: () => this.fail('Failed to create server')
@@ -120,8 +159,9 @@ export class AddServerModalComponent implements OnChanges {
   private cloneServer(): void {
     if (!this.selectedServerToClone) return;
     this.busy = true;
-    const { id, ...source } = withoutRuntimeFields(this.selectedServerToClone);
-    this.serverInstanceService.save({ ...source, name: this.serverName, sessionName: this.serverName }).subscribe({
+    // Not the source's machine: the one chosen, or Auto-select's.
+    const { id, nodeId, ...source } = withoutRuntimeFields(this.selectedServerToClone);
+    this.serverInstanceService.save({ ...source, name: this.serverName, sessionName: this.serverName, ...this.placementFields() }).subscribe({
       next: result => this.handleSaveResult(result, 'Failed to clone server'),
       error: () => this.fail('Failed to clone server')
     });
@@ -134,7 +174,7 @@ export class AddServerModalComponent implements OnChanges {
       if (this.ipc.isElectron && this.selectedBackupFilePath) {
         result = this.serverInstanceService.importServerFromBackup(this.serverName, this.selectedBackupFilePath);
       } else if (this.selectedBackupFile) {
-        const fileData = await this.fileToBase64(this.selectedBackupFile);
+        const fileData = await fileToBase64(this.selectedBackupFile);
         result = this.serverInstanceService.importServerFromBackup(this.serverName, undefined, fileData, this.selectedBackupFile.name);
       } else {
         throw new Error('No backup file selected');
@@ -142,7 +182,9 @@ export class AddServerModalComponent implements OnChanges {
 
       result.subscribe({
         next: response => {
-          if (response?.success && response.instance) {
+          if (response?.success && response.instance && this.selectedNodeId) {
+            this.moveImported(response.instance);
+          } else if (response?.success && response.instance) {
             this.notificationService.success(response.message || 'Server imported successfully');
             this.finish(response.instance);
           } else {
@@ -158,6 +200,26 @@ export class AddServerModalComponent implements OnChanges {
       console.error('[add-server-modal] Failed to import backup:', error);
       this.fail('Failed to import server from backup');
     }
+  }
+
+  /** Restored here, then moved to the machine chosen; if the move fails it stays here, and says why. */
+  private moveImported(instance: ServerInstance): void {
+    const target = this.importOptions.find(option => option.value === this.selectedNodeId)?.label || 'that machine';
+    const stayed = (reason?: string) => this.notificationService.warning(
+      `Imported on this machine. It could not be moved to ${target}${reason ? `: ${reason}` : '.'}`
+    );
+    this.messaging.sendMessage<{ success?: boolean; error?: string }>('move-server', { serverId: instance.id, nodeId: this.selectedNodeId }, { timeoutMs: MOVE_TIMEOUT_MS })
+      .subscribe({
+        next: reply => {
+          if (reply?.success) this.notificationService.success(`Imported and moved to ${target}.`);
+          else stayed(reply?.error);
+          this.finish(instance);
+        },
+        error: () => {
+          stayed();
+          this.finish(instance);
+        }
+      });
   }
 
   private handleSaveResult(result: SaveInstanceResult | null, failure: string): void {
@@ -200,15 +262,8 @@ export class AddServerModalComponent implements OnChanges {
     this.selectedBackupFile = null;
     this.selectedBackupFilePath = '';
     this.selectedServerToClone = null;
+    this.selectedNodeId = '';
     this.busy = false;
   }
 
-  private fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve((reader.result as string).split(',')[1]);
-      reader.onerror = error => reject(error);
-    });
-  }
 }

@@ -262,7 +262,27 @@ describe('ark-server-logging.utils', () => {
       jest.advanceTimersByTime(61000);
 
       expect(onLog).not.toHaveBeenCalledWith('b2 line');
-      expect(onLog).toHaveBeenCalledWith('[WARN] Could not detect log file for this server instance');
+      expect(onLog).toHaveBeenCalledWith('[WARN] Still waiting for this server to write its log file');
+    });
+
+    // A server new to a machine (a move, a fresh Proton prefix) can take minutes to write its log.
+    // After the first minute it was never tailed: no lines, and starting until the 15-minute net.
+    it('keeps looking for a log that is slow to appear, and follows it when it does', () => {
+      const onLog = jest.fn();
+      setInstanceState('a1', 'starting');
+      const onState = jest.fn();
+      detectAndRegisterLogFile('a1', snapshotLogFiles('a1'));
+      setupLogTailing('a1', onLog, onState);
+
+      jest.advanceTimersByTime(3 * 60_000);
+      write(A_LOG, 'Log file open\n');
+      jest.advanceTimersByTime(10_000);
+      write(A_LOG, 'Server has completed startup and is now advertising for join.\n');
+      poll();
+
+      expect(onLog).toHaveBeenCalledWith('[WARN] Still waiting for this server to write its log file');
+      expect(onLog).toHaveBeenCalledWith('Server has completed startup and is now advertising for join.');
+      expect(getInstanceState('a1')).toBe('running');
     });
 
     it('stops looking for the file once unregistered', () => {

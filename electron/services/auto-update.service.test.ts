@@ -211,6 +211,19 @@ describe('AutoUpdateService', () => {
         expect(mockAutoUpdater.quitAndInstall).not.toHaveBeenCalled();
       });
     });
+
+    // A machine in a mesh is often unattended, and the installer's wizard waited there for someone to click Next.
+    it('installs a downloaded update without the wizard, then starts the app again', () => {
+      jest.isolateModules(() => {
+        const { autoUpdateService } = require('./auto-update.service');
+        const downloaded = mockAutoUpdater.on.mock.calls.filter((call: any[]) => call[0] === 'update-downloaded').pop()?.[1];
+        (downloaded as Function)({ version: '2.0.0' });
+
+        autoUpdateService.quitAndInstall();
+
+        expect(mockAutoUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+      });
+    });
   });
 
   describe('event handlers', () => {

@@ -42,7 +42,19 @@ export const PERMISSIONS = {
   ACCOUNTS_ATTENDANTS_CREATE: 'accounts.attendants.create',
   ACCOUNTS_ATTENDANTS_DELETE: 'accounts.attendants.delete',
   ACCOUNTS_VIEWERS_CREATE: 'accounts.viewers.create',
-  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete'
+  ACCOUNTS_VIEWERS_DELETE: 'accounts.viewers.delete',
+  // Mesh. Start and stop stay on servers.control. These cover membership, placement and clusters.
+  NODES_VIEW: 'nodes.view',
+  NODES_ENROLL: 'nodes.enroll',
+  NODES_MANAGE: 'nodes.manage',
+  NODES_REMOVE: 'nodes.remove',
+  SERVERS_MOVE: 'servers.move',
+  CLUSTERS_VIEW: 'clusters.view',
+  CLUSTERS_MANAGE: 'clusters.manage',
+  CLUSTERS_STORAGE_MANAGE: 'clusters.storage.manage',
+  MESH_VIEW: 'mesh.view',
+  MESH_CONFIGURE: 'mesh.configure',
+  MESH_SECURITY_MANAGE: 'mesh.security.manage'
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
@@ -74,7 +86,18 @@ export const PERMISSION_DESCRIPTIONS: Record<Permission, { label: string; group:
   [PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE]: { label: 'Add attendants',         group: 'Accounts', description: 'Add or edit an attendant in your pool.' },
   [PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE]: { label: 'Delete attendants',      group: 'Accounts', description: 'Delete an attendant in your pool.' },
   [PERMISSIONS.ACCOUNTS_VIEWERS_CREATE]:    { label: 'Add viewers',            group: 'Accounts', description: 'Add or edit a viewer in your pool.' },
-  [PERMISSIONS.ACCOUNTS_VIEWERS_DELETE]:    { label: 'Delete viewers',         group: 'Accounts', description: 'Delete a viewer in your pool.' }
+  [PERMISSIONS.ACCOUNTS_VIEWERS_DELETE]:    { label: 'Delete viewers',         group: 'Accounts', description: 'Delete a viewer in your pool.' },
+  [PERMISSIONS.NODES_VIEW]:                 { label: 'View nodes',             group: 'Mesh', description: 'See mesh nodes, health and where each server is hosted.' },
+  [PERMISSIONS.NODES_ENROLL]:               { label: 'Enroll nodes',           group: 'Mesh', description: 'Admin only. Create an enrollment token so another machine can join.' },
+  [PERMISSIONS.NODES_MANAGE]:               { label: 'Manage nodes',           group: 'Mesh', description: 'Rename a node or put it into maintenance.' },
+  [PERMISSIONS.NODES_REMOVE]:               { label: 'Remove nodes',           group: 'Mesh', description: 'Admin only. Remove a node and revoke its certificate.' },
+  [PERMISSIONS.SERVERS_MOVE]:               { label: 'Move servers',           group: 'Mesh', description: 'Move a server to another node. Healthy servers never move on their own.' },
+  [PERMISSIONS.CLUSTERS_VIEW]:              { label: 'View clusters',          group: 'Mesh', description: 'See logical ARK clusters and transfer-storage health.' },
+  [PERMISSIONS.CLUSTERS_MANAGE]:            { label: 'Manage clusters',        group: 'Mesh', description: 'Create clusters and choose which servers belong to them.' },
+  [PERMISSIONS.CLUSTERS_STORAGE_MANAGE]:    { label: 'Manage cluster storage', group: 'Mesh', description: 'Set and validate the shared transfer path.' },
+  [PERMISSIONS.MESH_VIEW]:                  { label: 'View mesh',              group: 'Mesh', description: 'See mesh health, leadership and whether the mesh is degraded.' },
+  [PERMISSIONS.MESH_CONFIGURE]:             { label: 'Configure mesh',         group: 'Mesh', description: 'Create or join a mesh, and change mesh settings.' },
+  [PERMISSIONS.MESH_SECURITY_MANAGE]:       { label: 'Manage mesh security',   group: 'Mesh', description: 'Change mesh-wide security settings.' }
 };
 
 export interface Role {
@@ -101,6 +124,10 @@ export interface User {
   ownerUserId: string | null;
   /** Set when this account's password comes from the process command line. */
   cliLocked: boolean;
+  /** For a machine admin: the mesh machine it administers. Null for every other role. */
+  machineNodeId?: string | null;
+  /** For a machine admin: granted by a mesh admin, it may update ARK and the app on every machine. */
+  updatesAnyMachine?: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt: number | null;
@@ -110,10 +137,12 @@ export interface User {
 export interface AuthenticatedUser extends User {
   roleName: string;
   permissions: Permission[];
+  /** Present for a mesh login. A session older than the account's current version is refused. */
+  securityVersion?: number;
 }
 
 /** What the web server child knows of a client from its session cookie; main re-resolves it. */
-export type SessionUser = Pick<AuthenticatedUser, 'id' | 'username' | 'displayName' | 'roleId' | 'roleName' | 'permissions' | 'active'>;
+export type SessionUser = Pick<AuthenticatedUser, 'id' | 'username' | 'displayName' | 'roleId' | 'roleName' | 'permissions' | 'active' | 'securityVersion'>;
 
 /** The id given to a session from the single login that predates accounts. It acts as Admin. */
 export const LEGACY_ADMIN_ID = 'legacy-admin';
@@ -126,6 +155,7 @@ export const UNMATCHABLE_BCRYPT_HASH = '$2b$12$invalidinvalidinvalidinvalidinval
 
 export const ROLE_IDS = {
   ADMIN: 'admin',
+  MACHINE_ADMIN: 'machine-admin',
   SERVER_MANAGER: 'server-manager',
   OPERATOR: 'operator',
   ATTENDANT: 'attendant',
@@ -159,6 +189,19 @@ export const BUILT_IN_ROLES: { id: string; name: string; description: string; pe
     permissions: ALL_PERMISSIONS
   },
   {
+    id: ROLE_IDS.MACHINE_ADMIN,
+    name: 'Machine Admin',
+    description: 'Looks after one mesh machine: runs, configures and backs up every server on it, updates ARK and the app there, and moves servers between machines. Sees every server in the mesh. Cannot add or remove machines, or manage accounts.',
+    permissions: [
+      PERMISSIONS.SERVERS_VIEW, PERMISSIONS.SERVERS_CONTROL, PERMISSIONS.SERVERS_CREATE,
+      PERMISSIONS.SERVERS_DELETE, PERMISSIONS.SERVERS_CONFIGURE, PERMISSIONS.SERVERS_MOVE,
+      PERMISSIONS.RCON_USE, PERMISSIONS.PLAYERS_VIEW, PERMISSIONS.PLAYERS_MANAGE,
+      PERMISSIONS.BACKUPS_VIEW, PERMISSIONS.BACKUPS_CREATE, PERMISSIONS.BACKUPS_RESTORE, PERMISSIONS.BACKUPS_DELETE,
+      PERMISSIONS.MODS_MANAGE, PERMISSIONS.AUTOMATION_MANAGE, PERMISSIONS.APP_INSTALL, PERMISSIONS.SETTINGS_VIEW,
+      PERMISSIONS.NODES_VIEW, PERMISSIONS.MESH_VIEW, PERMISSIONS.CLUSTERS_VIEW
+    ]
+  },
+  {
     id: ROLE_IDS.OPERATOR,
     name: 'Operator',
     description: 'Runs one pool: adds and deletes its servers, runs them, and manages the server managers, attendants and viewers in it. Cannot see another pool, create operators or change application settings.',
@@ -170,7 +213,8 @@ export const BUILT_IN_ROLES: { id: string; name: string; description: string; pe
       PERMISSIONS.MODS_MANAGE, PERMISSIONS.AUTOMATION_MANAGE,
       PERMISSIONS.ACCOUNTS_MANAGERS_CREATE, PERMISSIONS.ACCOUNTS_MANAGERS_DELETE,
       PERMISSIONS.ACCOUNTS_ATTENDANTS_CREATE, PERMISSIONS.ACCOUNTS_ATTENDANTS_DELETE,
-      PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE
+      PERMISSIONS.ACCOUNTS_VIEWERS_CREATE, PERMISSIONS.ACCOUNTS_VIEWERS_DELETE,
+      PERMISSIONS.NODES_VIEW, PERMISSIONS.MESH_VIEW, PERMISSIONS.CLUSTERS_VIEW
     ]
   },
   {
@@ -202,9 +246,21 @@ export const BUILT_IN_ROLES: { id: string; name: string; description: string; pe
   }
 ];
 
-/** Resolve a role's effective permissions. Admin always gets everything. */
+/**
+ * Only an admin, the mesh admin, may bring a machine into the mesh or take one out. A custom role
+ * that lists either permission does not get it.
+ */
+export const MESH_ADMIN_ONLY: readonly Permission[] = [PERMISSIONS.NODES_ENROLL, PERMISSIONS.NODES_REMOVE];
+
+/**
+ * Resolve a role's effective permissions. Admin always gets everything. A machine admin gets its
+ * built-in set whatever is stored, since a node on an older version may hold it as a custom role.
+ */
 export function effectivePermissions(role: Pick<Role, 'id' | 'permissions'> | null | undefined): Permission[] {
   if (!role) return [];
   if (role.id === ROLE_IDS.ADMIN) return [...ALL_PERMISSIONS];
-  return role.permissions || [];
+  const stored = role.id === ROLE_IDS.MACHINE_ADMIN
+    ? BUILT_IN_ROLES.find(builtIn => builtIn.id === ROLE_IDS.MACHINE_ADMIN)!.permissions
+    : role.permissions || [];
+  return stored.filter(permission => !MESH_ADMIN_ONLY.includes(permission));
 }

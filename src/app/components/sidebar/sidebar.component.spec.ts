@@ -16,9 +16,12 @@ import { WebSocketService } from '../../core/services/web-socket.service';
 import { ServerLifecycleService } from '../../core/services/server-lifecycle.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
+import { RestartsService } from '../../core/services/restarts.service';
 
 describe('SidebarComponent', () => {
   let component: SidebarComponent;
@@ -35,11 +38,22 @@ describe('SidebarComponent', () => {
   /** Permissions the stubbed identity lacks; empty means an admin. */
   let denied: Set<string>;
   let identity: { isAdmin: boolean };
+  /** Mesh machine names by node id; empty outside a mesh. */
+  let machineNames: Record<string, string>;
+  let meshNodesChanged$: Subject<void>;
+  /** This machine's node id in a mesh. */
+  let localNode: string;
+  /** Operator names by user id. */
+  let operatorNames: Record<string, string>;
 
   const stopped = { id: '1', name: 'Alpha', state: 'stopped' };
   const running = { id: '2', name: 'Beta', state: 'running', players: 3 };
 
+  let restarts: jasmine.SpyObj<RestartsService> & { changed$: unknown };
+
   beforeEach(async () => {
+    restarts = Object.assign(jasmine.createSpyObj('RestartsService', ['restartAll', 'cancelAll', 'restartingAllAt']), { changed$: of(undefined) });
+    restarts.restartingAllAt.and.returnValue(null);
     servers$ = new BehaviorSubject<any[]>([]);
     activeServer$ = new BehaviorSubject<any>(null);
     routerEvents$ = new Subject<any>();
@@ -78,6 +92,13 @@ describe('SidebarComponent', () => {
     settingsDrawer = jasmine.createSpyObj('SettingsDrawerService', ['open', 'close', 'selectSection'], { isOpen: false });
     denied = new Set();
     identity = { isAdmin: false };
+    machineNames = {};
+    meshNodesChanged$ = new Subject<void>();
+    localNode = '';
+    operatorNames = {};
+    // The list's choices are kept in this browser; each test starts without them.
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
+    localStorage.removeItem('aasm.sidebar.closedGroups');
 
     await TestBed.configureTestingModule({
       imports: [SidebarComponent, HttpClientTestingModule],
@@ -91,10 +112,14 @@ describe('SidebarComponent', () => {
         { provide: ToastrService, useValue: { success: () => {}, error: () => {}, info: () => {}, warning: () => {} } },
         { provide: NotificationService, useValue: notification },
         { provide: GlobalConfigService, useClass: MockGlobalConfigService },
+        { provide: RestartsService, useValue: restarts },
         { provide: WebSocketService, useValue: { connected$: of(false) } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
         { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission), identity, identity$: of(identity) } },
-        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: () => 'Admin', assigneeLabel: () => 'Not assigned' } }
+        { provide: PoolDirectoryService, useValue: { changed$: of(undefined), operatorLabel: (server: any) => (server?.operatorUserId && operatorNames[server.operatorUserId]) || 'Admin', assigneeLabel: () => 'Not assigned' } },
+        { provide: MeshNodesService, useValue: { changed$: meshNodesChanged$.asObservable(), nameOf: (id?: string) => (id && machineNames[id]) || '', placementChoices: () => [],
+          isHere: (id?: string | null) => !id || id === localNode,
+          machines: () => Object.entries(machineNames).map(([nodeId, name]) => ({ nodeId, name })) } }
       ]
     }).compileComponents();
 
@@ -123,6 +148,47 @@ describe('SidebarComponent', () => {
 
   it('leaves the subtitle blank when a server has no operator or assignee', () => {
     expect(component.listLabel({ id: '1', name: 'Alpha', gamePort: 7777, multiHome: '203.0.113.5' } as any)).toBe('');
+  });
+
+  // In a mesh a server can run on any member.
+  it('names the machine a server runs on, ahead of who it is assigned to', () => {
+    machineNames = { desk: 'Jareds-PC', box: 'Basement Box' };
+    const directory = TestBed.inject(PoolDirectoryService) as unknown as { assigneeLabel: () => string };
+    directory.assigneeLabel = () => 'Server Manager · mia';
+
+    expect(component.subtitle({ id: '1', name: 'Alpha', nodeId: 'box' } as any)).toBe('Basement Box');
+    expect(component.subtitle({ id: '1', name: 'Alpha', nodeId: 'desk', managerUserId: 'm1' } as any)).toBe('Jareds-PC · Server Manager · mia');
+    expect(component.subtitle({ id: '1', name: 'Alpha' } as any)).toBe('');
+  });
+
+  it('shows the machine under the server in the list', () => {
+    machineNames = { box: 'Basement Box' };
+    servers$.next([{ ...stopped, nodeId: 'box' }]);
+    meshNodesChanged$.next();
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.server-item-manager')?.textContent).toContain('Basement Box');
+  });
+
+  // With a subtitle the name took the top half of the row, and a double-click below it did nothing.
+  it('renames on a double-click anywhere on the server\'s row, its subtitle too', () => {
+    machineNames = { box: 'Basement Box' };
+    servers$.next([{ ...stopped, nodeId: 'box' }]);
+    meshNodesChanged$.next();
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector('.server-item-manager')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+    expect(component.editingServerId).toBe('1');
+  });
+
+  it('does not rename on a double-click of the row\'s delete button', () => {
+    servers$.next([stopped, { ...stopped, id: '2', name: 'Beta' }]);
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector('.delete-server-btn')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+    expect(component.editingServerId).toBeNull();
   });
 
   it('groups the visible tabs into overview, configuration and features', () => {
@@ -229,10 +295,11 @@ describe('SidebarComponent', () => {
     expect(appUpdate.install).toHaveBeenCalled();
   });
 
-  it('should not allow editing server name if busy', () => {
+  // The name is the app's label: the server is known by its id, and ARK takes its own Session Name.
+  it('renames a running server too', () => {
     const event = { stopPropagation: jasmine.createSpy() } as any;
     component.onServerNameDoubleClick(running as any, event);
-    expect(component.editingServerId).toBeNull();
+    expect(component.editingServerId).toBe('2');
   });
 
   it('should allow editing server name if not busy', () => {
@@ -304,6 +371,200 @@ describe('SidebarComponent', () => {
       { id: '2', name: 'Alpha', sortOrder: 1, operatorUserId: 'bob' }
     ]);
     expect(component.servers.map(server => server.id)).toEqual(['1', '2']);
+  });
+
+  // A tree that groups only what is really apart: the machines of a mesh, and the operators when
+  // that is switched on in Settings → Servers.
+  describe('the server tree', () => {
+    const list = [
+      { id: 'a', name: 'The Island', mapName: 'TheIsland_WP', nodeId: 'n1', operatorUserId: 'op1' },
+      { id: 'b', name: 'Ragnarok', mapName: 'Ragnarok_WP', nodeId: 'n2' },
+      { id: 'c', name: 'Aberration', mapName: 'Aberration_WP', nodeId: 'n2', operatorUserId: 'op1' }
+    ];
+    /** The rows as shown: groups as "label (count)", servers by id, indented by depth. */
+    const rows = () => component.serverRows.map(row =>
+      `${'  '.repeat(row.depth)}${row.kind === 'group' ? `${row.label}${row.note ? ` [${row.note}]` : ''} (${row.count})` : row.server!.id}`);
+    const page = () => fixture.nativeElement as HTMLElement;
+
+    function inMesh(): void {
+      machineNames = { n1: 'PC 1', n2: 'Dallas01' };
+      localNode = 'n1';
+      meshNodesChanged$.next();
+    }
+
+    beforeEach(() => {
+      operatorNames = { op1: 'Ops' };
+      servers$.next(list);
+    });
+
+    it('is one flat list outside a mesh', () => {
+      expect(rows()).toEqual(['a', 'b', 'c']);
+      fixture.detectChanges();
+      expect(page().querySelectorAll('.server-group').length).toBe(0);
+    });
+
+    it('puts each server under its machine in a mesh, this machine first', () => {
+      inMesh();
+
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a', 'Dallas01 (2)', '  b', '  c']);
+      fixture.detectChanges();
+      expect(Array.from(page().querySelectorAll('.server-group-name')).map(name => name.textContent?.trim())).toEqual(['PC 1', 'Dallas01']);
+    });
+
+    it('stays flat in a mesh whose servers are all on one machine, naming it under each server', () => {
+      inMesh();
+      servers$.next(list.map(server => ({ ...server, nodeId: 'n2' })));
+
+      expect(rows()).toEqual(['a', 'b', 'c']);
+      expect(component.subtitle(component.servers[1])).toBe('Dallas01');
+    });
+
+    it('does not repeat the machine under a server grouped beneath it', () => {
+      inMesh();
+
+      expect(component.subtitle(component.servers[1])).toBe('');
+    });
+
+    it('folds a machine away, and remembers it', () => {
+      inMesh();
+
+      component.toggleGroup('machine:n2');
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a', 'Dallas01 (2)']);
+      expect(component.serverRows.find(row => row.key === 'machine:n2')?.open).toBeFalse();
+
+      const again = TestBed.createComponent(SidebarComponent).componentInstance;
+      again.ngOnInit();
+      expect(again.serverRows.find(row => row.key === 'machine:n2')?.open).toBeFalse();
+      again.ngOnDestroy();
+    });
+
+    it('finds servers by name, map or machine as you type, opening the groups it finds them in', () => {
+      inMesh();
+      component.toggleGroup('machine:n2');
+
+      component.onSearch('ragn');
+      expect(rows()).toEqual(['Dallas01 (1)', '  b']);
+      component.onSearch('island');
+      expect(rows()).toEqual(['PC 1 [this machine] (1)', '  a']);
+      component.onSearch('dallas');
+      expect(rows()).toEqual(['Dallas01 (2)', '  b', '  c']);
+    });
+
+    it('groups by operator above the machines when that is switched on, with the admin pool last', () => {
+      inMesh();
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
+
+      expect(rows()).toEqual([
+        'Ops (2)', '  PC 1 [this machine] (1)', '    a', '  Dallas01 (1)', '    c',
+        'Admin pool (1)', '  Dallas01 (1)', '    b'
+      ]);
+    });
+
+    it('groups by operator without machines outside a mesh', () => {
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
+
+      expect(rows()).toEqual(['Ops (2)', '  a', '  c', 'Admin pool (1)', '  b']);
+    });
+
+    it('has no operator level when no server has an operator', () => {
+      servers$.next(list.map(server => ({ ...server, operatorUserId: undefined })));
+      TestBed.inject(ServerListPreferencesService).setGroupByOperator(true);
+
+      expect(rows()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('offers no machine dropdown or operator box of its own', () => {
+      inMesh();
+      fixture.detectChanges();
+
+      expect(page().querySelector('.server-list-tools select')).toBeNull();
+      expect(page().querySelector('.server-list-tools input[type="checkbox"]')).toBeNull();
+    });
+
+    // A search box over a short list is clutter; it comes in at ten servers.
+    describe('searching', () => {
+      const many = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `s${index}`, name: `Server ${index}`, mapName: 'TheIsland_WP' }));
+      const box = () => page().querySelector('.server-search');
+
+      it('is offered from ten servers', () => {
+        servers$.next(many(9));
+        fixture.detectChanges();
+        expect(box()).toBeNull();
+
+        servers$.next(many(10));
+        fixture.detectChanges();
+        expect(box()).not.toBeNull();
+      });
+
+      // With 38 servers the list pushed the server's own pages far down; a scrolling list inside a
+      // scrolling sidebar then gave two scrollbars. Each part scrolls on its own instead.
+      it('scrolls the server list and the server\'s pages each on their own, not the whole sidebar', () => {
+        const host = page();
+        host.style.display = 'block';
+        host.style.height = '600px';
+        servers$.next(many(30));
+        fixture.detectChanges();
+
+        const body = host.querySelector<HTMLElement>('.sidenav-body')!;
+        const list = host.querySelector<HTMLElement>('.server-list')!;
+        const pages = host.querySelector<HTMLElement>('.sidenav-pages')!;
+        expect(['auto', 'scroll']).not.toContain(getComputedStyle(body).overflowY);
+        expect(getComputedStyle(list).overflowY).toBe('auto');
+        expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+        expect(getComputedStyle(pages).overflowY).toBe('auto');
+        // The list has at most half; the server's pages keep the rest.
+        expect(host.querySelector<HTMLElement>('.sidenav-servers')!.offsetHeight).toBeLessThanOrEqual(body.clientHeight / 2 + 1);
+        expect(pages.offsetHeight).toBeGreaterThan(100);
+      });
+
+      // The selected server's name scrolled away with its pages.
+      it('keeps the selected server\'s name in place while its pages scroll', () => {
+        const host = page();
+        host.style.display = 'block';
+        host.style.height = '420px';
+        servers$.next(many(30));
+        fixture.detectChanges();
+
+        const pages = host.querySelector<HTMLElement>('.sidenav-pages')!;
+        const name = () => pages.querySelector<HTMLElement>('.nav-section-header')!.getBoundingClientRect().top;
+        expect(pages.scrollHeight).withContext('the pages need to scroll for this').toBeGreaterThan(pages.clientHeight);
+        const before = name();
+
+        pages.scrollTop = 60;
+
+        expect(pages.scrollTop).toBeGreaterThan(0);
+        expect(name()).toBeCloseTo(before, 0);
+      });
+
+      it('lets go of a search once the list is too short for the box', () => {
+        servers$.next(many(10));
+        component.onSearch('Server 3');
+        expect(rows()).toEqual(['s3']);
+
+        servers$.next(many(9));
+
+        expect(component.searchText).toBe('');
+        expect(rows().length).toBe(9);
+      });
+    });
+
+    it('reorders only a flat list that is not being searched', () => {
+      expect(component.reorderable).toBeTrue();
+      component.onSearch('ragn');
+      expect(component.reorderable).toBeFalse();
+      component.onSearch('');
+      inMesh();
+      expect(component.reorderable).toBeFalse();
+    });
+  });
+
+  it('does not rename a server whose machine cannot be reached', () => {
+    const unreachable = { id: '9', name: 'Far', state: 'unreachable' };
+    servers$.next([unreachable]);
+
+    component.onServerNameDoubleClick(unreachable as any, { stopPropagation: () => {} } as any);
+
+    expect(component.editingServerId).toBeNull();
   });
 
   it('maps server states to status classes', () => {
@@ -379,6 +640,45 @@ describe('SidebarComponent', () => {
     servers$.next([stopped, { ...running, state: 'starting' }]);
     fixture.detectChanges();
     expect(stopAll().disabled).toBeFalse();
+  });
+
+  // Catches mod updates, which ARK fetches as a server starts.
+  describe('restarting every server', () => {
+    const restartAll = () => fixture.nativeElement.querySelector('button[title="Restart all servers"]') as HTMLButtonElement;
+
+    it('is offered only while a server is running', () => {
+      servers$.next([stopped]);
+      fixture.detectChanges();
+      expect(restartAll().disabled).toBeTrue();
+
+      servers$.next([stopped, running]);
+      fixture.detectChanges();
+      expect(restartAll().disabled).toBeFalse();
+    });
+
+    it('asks first, then restarts every server after the warning, or now', () => {
+      component.restartAllServers();
+      expect(component.showConfirmRestartAllModal).toBeTrue();
+      expect(component.restartAllWarningMinutes).toBe(15);
+
+      component.onConfirmRestartAll(true);
+      expect(restarts.restartAll).toHaveBeenCalledWith(15);
+      expect(component.showConfirmRestartAllModal).toBeFalse();
+
+      component.restartAllServers();
+      component.onConfirmRestartAll(false);
+      expect(restarts.restartAll).toHaveBeenCalledWith(0);
+    });
+
+    it('shows it counting down, with a way to cancel it', () => {
+      restarts.restartingAllAt.and.returnValue(Date.now() + 12 * 60_000 - 1_000);
+      fixture.detectChanges();
+      const pending = fixture.nativeElement.querySelector('.restart-all-pending') as HTMLElement;
+
+      expect(pending.textContent?.replace(/\s+/g, ' ')).toContain('Restarting all in 12 min');
+      (pending.querySelector('button') as HTMLButtonElement).click();
+      expect(restarts.cancelAll).toHaveBeenCalled();
+    });
   });
 
   it('starts and stops all servers once confirmed', () => {

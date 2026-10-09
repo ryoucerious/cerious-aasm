@@ -31,6 +31,16 @@ describe('server-status', () => {
     expect(serverStatusLabel('error')).toBe('Error');
   });
 
+  // A server on a mesh machine that has stopped answering: its last known state may be stale.
+  it('says when the machine running a server cannot be reached, and offers nothing to do with it', () => {
+    expect(serverStatusKey('unreachable')).toBe('unreachable');
+    expect(serverStatusLabel('unreachable')).toBe('Unreachable');
+    expect(serverStatusClass('unreachable')).toBe('status-unreachable');
+    expect(isOnlineStatus('unreachable')).toBeFalse();
+    expect(isBusyStatus('unreachable')).toBeFalse();
+    expect(canStartStatus('unreachable')).toBeFalse();
+  });
+
   it('maps to the existing status css classes', () => {
     expect(serverStatusClass('running')).toBe('status-running');
     expect(serverStatusClass('queued')).toBe('status-starting');

@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { LoginComponent } from './login.component';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, of } from 'rxjs';
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { WebSocketService } from '../../core/services/web-socket.service';
 import { IpcService } from '../../core/services/ipc.service';
@@ -192,5 +192,37 @@ describe('LoginComponent', () => {
 
     await component.onLogin();
     expect(component.errorMessage).toBe('Incorrect username or password. Please try again.');
+  });
+});
+
+// After a join the desktop lands here, and the account its own admin password became was only named on the page it left.
+describe('LoginComponent on a desktop in a mesh', () => {
+  async function open(status: object): Promise<LoginComponent> {
+    await TestBed.configureTestingModule({
+      imports: [LoginComponent],
+      providers: [
+        { provide: MessagingService, useValue: { sendMessage: () => of(status), receiveMessage: () => of(null) } },
+        { provide: WebSocketService, useValue: { connected$: new BehaviorSubject(false) } },
+        { provide: IpcService, useValue: { isElectron: true } },
+        { provide: Router, useValue: jasmine.createSpyObj('Router', ['navigate']) }
+      ]
+    }).compileComponents();
+    const fixture = TestBed.createComponent(LoginComponent);
+    fixture.detectChanges();
+    return fixture.componentInstance;
+  }
+
+  it('names the account this machine\'s own admin password signs in as, and fills it in', async () => {
+    const login = await open({ enabled: true, hasAccounts: true, ownLogin: 'admin2-pc-1' });
+
+    expect(login.hint).toBe('This machine is in a mesh. Sign in with your account. This machine\'s own admin password signs in as admin2-pc-1.');
+    expect(login.username).toBe('admin2-pc-1');
+  });
+
+  it('only asks for an account when the mesh names none for this machine', async () => {
+    const login = await open({ enabled: true, hasAccounts: true });
+
+    expect(login.hint).toBe('This machine is in a mesh. Sign in with your account.');
+    expect(login.username).toBe('');
   });
 });

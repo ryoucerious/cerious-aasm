@@ -117,4 +117,52 @@ describe('AutomationTabComponent', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('.validation-error')?.textContent)
       .toContain('Crash detection interval must be between 30 and 300 seconds');
   });
+
+  // Admins wanted more than one restart a day.
+  describe('restart times', () => {
+    const timeInputs = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('.restart-time-row input[type="time"]'));
+
+    beforeEach(() => {
+      fixture.componentRef.setInput('serverInstance', { scheduledRestartEnabled: true, restartFrequency: 'daily', restartTime: '02:00' });
+      fixture.detectChanges();
+    });
+
+    it('shows the one time an older version saved', async () => {
+      await fixture.whenStable();
+      expect(component.restartTimes).toEqual(['02:00']);
+      expect(timeInputs().length).toBe(1);
+    });
+
+    it('adds a time twelve hours after the first, and saves', () => {
+      spyOn(component.saveScheduledRestartSettings, 'emit');
+
+      component.onAddRestartTime();
+      fixture.detectChanges();
+
+      expect(component.serverInstance.restartTimes).toEqual(['02:00', '14:00']);
+      expect(timeInputs().length).toBe(2);
+      expect(component.saveScheduledRestartSettings.emit).toHaveBeenCalled();
+    });
+
+    it('changes a time, keeping the first as the restart time older versions read', () => {
+      component.onAddRestartTime();
+      component.onRestartTimeChange(0, '04:30');
+
+      expect(component.serverInstance.restartTimes).toEqual(['04:30', '14:00']);
+      expect(component.serverInstance.restartTime).toBe('04:30');
+    });
+
+    it('removes a time, but never the last one', () => {
+      spyOn(component.saveScheduledRestartSettings, 'emit');
+      component.onAddRestartTime();
+      fixture.detectChanges();
+
+      component.onRemoveRestartTime(0);
+      fixture.detectChanges();
+
+      expect(component.serverInstance.restartTimes).toEqual(['14:00']);
+      expect(component.serverInstance.restartTime).toBe('14:00');
+      expect((fixture.nativeElement as HTMLElement).querySelector('.restart-time-row button')).toBeNull();
+    });
+  });
 });

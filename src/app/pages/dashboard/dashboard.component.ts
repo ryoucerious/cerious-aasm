@@ -17,6 +17,8 @@ import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { PoolDirectoryService } from '../../core/services/pool-directory.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { MoveServerDialogComponent } from '../../components/move-server-dialog/move-server-dialog.component';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { ServerCardComponent } from '../../components/server-card/server-card.component';
 import { AddServerModalComponent } from '../../components/add-server-modal/add-server-modal.component';
@@ -24,8 +26,9 @@ import { ModalComponent } from '../../components/modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../../components/dropdown/dropdown.component';
 import { AnimateReflowDirective } from '../../core/directives/animate-reflow.directive';
 import { ACTIVITY_ICONS } from '../../core/utils/activity-icons';
+import { getMapVisual } from '../../core/utils/map-visuals';
 import { bucketSamples, seriesStats, toPoints, linePath, areaPath, PlayerHistorySample, ChartPoint } from '../../core/utils/chart.utils';
-import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel } from '../../core/utils/format.utils';
+import { formatRelativeTime, formatBytes, formatPercent, toPercent, formatUptime, formatHourLabel, isLocalPageHost } from '../../core/utils/format.utils';
 
 export interface HostResources {
   cpuPercent: number;
@@ -35,6 +38,47 @@ export interface HostResources {
 
 interface HostResourcesReply extends Partial<HostResources> {
   error?: string;
+}
+
+/** A mesh member as get-mesh-status and mesh-status describe it. */
+interface MeshNodeView {
+  nodeId: string;
+  name: string;
+  status?: string;
+  /** The address other machines reach it at. */
+  host?: string;
+  /** From its last heartbeat; null once that is stale. */
+  resources?: HostResources | null;
+  connected?: boolean;
+  version?: string;
+  /** When this machine last heard from it; null when never. */
+  lastContactAt?: number | null;
+}
+
+interface MeshStatusView {
+  enabled?: boolean;
+  degraded?: boolean;
+  warning?: string | null;
+  /** This machine. */
+  nodeId?: string | null;
+  nodes?: MeshNodeView[];
+}
+
+/** One machine in System Resources, in a mesh. */
+export interface NodeResourceRow {
+  nodeId: string;
+  name: string;
+  local: boolean;
+  reporting: boolean;
+  cpuPercent: number;
+  cpuLabel: string;
+  memoryPercent: number;
+  memoryLabel: string;
+  diskPercent: number;
+  diskLabel: string;
+  connected: boolean;
+  /** Under the name: how many of its servers run, its version, and when last heard from if it cannot be reached. */
+  detail: string;
 }
 
 export type ServerFilter = 'all' | 'online' | 'offline';
@@ -57,7 +101,7 @@ const CLOCK_TICK_MS = 30_000;
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [NgIf, NgFor, NgClass, DecimalPipe, FormsModule, DragDropModule, ServerCardComponent, AddServerModalComponent, ModalComponent, DropdownComponent, AnimateReflowDirective],
+  imports: [NgIf, NgFor, NgClass, DecimalPipe, FormsModule, DragDropModule, ServerCardComponent, AddServerModalComponent, ModalComponent, DropdownComponent, AnimateReflowDirective, MoveServerDialogComponent],
   templateUrl: './dashboard.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
@@ -71,6 +115,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
   view: 'grid' | 'list' = 'grid';
   filter: ServerFilter = 'all';
   sort: ServerSort = 'custom';
+  /** Matched against the name, session name, map, machine and operator. Not remembered. */
+  searchText = '';
+  /** A machine's node id, or 'all'. Offered only in a mesh. */
+  machine = 'all';
+  /** "All machines" and each machine, in a mesh; empty outside one. */
+  machineOptions: DropdownOption<string>[] = [];
   readonly filterOptions: DropdownOption<ServerFilter>[] = [
     { value: 'all', label: 'All Servers' },
     { value: 'online', label: 'Online' },
@@ -110,6 +160,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   backupName = '';
   creatingBackup = false;
   serverToDelete: ServerInstance | null = null;
+  /** The server the move dialog is open for. */
+  movingServer: ServerInstance | null = null;
   private activeServerId: string | null = null;
 
   readonly chartWidth = CHART_WIDTH;
@@ -120,6 +172,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * when the desktop app loads the bundle over file://.
    */
   readonly heroBackground = `url("${HERO_IMAGE}")`;
+  meshBanner = '';
+  private nodeNames = new Map<string, string>();
+  /** Members of this machine's mesh, removed ones left out; empty when standalone. */
+  private meshNodes: MeshNodeView[] = [];
+  private localNodeId: string | null = null;
 
   private subs: Subscription[] = [];
 
@@ -135,6 +192,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private settingsDrawer: SettingsDrawerService,
     private auth: AuthService,
     public poolDirectory: PoolDirectoryService,
+    private meshMachines: MeshNodesService,
     private router: Router,
     private cdr: ChangeDetectorRef
   ) {}
@@ -156,9 +214,35 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.BACKUPS_VIEW);
   }
 
+  private applyMesh(status: MeshStatusView | null | undefined): void {
+    if (!status?.enabled) {
+      this.meshBanner = '';
+      this.nodeNames.clear();
+      this.meshNodes = [];
+      this.localNodeId = null;
+      this.machineOptions = [];
+    } else {
+      this.nodeNames = new Map((status.nodes || []).map(node => [node.nodeId, node.name]));
+      this.meshNodes = (status.nodes || []).filter(node => node.status !== 'removed');
+      this.localNodeId = status.nodeId || null;
+      // A degraded mesh shows in the top bar, on every page.
+      this.meshBanner = status.warning || '';
+      this.machineOptions = [{ value: 'all', label: 'All machines' }, ...this.meshNodes.map(node => ({ value: node.nodeId, label: node.name }))];
+      // A machine since removed would leave nothing to show and no way to pick it again.
+      if (this.machine !== 'all' && !this.meshNodes.some(node => node.nodeId === this.machine)) this.machine = 'all';
+    }
+    this.refreshVisible();
+    this.cdr.markForCheck();
+  }
+
   ngOnInit(): void {
     this.readViewPreferences();
+    this.subs.push(this.messaging.sendMessage<MeshStatusView>('get-mesh-status', {}).subscribe(status => this.applyMesh(status)));
+    // Sent again after each heartbeat, which carries the sender's resources.
+    this.subs.push(this.messaging.receiveMessage<MeshStatusView>('mesh-status').subscribe(status => this.applyMesh(status)));
 
+    // Which machines can take a server follows who is reachable and draining.
+    this.subs.push(this.meshMachines.changed$.subscribe(() => this.cdr.markForCheck()));
     this.subs.push(this.liveServers.servers$.subscribe(servers => {
       this.servers = servers;
       this.serverOptions = servers.map(server => ({ value: server.id, label: server.name }));
@@ -213,21 +297,69 @@ export class DashboardComponent implements OnInit, OnDestroy {
   onFilterChange(): void {
     this.refreshVisible();
     this.saveViewPreferences();
+    this.cdr.markForCheck();
   }
 
   onSortChange(): void {
     this.refreshVisible();
     this.saveViewPreferences();
+    this.cdr.markForCheck();
   }
 
+  onSearchChange(): void {
+    this.refreshVisible();
+    this.cdr.markForCheck();
+  }
+
+  /** From "No servers match": back to every server. */
+  clearSearchAndFilters(): void {
+    this.searchText = '';
+    this.filter = 'all';
+    this.machine = 'all';
+    this.refreshVisible();
+    this.saveViewPreferences();
+    this.cdr.markForCheck();
+  }
+
+  /** Dragging reorders the saved order, so only the whole list, unsorted, can be dragged. */
   get canReorder(): boolean {
-    return this.sort === 'custom' && this.filter === 'all';
+    return this.sort === 'custom' && this.filter === 'all' && !this.filteringByMachine && !this.searchText.trim();
+  }
+
+  private get filteringByMachine(): boolean {
+    return this.machine !== 'all' && this.meshNodes.length > 0;
+  }
+
+  /** A server without a machine of its own runs on this one. */
+  private machineOf(server: ServerInstance): string | null {
+    return server.nodeId || this.localNodeId;
+  }
+
+  private matchesSearch(server: ServerInstance, query: string): boolean {
+    const fields = [
+      server.name,
+      server.sessionName,
+      server.mapName,
+      getMapVisual(server.mapName).label,
+      this.nodeLabel(server),
+      // "Admin" stands for no operator, which would match every server not in a pool.
+      server.operatorUserId ? this.poolDirectory.operatorLabel(server) : ''
+    ];
+    return fields.some(value => String(value || '').toLowerCase().includes(query));
+  }
+
+  nodeLabel(server: ServerInstance): string {
+    if (!server.nodeId) return '';
+    return this.nodeNames.get(server.nodeId) || server.nodeId;
   }
 
   refreshVisible(): void {
     let list = this.servers.slice();
     if (this.filter === 'online') list = list.filter(server => LiveServersService.isOnline(server));
     if (this.filter === 'offline') list = list.filter(server => !LiveServersService.isOnline(server));
+    if (this.filteringByMachine) list = list.filter(server => this.machineOf(server) === this.machine);
+    const query = this.searchText.trim().toLowerCase();
+    if (query) list = list.filter(server => this.matchesSearch(server, query));
 
     const byName = (a: ServerInstance, b: ServerInstance) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
     switch (this.sort) {
@@ -259,6 +391,71 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.hostResources?.memory?.total || null;
   }
 
+  /** The memory of the machine a server runs on: this one, or the member hosting it. */
+  hostMemoryTotalFor(server: ServerInstance): number | null {
+    const node = this.hostNodeOf(server);
+    if (!node || node.nodeId === this.localNodeId) return this.hostMemoryTotal;
+    return node.resources?.memory?.total || null;
+  }
+
+  /**
+   * The address players use for a server in a mesh: that of the member hosting it. A server on
+   * this machine keeps the name the page was opened on, unless that is localhost or the desktop
+   * app, which other machines cannot use. Null outside a mesh.
+   */
+  joinHost(server: ServerInstance): string | null {
+    const node = this.hostNodeOf(server);
+    if (!node?.host) return null;
+    if (node.nodeId === this.localNodeId && !isLocalPageHost(this.pageHostname())) return null;
+    return node.host;
+  }
+
+  /** Every member's CPU, memory and disk, this machine's as it is polled here. Empty unless the mesh has another member. */
+  /** The machines of the mesh, for the Machines card; empty outside a mesh. */
+  get resourceNodes(): NodeResourceRow[] {
+    if (!this.meshNodes.length) return [];
+    return this.meshNodes.map(node => {
+      const local = node.nodeId === this.localNodeId;
+      const connected = local || !!node.connected;
+      return {
+        ...resourceRow(node.nodeId, node.name, local, local ? this.hostResources : node.resources || null),
+        connected,
+        detail: this.machineDetail(node, connected)
+      };
+    });
+  }
+
+  private machineDetail(node: MeshNodeView, connected: boolean): string {
+    const servers = this.servers.filter(server => this.machineOf(server) === node.nodeId);
+    const running = servers.filter(server => LiveServersService.isOnline(server)).length;
+    const parts = [servers.length ? `${running} of ${servers.length} server${servers.length === 1 ? '' : 's'} running` : 'No servers'];
+    // A machine's record holds '0' until its first heartbeat is written.
+    if (node.version && node.version !== '0') parts.push(`Version ${node.version}`);
+    if (!connected && node.lastContactAt !== undefined) {
+      parts.push(node.lastContactAt === null ? 'Never heard from' : `Last contact ${formatRelativeTime(node.lastContactAt, this.now)}`);
+    }
+    return parts.join(' · ');
+  }
+
+  openMeshSettings(): void {
+    this.settingsDrawer.open('mesh');
+  }
+
+  trackNode(_index: number, node: NodeResourceRow): string {
+    return node.nodeId;
+  }
+
+  private hostNodeOf(server: ServerInstance): MeshNodeView | null {
+    if (!this.meshNodes.length) return null;
+    const nodeId = server.nodeId || this.localNodeId;
+    return this.meshNodes.find(node => node.nodeId === nodeId) || null;
+  }
+
+  /** The host in the address bar; empty in the desktop app. Separate so tests can set it. */
+  protected pageHostname(): string {
+    return typeof window === 'undefined' ? '' : window.location.hostname;
+  }
+
   startServer(server: ServerInstance): void {
     this.serverLifecycle.startServer(server, this.cdr);
   }
@@ -287,6 +484,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.serverInstanceService.setActiveServer(server);
     this.serverNav.rememberTab(tab);
     this.router.navigate(['/server', tab]);
+  }
+
+  /** The user may move servers, and another machine in the mesh can take this one. The card offers it only while the server is off. */
+  canMoveServer(server: ServerInstance): boolean {
+    return this.auth.can(PERMISSIONS.SERVERS_MOVE) && this.meshMachines.destinationsFor(server).length > 0;
+  }
+
+  openMove(server: ServerInstance): void {
+    this.movingServer = server;
+    this.cdr.markForCheck();
+  }
+
+  closeMove(): void {
+    this.movingServer = null;
+    this.cdr.markForCheck();
   }
 
   requestDelete(server: ServerInstance): void {
@@ -373,10 +585,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
       });
   }
 
-  goToServerInstall(): void {
-    this.settingsDrawer.open('server-installation');
-  }
-
   goToSettings(): void {
     this.settingsDrawer.open();
   }
@@ -401,7 +609,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get cpuPercent(): number {
-    return this.hostResources ? Math.max(0, Math.min(100, this.hostResources.cpuPercent)) : 0;
+    return cpuPercentOf(this.hostResources);
   }
 
   get memoryPercent(): number {
@@ -413,17 +621,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get cpuLabel(): string {
-    return this.hostResources ? formatPercent(this.hostResources.cpuPercent) : '--';
+    return cpuLabelOf(this.hostResources);
   }
 
   get memoryLabel(): string {
-    const memory = this.hostResources?.memory;
-    return memory ? `${formatBytes(memory.used)} / ${formatBytes(memory.total, 0)}` : '--';
+    return memoryLabelOf(this.hostResources);
   }
 
   get diskLabel(): string {
-    const disk = this.hostResources?.disk;
-    return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
+    return diskLabelOf(this.hostResources);
   }
 
   private fetchPlayerHistory(): Observable<unknown> {
@@ -486,13 +692,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return bar.server.id;
   }
 
+  /** Server Uptime shows the longest-running few until asked for every server. */
+  showAllUptime = false;
+  readonly uptimeTop = UPTIME_TOP;
+
+  /** The servers Server Uptime is about: those on the machine chosen for the server list. */
+  private get uptimeServers(): ServerInstance[] {
+    return this.filteringByMachine ? this.servers.filter(server => this.machineOf(server) === this.machine) : this.servers;
+  }
+
+  get uptimeTotal(): number {
+    return this.uptimeServers.length;
+  }
+
+  toggleUptime(): void {
+    this.showAllUptime = !this.showAllUptime;
+    this.cdr.markForCheck();
+  }
+
+  /** Longest-running first; with many servers a list in the sidebar's order said little. */
   get uptimeBars(): { server: ServerInstance; percent: number; label: string }[] {
-    const uptimes = this.servers.map(server => ({
+    const uptimes = this.uptimeServers.map(server => ({
       server,
       ms: LiveServersService.isOnline(server) && server.startedAt ? Math.max(0, this.now - server.startedAt) : 0
-    }));
+    })).sort((a, b) => b.ms - a.ms);
     const max = Math.max(1, ...uptimes.map(item => item.ms));
-    return uptimes.map(item => ({
+    return (this.showAllUptime ? uptimes : uptimes.slice(0, UPTIME_TOP)).map(item => ({
       server: item.server,
       percent: item.ms > 0 ? Math.max(4, (item.ms / max) * 100) : 0,
       label: item.ms > 0 ? formatUptime(this.now - item.ms, this.now) : '0m'
@@ -539,6 +764,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       if (prefs.view === 'grid' || prefs.view === 'list') this.view = prefs.view;
       if (['all', 'online', 'offline'].includes(prefs.filter)) this.filter = prefs.filter;
       if (['custom', 'name-asc', 'name-desc', 'status', 'players'].includes(prefs.sort)) this.sort = prefs.sort;
+      if (typeof prefs.machine === 'string' && prefs.machine) this.machine = prefs.machine;
     } catch {
       // Corrupt or unavailable storage: keep the defaults.
     }
@@ -546,9 +772,45 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   private saveViewPreferences(): void {
     try {
-      localStorage.setItem('cerious-aasm.dashboard', JSON.stringify({ view: this.view, filter: this.filter, sort: this.sort }));
+      localStorage.setItem('cerious-aasm.dashboard', JSON.stringify({ view: this.view, filter: this.filter, sort: this.sort, machine: this.machine }));
     } catch {
       // Unavailable storage: the choice lasts for this visit only.
     }
   }
+}
+
+/** How many servers Server Uptime shows before "Show all". */
+const UPTIME_TOP = 10;
+
+function cpuPercentOf(resources: HostResources | null | undefined): number {
+  return resources ? Math.max(0, Math.min(100, resources.cpuPercent)) : 0;
+}
+
+function cpuLabelOf(resources: HostResources | null | undefined): string {
+  return resources ? formatPercent(resources.cpuPercent) : '--';
+}
+
+function memoryLabelOf(resources: HostResources | null | undefined): string {
+  const memory = resources?.memory;
+  return memory ? `${formatBytes(memory.used)} / ${formatBytes(memory.total, 0)}` : '--';
+}
+
+function diskLabelOf(resources: HostResources | null | undefined): string {
+  const disk = resources?.disk;
+  return disk ? `${formatBytes(disk.used, 0)} / ${formatBytes(disk.total, 0)}` : 'Unavailable';
+}
+
+function resourceRow(nodeId: string, name: string, local: boolean, resources: HostResources | null): Omit<NodeResourceRow, 'connected' | 'detail'> {
+  return {
+    nodeId,
+    name,
+    local,
+    reporting: !!resources,
+    cpuPercent: cpuPercentOf(resources),
+    cpuLabel: cpuLabelOf(resources),
+    memoryPercent: toPercent(resources?.memory?.used, resources?.memory?.total),
+    memoryLabel: memoryLabelOf(resources),
+    diskPercent: toPercent(resources?.disk?.used, resources?.disk?.total),
+    diskLabel: diskLabelOf(resources)
+  };
 }

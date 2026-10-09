@@ -29,20 +29,34 @@
     </div>
   </section>
 
+  <div class="ark-install-notice warning dash-mesh-warning" *ngIf="meshBanner">
+    <i class="material-icons">warning</i>
+    <span>{{ meshBanner }}</span>
+  </div>
+
   <div class="dash-grid">
     <div class="dash-main">
-      <div class="dash-section-header">
-        <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
-        <div class="dash-toolbar">
-          <div class="dash-view-toggle" role="group" aria-label="View">
-            <button type="button" class="dash-toggle-btn" [class.active]="view === 'grid'" (click)="setView('grid')" title="Grid view"><span class="material-icons">grid_view</span></button>
-            <button type="button" class="dash-toggle-btn" [class.active]="view === 'list'" (click)="setView('list')" title="List view"><span class="material-icons">view_list</span></button>
-          </div>
-          <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
-          <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
+      <!-- The title and Add Server on one row; search on the left of the next, filters on the right. -->
+      <div class="dash-servers-head">
+        <div class="dash-section-header">
+          <h2 class="dash-section-title">Servers <span class="nav-count">{{ visibleServers.length }}</span></h2>
           <button type="button" class="btn btn-primary" *ngIf="canCreateServer" (click)="openAddServer()">
             <span class="material-icons">add</span> Add Server
           </button>
+        </div>
+        <div class="dash-toolbar">
+          <input type="search" class="form-control dash-search" placeholder="Search servers" aria-label="Search servers"
+                 [(ngModel)]="searchText" (ngModelChange)="onSearchChange()" />
+          <div class="dash-toolbar-filters">
+            <app-dropdown class="dash-select" [options]="filterOptions" [(ngModel)]="filter" (ngModelChange)="onFilterChange()" ariaLabel="Filter servers"></app-dropdown>
+            <app-dropdown class="dash-select dash-machine-filter" *ngIf="machineOptions.length" [options]="machineOptions" [(ngModel)]="machine"
+                          (ngModelChange)="onFilterChange()" ariaLabel="Filter by machine"></app-dropdown>
+            <app-dropdown class="dash-select dash-select-wide" [options]="sortOptions" [(ngModel)]="sort" (ngModelChange)="onSortChange()" ariaLabel="Sort servers"></app-dropdown>
+            <div class="dash-view-toggle" role="group" aria-label="View">
+              <button type="button" class="dash-toggle-btn" [class.active]="view === 'grid'" (click)="setView('grid')" title="Grid view"><span class="material-icons">grid_view</span></button>
+              <button type="button" class="dash-toggle-btn" [class.active]="view === 'list'" (click)="setView('list')" title="List view"><span class="material-icons">view_list</span></button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -61,7 +75,11 @@
                          [canBackups]="canBackups"
                          [assigneeLabel]="poolDirectory.assigneeLabel(server)"
                          [operatorLabel]="poolDirectory.operatorLabel(server)"
-                         [hostMemoryTotalBytes]="hostMemoryTotal"
+                         [nodeLabel]="nodeLabel(server)"
+                         [hostMemoryTotalBytes]="hostMemoryTotalFor(server)"
+                         [joinHost]="joinHost(server)"
+                         [canMove]="canMoveServer(server)"
+                         (move)="openMove($event)"
                          (start)="startServer($event)"
                          (stop)="stopServer($event)"
                          (forceStop)="forceStopServer($event)"
@@ -73,7 +91,8 @@
         <div class="dash-empty" *ngIf="!visibleServers.length">
           <span class="material-icons">dns</span>
           <p *ngIf="!servers.length">No servers yet. Create your first ARK: Survival Ascended server.</p>
-          <p *ngIf="servers.length">No servers match this filter.</p>
+          <p *ngIf="servers.length">No servers match.</p>
+          <button type="button" class="btn btn-ghost dash-empty-clear" *ngIf="servers.length" (click)="clearSearchAndFilters()">Clear search and filters</button>
           <button type="button" class="btn btn-primary" *ngIf="!servers.length && canCreateServer" (click)="openAddServer()"><span class="material-icons">add</span> Add Server</button>
         </div>
       </div>
@@ -116,13 +135,17 @@
 
         <div class="dash-card dash-uptime-card">
           <div class="dash-card-header"><h3>Server Uptime</h3></div>
-          <div class="dash-uptime-bars" *ngIf="servers.length; else noUptime">
+          <!-- The longest-running few, the rest on request; on the machine chosen for the list. -->
+          <div class="dash-uptime-bars" [class.show-all]="showAllUptime" *ngIf="uptimeTotal; else noUptime">
             <div class="dash-uptime-bar" *ngFor="let bar of uptimeBars; trackBy: trackByUptimeBar">
-              <span class="dash-uptime-value">{{ bar.label }}</span>
-              <span class="dash-uptime-track"><span class="dash-uptime-fill" [class.empty]="bar.percent === 0" [style.height.%]="bar.percent"></span></span>
               <span class="dash-uptime-name" [title]="bar.server.name">{{ bar.server.name }}</span>
+              <span class="dash-uptime-track"><span class="dash-uptime-fill" [class.empty]="bar.percent === 0" [style.width.%]="bar.percent"></span></span>
+              <span class="dash-uptime-value">{{ bar.label }}</span>
             </div>
           </div>
+          <button type="button" class="link-btn dash-uptime-more" *ngIf="uptimeTotal > uptimeTop" (click)="toggleUptime()">
+            {{ showAllUptime ? 'Show fewer' : 'Show all ' + uptimeTotal }}
+          </button>
           <ng-template #noUptime><div class="dash-muted">No servers to report.</div></ng-template>
         </div>
 
@@ -132,30 +155,70 @@
     <aside class="dash-side">
       <div class="dash-card">
         <div class="dash-card-header"><h3>Quick Actions</h3></div>
-        <div class="dash-quick-actions">
-          <button type="button" class="dash-action" (click)="showConfirmStartAll = true" [disabled]="!servers.length">
-            <span class="dash-action-icon tone-success"><span class="material-icons">play_arrow</span></span> Start All Servers
-          </button>
-          <button type="button" class="dash-action" (click)="showConfirmStopAll = true" [disabled]="!canStopAll">
-            <span class="dash-action-icon tone-danger"><span class="material-icons">stop</span></span> Stop All Servers
-          </button>
-          <button type="button" class="dash-action" (click)="openBackupModal()" [disabled]="!servers.length">
-            <span class="dash-action-icon tone-primary"><span class="material-icons">backup</span></span> Create Backup
-          </button>
-          <button type="button" class="dash-action" (click)="goToServerInstall()">
-            <span class="dash-action-icon tone-warning"><span class="material-icons">system_update_alt</span></span> Update ARK Server
-          </button>
-          <button type="button" class="dash-action" *ngIf="canCreateServer" (click)="openAddServer()">
-            <span class="dash-action-icon tone-info"><span class="material-icons">add</span></span> Add Server
-          </button>
-          <button type="button" class="dash-action" (click)="goToSettings()">
-            <span class="dash-action-icon tone-muted"><span class="material-icons">settings</span></span> Settings
-          </button>
+        <!-- What acts on every server apart from the rest; the backup asks which server. -->
+        <div class="dash-action-group">
+          <div class="dash-action-group-title">All servers</div>
+          <div class="dash-quick-actions">
+            <button type="button" class="dash-action" (click)="showConfirmStartAll = true" [disabled]="!servers.length">
+              <span class="dash-action-icon tone-success"><span class="material-icons">play_arrow</span></span> Start All Servers
+            </button>
+            <button type="button" class="dash-action" (click)="showConfirmStopAll = true" [disabled]="!canStopAll">
+              <span class="dash-action-icon tone-danger"><span class="material-icons">stop</span></span> Stop All Servers
+            </button>
+          </div>
+        </div>
+        <div class="dash-action-group">
+          <div class="dash-action-group-title">More</div>
+          <div class="dash-quick-actions">
+            <button type="button" class="dash-action" (click)="openBackupModal()" [disabled]="!servers.length">
+              <span class="dash-action-icon tone-primary"><span class="material-icons">backup</span></span> Back Up a Server…
+            </button>
+            <button type="button" class="dash-action" *ngIf="canCreateServer" (click)="openAddServer()">
+              <span class="dash-action-icon tone-info"><span class="material-icons">add</span></span> Add Server
+            </button>
+            <button type="button" class="dash-action" (click)="goToSettings()">
+              <span class="dash-action-icon tone-muted"><span class="material-icons">settings</span></span> Settings
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="dash-card">
-        <div class="dash-card-header"><h3>System Resources</h3></div>
+      <div class="dash-card" [class.dash-machines-card]="resourceNodes.length > 0">
+        <div class="dash-card-header">
+          <h3>{{ resourceNodes.length ? 'Machines' : 'System Resources' }}</h3>
+          <button type="button" class="link-btn dash-machines-manage" *ngIf="resourceNodes.length" (click)="openMeshSettings()">Manage</button>
+        </div>
+        <!-- In a mesh, every member: whether it can be reached, what it runs, and its meters. -->
+        <div class="dash-node-list" *ngIf="resourceNodes.length; else thisMachine">
+          <div class="dash-node-resources" *ngFor="let node of resourceNodes; trackBy: trackNode">
+            <div class="dash-node-head">
+              <span class="material-icons">hub</span>
+              <span class="dash-node-name" [attr.data-tooltip]="node.name">{{ node.name }}</span>
+              <span class="dash-node-tag" *ngIf="node.local">This machine</span>
+              <span class="dash-node-pill" [ngClass]="node.connected ? 'tone-success' : 'tone-danger'">{{ node.connected ? 'Connected' : 'Unreachable' }}</span>
+            </div>
+            <div class="dash-node-detail">{{ node.detail }}</div>
+            <div class="dash-node-quiet" *ngIf="node.connected && !node.reporting">Not reporting its resources</div>
+            <ng-container *ngIf="node.reporting">
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">CPU</span>
+                <span class="meter"><span class="meter-fill tone-primary" [style.width.%]="node.cpuPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.cpuLabel }}</span>
+              </div>
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">Memory</span>
+                <span class="meter"><span class="meter-fill tone-violet" [style.width.%]="node.memoryPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.memoryLabel }}</span>
+              </div>
+              <div class="dash-node-meter">
+                <span class="dash-node-meter-name">Disk</span>
+                <span class="meter"><span class="meter-fill tone-success" [style.width.%]="node.diskPercent"></span></span>
+                <span class="dash-node-meter-value">{{ node.diskLabel }}</span>
+              </div>
+            </ng-container>
+          </div>
+        </div>
+        <ng-template #thisMachine>
         <div class="dash-resources">
           <div class="dash-resource">
             <span class="dash-resource-icon tone-primary"><span class="material-icons">memory</span></span>
@@ -179,6 +242,7 @@
             </div>
           </div>
         </div>
+        </ng-template>
       </div>
 
       <div class="dash-card" id="activity">
@@ -238,6 +302,8 @@
     </button>
   </div>
 </app-modal>
+
+<app-move-server-dialog [server]="movingServer" (closed)="closeMove()"></app-move-server-dialog>
 
 <app-modal [title]="'Confirm Delete'" [show]="!!serverToDelete" (close)="cancelDelete()">
   <div class="modal-confirmation">

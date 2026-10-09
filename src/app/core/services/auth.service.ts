@@ -63,15 +63,29 @@ export class AuthService {
   });
   /** Username of the login that predates accounts while authentication is on; null until known. */
   private readonly legacyUsername = new BehaviorSubject<string | null>(null);
+  private ready: Promise<void> | null = null;
 
   constructor(private messaging: MessagingService, private webSocket: WebSocketService, private ipc: IpcService) {
     // The web UI asks whenever its socket comes up: the session behind it may have changed
     // (signed in, expired, backend restarted). The desktop app has no socket and asks once.
-    if (ipc.isElectron) this.refresh();
+    if (ipc.isElectron) void this.whenReady();
     webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh());
     // A change to accounts or roles can alter what this session may do.
     this.messaging.receiveMessage('users-changed').subscribe(() => this.refresh());
+    this.messaging.receiveMessage('mesh-auth-changed').subscribe(() => { void this.refresh(); });
     this.messaging.receiveMessage<GlobalConfig>('global-config').subscribe(config => this.applyLegacyLogin(config));
+  }
+
+  /** True when this desktop is in a mesh and nobody has signed in yet. */
+  get needsMeshSignIn(): boolean {
+    const identity = this.identity;
+    return this.ipc.isElectron && identity.isLocalDesktop && !identity.user && !identity.isAdmin;
+  }
+
+  /** Resolves once the first identity reply has been applied. Later calls reuse that reply. */
+  whenReady(): Promise<void> {
+    if (!this.ready) this.ready = this.refresh();
+    return this.ready;
   }
 
   get identity(): CurrentIdentity {
@@ -99,22 +113,26 @@ export class AuthService {
   }
 
   /** Ask the backend who we are. Safe to call repeatedly. */
-  refresh(): void {
-    this.messaging.sendMessage<CurrentUserReply>('get-current-user', {}).subscribe({
-      next: (res) => {
-        if (!res || res.success === false) return;
-        this.identitySubject.next({
-          user: res.user || null,
-          isLocalDesktop: !!res.isLocalDesktop,
-          isAdmin: !!res.isAdmin,
-          permissions: res.permissions || [],
-          accountsInUse: !!res.accountsInUse
-        });
-        // A web session without an account signed in with the older single login, which only
-        // the global config names. Its broadcasts keep the name current once known.
-        if (!res.user && !this.ipc.isElectron && this.legacyUsername.value === null) this.loadLegacyLogin();
-      },
-      error: () => { /* keep the optimistic default; the backend still enforces */ }
+  refresh(): Promise<void> {
+    return new Promise(resolve => {
+      this.messaging.sendMessage<CurrentUserReply>('get-current-user', {}).subscribe({
+        next: (res) => {
+          if (res && res.success !== false) {
+            this.identitySubject.next({
+              user: res.user || null,
+              isLocalDesktop: !!res.isLocalDesktop,
+              isAdmin: !!res.isAdmin,
+              permissions: res.permissions || [],
+              accountsInUse: !!res.accountsInUse
+            });
+            // A web session without an account signed in with the older single login, which only
+            // the global config names. Its broadcasts keep the name current once known.
+            if (!res.user && !this.ipc.isElectron && this.legacyUsername.value === null) this.loadLegacyLogin();
+          }
+          resolve();
+        },
+        error: () => resolve()
+      });
     });
   }
 
@@ -123,6 +141,8 @@ export class AuthService {
    * resolves, so the pages behind the login do not ask for their data down a refused socket.
    */
   async login(username: string, password: string): Promise<LoginResult> {
+    if (this.ipc.isElectron) return this.finishDesktopSignIn('mesh-login', username, password);
+
     let response: Response;
     try {
       response = await fetch('/api/login', {
@@ -146,8 +166,17 @@ export class AuthService {
     return { success: true, status: response.status };
   }
 
-  /** Ends the web session. Resolves false when the server did not confirm it; never rejects. */
+  /**
+   * Ends the session: the web session, or on the desktop the mesh account signed in there.
+   * Resolves false when it was not confirmed; never rejects.
+   */
   async logout(): Promise<boolean> {
+    if (this.ipc.isElectron) {
+      const res = await this.send<{ success?: boolean }>('mesh-logout', {});
+      if (!res?.success) return false;
+      await this.refresh();
+      return true;
+    }
     try {
       const response = await fetch('/api/logout', { method: 'POST', credentials: 'include' });
       if (!response.ok) {
@@ -161,6 +190,18 @@ export class AuthService {
     this.webSocket.endSession();
     this.identitySubject.next({ ...SIGNED_OUT, accountsInUse: this.identity.accountsInUse });
     return true;
+  }
+
+  /** Creates the first mesh admin when the mesh has no accounts, then signs that account in. */
+  bootstrapMeshAdmin(username: string, password: string): Promise<LoginResult> {
+    return this.finishDesktopSignIn('mesh-bootstrap-admin', username, password);
+  }
+
+  private async finishDesktopSignIn(channel: string, username: string, password: string): Promise<LoginResult> {
+    const res = await this.send<{ success?: boolean; error?: string }>(channel, { username, password });
+    if (!res?.success) return { success: false, status: 401, ...(res?.error ? { error: res.error } : {}) };
+    await this.refresh();
+    return { success: true, status: 200 };
   }
 
   /** True when the current session holds a permission. Admin and the desktop hold them all. */
@@ -182,12 +223,14 @@ export class AuthService {
 
   createUser(input: {
     username: string; password: string; displayName?: string; roleId: string; active?: boolean; ownerUserId?: string | null;
+    machineNodeId?: string | null; updatesAnyMachine?: boolean;
   }): Promise<SaveResult<User>> {
     return this.mutate<User>('create-user', input, 'user');
   }
 
   updateUser(input: {
     id: string; username?: string; displayName?: string; roleId?: string; active?: boolean; password?: string; ownerUserId?: string | null;
+    machineNodeId?: string | null; updatesAnyMachine?: boolean;
   }): Promise<SaveResult<User>> {
     return this.mutate<User>('update-user', input, 'user');
   }

@@ -68,6 +68,15 @@ export interface InstanceConfig extends Partial<AutomationSettings> {
   altSaveDirName?: string;
   clusterId?: string;
   clusterDirOverride?: string;
+  /**
+   * The cluster chosen in Settings → Clusters, by its id. When set, the cluster's ARK ID and this
+   * machine's folder for it are used, and clusterId and clusterDirOverride are not.
+   */
+  clusterRef?: string | null;
+  /** Monotonic configuration revision. Mesh desired state tracks this. */
+  configRevision?: number;
+  /** Hosting node when this install is in a mesh. Absent on a standalone server. */
+  nodeId?: string;
   serverPlatform?: string;
   crossplay?: string[];
   launchParameters?: string;

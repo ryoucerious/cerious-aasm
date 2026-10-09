@@ -5,7 +5,8 @@ import { getDefaultInstallDir } from '../platform.utils';
 import { loadGlobalConfig } from '../global-config.utils';
 import { validateInstanceId } from '../validation.utils';
 import { writeJsonAtomic } from '../fs.utils';
-import { findPortConflict, nextFreePortSet } from './port-sets';
+import { findPortConflict, nextFreePortsIn, portsOutsideRanges, type PortCarrier, type PortSet, type ServerPortRanges } from './port-sets';
+import { getServerPortRanges } from '../server-ports.utils';
 import { notifyInstancesChanged } from './instance-changes';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
@@ -91,6 +92,38 @@ export function getInstance(id: string) {
   return { ...readInstanceConfig(id), id };
 }
 
+/** A server's ports need moving when a server here uses one, or one is outside this machine's ranges. */
+function needsOtherPorts(server: PortCarrier, others: PortCarrier[], ranges: ServerPortRanges): boolean {
+  return !!findPortConflict(server, others) || portsOutsideRanges(server, ranges).length > 0;
+}
+
+function describeRanges({ game, query, rcon }: ServerPortRanges): string {
+  const range = (r: { start: number; end: number }) => (r.start === r.end ? `${r.start}` : `${r.start}–${r.end}`);
+  return `game ${range(game)}, query ${range(query)}, RCON ${range(rcon)}`;
+}
+
+/**
+ * A server moved here from another machine keeps its ports unless a server here already uses
+ * one, or one is outside this machine's ranges: then it takes the lowest free ports inside them,
+ * as a new server would, so it can start and be reached. Returns the ports it took, or null when
+ * it kept its own (or none are free).
+ */
+export async function takeFreePortsIfNeeded(id: string): Promise<PortSet | null> {
+  const all = await getAllInstances();
+  const self = all.find(inst => inst.id === id);
+  if (!self) return null;
+  const others = all.filter(inst => inst.id !== id);
+  const { ranges } = getServerPortRanges();
+  if (!needsOtherPorts(self, others, ranges)) return null;
+  const free = nextFreePortsIn(ranges, others);
+  if (!free) {
+    console.warn(`[instance-utils] No ports are free in this machine's server ports (${describeRanges(ranges)}) for ${self.name || id}; it keeps its own.`);
+    return null;
+  }
+  const saved = await saveInstance({ ...self, gamePort: free.gamePort, queryPort: free.queryPort, rconPort: free.rconPort });
+  return saved.error !== undefined ? null : free;
+}
+
 export async function saveInstance(instance: Partial<InstanceConfig>): Promise<SaveOutcome> {
   const id = instance.id || randomUUID();
   const dir = getInstanceDir(id);
@@ -102,25 +135,31 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
   }
 
   const config: InstanceConfig = { ...instance, id };
+  const previous = all.find(inst => inst.id === id);
+  const priorRevision = previous && Number.isFinite(Number(previous.configRevision)) ? Number(previous.configRevision) : 0;
+  // A mesh apply already carries the desired revision. A local edit bumps from whatever is on disk.
+  const incoming = Number(instance.configRevision);
+  config.configRevision = Number.isFinite(incoming) && incoming > priorRevision ? incoming : priorRevision + 1;
   for (const field of RUNTIME_FIELDS) {
     delete config[field];
   }
 
-  // Two servers on one port cannot both run. A new server arrives with the default ports and
-  // takes the next free set; an edit that lands on another server's port is refused.
+  // A new server takes the lowest free ports inside this machine's ranges when its own are taken
+  // or outside them: the ranges are what the firewall opens. Shared ports never stop the save of
+  // an existing server: two servers on one port can be kept, and only one of them run at a time,
+  // which starting checks.
   const others = all.filter(inst => inst.id !== id);
-  const conflict = findPortConflict(config, others);
-  if (conflict) {
-    if (all.some(inst => inst.id === id)) {
-      return { error: `${conflict.protocol} port ${conflict.port} is already used by "${conflict.name}".` };
+  if (!all.some(inst => inst.id === id)) {
+    const { ranges } = getServerPortRanges();
+    if (needsOtherPorts(config, others, ranges)) {
+      const free = nextFreePortsIn(ranges, others);
+      if (!free) {
+        return { error: `No ports are left in this machine's server ports (${describeRanges(ranges)}). Widen them in Settings → Server Defaults → Server Ports.` };
+      }
+      config.gamePort = free.gamePort;
+      config.queryPort = free.queryPort;
+      config.rconPort = free.rconPort;
     }
-    const free = nextFreePortSet(others);
-    if (!free) {
-      return { error: 'Every port set is in use. Free one before adding another server.' };
-    }
-    config.gamePort = free.gamePort;
-    config.queryPort = free.queryPort;
-    config.rconPort = free.rconPort;
   }
 
   // A new server has no place in the sidebar yet. Give it the next place, and give any

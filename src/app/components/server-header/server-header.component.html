@@ -11,7 +11,12 @@
     </div>
     <div class="server-header-meta">
       <span class="server-header-map"><span class="material-icons">map</span>{{ visual.label }}</span>
-      <span class="server-header-ports" *ngIf="ports">{{ ports }}</span>
+      <span class="server-header-connect" *ngIf="connectAddress" title="What players type to connect">
+        <span class="material-icons">link</span><code>{{ connectAddress }}</code>
+        <button type="button" class="btn btn-ghost btn-icon-only server-header-copy" (click)="copyConnectAddress()" [disabled]="unreachable" [attr.aria-label]="copied ? 'Copied' : 'Copy connect address'">
+          <span class="material-icons">{{ copied ? 'check' : 'content_copy' }}</span>
+        </button>
+      </span>
       <span class="server-header-rcon" [class.connected]="rconConnected" *ngIf="isRunning">
         <span class="material-icons">{{ rconConnected ? 'link' : 'link_off' }}</span>
         RCON {{ rconConnected ? 'connected' : 'disconnected' }}
@@ -32,8 +37,31 @@
     <button type="button" class="btn" (click)="stopServer.emit()" [disabled]="!canStop">
       <span class="material-icons">stop</span> Stop
     </button>
+    <button type="button" class="btn" *ngIf="restartDueAt === null" (click)="restartServer.emit()" [disabled]="!canStop">
+      <span class="material-icons">restart_alt</span> Restart
+    </button>
+    <!-- A restart counting down: the players are hearing the warnings. -->
+    <span class="server-header-restart" *ngIf="restartDueAt !== null" role="status">
+      <span class="material-icons spinner" aria-hidden="true">autorenew</span>{{ restartText }}
+    </span>
+    <button type="button" class="btn btn-ghost" *ngIf="restartDueAt !== null" (click)="cancelRestart.emit()">
+      <span class="material-icons">close</span> Cancel restart
+    </button>
     <button type="button" class="btn btn-ghost" (click)="forceStopServer.emit()" [disabled]="!canForceStop" title="Force stop">
       <span class="material-icons">power_off</span> Force
     </button>
+    <!-- Occasional actions, kept apart from the controls used every day. -->
+    <div class="server-header-more-anchor" *ngIf="canMove">
+      <button type="button" class="btn btn-ghost btn-icon-only server-header-more" (click)="toggleMenu($event)" [disabled]="unreachable"
+              title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuOpen">
+        <span class="material-icons">more_horiz</span>
+      </button>
+      <div class="card-menu server-header-menu" *ngIf="menuOpen" role="menu" (click)="$event.stopPropagation()">
+        <button type="button" class="card-menu-item server-header-move" role="menuitem" [disabled]="!canMoveNow" (click)="onMove()">
+          <span class="material-icons">drive_file_move</span> Move to another machine…
+        </button>
+        <p class="server-header-menu-note" *ngIf="!canMoveNow">Stop the server to move it.</p>
+      </div>
+    </div>
   </div>
 </section>

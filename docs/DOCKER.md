@@ -154,7 +154,7 @@ To serve the web interface over HTTPS you can put a reverse proxy such as nginx 
 
 - **Forward the Host header.** The web interface talks to the app over a WebSocket at `/ws`, and the app refuses a connection whose `Origin` doesn't match the request's `Host`, and says so in its log (`Refused a WebSocket from origin`). In nginx the fix is `proxy_set_header Host $host;` (use `$http_host` instead if the site is on a non-default port, since the port has to match too). If your proxy has to rewrite `Host`, send the original in `X-Forwarded-Host` instead; the app accepts either.
 - **Pass WebSocket upgrades for `/ws`.** Without them the page loads but never shows live data.
-- **Know what the app doesn't trust.** It ignores `X-Forwarded-For`, so the sign-in limiter (10 attempts per username and address in 15 minutes) sees the proxy's address for every client, and one person guessing a username can lock it out for everyone. It also marks the session cookie `Secure` only when it sees HTTPS itself, which behind a proxy it never does. The cookie is still `HttpOnly` and `SameSite=Strict`.
+- **Tell the app which proxy to believe.** By default it ignores `X-Forwarded-For` and `X-Forwarded-Proto`, because any client could send them. Then the sign-in limiter (10 attempts per username and address in 15 minutes) sees the proxy's address for every client, so one person guessing a username can lock it out for everyone, and the session cookie is marked `Secure` only when the app sees HTTPS itself, which behind a proxy it never does. Set `AASM_TRUST_PROXY` to the proxy's address, a subnet, `loopback`, or the number of proxies in front (`1`), and the app uses each client's real address and marks the cookie `Secure` when the proxy took HTTPS. Name only proxies you run: a trusted address can claim to be any client. The cookie is `HttpOnly` and `SameSite=Strict` either way.
 
 A minimal nginx location:
 
@@ -168,16 +168,54 @@ location / {
 }
 ```
 
+### Joining a mesh
+
+A container can be a member of a Cerious AASM mesh with machines elsewhere, on the same network or another one. Members reach each other on two TCP ports, published by default:
+
+| What | Protocol | Default | Setting |
+| --- | --- | --- | --- |
+| Mesh peer API | TCP | 4747 | `AASM_PEER_PORT` |
+| Mesh database (Raft) | TCP | 4002 | `AASM_RAFT_PORT` |
+
+Three things to get right:
+
+- **Tell the others where to find this container.** In the default bridge network the container only knows its internal `172.x` address. Set `AASM_ADVERTISE_HOST` to the address the other members use for this machine: its LAN address, its VPN address (WireGuard, Tailscale), or a name that resolves to it.
+- **When the ports differ outside**, because of a port forward, a proxy or two containers on one machine, set the full addresses instead: `AASM_ADVERTISE_PEER_URL` (for example `https://mesh-a.example.com:443`) and `AASM_ADVERTISE_RAFT_ADDR` (for example `mesh-a.example.com:14002`). These are read when the container creates or joins a mesh and kept after that. To change them later, use **Change address** in the ⋯ menu on the container's card in Settings → Mesh. That page also takes an address when you create or join.
+- **Pass TLS through; do not end it.** Members prove who they are with certificates, end to end. A proxy in front of these two ports must forward raw TCP (nginx `stream`, a Traefik TCP router with TLS passthrough, HAProxy in TCP mode) or be a plain port forward or VPN. A proxy that decrypts the traffic removes the certificates, and members refuse it; joining checks the mesh's certificate against the join token and stops before sending anything.
+
+**Sign-in is always on in a mesh, with mesh accounts only.** A member's web interface controls servers on every member, so it asks for a mesh account even with `AASM_AUTH_ENABLED=false`. The single `AASM_USERNAME`/`AASM_PASSWORD` login does not sign in there. Joining brings that password with it instead, as a machine admin for the container named `admin<N>-<its name in the mesh>`, for example `admin3-docker-1`; the join message and the mesh page show the name. Leaving the mesh puts the container's own login back.
+
+A mesh of two needs both members running to get going again after one restarts: the restarted member waits, with its mesh page saying it is reconnecting, until the other is up.
+
+**Clusters work across members with no shared folder.** Make a cluster in Settings → Clusters, then choose it on each server's Cluster tab. The app keeps the cluster's transfer files on every member over the same peer port, so a player can upload on a server here and download on one elsewhere. In the container they live in the data volume, in `AASMServer/ShooterGame/Saved/AASMClusters/` next to the servers. There is nothing to mount.
+
+A minimal nginx `stream` block forwarding public 443 to the peer API:
+
+```nginx
+stream {
+    server {
+        listen 443;
+        proxy_pass 127.0.0.1:4747;
+    }
+}
+```
+
+The web interface on port 3000 is separate and can sit behind an ordinary HTTPS proxy as above.
+
 ## Updating
 
-When a new release is out, the app shows an update icon in the sidebar. It can't update itself from inside the container, so run these on the machine where Docker runs:
+Settings, Mesh lists every machine and can start an ARK update or an app update on the one you pick. Each machine updates its own install.
+
+An app update inside this container downloads `cerious-aasm-runtime.tar.gz` from the release, writes it onto the data volume, and restarts the app process. The container keeps running, so you do not run `docker compose pull` for that. Server data in the volumes stays put. Update one voting machine at a time: restarting the app also restarts that machine's vote.
+
+A release published before this archive existed, or an image you built yourself, still updates from the Docker host:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-The container is recreated from the new image and your data volumes carry over untouched. Stop your ARK servers first if you'd rather not have them cut off mid-game.
+The container is recreated from the new image and your data volumes carry over untouched. A newer image wins over an older in-place update. Stop your ARK servers first if you'd rather not have them cut off mid-game. After an in-place app update, servers that are supposed to be running come back when the app is up.
 
 ## Building the image yourself
 
@@ -239,6 +277,13 @@ All of these go in the `.env` file next to `docker-compose.yml`. Run `docker com
 | `AASM_GAME_PORTS` | `7777-7900` | Game and peer ports available to servers (UDP) |
 | `AASM_QUERY_PORTS` | `27015-27030` | Query ports available to servers (UDP) |
 | `AASM_RCON_PORTS` | `27020-27050` | RCON ports available to servers (TCP) |
+| `AASM_TRUST_PROXY` | none | Proxies whose `X-Forwarded-*` headers the web interface believes: addresses, subnets, `loopback`, or a count such as `1` |
+| `AASM_PEER_PORT` | `4747` | Mesh peer API port (TCP) |
+| `AASM_RAFT_PORT` | `4002` | Mesh database port (TCP) |
+| `AASM_ADVERTISE_HOST` | first LAN address | The address other mesh members use for this machine |
+| `AASM_ADVERTISE_PEER_URL` | `https://` host and peer port | Full peer API address other members dial, when it differs outside |
+| `AASM_ADVERTISE_RAFT_ADDR` | host and Raft port | Full Raft address other members dial, when it differs outside |
+| `AASM_NODE_NAME` | container id | The name every member shows for this container. Read when the container first makes its identity; after that, rename it from Settings → Mesh |
 | `PUID` | none | User ID that owns the data folders when they're host folders (Unraid: `99`) |
 | `PGID` | none | Group ID that owns the data folders when they're host folders (Unraid: `100`) |
 | `UMASK` | none | Permissions mask for new files, such as `002` for group-writable |

@@ -152,11 +152,19 @@ export class ServerLifecycleService {
   }
 
   /**
-   * Stops every running server in parallel. Resolves when all have answered or after
-   * EXIT_SHUTDOWN_CAP_MS, whichever comes first; never rejects.
+   * The servers with these ids, as the roster names them: those the desktop's main process says
+   * run on this machine. In a mesh the roster lists every machine's servers.
    */
-  async shutdownAllServers(): Promise<void> {
-    const stops = Promise.all(this.runningServers().map(server => this.stopServer(server)));
+  serversRunningHere(ids: string[]): ServerInstance[] {
+    return ids.map(id => this.liveServers.find(id) ?? ({ id, name: id } as ServerInstance));
+  }
+
+  /**
+   * Stops these servers in parallel, before the app exits. Resolves when all have answered or
+   * after EXIT_SHUTDOWN_CAP_MS, whichever comes first; never rejects.
+   */
+  async shutdownServers(servers: ServerInstance[]): Promise<void> {
+    const stops = Promise.all(servers.map(server => this.stopServer(server)));
     let cap: ReturnType<typeof setTimeout> | undefined;
     const capped = new Promise<void>(resolve => cap = setTimeout(resolve, EXIT_SHUTDOWN_CAP_MS));
     try {

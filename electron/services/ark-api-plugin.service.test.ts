@@ -199,18 +199,32 @@ describe('ArkApiPluginService', () => {
     });
   });
 
-  describe('installPluginFromZipPath', () => {
+  // Read so it can go to whichever machine runs the server.
+  describe('readZipAsBase64', () => {
     it('should throw when zip file does not exist', () => {
-      expect(() => service.installPluginFromZipPath('inst1', '/nonexistent.zip')).toThrow('ZIP file not found');
+      expect(() => service.readZipAsBase64('/nonexistent.zip')).toThrow('ZIP file not found');
     });
 
-    it('extracts the plugin into the Plugins folder', () => {
+    it('reads a ZIP the desktop names, ready to install', () => {
       const zipPath = path.join(tmpDir, 'plugin.zip');
       fs.writeFileSync(zipPath, pluginZip('MyPlugin'));
 
-      service.installPluginFromZipPath('inst1', zipPath);
+      service.installPluginFromZipData('inst1', service.readZipAsBase64(zipPath));
 
       expect(service.listPlugins('inst1').map(plugin => plugin.name)).toEqual(['MyPlugin']);
+    });
+  });
+
+  // The web UI has no path to a chosen file, so it sends the ZIP itself.
+  describe('installPluginFromZipData', () => {
+    it('extracts uploaded ZIP contents into the Plugins folder', () => {
+      service.installPluginFromZipData('inst1', pluginZip('Uploaded').toString('base64'));
+
+      expect(service.listPlugins('inst1').map(plugin => plugin.name)).toEqual(['Uploaded']);
+    });
+
+    it('says when what was sent is not a ZIP', () => {
+      expect(() => service.installPluginFromZipData('inst1', Buffer.from('not a zip').toString('base64'))).toThrow();
     });
   });
 

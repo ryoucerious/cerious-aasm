@@ -35,6 +35,8 @@ export class AutomationService {
     enabled: boolean;
     frequency: 'none' | 'daily' | 'weekly' | 'custom';
     time: string;
+    /** Every time of day to restart at; time is the first, for older backends. */
+    times?: string[];
     days: number[];
     warningMinutes: number;
   }): Observable<any> {

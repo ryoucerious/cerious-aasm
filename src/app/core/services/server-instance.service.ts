@@ -88,6 +88,9 @@ export class ServerInstanceService implements OnDestroy {
     // the desktop app has no socket and asks once.
     this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
     if (ipc.isElectron) this.refresh();
+    // Signing in to a mesh happens after that first ask, which is refused. The list has to be
+    // loaded again or the dashboard stays empty while the servers are still on disk.
+    this.subs.push(this.messaging.receiveMessage('mesh-auth-changed').subscribe(() => this.refresh()));
 
     this.subs.push(this.messaging.receiveMessage<ServerInstance[]>('server-instances').subscribe(instances => {
       const list = Array.isArray(instances) ? instances : [];

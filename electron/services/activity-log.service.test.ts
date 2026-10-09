@@ -108,4 +108,60 @@ describe('ActivityLogService', () => {
 
     expect(recorded()).toEqual([]);
   });
+
+  // ARK under Proton took 5 minutes to start, and ignored DoExit for 2: both outcomes lost the name.
+  describe('crediting a slow start or stop', () => {
+    const credited = () => recordActivity.mock.calls.map(([entry]) => `${entry.message} by ${entry.username}`);
+
+    beforeEach(() => jest.useFakeTimers({ now: new Date('2026-10-09T02:00:00Z') }));
+    afterEach(() => jest.useRealTimers());
+
+    it('credits the outcome to whoever asked, however long it takes', () => {
+      service.noteAction('start-server-instance', { id: 'a1' }, 'ann');
+      state('starting');
+      jest.setSystemTime(Date.now() + 5 * 60_000);
+      state('running');
+      service.noteAction('stop-server-instance', { id: 'a1' }, 'bob');
+      state('stopping');
+      jest.setSystemTime(Date.now() + 5 * 60_000);
+      state('stopped');
+
+      expect(credited()).toEqual(['Ragnarok started by ann', 'Ragnarok stopped by bob']);
+    });
+
+    // Start All queues the servers, the start delay apart: the last can wait minutes to begin.
+    it('credits a server Start All queued, when its turn comes', () => {
+      service.noteAction('start-all-instances', {}, 'ann');
+      state('queued');
+      jest.setSystemTime(Date.now() + 4 * 60_000);
+      state('starting');
+      jest.setSystemTime(Date.now() + 5 * 60_000);
+      state('running');
+
+      expect(credited()).toEqual(['Ragnarok started by ann']);
+    });
+
+    it('credits nobody with a later change nobody asked for', () => {
+      service.noteAction('start-server-instance', { id: 'a1' }, 'ann');
+      state('starting');
+      state('running');
+      jest.setSystemTime(Date.now() + 60 * 60_000);
+      state('stopping');
+      state('stopped');
+
+      expect(credited()).toEqual(['Ragnarok started by ann', 'Ragnarok stopped by null']);
+    });
+
+    it('credits nobody with a crash part way through', () => {
+      service.noteAction('start-server-instance', { id: 'a1' }, 'ann');
+      state('starting');
+      jest.setSystemTime(Date.now() + 5 * 60_000);
+      state('crashed');
+      jest.setSystemTime(Date.now() + 5 * 60_000);
+      state('starting');
+      state('running');
+
+      expect(credited()).toEqual(['Ragnarok crashed by null', 'Ragnarok started by null']);
+    });
+  });
 });

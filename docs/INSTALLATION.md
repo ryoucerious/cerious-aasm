@@ -90,6 +90,15 @@
    ```
    Current builds include these flags automatically.
 
+   SteamCMD, which downloads the ARK server, needs the 32-bit C library. The
+   `.deb` and `.rpm` bring it when they are installed. An AppImage installs
+   nothing as root, so install it once yourself; otherwise the app asks for a
+   sudo password the first time it installs or updates ARK:
+   ```bash
+   sudo apt install lib32gcc-s1        # Debian / Ubuntu
+   sudo dnf install glibc.i686         # Fedora / RHEL
+   ```
+
 3. **Optional: Desktop Integration**
    ```bash
    # Move to applications directory
@@ -117,6 +126,10 @@
    sudo dpkg -i Cerious-AASM-*.deb
    sudo apt-get install -f  # Fix any dependency issues
    ```
+
+   The package brings everything the app needs to install and update ARK,
+   including the 32-bit C library SteamCMD runs on (`lib32gcc-s1`), so the
+   account that runs the app never needs a sudo password for it.
 
 2. **Launch**
    ```bash

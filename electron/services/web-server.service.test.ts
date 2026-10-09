@@ -4,6 +4,7 @@ import { WebServerService } from './web-server.service';
 import { messagingService } from './messaging.service';
 import { userDatabaseService } from './auth/user-database.service';
 import { settingsService } from './settings.service';
+import { registerMeshAuth, setMeshMember } from './mesh/mesh-hooks';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import { ALL_PERMISSIONS, AuthenticatedUser, SessionUser } from '../types/auth.types';
 import type { ChildToMainMessage } from '../types/messaging.types';
@@ -387,6 +388,102 @@ describe('WebServerService', () => {
 
       expect(userDatabaseService.verifyCredentials).toHaveBeenCalledWith('sam', 'pw');
       expect(child.send).toHaveBeenCalledWith({ type: 'auth-verify-result', requestId: 'auth-1', user: account('viewer') });
+    });
+  });
+
+  // A member's web interface controls servers on every node, so it needs a mesh account
+  // even where this machine's own login is off.
+  describe('in a mesh', () => {
+    const mesh = {
+      enabled: () => true,
+      verify: jest.fn(async () => null),
+      resolve: jest.fn(async () => null),
+      hasQuorum: () => true
+    };
+
+    afterEach(() => {
+      registerMeshAuth(null);
+      setMeshMember(false);
+    });
+
+    function anonymous(child: FakeChild): jest.Mock {
+      const listener = jest.fn();
+      messagingService.on('set-global-config', listener);
+      child.receive({ type: 'messaging-event', channel: 'set-global-config', payload: { requestId: 'r1' }, cid: 'c1', user: null, authEnabled: false });
+      return listener;
+    }
+
+    it('tells the child that sign-in is required once it is ready', async () => {
+      setMeshMember(true);
+
+      const child = await startReady();
+
+      expect(child.send).toHaveBeenCalledWith({ type: 'mesh-sign-in', required: true });
+    });
+
+    // Told only once ready, the child would serve its first requests as authentication left them.
+    it('starts the child already requiring sign-in', async () => {
+      setMeshMember(true);
+
+      await startReady();
+
+      expect(mockedFork.mock.calls[0][2]!.env).toMatchObject({ AASM_MESH_SIGN_IN: '1' });
+    });
+
+    it('refuses an account set from the command line while this node reconnects to its mesh', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+      jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(account('admin', { cliLocked: true }));
+
+      child.receive({ type: 'auth-verify', requestId: 'auth-1', username: 'sam', password: 'pw' });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(child.send).toHaveBeenCalledWith({ type: 'auth-verify-result', requestId: 'auth-1', user: null });
+    });
+
+    it('tells the running child when this node joins and when it leaves', async () => {
+      const child = await startReady();
+
+      setMeshMember(true);
+      setMeshMember(false);
+
+      expect(child.send.mock.calls.map(([message]) => message).filter(message => message.type === 'mesh-sign-in'))
+        .toEqual([{ type: 'mesh-sign-in', required: true }, { type: 'mesh-sign-in', required: false }]);
+    });
+
+    it('treats a web client without an account as signed out, even when the child says authentication is off', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+      registerMeshAuth(mesh);
+
+      expect(anonymous(child)).not.toHaveBeenCalled();
+      expect(child.replies()[0].data).toMatchObject({ success: false, error: 'You must sign in to do that.' });
+    });
+
+    // The single login is this machine's alone; its password now signs in as this machine's admin.
+    it('treats a session of this machine\'s single login as signed out', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+      registerMeshAuth(mesh);
+      const listener = jest.fn();
+      messagingService.on('set-global-config', listener);
+
+      child.receive({
+        type: 'messaging-event', channel: 'set-global-config', payload: { requestId: 'r1' }, cid: 'c1', authEnabled: true,
+        user: { id: 'legacy-admin', username: 'admin', displayName: 'admin', roleId: 'admin', roleName: 'Admin', permissions: [], active: true }
+      });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(child.replies()[0].data).toMatchObject({ success: false, error: 'You must sign in to do that.' });
+    });
+
+    it('does the same while this node is still reaching its mesh after a restart', async () => {
+      const child = await startReady();
+      setMeshMember(true);
+
+      expect(anonymous(child)).not.toHaveBeenCalled();
+      expect(child.replies()[0].data).toMatchObject({ success: false, error: 'You must sign in to do that.' });
     });
   });
 });

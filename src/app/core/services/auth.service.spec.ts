@@ -183,6 +183,33 @@ describe('AuthService', () => {
       expect(service.identity.permissions).toEqual([]);
     });
 
+    // A mesh account signs in on the desktop too; it had no way back out.
+    it('signs the desktop out of its mesh account, then asks again who is signed in', async () => {
+      const service = create(true);
+      await service.refresh();
+      expect(service.currentUser).not.toBeNull();
+      currentUser = null;
+      const before = identityRequests();
+
+      await expectAsync(service.logout()).toBeResolvedTo(true);
+
+      expect(requests('mesh-logout')).toBe(1);
+      expect(identityRequests()).toBe(before + 1);
+      expect(service.currentUser).toBeNull();
+    });
+
+    it('keeps the desktop signed in when the app does not confirm', async () => {
+      const service = create(true);
+      await service.refresh();
+      messaging.sendMessage.and.callFake(((channel: string) => channel === 'mesh-logout'
+        ? of({ success: false })
+        : of({ success: true, user: currentUser, isLocalDesktop: true, isAdmin: false, permissions: [], accountsInUse: true })) as any);
+
+      await expectAsync(service.logout()).toBeResolvedTo(false);
+
+      expect(service.currentUser).not.toBeNull();
+    });
+
     it('keeps the session when the server does not confirm', async () => {
       spyOn(console, 'error');
       respond(500, { success: false });

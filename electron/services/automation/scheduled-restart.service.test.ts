@@ -85,6 +85,34 @@ describe('ScheduledRestartService', () => {
       expect(automation.status).toEqual({ isMonitoring: false, isScheduled: true, nextRestart: new Date(2025, 8, 29, 4, 0) });
     });
 
+    // Admins wanted more than one restart a day.
+    it('restarts at the soonest of several times a day', () => {
+      const automation = schedule({ restartTimes: ['20:30', '02:00', '14:00'] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 14, 0));
+    });
+
+    it('schedules the next of the times once a restart is done', async () => {
+      const automation = schedule({ restartTimes: ['02:00', '14:00', '20:30'], restartWarningMinutes: 0 });
+
+      await jest.advanceTimersByTimeAsync(11 * 60 * 60_000 + 1_000);
+
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(1);
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 20, 30));
+    });
+
+    it('restarts at each of the times on the chosen days of a weekly schedule', () => {
+      const automation = schedule({ restartFrequency: 'weekly', restartDays: [3], restartTimes: ['18:00', '06:00'] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 9, 1, 6, 0));
+    });
+
+    it('uses the one time saved by older versions', () => {
+      const automation = schedule({ restartTime: '05:00', restartTimes: [] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 5, 0));
+    });
+
     it('schedules a weekly restart on the nearest chosen day', () => {
       const automation = schedule({ restartFrequency: 'weekly', restartTime: '02:00', restartDays: [1, 3] });
 
@@ -128,85 +156,159 @@ describe('ScheduledRestartService', () => {
   });
 
   describe('restarting', () => {
-    it('warns the players, waits, then stops the server gracefully and starts it again', async () => {
-      schedule();
+    /** Host local time today (Monday 29 September 2025). */
+    const at = (hours: number, minutes: number, seconds = 0) => new Date(2025, 8, 29, hours, minutes, seconds);
+    const advanceTo = (time: Date) => jest.advanceTimersByTimeAsync(time.getTime() - Date.now());
 
-      await jest.advanceTimersByTimeAsync(HOUR);
-      expect(broadcasts()).toEqual(['broadcast Server will restart in 5 minutes!']);
+    /** When each broadcast went out, as "HH:MM:SS message". */
+    let sent: string[];
+    let stoppedAt: Date | null;
+
+    beforeEach(() => {
+      sent = [];
+      stoppedAt = null;
+      rconService.executeRconCommand.mockImplementation(async (_id: string, command: string) => {
+        sent.push(`${new Date(Date.now()).toTimeString().slice(0, 8)} ${command.replace(/^broadcast /, '')}`);
+        return { success: true, response: '', instanceId: 'a1' };
+      });
+      serverLifecycleService.stopServerInstance.mockImplementation(async () => {
+        stoppedAt = new Date(Date.now());
+        return { success: true, instanceId: 'a1' };
+      });
+    });
+
+    // A restart set for 04:20 with a 15-minute warning used to warn at 04:20 and restart at 04:35.
+    it('restarts at the time entered, with the warnings counting down to it', async () => {
+      const automation = schedule({ restartTime: '04:20', restartWarningMinutes: 15 });
+      expect(automation.status.nextRestart).toEqual(at(4, 20));
+
+      await advanceTo(at(4, 19, 59));
+      expect(sent).toEqual([
+        '04:05:00 Server will restart in 15 minutes!',
+        '04:10:00 Server will restart in 10 minutes!',
+        '04:15:00 Server will restart in 5 minutes!',
+        '04:16:00 Server will restart in 4 minutes!',
+        '04:17:00 Server will restart in 3 minutes!',
+        '04:18:00 Server will restart in 2 minutes!',
+        '04:19:00 Server will restart in 1 minute!'
+      ]);
       expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
 
-      await jest.advanceTimersByTimeAsync(5 * MINUTE);
-      expect(broadcasts()).toEqual(['broadcast Server will restart in 5 minutes!', 'broadcast Server restarting now!']);
+      await advanceTo(at(4, 20));
+      expect(sent.at(-1)).toBe('04:20:00 Server restarting now!');
+      expect(stoppedAt).toEqual(at(4, 20));
       expect(messagingService.sendToAll).toHaveBeenCalledWith('server-instance-state', { state: 'stopping', instanceId: 'a1' });
-      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledWith('a1');
       expect(serverInstanceService.startServerInstance).toHaveBeenCalledWith('a1', expect.any(Function), expect.any(Function));
       expect(serverProcessService.getServerProcess).not.toHaveBeenCalled();
     });
 
-    // The server used to be killed and started again 5 s later, whether it had exited or not.
-    it('starts the server again only once the stop has finished', async () => {
-      let finishStop: (result: unknown) => void = () => undefined;
-      serverLifecycleService.stopServerInstance.mockReturnValue(new Promise(resolve => { finishStop = resolve; }));
-      schedule();
+    it.each([
+      [5, ['03:55:00 Server will restart in 5 minutes!', '03:56:00 Server will restart in 4 minutes!', '03:57:00 Server will restart in 3 minutes!',
+        '03:58:00 Server will restart in 2 minutes!', '03:59:00 Server will restart in 1 minute!']],
+      [7, ['03:53:00 Server will restart in 7 minutes!', '03:55:00 Server will restart in 5 minutes!', '03:56:00 Server will restart in 4 minutes!',
+        '03:57:00 Server will restart in 3 minutes!', '03:58:00 Server will restart in 2 minutes!', '03:59:00 Server will restart in 1 minute!']],
+      [30, ['03:30:00 Server will restart in 30 minutes!', '03:45:00 Server will restart in 15 minutes!', '03:50:00 Server will restart in 10 minutes!',
+        '03:55:00 Server will restart in 5 minutes!', '03:56:00 Server will restart in 4 minutes!', '03:57:00 Server will restart in 3 minutes!',
+        '03:58:00 Server will restart in 2 minutes!', '03:59:00 Server will restart in 1 minute!']]
+    ])('starts a %i-minute warning at its own length, then counts down on the same marks', async (warningMinutes, warnings) => {
+      schedule({ restartWarningMinutes: warningMinutes });
 
-      await jest.advanceTimersByTimeAsync(HOUR + 5 * MINUTE + 10 * MINUTE);
-      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+      await advanceTo(at(4, 0));
 
-      finishStop({ success: true, instanceId: 'a1' });
-      await jest.advanceTimersByTimeAsync(0);
-      expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
+      expect(sent).toEqual([...warnings, '04:00:00 Server restarting now!']);
+      expect(stoppedAt).toEqual(at(4, 0));
     });
 
-    it('restarts at once when the players cannot be warned', async () => {
+    // Scheduled at 03:00 for 03:08: the 15- and 10-minute marks have gone by.
+    it('counts down on the marks still ahead when set inside the warning period', async () => {
+      schedule({ restartTime: '03:08', restartWarningMinutes: 15 });
+
+      await advanceTo(at(3, 8));
+
+      expect(sent).toEqual([
+        '03:03:00 Server will restart in 5 minutes!',
+        '03:04:00 Server will restart in 4 minutes!',
+        '03:05:00 Server will restart in 3 minutes!',
+        '03:06:00 Server will restart in 2 minutes!',
+        '03:07:00 Server will restart in 1 minute!',
+        '03:08:00 Server restarting now!'
+      ]);
+      expect(stoppedAt).toEqual(at(3, 8));
+    });
+
+    it('gives a mark that falls on the moment it is set', async () => {
+      schedule({ restartTime: '03:10', restartWarningMinutes: 15 });
+
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(sent).toEqual(['03:00:00 Server will restart in 10 minutes!']);
+    });
+
+    it('restarts on the scheduled minute when the players cannot be warned', async () => {
       rconService.executeRconCommand.mockResolvedValue({ success: false, error: 'RCON not connected for this instance', notSent: true, instanceId: 'a1' });
       schedule();
 
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(3, 59, 59));
+      expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
 
-      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledWith('a1');
+      await advanceTo(at(4, 0));
+      expect(stoppedAt).toEqual(at(4, 0));
     });
 
-    it('restarts at once when there is no warning time', async () => {
+    it('restarts on the scheduled minute when a warning is slow to go out', async () => {
+      rconService.executeRconCommand.mockImplementation((_id: string, command: string) =>
+        command.includes('1 minute') ? new Promise(() => undefined) : Promise.resolve({ success: true, response: '', instanceId: 'a1' }));
+      schedule();
+
+      await advanceTo(at(4, 0));
+
+      expect(stoppedAt).toEqual(at(4, 0));
+    });
+
+    it('restarts at the time entered when there is no warning time', async () => {
       schedule({ restartWarningMinutes: 0 });
 
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(4, 0));
 
-      expect(broadcasts()).toEqual(['broadcast Server restarting now!']);
-      expect(serverLifecycleService.stopServerInstance).toHaveBeenCalled();
+      expect(sent).toEqual(['04:00:00 Server restarting now!']);
+      expect(stoppedAt).toEqual(at(4, 0));
     });
 
     // The countdown timers were not tracked, so a restart still happened after the schedule was disabled.
     it('cancels a pending restart when the schedule is disabled during the warning', async () => {
       schedule();
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(3, 57));
 
       service.unscheduleRestart('a1');
       await jest.advanceTimersByTimeAsync(10 * MINUTE);
 
+      expect(sent.at(-1)).toBe('03:57:00 Server will restart in 3 minutes!');
       expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
       expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
     });
 
     it('restarts once, on the new schedule, when rescheduled during the warning', async () => {
       const automation = schedule();
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(3, 57));
 
       automation.settings.restartTime = '06:00';
       service.scheduleRestart('a1');
-      await jest.advanceTimersByTimeAsync(10 * MINUTE);
+      await advanceTo(at(4, 30));
       expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
 
-      await jest.advanceTimersByTimeAsync(2 * HOUR);
+      await advanceTo(at(6, 0));
       expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledTimes(1);
+      expect(stoppedAt).toEqual(at(6, 0));
     });
 
     it('leaves a server that was stopped by hand during the warning alone', async () => {
       schedule();
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(3, 57));
 
       serverProcessService.getInstanceState.mockReturnValue('stopped');
-      await jest.advanceTimersByTimeAsync(5 * MINUTE);
+      await advanceTo(at(4, 5));
 
+      expect(sent.at(-1)).toBe('03:57:00 Server will restart in 3 minutes!');
       expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
       expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
     });
@@ -215,7 +317,7 @@ describe('ScheduledRestartService', () => {
       serverProcessService.getInstanceState.mockReturnValue('stopped');
       const automation = schedule();
 
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(4, 0));
 
       expect(broadcasts()).toEqual([]);
       expect(serverLifecycleService.stopServerInstance).not.toHaveBeenCalled();
@@ -228,28 +330,43 @@ describe('ScheduledRestartService', () => {
       serverProcessService.getNormalizedInstanceState.mockReturnValue('crashed');
       schedule({ restartWarningMinutes: 0 });
 
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(4, 0));
 
       expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
       expect(console.error).toHaveBeenCalled();
       expect(messagingService.sendToAll).toHaveBeenLastCalledWith('server-instance-state', { state: 'crashed', instanceId: 'a1' });
     });
 
+    // The server used to be killed and started again 5 s later, whether it had exited or not.
+    it('starts the server again only once the stop has finished', async () => {
+      let finishStop: (result: unknown) => void = () => undefined;
+      serverLifecycleService.stopServerInstance.mockReturnValue(new Promise(resolve => { finishStop = resolve; }));
+      schedule();
+
+      await advanceTo(at(4, 15));
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+
+      finishStop({ success: true, instanceId: 'a1' });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalled();
+    });
+
     it('schedules the next restart once one is done', async () => {
       const automation = schedule();
 
-      await jest.advanceTimersByTimeAsync(HOUR + 5 * MINUTE);
+      await advanceTo(at(4, 0));
 
       expect(automation.status).toMatchObject({ isScheduled: true, nextRestart: new Date(2025, 8, 30, 4, 0) });
       await jest.advanceTimersByTimeAsync(24 * HOUR);
       expect(serverLifecycleService.stopServerInstance).toHaveBeenCalledTimes(2);
+      expect(stoppedAt).toEqual(new Date(2025, 8, 30, 4, 0));
     });
 
     it('keeps the schedule when a restart throws', async () => {
       serverInstanceService.startServerInstance.mockRejectedValueOnce(new Error('boom'));
       const automation = schedule({ restartWarningMinutes: 0 });
 
-      await jest.advanceTimersByTimeAsync(HOUR);
+      await advanceTo(at(4, 0));
 
       expect(console.error).toHaveBeenCalled();
       expect(automation.status).toMatchObject({ isScheduled: true, nextRestart: new Date(2025, 8, 30, 4, 0) });

@@ -36,7 +36,7 @@ if (isHeadlessMode && isLinux && !hasDisplay) {
   }
 }
 
-import { app, BrowserWindow, IpcMainEvent, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, IpcMainEvent, ipcMain, screen, shell } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -67,13 +67,15 @@ import { messagingService } from './services/messaging.service';
 import { webServerService } from './services/web-server.service';
 import { applicationService, readAuthArgs } from './services/application.service';
 import { LogService } from './services/log.service';
-import { ArkUpdateService, stopSteamCmdQuery } from './services/ark-update.service';
+import { ArkUpdateService, bindArkUpdateService, stopSteamCmdQuery } from './services/ark-update.service';
 import { autoUpdateService } from './services/auto-update.service';
 import { playerHistoryService } from './services/player-history.service';
+import { meshService } from './services/mesh/mesh-service';
 import { userDatabaseService } from './services/auth/user-database.service';
 import { scopeBroadcast } from './services/auth/pool-broadcast';
 import { cleanupAllRconConnections } from './utils/rcon.utils';
 import { loadGlobalConfig } from './utils/global-config.utils';
+import { readWindowState, trackWindowState } from './utils/window-state.utils';
 import { releaseInstallLockIfHeld } from './utils/installer.utils';
 import { setArkUpdateService } from './handlers/ark-update-handler';
 import { initializeBackupSystem } from './handlers/backup-handler';
@@ -98,6 +100,8 @@ import './handlers/host-resources-handler';
 import './handlers/user-handler';
 import './handlers/activity-handler';
 import './handlers/player-history-handler';
+import './handlers/mesh-handler';
+import './handlers/cluster-handler';
 
 const DEV_SERVER_URL = 'http://localhost:4200';
 const CLOSE_RESPONSE_TIMEOUT_MS = 10000;
@@ -106,6 +110,7 @@ const SHUTDOWN_POLL_MS = 1000;
 
 const arkUpdateService = new ArkUpdateService(messagingService);
 setArkUpdateService(arkUpdateService);
+bindArkUpdateService(arkUpdateService);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -182,6 +187,11 @@ function cleanup(): void {
     playerHistoryService.stop();
   } catch (error) {
     console.error('[main] Error stopping player history:', error);
+  }
+  try {
+    void meshService.stop();
+  } catch (error) {
+    console.error('[main] Error stopping the mesh:', error);
   }
   try {
     arkUpdateService.stop();
@@ -273,7 +283,9 @@ function confirmBeforeClosing(win: BrowserWindow): void {
       return;
     }
     awaitingResponse = true;
-    win.webContents.send('app-close-request');
+    // Only this machine's servers: in a mesh the window lists every machine's, and quitting here
+    // must neither ask about nor stop servers another machine runs.
+    win.webContents.send('app-close-request', { runningHere: serverProcessService.getActiveInstanceIds() });
     // A renderer that never answers must not leave closing disabled.
     responseTimeout = setTimeout(() => {
       awaitingResponse = false;
@@ -409,11 +421,16 @@ function createWindow(): void {
   }
   const isDev = process.env.NODE_ENV === 'development';
   const indexPath = path.join(app.getAppPath(), 'dist', 'cerious-aasm', 'browser', 'index.html');
+  // Where and how large it was left, kept to the monitors connected now.
+  const windowStateFile = path.join(app.getPath('userData'), 'window-state.json');
+  const sizes = { width: 1024, height: 768, minWidth: 940, minHeight: 600 };
+  const saved = readWindowState(windowStateFile, screen.getAllDisplays().map(display => display.workArea), sizes);
   const win = new BrowserWindow({
-    width: 1024,
-    height: 768,
-    minWidth: 940,
-    minHeight: 600,
+    ...(saved.x !== undefined && saved.y !== undefined ? { x: saved.x, y: saved.y } : {}),
+    width: saved.width,
+    height: saved.height,
+    minWidth: sizes.minWidth,
+    minHeight: sizes.minHeight,
     // The app draws its own title bar (see WindowControlsComponent), so the native frame
     // is off. The window stays resizable; Electron keeps the invisible resize border.
     frame: false,
@@ -428,6 +445,8 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  if (saved.maximized) win.maximize();
+  trackWindowState(win, windowStateFile);
 
   messagingService.addWebContents(win.webContents);
   registerWindowControlHandlers(win);
@@ -504,13 +523,18 @@ app.on('ready', async () => {
   }
   console.info(`[main] Cerious AASM starting, log: ${getLogFilePath()}`);
 
+  // Before the web server starts and the window opens: on a mesh member both ask for a mesh
+  // account from their first moment, not once the mesh is reached.
+  meshService.noteMembership();
   LogService.clearArkLogFiles();
   await applicationService.initializeApplication();
 
+  await prepareAccounts();
+  await meshService.resumeIfJoined().catch(error => console.error('[main] Mesh did not resume:', error));
+  // The window asks who is signed in as soon as it opens, so the mesh decision has to come first.
   createWindow();
   initializeBackupSystem().catch(error => console.error('[main] Backup system failed to start:', error));
   automationService.initializeAutomation();
-  await prepareAccounts();
 
   // Feeds the dashboard's 24-hour player chart, once a minute.
   playerHistoryService.start(playerCountsByInstance);

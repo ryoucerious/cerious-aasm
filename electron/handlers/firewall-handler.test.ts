@@ -11,6 +11,21 @@ jest.mock('../services/firewall.service', () => ({
 }));
 jest.mock('../utils/platform.utils', () => ({ getPlatform: jest.fn() }));
 jest.mock('../utils/docker-network.utils', () => ({ getDockerNetworkInfo: jest.fn() }));
+jest.mock('../services/server-ports.service', () => ({
+  serverPortsService: { state: jest.fn(), setRanges: jest.fn(), openFirewall: jest.fn(), portsOpen: jest.fn(() => null) }
+}));
+jest.mock('../utils/server-ports.utils', () => ({
+  getServerPortRanges: jest.fn(() => ({ ranges: RANGES, source: 'settings' }))
+}));
+import { serverPortsService } from '../services/server-ports.service';
+jest.mock('../services/auth/permission-gate', () => ({
+  identifySender: jest.fn(() => ({ user: null, permissions: [], isAdmin: true, isLocalDesktop: true })),
+  isDesktopWindow: jest.requireActual('../services/auth/permission-gate').isDesktopWindow
+}));
+jest.mock('../services/mesh/mesh-hooks', () => ({ localNode: jest.fn(() => 'n1') }));
+import { identifySender } from '../services/auth/permission-gate';
+
+const RANGES = { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } };
 
 const mockMessaging = jest.mocked(messagingService);
 const mockFirewall = jest.mocked(firewallService);
@@ -177,7 +192,19 @@ describe('firewall-handler', () => {
 
       await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
 
-      expect(replies('check-firewall-enabled')).toEqual([{ success: true, platform, enabled, message, requestId: 'r1' }]);
+      expect(replies('check-firewall-enabled')).toEqual([{
+        success: true, platform, enabled, message, serverPorts: { ranges: RANGES, source: 'settings', portsOpen: null }, requestId: 'r1'
+      }]);
+    });
+
+    // The server's Firewall tab checks its ports against them, on every platform.
+    it('says which ports this machine\'s servers take, and whether its firewall lets players in', async () => {
+      mockGetPlatform.mockReturnValue('windows');
+      jest.mocked(serverPortsService.portsOpen).mockReturnValueOnce(false);
+
+      await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
+
+      expect(replies('check-firewall-enabled')).toEqual([expect.objectContaining({ serverPorts: { ranges: RANGES, source: 'settings', portsOpen: false } })]);
     });
 
     it('adds the Docker port ranges when running in Docker', async () => {
@@ -193,7 +220,8 @@ describe('firewall-handler', () => {
       await handlers['check-firewall-enabled']({ requestId: 'r1' }, sender);
 
       expect(replies('check-firewall-enabled')).toEqual([{
-        success: true, platform: 'linux', enabled: true, message: 'Firewall management available on Linux', docker, requestId: 'r1'
+        success: true, platform: 'linux', enabled: true, message: 'Firewall management available on Linux', docker,
+        serverPorts: { ranges: RANGES, source: 'settings', portsOpen: null }, requestId: 'r1'
       }]);
     });
 
@@ -216,8 +244,85 @@ describe('firewall-handler', () => {
       await handlers['check-firewall-enabled'](payload, sender);
 
       expect(replies('check-firewall-enabled')).toEqual([{
-        success: true, platform: 'windows', enabled: false, message: 'Firewall management not available on this platform', requestId: undefined
+        success: true, platform: 'windows', enabled: false, message: 'Firewall management not available on this platform',
+        serverPorts: { ranges: RANGES, source: 'settings', portsOpen: null }, requestId: undefined
       }]);
+    });
+  });
+
+  describe('server ports', () => {
+    const state = { ranges: RANGES, source: 'settings', platform: 'windows', windowsFirewall: null, linuxCommands: null, outside: [] };
+    const webClient = { readyState: 1, send: jest.fn() };
+
+    it('replies with this machine\'s server ports', async () => {
+      jest.mocked(serverPortsService.state).mockResolvedValue(state as never);
+
+      await handlers['get-server-ports']({ requestId: 'r1' }, sender);
+
+      expect(replies('get-server-ports')).toEqual([{ ...state, requestId: 'r1' }]);
+    });
+
+    it('saves the ranges it is given', async () => {
+      jest.mocked(serverPortsService.setRanges).mockResolvedValue({ success: true, state } as never);
+
+      await handlers['set-server-ports']({ ranges: RANGES, requestId: 'r1' }, sender);
+
+      expect(serverPortsService.setRanges).toHaveBeenCalledWith(RANGES);
+      expect(replies('set-server-ports')).toEqual([{ success: true, state, requestId: 'r1' }]);
+    });
+
+    it('opens them in Windows Firewall when the desktop app asks', async () => {
+      jest.mocked(serverPortsService.openFirewall).mockResolvedValue({ success: true, state } as never);
+
+      await handlers['open-server-ports-firewall']({ requestId: 'r1' }, sender);
+
+      expect(replies('open-server-ports-firewall')).toEqual([{ success: true, state, requestId: 'r1' }]);
+    });
+
+    // A Machine Admin looks after one machine: its firewall is theirs to open, no other machine's.
+    describe('who may change them', () => {
+      const machineAdmin = (machineNodeId: string) => ({
+        user: { roleId: 'machine-admin', machineNodeId }, permissions: ['settings.view'], isAdmin: false, isLocalDesktop: false
+      });
+      afterEach(() => jest.mocked(identifySender).mockReturnValue({ user: null, permissions: [], isAdmin: true, isLocalDesktop: true } as never));
+
+      it('lets the Machine Admin of this machine open its ports and change its ranges', async () => {
+        jest.mocked(identifySender).mockReturnValue(machineAdmin('n1') as never);
+        jest.mocked(serverPortsService.openFirewall).mockResolvedValue({ success: true, state } as never);
+        jest.mocked(serverPortsService.setRanges).mockResolvedValue({ success: true, state } as never);
+
+        await handlers['open-server-ports-firewall']({ requestId: 'm1' }, sender);
+        await handlers['set-server-ports']({ ranges: RANGES, requestId: 'm2' }, sender);
+
+        expect(replies('open-server-ports-firewall')).toContainEqual({ success: true, state, requestId: 'm1' });
+        expect(replies('set-server-ports')).toContainEqual({ success: true, state, requestId: 'm2' });
+      });
+
+      it('refuses a Machine Admin of another machine, and a role that may only look', async () => {
+        jest.mocked(serverPortsService.openFirewall).mockClear();
+        jest.mocked(identifySender).mockReturnValue(machineAdmin('n2') as never);
+        await handlers['open-server-ports-firewall']({ requestId: 'm3' }, sender);
+        jest.mocked(identifySender).mockReturnValue({ user: { roleId: 'viewer' }, permissions: ['settings.view'], isAdmin: false } as never);
+        await handlers['set-server-ports']({ ranges: RANGES, requestId: 'm4' }, sender);
+
+        expect(serverPortsService.openFirewall).not.toHaveBeenCalled();
+        expect(replies('open-server-ports-firewall')).toContainEqual({ success: false, error: 'Only an Admin, or the Machine Admin of this machine, can change its server ports.', requestId: 'm3' });
+        expect(replies('set-server-ports')).toContainEqual({ success: false, error: 'Only an Admin, or the Machine Admin of this machine, can change its server ports.', requestId: 'm4' });
+      });
+    });
+
+    // Windows asks for permission on this machine's screen, where a web client's user may not be.
+    it('leaves opening them to the desktop app on this machine', async () => {
+      jest.mocked(serverPortsService.openFirewall).mockClear();
+
+      await handlers['open-server-ports-firewall']({ requestId: 'r2' }, webClient);
+
+      expect(serverPortsService.openFirewall).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('open-server-ports-firewall', {
+        success: false,
+        error: 'Open the ports from the desktop app on this machine: Windows asks for permission on its screen.',
+        requestId: 'r2'
+      }, webClient);
     });
   });
 });

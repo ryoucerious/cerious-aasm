@@ -44,9 +44,11 @@ export class TooltipHostComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     // Outside Angular: pointer movement over the whole document must not run change
     // detection on every event. Showing the bubble re-enters explicitly.
+    // Pointer events rather than mouse events: the app's Chromium sends a disabled button no
+    // mouseover, so its title would get the browser's own tooltip instead of this one.
     this.zone.runOutsideAngular(() => {
-      document.addEventListener('mouseover', this.onPointerOver, true);
-      document.addEventListener('mouseout', this.onPointerOut as EventListener, true);
+      document.addEventListener('pointerover', this.onPointerOver, true);
+      document.addEventListener('pointerout', this.onPointerOut as EventListener, true);
       document.addEventListener('mousedown', this.hide, true);
       document.addEventListener('keydown', this.onKeydown, true);
       document.addEventListener('scroll', this.hide, true);
@@ -55,8 +57,8 @@ export class TooltipHostComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    document.removeEventListener('mouseover', this.onPointerOver, true);
-    document.removeEventListener('mouseout', this.onPointerOut as EventListener, true);
+    document.removeEventListener('pointerover', this.onPointerOver, true);
+    document.removeEventListener('pointerout', this.onPointerOut as EventListener, true);
     document.removeEventListener('mousedown', this.hide, true);
     document.removeEventListener('keydown', this.onKeydown, true);
     document.removeEventListener('scroll', this.hide, true);
@@ -79,10 +81,10 @@ export class TooltipHostComponent implements OnInit, OnDestroy {
   /**
    * Hide only when the pointer actually leaves the element.
    *
-   * Moving onto a child fires mouseout on the parent too, so the icon inside a button used
+   * Moving onto a child fires pointerout on the parent too, so the icon inside a button used
    * to cancel that button's tooltip before it could appear.
    */
-  private onPointerOut = (event: MouseEvent): void => {
+  private onPointerOut = (event: PointerEvent): void => {
     if (!this.target) return;
     const movedTo = event.relatedTarget as Node | null;
     if (movedTo && this.target.contains(movedTo)) return;
@@ -98,14 +100,18 @@ export class TooltipHostComponent implements OnInit, OnDestroy {
    *
    * Removing the attribute is what stops the browser drawing its own tooltip on top of
    * ours; the text is kept on the element so a later hover still has it, and copied to
-   * aria-label when the element has no other accessible name.
+   * aria-label when the element has no other accessible name. A title set again since, even
+   * an empty one from a binding whose reason has gone, replaces the text kept.
    */
   private labelFor(element: HTMLElement): string {
     const title = element.getAttribute('title');
     if (title !== null) {
       const trimmed = title.trim();
       element.removeAttribute('title');
-      if (!trimmed) return element.dataset['tooltip'] || '';
+      if (!trimmed) {
+        delete element.dataset['tooltip'];
+        return '';
+      }
       element.dataset['tooltip'] = trimmed;
       if (!element.getAttribute('aria-label') && !element.textContent?.trim()) {
         element.setAttribute('aria-label', trimmed);

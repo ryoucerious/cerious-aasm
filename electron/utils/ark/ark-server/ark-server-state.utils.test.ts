@@ -2,8 +2,10 @@ import {
   areServerFilesUpdating,
   getInstanceState,
   getNormalizedInstanceState,
+  isServerMoving,
   setInstanceState,
-  whileServerFilesUpdate
+  whileServerFilesUpdate,
+  whileServerMoves
 } from './ark-server-state.utils';
 
 describe('ark-server-state.utils', () => {
@@ -38,5 +40,22 @@ describe('ark-server-state.utils', () => {
     await expect(whileServerFilesUpdate(async () => { throw new Error('SteamCMD failed'); })).rejects.toThrow('SteamCMD failed');
 
     expect(areServerFilesUpdating()).toBe(false);
+  });
+
+  it('marks one server as being moved for exactly as long as its move runs', async () => {
+    const during: boolean[] = [];
+
+    await whileServerMoves('isle', async () => {
+      during.push(isServerMoving('isle'), isServerMoving('other'));
+    });
+
+    expect(during).toEqual([true, false]);
+    expect(isServerMoving('isle')).toBe(false);
+  });
+
+  it('clears the move mark when the move fails', async () => {
+    await expect(whileServerMoves('isle', async () => { throw new Error('copy failed'); })).rejects.toThrow('copy failed');
+
+    expect(isServerMoving('isle')).toBe(false);
   });
 });

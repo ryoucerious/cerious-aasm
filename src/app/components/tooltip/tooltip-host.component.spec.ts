@@ -11,7 +11,11 @@ describe('TooltipHostComponent', () => {
 
   /** Hover something the way the browser reports it: over the element, out of the last one. */
   function pointerTo(element: Element, from?: Element): void {
-    if (from) from.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: element }));
+    if (from) {
+      from.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: element }));
+      from.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: element }));
+    }
+    element.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
     element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
   }
 
@@ -59,8 +63,7 @@ describe('TooltipHostComponent', () => {
     fixture.detectChanges();
 
     // Moving onto the icon inside the button fires mouseout on the button itself.
-    button.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: icon }));
-    icon.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    pointerTo(icon, button);
     fixture.detectChanges();
 
     expect(bubble()?.textContent).toBe('Stop all servers');
@@ -71,7 +74,7 @@ describe('TooltipHostComponent', () => {
     tick(500);
     fixture.detectChanges();
 
-    button.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+    pointerTo(document.body, button);
     fixture.detectChanges();
     expect(bubble()).toBeNull();
 
@@ -83,6 +86,38 @@ describe('TooltipHostComponent', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     fixture.detectChanges();
     expect(bubble()).toBeNull();
+  }));
+
+  // The app's Chromium (Electron 21) sends a disabled button pointer events but no mouse events,
+  // so the browser drew its own plain tooltip there instead of ours.
+  it('describes a disabled button, which gets pointer events but no mouse events', fakeAsync(() => {
+    button.disabled = true;
+
+    button.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    tick(500);
+    fixture.detectChanges();
+
+    expect(button.getAttribute('title')).toBeNull();
+    expect(bubble()?.textContent).toBe('Stop all servers');
+
+    button.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
+    fixture.detectChanges();
+    expect(bubble()).toBeNull();
+  }));
+
+  // A [title] binding empties the title once its reason is gone, as a button's does when it is enabled again.
+  it('says nothing once the title is emptied, rather than the text it had before', fakeAsync(() => {
+    pointerTo(button);
+    tick(500);
+    pointerTo(document.body, button);
+
+    button.title = '';
+    pointerTo(button);
+    tick(500);
+    fixture.detectChanges();
+
+    expect(bubble()).toBeNull();
+    expect(button.dataset['tooltip']).toBeUndefined();
   }));
 
   it('ignores elements with nothing to say', fakeAsync(() => {

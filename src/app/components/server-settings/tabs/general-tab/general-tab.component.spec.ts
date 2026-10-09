@@ -149,12 +149,28 @@ describe('GeneralTabComponent', () => {
     const dropdowns = () => (fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section app-dropdown').length;
     const statics = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section .form-control-static')).map(el => el.textContent?.trim());
 
+    // The settings that change the game come first; who owns the server is set once.
+    it('comes last on the page', () => {
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
+
+      const sections = (fixture.nativeElement as HTMLElement).querySelectorAll('.settings-section');
+      expect(sections[sections.length - 1].classList).toContain('ownership-section');
+    });
+
     it('lets an admin choose both the pool and the assignee', () => {
       setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
 
       expect(dropdowns()).toBe(2);
       expect(component.operatorOptions.map(option => option.label)).toEqual(['Admin pool', 'Ops (op1)']);
       expect(component.assigneeOptions.map(option => option.value)).toEqual(['', 'm1']);
+    });
+
+    // A server made before operators carried an id no option matched: the picker showed blank.
+    it('shows a server whose operator is gone as such, so an admin can choose another', () => {
+      setServer({ id: 's1', operatorUserId: 'gone', managerUserId: null });
+
+      expect(component.operatorOptions.map(option => [option.value, option.label]))
+        .toEqual([['', 'Admin pool'], ['op1', 'Ops (op1)'], ['gone', 'No longer an operator']]);
     });
 
     it('lets the pool\'s operator choose only the assignee', () => {
@@ -182,5 +198,13 @@ describe('GeneralTabComponent', () => {
       expect(assignServerManager).toHaveBeenCalledWith('s1', 'm1');
       expect(setServerOperator).toHaveBeenCalledWith('s1', null);
     });
+  });
+
+  it('marks a setting saved since the server started', () => {
+    fixture.componentRef.setInput('pendingKeys', new Set(['mapName']));
+    fixture.detectChanges();
+
+    const mark = (fixture.nativeElement as HTMLElement).querySelector('.pending-mark');
+    expect(mark?.textContent?.trim()).toBe('Next restart');
   });
 });

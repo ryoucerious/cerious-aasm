@@ -8,7 +8,7 @@ import { BehaviorSubject, Subject, of, throwError } from 'rxjs';
 describe('GlobalConfigService', () => {
   let service: GlobalConfigService;
   let messaging: jasmine.SpyObj<MessagingService>;
-  let broadcasts: Subject<GlobalConfig>;
+  let channels: Record<string, Subject<GlobalConfig>>;
   let connected$: BehaviorSubject<boolean>;
 
   const create = (isElectron = false) => new GlobalConfigService(
@@ -29,10 +29,10 @@ describe('GlobalConfigService', () => {
   });
 
   beforeEach(() => {
-    broadcasts = new Subject<GlobalConfig>();
+    channels = {};
     connected$ = new BehaviorSubject(false);
     messaging = jasmine.createSpyObj('MessagingService', ['sendMessage', 'receiveMessage']);
-    messaging.receiveMessage.and.returnValue(broadcasts);
+    messaging.receiveMessage.and.callFake(((channel: string) => channels[channel] ??= new Subject<GlobalConfig>()) as any);
     service = create();
   });
 
@@ -116,7 +116,7 @@ describe('GlobalConfigService', () => {
       const seen: number[] = [];
       service.config$.subscribe(cfg => seen.push(cfg.webServerPort));
 
-      broadcasts.next(config({ webServerPort: 8080 }));
+      channels['global-config'].next(config({ webServerPort: 8080 }));
 
       expect(seen).toEqual([8080]);
     });
@@ -160,7 +160,7 @@ describe('GlobalConfigService', () => {
   });
 
   it('follows settings saved by another client', () => {
-    broadcasts.next(config({ webServerPort: 8080 }));
+    channels['global-config'].next(config({ webServerPort: 8080 }));
     expect(service.webServerPort).toBe(8080);
   });
 
@@ -189,7 +189,7 @@ describe('GlobalConfigService', () => {
 
   describe('settings', () => {
     beforeEach(() => {
-      broadcasts.next(config({ startWebServerOnLoad: false }));
+      channels['global-config'].next(config({ startWebServerOnLoad: false }));
       messaging.sendMessage.and.returnValue(of({ success: true }));
     });
 

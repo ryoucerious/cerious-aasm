@@ -1,9 +1,13 @@
 <div *ngIf="isLoginPage" class="login-page-container">
+  <!-- The window is frameless and its title bar is the app's top bar: until that shows, this one moves and closes it. -->
+  <div *ngIf="isElectron" class="window-titlebar"><app-window-controls></app-window-controls></div>
   <router-outlet></router-outlet>
 </div>
 
-<ng-container *ngIf="!isLoginPage && (isElectron || (!connecting && !connectionLost)); else lostOrConnecting">
-  <div class="app-root-wrapper">
+<!-- Nothing of the app until access is confirmed: see showApp. -->
+<ng-container *ngIf="showApp; else notReady">
+  <!-- Inert under the busy overlay: nothing behind it can be clicked or typed into. -->
+  <div class="app-root-wrapper" [attr.inert]="busy.message !== null ? '' : null" [attr.aria-busy]="busy.message !== null">
     <app-topbar [isMobile]="isMobile" [menuOpen]="isMobileMenuOpen" (menuToggle)="toggleMobileMenu()"></app-topbar>
 
     <div class="app-container">
@@ -40,14 +44,16 @@
 </ng-container>
 <!-- One tooltip for the whole app, in place of the browser's own -->
 <app-tooltip-host></app-tooltip-host>
+<!-- Over everything while something the app has to wait for is under way -->
+<app-busy-overlay></app-busy-overlay>
 
-<ng-template #lostOrConnecting>
-  <div *ngIf="connecting" class="connection-lost-container">
-    <div class="connection-lost-content">
-      <div class="icon-glitch"><span>🛰️</span></div>
-      <h1>Connecting...</h1>
-      <p>Attempting to connect to the web server.</p>
-    </div>
+<ng-template #notReady>
+  <div *ngIf="isElectron && showLoading" class="window-titlebar"><app-window-controls></app-window-controls></div>
+  <div *ngIf="showLoading" class="app-loading" role="status" aria-live="polite">
+    <img class="app-loading-logo" src="assets/logo-square-256.png" alt="" />
+    <h1 class="app-loading-title">Cerious AASM</h1>
+    <span class="app-loading-spinner" aria-hidden="true"></span>
+    <p class="app-loading-text">{{ isElectron ? 'Checking access…' : 'Connecting to the server…' }}</p>
   </div>
-  <app-connection-lost *ngIf="!connecting && connectionLost"></app-connection-lost>
+  <app-connection-lost *ngIf="!isElectron && !connecting && connectionLost"></app-connection-lost>
 </ng-template>

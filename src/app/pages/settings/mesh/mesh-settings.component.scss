@@ -1,0 +1,261 @@
+.settings-card-head-text {
+  flex: 1 1 auto;
+}
+
+.mesh-token {
+  margin-top: -0.35rem;
+  word-break: break-all;
+}
+
+.mesh-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mesh-node-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.85rem;
+}
+
+.mesh-node-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mesh-node-identity { min-width: 0; }
+
+.mesh-node-rename-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+
+  .mesh-node-rename-input {
+    flex: 1 1 10rem;
+    min-width: 0;
+  }
+}
+
+.mesh-node-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mesh-node-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.mesh-node-tag {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+// The pill, and the ⋯ menu beside it.
+.mesh-node-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mesh-node-more-anchor {
+  position: relative;
+  display: flex;
+}
+
+// As tall as the pill beside it, just a little wider (.btn-icon-only reserves a bigger box).
+.mesh-node-more {
+  min-width: 0;
+  min-height: 0;
+  padding: 0.15rem 0.35rem;
+
+  .material-icons { font-size: 20px; }
+}
+
+// The card does not clip, so the menu hangs from its button rather than the viewport.
+.card-menu.mesh-node-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 250px;
+}
+
+.mesh-node-menu-divider {
+  height: 1px;
+  margin: 0.3rem 0.35rem;
+  background: var(--border-muted-1);
+}
+
+.mesh-node-menu-note {
+  margin: 0.35rem 0.65rem 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.mesh-node-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+
+  span + span::before {
+    content: '·';
+    margin: 0 0.4rem;
+  }
+}
+
+// Its firewall keeps players out: a server moved there could not be reached.
+.mesh-node-ports {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  color: var(--text-primary);
+
+  .material-icons {
+    flex: none;
+    font-size: 1rem;
+    color: var(--warning);
+  }
+
+  span + span::before {
+    content: none;
+  }
+}
+
+.mesh-node-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+// The switch on the left, the two updates on the right.
+.mesh-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-muted-1);
+
+  .mesh-node-skip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .mesh-node-updates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
+}
+
+// The machines that can be forced out, one per line, and what removing the ticked ones leaves.
+.mesh-force-remove-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.75rem;
+
+  .mesh-force-remove-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+}
+
+.mesh-force-remove-plan { margin: 0 0 0.75rem; }
+
+// The notice that this machine was removed carries its own Leave button.
+.mesh-removed .btn { margin-left: auto; flex-shrink: 0; }
+
+.mesh-output {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+// Address first and widest; the two ports beside it, narrow.
+.mesh-address-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8rem 8rem;
+  gap: 0 0.75rem;
+
+  @media (max-width: 560px) {
+    grid-template-columns: 1fr 1fr;
+
+    .mesh-address-host-group { grid-column: 1 / -1; }
+  }
+}
+
+.mesh-address-form {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-muted-1);
+}
+
+.mesh-address-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mesh-invite {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.mesh-invite-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.mesh-invite-label {
+  flex: 0 0 6.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.mesh-invite-value {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  font-size: 0.8rem;
+  word-break: break-all;
+  user-select: all;
+}

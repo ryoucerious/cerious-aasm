@@ -1,4 +1,5 @@
 import { messagingService } from '../messaging.service';
+import { mergeWithInventory } from './inventory-merge';
 import { serverManagementService } from './server-management.service';
 import { serverMonitoringService } from './server-monitoring.service';
 
@@ -36,7 +37,7 @@ async function broadcastInstanceList(): Promise<void> {
     const { instances } = await serverManagementService.getAllInstances();
     // Empty means the read failed: an instance just changed state, so at least one exists.
     if (instances.length > 0) {
-      messagingService.sendToAll('server-instances', instances);
+      messagingService.sendToAll('server-instances', await mergeWithInventory(instances));
     }
   } catch (error) {
     console.error('[instance-events] Could not broadcast the instance list:', error);

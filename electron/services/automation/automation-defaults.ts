@@ -27,6 +27,7 @@ export function createServerAutomation(serverId: string, stored: Partial<Automat
       scheduledRestartEnabled: !!stored.scheduledRestartEnabled,
       restartFrequency: stored.restartFrequency || DEFAULT_SETTINGS.restartFrequency,
       restartTime: stored.restartTime || DEFAULT_SETTINGS.restartTime,
+      restartTimes: stored.restartTimes?.length ? [...stored.restartTimes] : [stored.restartTime || DEFAULT_SETTINGS.restartTime],
       restartDays: stored.restartDays || [...DEFAULT_SETTINGS.restartDays],
       restartWarningMinutes: stored.restartWarningMinutes || DEFAULT_SETTINGS.restartWarningMinutes
     },

@@ -49,7 +49,8 @@ describe('ServerNavService', () => {
     const normal = service.visibleTabs(false, false).map(t => t.id);
     expect(normal).toContain('general');
     expect(normal).not.toContain('ini-Game');
-    expect(normal).not.toContain('firewall');
+    // Windows too: the page says whether Windows Firewall lets players in.
+    expect(normal).toContain('firewall');
 
     const expert = service.visibleTabs(true, true).map(t => t.id);
     expect(expert).not.toContain('general');

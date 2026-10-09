@@ -104,6 +104,7 @@
     </div>
 
     <div *ngIf="activeTab === 'storage'" class="settings-pane">
+      <app-held-backup-copies></app-held-backup-copies>
       <section class="settings-card">
         <h3 class="settings-card-title">Server Data Directory</h3>
         <p class="settings-card-hint">
@@ -128,8 +129,9 @@
       <section class="settings-card">
         <h3 class="settings-card-title">Automatic ARK Updates</h3>
         <p class="settings-card-hint">
-          When a new build is published, players are warned, the servers stop, the update runs,
-          and the ones that were running start again.
+          When a new build is published, it downloads while the servers keep running. Once it is
+          ready, players are warned, the servers stop, the new files go in, and the ones that were
+          running start again.
         </p>
         <div class="form-group">
           <div class="form-control-label toggle-label">
@@ -141,12 +143,26 @@
         <div class="form-group">
           <label class="form-control-label">Warning time (minutes)</label>
           <input type="number" [ngModel]="updateWarningMinutes" (change)="onUpdateWarningMinutesChange($event.target.value)" class="form-control input" min="1" max="60" />
-          <label class="form-control-label desc">How long players are warned over RCON before an update begins.</label>
+          <label class="form-control-label desc">How long players are warned over RCON, once the update has downloaded, before the servers stop for it.</label>
         </div>
       </section>
     </div>
 
     <div *ngIf="activeTab === 'servers'" class="settings-pane">
+      <!-- Only where this machine can do it: not in Docker, which starts the app itself. -->
+      <section class="settings-card run-at-startup" *ngIf="runAtStartup?.supported">
+        <h3 class="settings-card-title">Startup</h3>
+        <p class="settings-card-hint">
+          Servers set to auto-start on app launch, in their Automation settings, then start with it.
+        </p>
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="runAtStartup?.enabled" (change)="onRunAtStartupChange($event)" tabindex="0" />
+            <span class="slider"></span>
+            <span class="toggle-text">Start Cerious AASM when this computer starts</span>
+          </div>
+        </div>
+      </section>
       <section class="settings-card">
         <h3 class="settings-card-title">Starting Servers</h3>
         <p class="settings-card-hint">
@@ -157,6 +173,23 @@
           <label class="form-control-label">Delay between starts (seconds)</label>
           <input type="number" [ngModel]="serverStartDelaySeconds" (change)="onServerStartDelaySecondsChange($event.target.value)" class="form-control input" min="10" max="300" />
           <label class="form-control-label desc">A longer wait keeps servers on a shared cluster from downloading the same mods at once.</label>
+        </div>
+      </section>
+      <app-server-ports-settings></app-server-ports-settings>
+      <section class="settings-card">
+        <h3 class="settings-card-title">Server List</h3>
+        <p class="settings-card-hint">
+          In a mesh, the server list in the sidebar groups the servers by the machine they run on.
+          This choice is kept in this browser.
+        </p>
+        <div class="form-group">
+          <div class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch server-list-group-by-operator" [checked]="groupServersByOperator"
+                   (change)="onGroupServersByOperatorChange($event)" />
+            <span class="slider"></span>
+            <span class="toggle-text">Group servers by operator</span>
+          </div>
+          <label class="form-control-label desc">Each operator's servers together, above the machines; servers in no pool under "Admin pool".</label>
         </div>
       </section>
     </div>
@@ -202,7 +235,7 @@
         </div>
       </section>
 
-      <section class="settings-card">
+      <section class="settings-card settings-auth">
         <h3 class="settings-card-title">Authentication</h3>
         <p class="settings-card-hint">
           Who may open the web interface. The desktop app runs as the owner of this machine and
@@ -219,20 +252,25 @@
           </div>
         </div>
 
+        <!-- One span for the words and the link: loose in the flex row, each piece wrapped in a column of its own. -->
         <div *ngIf="authenticationEnabled && accountsInUse" class="ark-install-notice">
           <i class="material-icons">group</i>
-          Accounts are managed under
-          <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
-          Give each person their own; what they may do follows their role.
+          <span>
+            Accounts are managed under
+            <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
+            Give each person their own; what they may do follows their role.
+          </span>
         </div>
         <div *ngIf="authenticationEnabled && !accountsInUse" class="ark-install-notice warning">
           <i class="material-icons">warning</i>
-          There are no accounts yet, so nobody can sign in. Add one under
-          <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
+          <span>
+            There are no accounts yet, so nobody can sign in. Add one under
+            <button type="button" class="link-btn" (click)="goToUsers()">Users &amp; Roles</button>.
+          </span>
         </div>
         <div *ngIf="authenticationEnabled && webServerRunning" class="ark-install-notice">
           <i class="material-icons">info</i>
-          Stop the web server to change these settings.
+          <span>Stop the web server to change these settings.</span>
         </div>
       </section>
 
@@ -259,6 +297,8 @@
     <app-profile-settings *ngIf="activeTab === 'profile'"></app-profile-settings>
 
     <app-users-settings *ngIf="activeTab === 'users'"></app-users-settings>
+    <app-mesh-settings *ngIf="activeTab === 'mesh'"></app-mesh-settings>
+    <app-clusters-settings *ngIf="activeTab === 'clusters'"></app-clusters-settings>
 
     <div *ngIf="activeTab === 'about'" class="settings-pane">
       <div class="about-container">

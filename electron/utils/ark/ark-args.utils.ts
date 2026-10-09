@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { getDefaultInstallDir, getPlatform } from '../platform.utils';
 import { parsePort, validateIPAddress } from '../validation.utils';
+import { clusterFolder, knownCluster } from '../../services/clusters/cluster-registry';
 import type { InstanceConfig } from '../../types/server-instance.types';
 
 type LaunchConfig = Partial<InstanceConfig>;
@@ -89,13 +90,25 @@ export function buildArkServerArgs(config: LaunchConfig): string[] {
   }
   paramParts.push(`MultiHome=${multiHome ?? '0.0.0.0'}`);
 
-  if (config.clusterDirOverride) {
-    // A relative override resolves against the install directory; an absolute one is used as given.
-    const clusterDir = path.resolve(getDefaultInstallDir(), config.clusterDirOverride);
-    args.push(`-ClusterDirOverride=${clusterDir}`);
+  if (config.clusterRef) {
+    // A cluster chosen in Settings → Clusters: its ID, and this machine's folder for it, whatever
+    // was typed into the server's own cluster fields before.
+    const cluster = knownCluster(config.clusterRef);
+    if (cluster) {
+      args.push(`-ClusterDirOverride=${clusterFolder(cluster.clusterId)}`);
+      args.push(`-ClusterId=${cluster.arkClusterId}`);
+    } else {
+      console.warn(`[ark-args] This server's cluster ${config.clusterRef} no longer exists; starting it in no cluster.`);
+    }
+  } else {
+    if (config.clusterDirOverride) {
+      // A relative override resolves against the install directory; an absolute one is used as given.
+      const clusterDir = path.resolve(getDefaultInstallDir(), config.clusterDirOverride);
+      args.push(`-ClusterDirOverride=${clusterDir}`);
+    }
+    const clusterId = safeValue(config.clusterId, 'clusterId');
+    if (clusterId) args.push(`-ClusterId=${clusterId}`);
   }
-  const clusterId = safeValue(config.clusterId, 'clusterId');
-  if (clusterId) args.push(`-ClusterId=${clusterId}`);
 
   // Passwords go in raw, never URL-encoded: ARK does not decode command-line values, so a join
   // password of `my pass!` would arrive as `my%20pass%21` and nobody typing the real one could

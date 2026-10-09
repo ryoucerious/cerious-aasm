@@ -1,4 +1,5 @@
-import { getLinuxFirewallInstructions, getLinuxWebFirewallInstructions } from './firewall.utils';
+import { getLinuxFirewallInstructions, getLinuxServerPortsInstructions, getLinuxWebFirewallInstructions } from './firewall.utils';
+import { DEFAULT_SERVER_PORT_RANGES } from './ark/port-sets';
 
 describe('firewall.utils', () => {
   describe('getLinuxFirewallInstructions', () => {
@@ -55,6 +56,26 @@ describe('firewall.utils', () => {
         'sudo firewall-cmd --reload',
         ''
       ].join('\n'));
+    });
+  });
+
+  // Once for every server: the ranges new servers take their ports from.
+  describe('getLinuxServerPortsInstructions', () => {
+    it('opens the game and query ranges for UDP with ufw and firewalld, and leaves RCON closed', () => {
+      const text = getLinuxServerPortsInstructions(DEFAULT_SERVER_PORT_RANGES);
+
+      expect(text).toContain('sudo ufw allow 7777:7900/udp');
+      expect(text).toContain('sudo ufw allow 27015:27030/udp');
+      expect(text).toContain('sudo firewall-cmd --permanent --add-port=7777-7900/udp');
+      expect(text).toContain('sudo firewall-cmd --permanent --add-port=27015-27030/udp');
+      expect(text).toContain('sudo firewall-cmd --reload');
+      expect(text).not.toMatch(/27020|tcp/);
+    });
+
+    it('writes a one-port range as the port', () => {
+      const text = getLinuxServerPortsInstructions({ ...DEFAULT_SERVER_PORT_RANGES, query: { start: 27015, end: 27015 } });
+      expect(text).toContain('sudo ufw allow 27015/udp');
+      expect(text).toContain('--add-port=27015/udp');
     });
   });
 });

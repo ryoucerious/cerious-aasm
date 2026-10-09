@@ -6,9 +6,12 @@ import { validateInstanceId } from '../../utils/validation.utils';
 import type { DeleteInstanceResult, ImportBackupResult, ServerInstanceResult, StartServerResult } from '../../types/server-instance.types';
 import { automationService } from '../automation/automation.service';
 import { messagingService } from '../messaging.service';
+import { mergeWithInventory, setInventoryMerge } from './inventory-merge';
 import { serverLifecycleService } from './server-lifecycle.service';
 import { serverManagementService } from './server-management.service';
 import { serverProcessService } from './server-process.service';
+
+export { setInventoryMerge };
 
 export class ServerInstanceService {
   /** Starts an instance. Never rejects: a failure, a busy port included, comes back as `portError`. */
@@ -111,7 +114,8 @@ export class ServerInstanceService {
   /** Sends the full instance list, with live state, to every client on 'server-instances'. */
   async broadcastInstances(): Promise<void> {
     const { instances } = await serverManagementService.getAllInstances();
-    messagingService.sendToAll('server-instances', instances);
+    const merged = await mergeWithInventory(instances);
+    messagingService.sendToAll('server-instances', merged);
   }
 
   /** Kills the server's process tree at once, with no save. */

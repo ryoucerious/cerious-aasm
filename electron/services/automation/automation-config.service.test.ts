@@ -110,6 +110,22 @@ describe('AutomationConfigService', () => {
     expect(saveInstance).toHaveBeenCalled();
   });
 
+  // Several times a day: kept in order, each once, and the first stays restartTime for older versions.
+  it('saves several restart times, in order, each once', async () => {
+    await service.configureScheduledRestart('id', true, 'daily', ['14:00', '02:00', '14:00', 'not a time', '25:00'], [1], 5);
+
+    const settings = automations.get('id')!.settings;
+    expect(settings.restartTimes).toEqual(['02:00', '14:00']);
+    expect(settings.restartTime).toBe('02:00');
+    expect(saveInstance).toHaveBeenCalledWith(expect.objectContaining({ restartTimes: ['02:00', '14:00'], restartTime: '02:00' }));
+  });
+
+  it('keeps one time saved as a single value as the only restart time', async () => {
+    await service.configureScheduledRestart('id', true, 'daily', '03:00', [1], 5);
+
+    expect(automations.get('id')!.settings.restartTimes).toEqual(['03:00']);
+  });
+
   it('should handle missing instance in scheduled restart', async () => {
     (getInstance as jest.Mock).mockReturnValue(undefined);
     const result = await service.configureScheduledRestart('id', false, 'daily', '02:00', [0], 0);

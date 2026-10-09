@@ -32,6 +32,7 @@ export class GlobalConfigService implements OnDestroy {
     // asks once.
     this.subs.push(webSocket.connected$.pipe(filter(connected => connected)).subscribe(() => this.refresh()));
     if (ipc.isElectron) this.refresh();
+    this.subs.push(this.messaging.receiveMessage('mesh-auth-changed').subscribe(() => this.refresh()));
   }
 
   ngOnDestroy(): void {

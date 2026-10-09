@@ -18,6 +18,7 @@ jest.mock('../../utils/ark/ark-server/ark-server-isolation.utils', () => ({
   linkSharedWin64Subdirs: jest.fn(async () => [])
 }));
 jest.mock('../ark-config.service', () => ({ arkConfigService: { writeArkConfigFiles: jest.fn() } }));
+jest.mock('../clusters/cluster-import', () => ({ carryClusterData: jest.fn() }));
 jest.mock('../backup/backup.service', () => ({
   backupService: {
     importBackupAsNewServer: jest.fn(),
@@ -25,6 +26,14 @@ jest.mock('../backup/backup.service', () => ({
     startBackupScheduler: jest.fn(async () => ({ success: true })),
     waitForBackupOperations: jest.fn(async () => undefined)
   }
+}));
+jest.mock('../../utils/ark/started-config.utils', () => ({ recordStartedConfig: jest.fn() }));
+import { recordStartedConfig } from '../../utils/ark/started-config.utils';
+jest.mock('../../utils/server-ports.utils', () => ({
+  getServerPortRanges: jest.fn(() => ({
+    ranges: { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } },
+    source: 'settings'
+  }))
 }));
 jest.mock('../scheduler.service', () => ({ schedulerService: { initSchedule: jest.fn(async () => undefined), stopScheduler: jest.fn() } }));
 jest.mock('../whitelist.service', () => ({
@@ -54,6 +63,7 @@ import { generateRandomPassword } from '../../utils/crypto.utils';
 import { getProcessMemoryUsage } from '../../utils/platform.utils';
 import { linkInstanceSaveDir } from '../../utils/ark/ark-server/ark-server-isolation.utils';
 import { arkConfigService } from '../ark-config.service';
+import { carryClusterData } from '../clusters/cluster-import';
 import { backupService } from '../backup/backup.service';
 import { schedulerService } from '../scheduler.service';
 import { whitelistService } from '../whitelist.service';
@@ -140,6 +150,51 @@ describe('ServerManagementService', () => {
     ])('refuses %s', async (_label, instance, error) => {
       await expect(serverManagementService.saveInstance(instance as Partial<InstanceConfig> | null)).resolves.toEqual({ success: false, error });
       expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+    });
+
+    // The ranges are what this machine's firewall opens: a port moved outside them can't be reached.
+    describe('ports outside this machine\'s server ports', () => {
+      const stored = { id: 'a1', name: 'Alpha', gamePort: 7777, queryPort: 27015, rconPort: 27020 };
+
+      beforeEach(() => mockInstanceUtils.getInstance.mockReturnValue(stored));
+
+      it('refuses a game port moved outside them', async () => {
+        await expect(serverManagementService.saveInstance({ ...stored, gamePort: 7967 })).resolves.toEqual({
+          success: false,
+          error: 'The game port 7967 is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
+        });
+        expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
+      });
+
+      it('refuses a game port at the top of the range, which pushes the peer port out', async () => {
+        await expect(serverManagementService.saveInstance({ ...stored, gamePort: 7900 })).resolves.toEqual({
+          success: false,
+          error: 'The peer port 7901, always the game port + 1, is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
+        });
+      });
+
+      it('refuses query and RCON ports moved outside theirs', async () => {
+        await expect(serverManagementService.saveInstance({ ...stored, rconPort: 27100 })).resolves.toEqual(expect.objectContaining({
+          error: 'The RCON port 27100 is outside this machine\'s RCON ports (27020–27050). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
+        }));
+        await expect(serverManagementService.saveInstance({ ...stored, queryPort: '27100' } as Partial<InstanceConfig>)).resolves.toEqual(expect.objectContaining({
+          error: 'The query port 27100 is outside this machine\'s query ports (27015–27030). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
+        }));
+      });
+
+      // Servers from before the ranges, or moved since they changed, keep working and saving.
+      it('lets a server keep ports it already had outside them', async () => {
+        mockInstanceUtils.getInstance.mockReturnValue({ ...stored, gamePort: 7967 });
+
+        await expect(serverManagementService.saveInstance({ ...stored, gamePort: 7967, name: 'Alpha 2', rconPort: 27021 }))
+          .resolves.toEqual({ success: true, instance: saved });
+      });
+
+      it('leaves a new server to take ports inside them when it is saved', async () => {
+        mockInstanceUtils.getInstance.mockReturnValue(null);
+
+        await expect(serverManagementService.saveInstance({ name: 'New', gamePort: 7967 })).resolves.toEqual({ success: true, instance: saved });
+      });
     });
 
     // Refused at send time instead: an old URL must not lock the user out of every other setting.
@@ -328,6 +383,15 @@ describe('ServerManagementService', () => {
       expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalled();
     });
 
+    // Settings saved while it runs take effect at the next start; the page marks those that differ.
+    it('keeps the settings the server starts with', async () => {
+      const instance = { id: 'a1', rconPassword: 'pw', maxPlayers: 70 };
+
+      await serverManagementService.prepareInstanceConfiguration('a1', instance);
+
+      expect(recordStartedConfig).toHaveBeenCalledWith('a1', instance);
+    });
+
     it('writes the INI files and copies the whitelist', async () => {
       const instance = { id: 'a1', rconPassword: 'pw', useExclusiveList: true };
 
@@ -335,6 +399,14 @@ describe('ServerManagementService', () => {
 
       expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalledWith('/instances/a1', instance, 'a1');
       expect(whitelistService.copyWhitelistToMainDir).toHaveBeenCalledWith('a1');
+    });
+
+    it('brings the transfer data the server had under its own cluster ID into the cluster it chose', async () => {
+      const instance = { id: 'a1', rconPassword: 'pw', clusterRef: 'c1', clusterId: 'Old' };
+
+      await serverManagementService.prepareInstanceConfiguration('a1', instance);
+
+      expect(carryClusterData).toHaveBeenCalledWith(instance, { instanceDir: '/instances/a1', runtimeRoot: '/instances/a1' });
     });
 
     // A copied SavedArks takes ARK's writes while backups keep reading the canonical folder.

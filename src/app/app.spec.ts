@@ -1,7 +1,7 @@
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { NgForOf, NgIf } from '@angular/common';
-import { RouterOutlet } from '@angular/router';
-import { TestBed, fakeAsync, flushMicrotasks, tick } from '@angular/core/testing';
+import { Router, RouterOutlet } from '@angular/router';
+import { ComponentFixture, TestBed, fakeAsync, flushMicrotasks, tick } from '@angular/core/testing';
 import { BehaviorSubject, Subject } from 'rxjs';
 import { App } from './app';
 import { MessagingService } from './core/services/messaging/messaging.service';
@@ -10,12 +10,14 @@ import { ServerInstanceService } from './core/services/server-instance.service';
 import { IpcService } from './core/services/ipc.service';
 import { ServerLifecycleService } from './core/services/server-lifecycle.service';
 import { WebSocketService } from './core/services/web-socket.service';
+import { AuthService } from './core/services/auth.service';
 import { ServerInstance } from './core/models/server-instance.model';
 import type { ElectronListener } from './core/types/electron-api';
 import { MockMessagingService } from '../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../test/mocks/mock-notification.service';
 import { MockServerInstanceService } from '../../test/mocks/mock-server-instance.service';
 import { ModalComponent } from './components/modal/modal.component';
+import { BusyService } from './core/services/busy.service';
 
 describe('App', () => {
   let ipc: { isElectron: boolean; on: jasmine.Spy; send: jasmine.Spy; invoke: jasmine.Spy };
@@ -37,9 +39,9 @@ describe('App', () => {
       send: jasmine.createSpy('send'),
       invoke: jasmine.createSpy('invoke').and.resolveTo(false)
     };
-    lifecycle = jasmine.createSpyObj('ServerLifecycleService', ['runningServers', 'shutdownAllServers']);
-    lifecycle.runningServers.and.returnValue([]);
-    lifecycle.shutdownAllServers.and.resolveTo();
+    lifecycle = jasmine.createSpyObj('ServerLifecycleService', ['serversRunningHere', 'shutdownServers']);
+    lifecycle.serversRunningHere.and.returnValue([]);
+    lifecycle.shutdownServers.and.resolveTo();
     connected$ = new BehaviorSubject(false);
     unauthorized$ = new Subject<void>();
 
@@ -70,6 +72,15 @@ describe('App', () => {
     return fixture;
   };
 
+  /** In fakeAsync: the app on the sign-in page, once the router's first navigation (to '/') is over. */
+  const signInPage = () => {
+    const fixture = createApp();
+    fixture.detectChanges();
+    flushMicrotasks();
+    fixture.componentInstance.isLoginPage = true;
+    return fixture;
+  };
+
   describe('in the desktop app', () => {
     beforeEach(() => setUp(true));
 
@@ -79,12 +90,13 @@ describe('App', () => {
       expect(ipc.send).toHaveBeenCalledWith('app-close-response', { action: 'exit' });
     });
 
-    it('asks first when servers are running, listing them from the live roster', () => {
-      lifecycle.runningServers.and.returnValue(running);
+    it('asks first when servers run on this machine, naming only those', () => {
+      lifecycle.serversRunningHere.and.returnValue(running);
       const app = createApp().componentInstance;
 
-      ipcListeners.get('app-close-request')!({});
+      ipcListeners.get('app-close-request')!({}, { runningHere: ['a'] });
 
+      expect(lifecycle.serversRunningHere).toHaveBeenCalledWith(['a']);
       expect(app.showExitModal).toBeTrue();
       expect(app.runningServers).toEqual(running);
       expect(ipc.send).not.toHaveBeenCalled();
@@ -92,7 +104,7 @@ describe('App', () => {
 
     it('answers only after the servers have stopped', fakeAsync(() => {
       let finish!: () => void;
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(resolve => finish = resolve));
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(resolve => finish = resolve));
       const app = createApp().componentInstance;
       app.showExitModal = true;
 
@@ -109,9 +121,20 @@ describe('App', () => {
       expect(app.shuttingDown).toBeFalse();
     }));
 
+    it('stops only the servers it named, the ones on this machine', fakeAsync(() => {
+      lifecycle.serversRunningHere.and.returnValue(running);
+      const app = createApp().componentInstance;
+      ipcListeners.get('app-close-request')!({}, { runningHere: ['a'] });
+
+      app.onExitModalClose('shutdown');
+      flushMicrotasks();
+
+      expect(lifecycle.shutdownServers).toHaveBeenCalledWith(running);
+    }));
+
     it('still answers when stopping the servers fails', fakeAsync(() => {
       spyOn(console, 'error');
-      lifecycle.shutdownAllServers.and.rejectWith(new Error('boom'));
+      lifecycle.shutdownServers.and.rejectWith(new Error('boom'));
       const app = createApp().componentInstance;
 
       app.onExitModalClose('shutdown');
@@ -121,7 +144,7 @@ describe('App', () => {
     }));
 
     it('ignores other choices while servers are stopping', fakeAsync(() => {
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(() => {}));
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(() => {}));
       const app = createApp().componentInstance;
 
       app.onExitModalClose('shutdown');
@@ -129,20 +152,20 @@ describe('App', () => {
       flushMicrotasks();
 
       expect(ipc.send).not.toHaveBeenCalled();
-      expect(lifecycle.shutdownAllServers).toHaveBeenCalledTimes(1);
+      expect(lifecycle.shutdownServers).toHaveBeenCalledTimes(1);
     }));
 
     // Main asks again if it hears nothing for a while. By then the stopping servers no longer
     // count as running, so answering would let main exit while they are still saving.
     it('ignores a repeated close request while its servers are stopping', fakeAsync(() => {
-      lifecycle.runningServers.and.returnValue(running);
-      lifecycle.shutdownAllServers.and.returnValue(new Promise<void>(() => {}));
+      lifecycle.serversRunningHere.and.returnValue(running);
+      lifecycle.shutdownServers.and.returnValue(new Promise<void>(() => {}));
       const app = createApp().componentInstance;
       ipcListeners.get('app-close-request')!({});
       app.onExitModalClose('shutdown');
       flushMicrotasks();
 
-      lifecycle.runningServers.and.returnValue([]);
+      lifecycle.serversRunningHere.and.returnValue([]);
       ipcListeners.get('app-close-request')!({});
 
       expect(ipc.send).not.toHaveBeenCalled();
@@ -150,11 +173,11 @@ describe('App', () => {
     }));
 
     it('ignores a repeated close request while the question is still open', () => {
-      lifecycle.runningServers.and.returnValue(running);
+      lifecycle.serversRunningHere.and.returnValue(running);
       const app = createApp().componentInstance;
       ipcListeners.get('app-close-request')!({});
 
-      lifecycle.runningServers.and.returnValue([]);
+      lifecycle.serversRunningHere.and.returnValue([]);
       ipcListeners.get('app-close-request')!({});
 
       expect(ipc.send).not.toHaveBeenCalled();
@@ -173,7 +196,7 @@ describe('App', () => {
       await app.onExitModalClose('cancel');
       expect(ipc.send).toHaveBeenCalledWith('app-close-response', { action: 'cancel' });
       expect(app.showExitModal).toBeFalse();
-      expect(lifecycle.shutdownAllServers).not.toHaveBeenCalled();
+      expect(lifecycle.shutdownServers).not.toHaveBeenCalled();
     });
 
     it('stops listening for close requests on destroy', () => {
@@ -183,8 +206,114 @@ describe('App', () => {
     });
   });
 
+  // A mesh member's desktop needs a mesh account; until the app knows, it shows nothing else.
+  describe('in the desktop app, until access is confirmed', () => {
+    let identity$: BehaviorSubject<unknown>;
+    let finishReady: () => void;
+    let signInNeeded: boolean;
+
+    beforeEach(async () => {
+      await setUp(true);
+      identity$ = new BehaviorSubject<unknown>({});
+      signInNeeded = false;
+      const ready = new Promise<void>(resolve => { finishReady = resolve; });
+      TestBed.overrideProvider(AuthService, {
+        useValue: { identity$, whenReady: () => ready, get needsMeshSignIn() { return signInNeeded; } }
+      });
+    });
+
+    function shown(fixture: ComponentFixture<App>): { loading: boolean; app: boolean } {
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+      return { loading: !!page.querySelector('.app-loading'), app: !!page.querySelector('.sidebar-container') };
+    }
+
+    it('shows only a loading page while it finds out who is signed in', () => {
+      const fixture = createApp();
+
+      expect(shown(fixture)).toEqual({ loading: true, app: false });
+    });
+
+    it('shows the app once access is confirmed', fakeAsync(() => {
+      const fixture = createApp();
+
+      finishReady();
+      flushMicrotasks();
+
+      expect(shown(fixture)).toEqual({ loading: false, app: true });
+    }));
+
+    it('never shows the app to a machine waiting for a mesh sign-in', fakeAsync(() => {
+      signInNeeded = true;
+      const navigate = spyOn(TestBed.inject(Router), 'navigate').and.resolveTo(true);
+      const fixture = createApp();
+
+      finishReady();
+      flushMicrotasks();
+
+      expect(shown(fixture).app).toBeFalse();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    }));
+
+    it('hides the app the moment a sign-in becomes necessary', fakeAsync(() => {
+      const fixture = createApp();
+      spyOn(fixture.componentInstance['router'], 'navigate').and.resolveTo(true);
+      finishReady();
+      flushMicrotasks();
+      expect(shown(fixture).app).toBeTrue();
+
+      signInNeeded = true; // joined a mesh, or signed out
+      identity$.next({});
+
+      expect(shown(fixture)).toEqual({ loading: true, app: false });
+    }));
+
+    // The window is frameless and the top bar, its title bar, is part of the app. Before the app
+    // shows, the window still has to be moved, and closed, from somewhere.
+    describe('a title bar until the app shows', () => {
+      const onSignInPage = signInPage;
+      const titleBar = (fixture: ComponentFixture<App>) => {
+        fixture.detectChanges();
+        return (fixture.nativeElement as HTMLElement).querySelector('.window-titlebar');
+      };
+
+      it('is on the sign-in page, with the window controls', fakeAsync(() => {
+        const fixture = onSignInPage();
+
+        const bar = titleBar(fixture);
+
+        expect(bar?.closest('.login-page-container')).toBeTruthy();
+        expect(bar?.querySelector('app-window-controls')).toBeTruthy();
+      }));
+
+      it('is on the loading page', () => {
+        const fixture = createApp();
+
+        expect(titleBar(fixture)?.querySelector('app-window-controls')).toBeTruthy();
+      });
+
+      it('goes once the app, with its own top bar, shows', fakeAsync(() => {
+        const fixture = createApp();
+
+        finishReady();
+        flushMicrotasks();
+
+        expect(titleBar(fixture)).toBeNull();
+      }));
+    });
+  });
+
   describe('in the web UI', () => {
     beforeEach(() => setUp(false));
+
+    it('shows only a loading page until the server accepts the connection', () => {
+      const fixture = createApp();
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+
+      expect(page.querySelector('.app-loading')).toBeTruthy();
+      expect(page.querySelector('.sidebar-container')).toBeNull();
+    });
 
     it('does not listen for window close requests', () => {
       const app = createApp().componentInstance;
@@ -223,11 +352,46 @@ describe('App', () => {
       expect(fixture.componentInstance.connectionLost).toBeFalse();
     }));
 
+    it('has no title bar on the sign-in page: the browser is the window', fakeAsync(() => {
+      connected$.next(true);
+      const fixture = signInPage();
+      fixture.detectChanges();
+      const page = fixture.nativeElement as HTMLElement;
+
+      expect(page.querySelector('.login-page-container')).toBeTruthy();
+      expect(page.querySelector('.window-titlebar')).toBeNull();
+    }));
+
     it('should render main app content once connected', () => {
       const fixture = createApp();
       connected$.next(true);
       fixture.detectChanges();
       expect((fixture.nativeElement as HTMLElement).querySelector('.sidebar-container')).toBeTruthy();
+    });
+
+    // The overlay only covers the app; inert is what keeps the keyboard out of it as well.
+    it('cannot be used while something is under way, settings included', () => {
+      const fixture = createApp();
+      connected$.next(true);
+      fixture.detectChanges();
+      const wrapper = (fixture.nativeElement as HTMLElement).querySelector('.app-root-wrapper')!;
+      expect(wrapper.hasAttribute('inert')).toBeFalse();
+
+      const done = TestBed.inject(BusyService).start('Removing Docker 1…');
+      fixture.detectChanges();
+      expect(wrapper.hasAttribute('inert')).toBeTrue();
+      expect(wrapper.getAttribute('aria-busy')).toBe('true');
+      expect(wrapper.querySelector('app-settings-page')).toBeTruthy();
+
+      done();
+      fixture.detectChanges();
+      expect(wrapper.hasAttribute('inert')).toBeFalse();
+    });
+
+    it('has the overlay for things under way', () => {
+      const fixture = createApp();
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('app-busy-overlay')).toBeTruthy();
     });
   });
 

@@ -12,6 +12,8 @@ export interface PoolUser {
   id: string;
   roleId: string;
   ownerUserId?: string | null;
+  /** For a machine admin, the machine it looks after. */
+  machineNodeId?: string | null;
 }
 
 /** The fields of a server config these rules read. */
@@ -61,13 +63,16 @@ export function isPoolOwnerIdentity(permissions: readonly Permission[]): boolean
  * Whether `user` may see `instance`.
  *
  * An operator sees their pool. A viewer sees their owner's pool. A server manager or attendant
- * sees the servers assigned to them. A role this app does not know stays in the admin pool,
- * so it never sees an operator's servers. An admin is not passed here.
+ * sees the servers assigned to them. A machine admin sees every server, and changes only those on
+ * its machine (machineScopeRefusal). A role this app does not know stays in the admin pool, so it
+ * never sees an operator's servers. An admin is not passed here.
  */
 export function instanceVisibleTo(user: PoolUser | null | undefined, instance: PoolInstance | null | undefined): boolean {
   if (!user?.id || !instance) return false;
   const pool = instance.operatorUserId || null;
   switch (user.roleId) {
+    case ROLE_IDS.MACHINE_ADMIN:
+      return true;
     case ROLE_IDS.OPERATOR:
       return pool === user.id;
     case ROLE_IDS.VIEWER:
@@ -80,6 +85,16 @@ export function instanceVisibleTo(user: PoolUser | null | undefined, instance: P
     default:
       return pool === null;
   }
+}
+
+/**
+ * Why `user` may not change a server hosted on `hostNodeId`; null when they may. Only a machine
+ * admin is narrowed, to the servers on its own machine.
+ */
+export function machineScopeRefusal(user: PoolUser | null | undefined, hostNodeId: string | null | undefined): string | null {
+  if (user?.roleId !== ROLE_IDS.MACHINE_ADMIN) return null;
+  if (user.machineNodeId && hostNodeId === user.machineNodeId) return null;
+  return 'That server is on another machine. A machine admin changes only the servers on its own machine.';
 }
 
 /** The instances `user` may see; everything for an admin, nothing for nobody. */

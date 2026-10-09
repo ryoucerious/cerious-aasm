@@ -107,22 +107,39 @@ export function updateAuthConfig(config: AuthConfig): void {
   saveAuthConfig();
 }
 
+/**
+ * The login in force. In a mesh, sign-in is required even where this machine's own login is off,
+ * and only mesh accounts sign in: the single login belongs to this machine alone, and on joining
+ * its password became this machine's machine admin. The saved login is never changed for it, so
+ * leaving the mesh puts this machine's own back.
+ */
 export function getAuthConfig(): AuthConfig {
+  if (meshSignInRequired) return { enabled: true, username: '', passwordHash: '' };
   return { ...authConfig };
 }
 
+let meshSignInRequired = false;
+
+/** Set by main while this node is in a mesh. */
+export function setMeshSignInRequired(required: boolean): void {
+  meshSignInRequired = required;
+}
+
 /**
- * Identifies a legacy login's username and password hash (the current login's by default). A legacy
+ * Identifies a legacy login's username and password hash (the login in force by default). A legacy
  * session is stamped with it, so a login changed since (even while the server was down) no longer
  * honours the session.
  */
-export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'passwordHash'> = authConfig): string {
+export function legacyLoginFingerprint(login: Pick<AuthConfig, 'username' | 'passwordHash'> = getAuthConfig()): string {
   return crypto.createHash('sha256').update(JSON.stringify([login.username, login.passwordHash])).digest('hex');
 }
 
 /** Applies AUTH_ENABLED / AUTH_USERNAME / AUTH_PASSWORD, which main sets when it forks this process. */
 export async function initializeAuthFromEnv(): Promise<void> {
   loadAuthConfig();
+  // Set by main for a mesh member, so sign-in is on from the first request rather than from
+  // the message main sends once this process is ready.
+  setMeshSignInRequired(process.env.AASM_MESH_SIGN_IN === '1');
 
   const authEnabled = process.env.AUTH_ENABLED === 'true';
   const authUsername = process.env.AUTH_USERNAME || 'admin';

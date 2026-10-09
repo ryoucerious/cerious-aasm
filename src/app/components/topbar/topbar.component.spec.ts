@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, Subject } from 'rxjs';
 import { TopbarComponent } from './topbar.component';
 import { ThemeService } from '../../core/services/theme.service';
 import { ActivityService } from '../../core/services/activity.service';
@@ -12,6 +12,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { ServerNavService } from '../../core/services/server-nav.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
+import { MeshHealth, MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 
 describe('TopbarComponent', () => {
@@ -30,10 +31,15 @@ describe('TopbarComponent', () => {
   let identity$: BehaviorSubject<any>;
   let displayName$: BehaviorSubject<string>;
   let auth: any;
+  /** What MeshNodesService says of the mesh; null outside one. */
+  let meshHealth: MeshHealth | null;
+  let meshChanged$: Subject<void>;
 
   beforeEach(async () => {
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
+    meshHealth = null;
+    meshChanged$ = new Subject<void>();
     theme = { resolved$: new BehaviorSubject('dark'), toggle: jasmine.createSpy('toggle') };
     items$ = new BehaviorSubject<any[]>([]);
     activity = { items$: items$.asObservable(), unreadCount: 0, markAllSeen: jasmine.createSpy('markAllSeen'), clear: jasmine.createSpy('clear') };
@@ -68,7 +74,8 @@ describe('TopbarComponent', () => {
         { provide: NotificationService, useValue: notification },
         { provide: ServerNavService, useValue: { lastTab: 'console', visibleTabs: () => [{ id: 'mods', label: 'Mods', icon: 'extension', group: 'features' }] } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
-        { provide: AuthService, useValue: auth }
+        { provide: AuthService, useValue: auth },
+        { provide: MeshNodesService, useValue: { changed$: meshChanged$.asObservable(), get health() { return meshHealth; } } }
       ]
     }).compileComponents();
 
@@ -79,6 +86,58 @@ describe('TopbarComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  // "Mesh Degraded" was a small line under the dashboard banner; this is on every page.
+  describe('the mesh indicator', () => {
+    const chip = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.topbar-mesh');
+    function health(next: MeshHealth | null): void {
+      meshHealth = next;
+      meshChanged$.next();
+      fixture.detectChanges();
+    }
+
+    it('says how many machines can be reached, and when changes to the mesh are paused', () => {
+      health({ state: 'degraded', reachable: 2, total: 4, needed: 3 });
+
+      expect(chip()?.textContent?.trim()).toBe('Mesh degraded · 2 of 4 machines');
+      expect(chip()?.classList).toContain('tone-danger');
+      expect(chip()?.title).toContain('Only 2 of 4 machines can be reached, and changes to the mesh need 3.');
+    });
+
+    it('says when every machine can be reached, or only some while the mesh can still agree', () => {
+      health({ state: 'healthy', reachable: 4, total: 4, needed: 3 });
+      expect(chip()?.textContent?.trim()).toBe('Mesh · 4 of 4 machines');
+      expect(chip()?.classList).toContain('tone-success');
+
+      health({ state: 'partial', reachable: 3, total: 4, needed: 3 });
+      expect(chip()?.textContent?.trim()).toBe('Mesh · 3 of 4 machines');
+      expect(chip()?.classList).toContain('tone-warning');
+      expect(chip()?.title).toContain('1 machine cannot be reached');
+    });
+
+    it('says when this machine is reconnecting, or the others removed it', () => {
+      health({ state: 'reconnecting', reachable: 0, total: 0, needed: 0 });
+      expect(chip()?.textContent?.trim()).toBe('Mesh reconnecting');
+
+      health({ state: 'removed', reachable: 1, total: 2, needed: 2 });
+      expect(chip()?.textContent?.trim()).toBe('Removed from the mesh');
+      expect(chip()?.classList).toContain('tone-danger');
+    });
+
+    it('is not shown outside a mesh', () => {
+      health(null);
+
+      expect(chip()).toBeNull();
+    });
+
+    it('opens Settings at the Mesh page', () => {
+      health({ state: 'degraded', reachable: 2, total: 4, needed: 3 });
+
+      chip()!.click();
+
+      expect(settingsDrawer.open).toHaveBeenCalledWith('mesh');
+    });
   });
 
   it('shows the name the auth service gives, with the role for a web session', async () => {
@@ -211,6 +270,23 @@ describe('TopbarComponent', () => {
     });
     expect(component.userRole).toBe('Server Manager');
     expect(component.canSignOut).toBeTrue();
+  });
+
+  // In a mesh the desktop signs in to an account, and the menu said there was nothing to sign out of.
+  it('offers Sign out on the desktop while a mesh account is signed in, and only then', async () => {
+    component.isWebMode = false;
+    identity$.next({ user: null, isLocalDesktop: true, isAdmin: true, permissions: [], accountsInUse: false });
+    expect(component.canSignOut).toBeFalse();
+
+    identity$.next({
+      user: { username: 'ann', displayName: 'Ann', roleName: 'Operator' },
+      isLocalDesktop: true, isAdmin: false, permissions: ['servers.view'], accountsInUse: true
+    });
+    expect(component.canSignOut).toBeTrue();
+
+    await component.logout();
+    expect(auth.logout).toHaveBeenCalled();
+    expect(router.navigate).toHaveBeenCalledWith(['/login']);
   });
 
   it('signs out through the auth service in web mode', async () => {

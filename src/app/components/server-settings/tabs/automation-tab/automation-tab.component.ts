@@ -8,6 +8,7 @@ import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/f
   selector: 'app-automation-tab',
   standalone: true,
   imports: [CommonModule, FormsModule, FieldMessagesComponent],
+  styleUrls: ['./automation-tab.component.scss'],
   templateUrl: './automation-tab.component.html'
 })
 export class AutomationTabComponent {
@@ -98,6 +99,42 @@ export class AutomationTabComponent {
 
   onSaveScheduledRestartSettings(): void {
     this.saveScheduledRestartSettings.emit();
+  }
+
+  /** Every time of day the server restarts at; older versions saved only one, as restartTime. */
+  get restartTimes(): string[] {
+    const times = this.serverInstance.restartTimes;
+    return times?.length ? times : [this.serverInstance.restartTime || '02:00'];
+  }
+
+  onRestartTimeChange(index: number, value: string): void {
+    const times = [...this.restartTimes];
+    times[index] = value;
+    this.setRestartTimes(times);
+  }
+
+  /** Another restart a day, twelve hours after the first to start with. */
+  onAddRestartTime(): void {
+    const [hours, minutes] = (this.restartTimes[0] || '02:00').split(':').map(Number);
+    const next = `${String(((hours || 0) + 12) % 24).padStart(2, '0')}:${String(minutes || 0).padStart(2, '0')}`;
+    this.setRestartTimes([...this.restartTimes, next]);
+    this.onSaveScheduledRestartSettings();
+  }
+
+  onRemoveRestartTime(index: number): void {
+    if (this.restartTimes.length < 2) return;
+    this.setRestartTimes(this.restartTimes.filter((_time, i) => i !== index));
+    this.onSaveScheduledRestartSettings();
+  }
+
+  trackByIndex(index: number): number {
+    return index;
+  }
+
+  /** The first time is restartTime too, which older versions read. */
+  private setRestartTimes(times: string[]): void {
+    this.serverInstance.restartTimes = times;
+    this.serverInstance.restartTime = times[0];
   }
 
   onValidateField(key: string, value: unknown): void {

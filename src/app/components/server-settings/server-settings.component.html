@@ -12,13 +12,13 @@
         <input type="checkbox" class="toggle-switch" [checked]="expertMode" (change)="toggleExpertMode($event)" tabindex="0" />
         <span class="toggle-text">Expert Mode</span>
       </label>
-      <button class="btn btn-ghost btn-sm" (click)="onImportConfig($event)" [disabled]="isLocked" title="Import settings from an INI file">
+      <button class="btn btn-ghost btn-sm" *ngIf="!unreachable" (click)="onImportConfig($event)" [disabled]="isLocked" title="Import settings from an INI file">
         <i class="material-icons">file_upload</i> Import
       </button>
       <button class="btn btn-ghost btn-sm" (click)="onExportConfig($event)" title="Export server configuration as ZIP">
         <i class="material-icons">file_download</i> Export
       </button>
-      <button class="btn btn-ghost btn-sm" (click)="onOpenCopyConfig($event)" [disabled]="isLocked" title="Copy settings from another server">
+      <button class="btn btn-ghost btn-sm" *ngIf="!unreachable" (click)="onOpenCopyConfig($event)" [disabled]="isLocked" title="Copy settings from another server">
         <i class="material-icons">content_copy</i> Copy from
       </button>
       <button *ngIf="isElectron" class="btn btn-ghost btn-sm" (click)="onOpenDirectory($event)" title="Open server directory">
@@ -26,7 +26,25 @@
       </button>
     </div>
   </div>
-  <div class="settings-body">
+  <div class="ark-install-notice warning server-ports-closed" *ngIf="serverPortsClosed" role="status">
+    <i class="material-icons">shield</i>
+    <span>Windows Firewall is not open for this machine's server ports yet. Windows will ask about each new server, and players may not get in.</span>
+    <button type="button" class="btn btn-sm" (click)="openServerPortsSettings()">Open server ports</button>
+  </div>
+  <!-- Saved while it runs: ARK reads its settings as it starts. -->
+  <div class="ark-install-notice settings-pending" *ngIf="pendingKeys.size" role="status">
+    <i class="material-icons">update</i>
+    <span>{{ pendingKeys.size }} {{ pendingKeys.size === 1 ? 'setting' : 'settings' }} saved since the server started take effect at its next restart.</span>
+    <button type="button" class="btn btn-sm" (click)="restartRequested.emit()">Restart</button>
+  </div>
+  <div class="ark-install-notice warning settings-unreachable" *ngIf="unreachable">
+    <i class="material-icons">cloud_off</i>
+    <span>
+      The machine that runs {{ serverInstance?.name || 'this server' }} cannot be reached, so its settings cannot be changed.
+      They can be once that machine answers again.
+    </span>
+  </div>
+  <div class="settings-body" *ngIf="!unreachable">
 
     <app-ini-editor
       *ngIf="isInIniTab"
@@ -35,6 +53,7 @@
     </app-ini-editor>
 
     <app-general-tab
+      [pendingKeys]="pendingKeys"
       *ngIf="activeTab === 'general'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
@@ -50,6 +69,7 @@
     </app-general-tab>
 
     <app-rates-tab
+      [pendingKeys]="pendingKeys"
       *ngIf="activeTab === 'rates'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
@@ -61,6 +81,7 @@
     </app-rates-tab>
 
     <app-structures-tab
+      [pendingKeys]="pendingKeys"
       *ngIf="activeTab === 'structures'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
@@ -86,6 +107,7 @@
     </app-stat-multipliers-tab>
 
     <app-misc-tab
+      [pendingKeys]="pendingKeys"
       *ngIf="activeTab === 'misc'"
       [serverInstance]="serverInstance"
       [isLocked]="isLocked"
@@ -103,6 +125,7 @@
       [isElectron]="isElectron"
       [fieldErrors]="fieldErrors"
       [fieldWarnings]="fieldWarnings"
+      [transferNote]="transferNote"
       (saveSettings)="settingsChanged.emit()"
       (validateField)="validateField($event.key, $event.value)"
       (testConnectivity)="testClusterConnectivity()">
@@ -147,6 +170,8 @@
       (restoreBackup)="restoreBackup.emit($event)"
       (downloadBackup)="downloadBackup.emit($event)"
       (deleteBackup)="deleteBackup.emit($event)"
+      [serverId]="serverInstance?.id || null"
+      (backupsChanged)="backupsChanged.emit()"
       (validateField)="validateField($event.key, $event.value)"
       (toggleBackupFrequencyDropdown)="toggleBackupFrequencyDropdown()"
       (toggleBackupDayDropdown)="toggleBackupDayDropdown()">

@@ -11,7 +11,8 @@ import * as instanceUtils from '../../utils/ark/instance.utils';
 import { BackupImportService } from './backup-import.service';
 
 jest.mock('../../utils/global-config.utils', () => ({ loadGlobalConfig: jest.fn() }));
-jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn() }));
+// A new server takes its ports from this machine's ranges, which come from Docker when it runs there.
+jest.mock('../../utils/platform.utils', () => ({ getDefaultInstallDir: jest.fn(), isRunningInDocker: jest.fn(() => false) }));
 
 const { loadGlobalConfig } = jest.requireMock('../../utils/global-config.utils') as { loadGlobalConfig: jest.Mock };
 
@@ -56,7 +57,7 @@ describe('BackupImportService (real fs)', () => {
     expect(imported.id).not.toBe('old-server');
     expect(imported).toMatchObject({ name: 'Alpha', sessionName: 'Alpha', gamePort: 7778 });
     const onDisk = JSON.parse(fs.readFileSync(path.join(serversDir, imported.id, 'config.json'), 'utf8'));
-    expect(onDisk).toEqual({ id: imported.id, name: 'Alpha', sessionName: 'Alpha', gamePort: 7778, sortOrder: 0 });
+    expect(onDisk).toEqual({ id: imported.id, name: 'Alpha', sessionName: 'Alpha', gamePort: 7778, sortOrder: 0, configRevision: 1 });
     expect(fs.readFileSync(path.join(serversDir, imported.id, 'SavedArks', 'TheIsland_WP', 'TheIsland_WP.ark'), 'utf8')).toBe('world');
     expect((await instanceUtils.getAllInstances()).map(instance => instance.id)).toEqual([imported.id]);
   });

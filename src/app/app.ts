@@ -9,6 +9,7 @@ import { NotificationService } from './core/services/notification.service';
 import { ThemeService } from './core/services/theme.service';
 import { ActivityService } from './core/services/activity.service';
 import { LiveServersService } from './core/services/live-servers.service';
+import { AuthService } from './core/services/auth.service';
 import { ServerInstance } from './core/models/server-instance.model';
 import { ConnectionLostComponent } from './components/connect-lost/connection-lost.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
@@ -16,6 +17,9 @@ import { ModalComponent } from './components/modal/modal.component';
 import { TopbarComponent } from './components/topbar/topbar.component';
 import { SettingsPageComponent } from './pages/settings/settings.component';
 import { TooltipHostComponent } from './components/tooltip/tooltip-host.component';
+import { BusyOverlayComponent } from './components/busy-overlay/busy-overlay.component';
+import { WindowControlsComponent } from './components/window-controls/window-controls.component';
+import { BusyService } from './core/services/busy.service';
 
 export type ExitAction = 'shutdown' | 'exit' | 'cancel';
 
@@ -24,7 +28,7 @@ const FIRST_CONNECT_GRACE_MS = 5000;
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent],
+  imports: [RouterOutlet, SidebarComponent, TopbarComponent, ConnectionLostComponent, NgIf, NgForOf, ModalComponent, SettingsPageComponent, TooltipHostComponent, BusyOverlayComponent, WindowControlsComponent],
   templateUrl: './app.html'
 })
 export class App implements OnInit, OnDestroy {
@@ -43,6 +47,9 @@ export class App implements OnInit, OnDestroy {
   private stopListeningForClose: (() => void) | null = null;
   private connectTimeout: ReturnType<typeof setTimeout> | undefined;
   private everConnected = false;
+  private identitySub: Subscription | null = null;
+  /** The desktop app has heard who is signed in. */
+  private identityKnown = false;
 
   constructor(
     private cdr: ChangeDetectorRef,
@@ -50,6 +57,9 @@ export class App implements OnInit, OnDestroy {
     private ipc: IpcService,
     private serverLifecycle: ServerLifecycleService,
     private router: Router,
+    private auth: AuthService,
+    /** While something is under way the app is inert behind the busy overlay. */
+    readonly busy: BusyService,
     // Eagerly instantiate NotificationService for global notifications
     _notification: NotificationService,
     // Eagerly instantiate ThemeService so the theme applies and keeps following the OS
@@ -75,7 +85,16 @@ export class App implements OnInit, OnDestroy {
     this.isLoginPage = this.router.url === '/login';
 
     if (this.isElectron) {
-      this.stopListeningForClose = this.ipc.on('app-close-request', () => this.onCloseRequested());
+      this.identitySub = this.auth.identity$.subscribe(() => {
+        this.routeForMeshSignIn();
+        this.cdr.markForCheck();
+      });
+      void this.auth.whenReady().then(() => {
+        this.identityKnown = true;
+        this.routeForMeshSignIn();
+        this.cdr.detectChanges();
+      });
+      this.stopListeningForClose = this.ipc.on('app-close-request', (_event, request) => this.onCloseRequested(request));
       return;
     }
 
@@ -119,7 +138,7 @@ export class App implements OnInit, OnDestroy {
 
     if (action === 'shutdown') {
       this.shuttingDown = true;
-      await this.serverLifecycle.shutdownAllServers()
+      await this.serverLifecycle.shutdownServers(this.runningServers)
         .catch(error => console.error('[app] Stopping servers before exit failed:', error));
     }
 
@@ -131,9 +150,33 @@ export class App implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.connectionSub?.unsubscribe();
     this.unauthorizedSub?.unsubscribe();
+    this.identitySub?.unsubscribe();
     this.stopListeningForClose?.();
     clearTimeout(this.connectTimeout);
     window.removeEventListener('resize', this.onWindowResize);
+  }
+
+  /**
+   * The app itself, with its sidebar and settings, only once access is confirmed. The desktop
+   * waits to hear who is signed in: on a mesh member that is nobody until a mesh account signs
+   * in. The web UI waits for its socket, which the server opens only with a session it accepts.
+   */
+  get showApp(): boolean {
+    if (this.isLoginPage) return false;
+    if (this.isElectron) return this.identityKnown && !this.auth.needsMeshSignIn;
+    return !this.connecting && !this.connectionLost;
+  }
+
+  /** Until then, a loading page and nothing else. */
+  get showLoading(): boolean {
+    if (this.isLoginPage) return false;
+    return this.isElectron ? !this.showApp : this.connecting;
+  }
+
+  /** A joined mesh has no implicit desktop admin. Leave the shell until someone signs in. */
+  private routeForMeshSignIn(): void {
+    if (!this.auth.needsMeshSignIn || this.router.url.startsWith('/login')) return;
+    void this.router.navigate(['/login']);
   }
 
   onServerSelected(server: ServerInstance) {
@@ -156,11 +199,18 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
-  private onCloseRequested(): void {
+  /**
+   * Main names the servers with a process on this machine. Only those are asked about and
+   * stopped: in a mesh the roster lists every machine's servers, and quitting here must not stop
+   * servers another machine runs.
+   */
+  private onCloseRequested(request?: unknown): void {
     // Main repeats an unanswered request. During a shutdown the servers still stopping no longer
     // count as running, so answering again would let main exit while they save.
     if (this.shuttingDown || this.showExitModal) return;
-    this.runningServers = this.serverLifecycle.runningServers();
+    const runningHere = (request as { runningHere?: unknown } | null | undefined)?.runningHere;
+    const ids = Array.isArray(runningHere) ? runningHere.filter((id): id is string => typeof id === 'string') : [];
+    this.runningServers = this.serverLifecycle.serversRunningHere(ids);
     if (this.runningServers.length > 0) {
       this.showExitModal = true;
     } else {

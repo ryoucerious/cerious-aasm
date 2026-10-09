@@ -1,9 +1,13 @@
 import { messagingService } from '../services/messaging.service';
 import { installService } from '../services/install.service';
 import type { ServerInstallProgress } from '../services/server-installer.service';
+import { serverProcessService } from '../services/server-instance/server-process.service';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
+}));
+jest.mock('../services/server-instance/server-process.service', () => ({
+  serverProcessService: { getActiveInstanceIds: jest.fn(() => []) }
 }));
 jest.mock('../services/install.service', () => ({
   installService: { checkInstallRequirements: jest.fn(), installComponent: jest.fn(), cancelInstallation: jest.fn() }
@@ -61,6 +65,16 @@ describe('install-handler', () => {
   });
 
   describe('install', () => {
+    // Only the page checked this; SteamCMD replaced files a running server had open.
+    it('will not update the ARK files while a server on this machine is up', async () => {
+      jest.mocked(serverProcessService.getActiveInstanceIds).mockReturnValueOnce(['isle']);
+
+      await handlers['install']({ target: 'server', requestId: 'r9' }, sender);
+
+      expect(mockInstall.installComponent).not.toHaveBeenCalled();
+      expect(replies('install')).toEqual([expect.objectContaining({ data: expect.objectContaining({ error: 'Stop this machine\'s servers before installing or updating ARK.' }) })]);
+    });
+
     it('forwards each progress report with the requestId, then the result', async () => {
       const step: ServerInstallProgress = { phasePercent: 40, step: 'ark-download', message: 'Downloading', phase: 'ark-download', overallPhase: 'Installing' };
       mockInstall.installComponent.mockImplementation(async (_target, progress) => {

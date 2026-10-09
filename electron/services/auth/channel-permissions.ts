@@ -45,6 +45,12 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   // Reads every signed-in user needs
   'get-system-info': null,
   'get-log-file-path': null,
+  'get-run-at-startup': PERMISSIONS.SETTINGS_VIEW,
+  'set-run-at-startup': PERMISSIONS.SETTINGS_MANAGE,
+  'get-server-ports': PERMISSIONS.SETTINGS_VIEW,
+  // Narrowed in the handler: settings.manage, or the Machine Admin of the machine.
+  'set-server-ports': PERMISSIONS.SETTINGS_VIEW,
+  'open-server-ports-firewall': PERMISSIONS.SETTINGS_VIEW,
   'get-host-resources': null,
   'get-player-history': null,
   'check-firewall-enabled': null,
@@ -69,6 +75,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'force-stop-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
   'start-all-instances': PERMISSIONS.SERVERS_CONTROL,
   'stop-all-instances': PERMISSIONS.SERVERS_CONTROL,
+  'restart-all-instances': PERMISSIONS.SERVERS_CONTROL,
+  'cancel-restart-all': PERMISSIONS.SERVERS_CONTROL,
   'connect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
   'disconnect-rcon': byId(PERMISSIONS.SERVERS_CONTROL),
 
@@ -105,6 +113,10 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
   'get-scheduler-status': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
   'download-backup': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'get-backup-copy': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'fetch-backup-copy': byInstanceId(PERMISSIONS.BACKUPS_RESTORE),
+  'list-held-backup-copies': PERMISSIONS.BACKUPS_VIEW,
+  'restore-backup-copy': PERMISSIONS.SERVERS_CREATE,
   'create-backup': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
   'save-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
   'start-backup-scheduler': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
@@ -171,7 +183,43 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'delete-role': PERMISSIONS.USERS_MANAGE,
   // Reading your own identity is not a privilege; every signed-in user needs it.
   'get-current-user': null,
-  'change-own-password': null
+  'change-own-password': null,
+
+  // Mesh. get-mesh-status and mesh-login are also allowed for a desktop window that has not
+  // signed in yet; see authorizeChannel. Unknown channels stay admin-only.
+  'get-mesh-status': null,
+  'mesh-login': null,
+  'mesh-logout': null,
+  'mesh-bootstrap-admin': null,
+  'create-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'join-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'create-enrollment-token': PERMISSIONS.NODES_ENROLL,
+  'remove-mesh-node': PERMISSIONS.NODES_REMOVE,
+  // Below quorum: machines that cannot be reached taken out by the rest, or this one leaving alone.
+  'force-remove-mesh-nodes': PERMISSIONS.NODES_REMOVE,
+  'leave-mesh-anyway': PERMISSIONS.NODES_REMOVE,
+  'get-mesh-nodes': PERMISSIONS.NODES_VIEW,
+  'set-node-maintenance': PERMISSIONS.NODES_MANAGE,
+  'rename-mesh-node': PERMISSIONS.NODES_MANAGE,
+  'set-mesh-node-address': PERMISSIONS.NODES_MANAGE,
+  'create-cluster': PERMISSIONS.CLUSTERS_MANAGE,
+  'get-clusters': PERMISSIONS.CLUSTERS_VIEW,
+  'rename-cluster': PERMISSIONS.CLUSTERS_MANAGE,
+  'delete-cluster': PERMISSIONS.CLUSTERS_MANAGE,
+  'set-cluster-upload-notices': PERMISSIONS.CLUSTERS_MANAGE,
+  'validate-cluster-storage': PERMISSIONS.CLUSTERS_STORAGE_MANAGE,
+  'move-server': byServerId(PERMISSIONS.SERVERS_MOVE),
+  'suggest-placement': PERMISSIONS.SERVERS_CREATE,
+  'mesh-diagnostics': PERMISSIONS.MESH_VIEW,
+  'mesh-wireguard': PERMISSIONS.MESH_CONFIGURE,
+  'mesh-wireguard-apply': PERMISSIONS.MESH_CONFIGURE,
+  'mesh-node-update': PERMISSIONS.APP_INSTALL,
+  'backup-mesh': PERMISSIONS.MESH_CONFIGURE,
+  'restart-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
+  'cancel-server-restart': byId(PERMISSIONS.SERVERS_CONTROL),
+  'get-pending-restarts': PERMISSIONS.SERVERS_VIEW,
+  'get-started-config': byId(PERMISSIONS.SERVERS_CONFIGURE),
+  'get-mesh-audit': PERMISSIONS.MESH_VIEW
 };
 
 function ruleFor(channel: string): ChannelRule | undefined {

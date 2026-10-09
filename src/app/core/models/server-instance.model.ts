@@ -212,7 +212,16 @@ export interface ServerInstance {
   disableImprinting?: boolean;
 
   // Cluster functionality
-  clusterId?: string; // ID of the cluster this server belongs to
+  /**
+   * The cluster chosen in Settings → Clusters. When set, its ID and this machine's folder for it
+   * are used, and clusterId and clusterDirOverride are not.
+   */
+  clusterRef?: string | null;
+  clusterId?: string; // ARK cluster id string passed as -ClusterId
+  /** Monotonic configuration revision. */
+  configRevision?: number;
+  /** Hosting mesh node. Absent when this install is not in a mesh. */
+  nodeId?: string;
   clusterName?: string; // Name of the cluster (for display purposes)
   clusterOrder?: number; // Order in which this server should start within the cluster (0-based)
   clusterRole?: 'primary' | 'secondary' | 'backup'; // Role of this server within the cluster
@@ -238,7 +247,8 @@ export interface ServerInstance {
   maxRestartAttempts?: number; // Max restart attempts before giving up
   scheduledRestartEnabled?: boolean; // Enable scheduled restarts
   restartFrequency?: 'none' | 'daily' | 'weekly' | 'custom'; // How often to restart
-  restartTime?: string; // Time to restart (HH:MM format)
+  restartTime?: string; // Time to restart (HH:MM format); the first of restartTimes
+  restartTimes?: string[]; // Every time of day to restart (HH:MM); unset in older versions
   restartDays?: number[]; // Days of week to restart (0=Sunday, 1=Monday, etc.)
   restartWarningMinutes?: number; // Minutes to warn players before restart
 
@@ -302,6 +312,8 @@ export interface SaveInstanceResult {
 export interface InstanceStateEvent {
   instanceId?: string;
   state?: string;
+  /** Sent with a running state by the node hosting a server elsewhere in a mesh. */
+  startedAt?: number;
 }
 
 export interface InstancePlayersEvent {

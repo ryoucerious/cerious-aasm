@@ -113,6 +113,24 @@ Authentication can also be set with `AASM_AUTH_ENABLED=true`, `AASM_USERNAME`, a
      `~/.local/share/cerious-aasm/steamcmd` (Linux)
    - Restart the application
 
+## ARK Updates
+
+An update (Settings → Mesh, Update ARK, or automatic updates) first copies the install's game
+files to `AASMServer-update`, a folder beside the install, and downloads the update into that
+copy while every server keeps running. Only once the new build is there are players warned,
+the servers stopped, the changed files moved into the install and the servers started again.
+`ShooterGame/Saved`, where every server's worlds, configs and clusters live, is never copied or
+touched.
+
+- **The update failed, or found the same build**: no server was stopped. The status on the
+  machine's card in Settings → Mesh says why, and the copy is removed.
+- **"Not enough free disk space to download the update beside the install"** (in the log): the
+  volume holding the install needs room for a second copy of the game files, plus a tenth. Without
+  it the update runs the way it used to: the servers stop first and SteamCMD updates the install
+  in place.
+- **A folder named `AASMServer-update` is left over**: an update was interrupted. The next update
+  removes it, or delete it yourself while no update is running.
+
 ## Ports
 
 ### Players Can't Connect

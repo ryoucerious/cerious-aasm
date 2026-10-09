@@ -27,7 +27,7 @@
         <thead>
           <tr>
             <th>Player Name</th>
-            <th>Steam ID</th>
+            <th>Player ID</th>
             <th style="text-align: right;">Actions</th>
           </tr>
         </thead>
@@ -47,9 +47,9 @@
           </tr>
           <tr *ngFor="let player of players" class="table-row">
             <td class="player-name">{{ player.name }}</td>
-            <td class="player-id">{{ player.steamId }}</td>
+            <td class="player-id">{{ player.playerId }}</td>
             <td class="player-actions">
-              <button class="btn btn-sm btn-ghost" (click)="copySteamId(player.steamId)" title="Copy Steam ID">
+              <button class="btn btn-sm btn-ghost" (click)="copyPlayerId(player.playerId)" title="Copy player ID">
                 <i class="material-icons">content_copy</i>
               </button>
             </td>

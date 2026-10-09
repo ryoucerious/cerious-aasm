@@ -14,12 +14,17 @@ import { ModalComponent } from '../../components/modal/modal.component';
 import { DrawerComponent } from '../../components/drawer/drawer.component';
 import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
+import { MeshSettingsComponent } from './mesh/mesh-settings.component';
+import { ClustersSettingsComponent } from './clusters/clusters-settings.component';
+import { HeldBackupCopiesComponent } from './backup-copies/held-backup-copies.component';
+import { ServerPortsSettingsComponent } from './server-ports/server-ports-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
 import { environment } from '../../../environments/environment';
 import { ThemeService, ThemePreference } from '../../core/services/theme.service';
 import { GlobalConfig } from '../../core/interfaces/global-config.interface';
 import { isBusyStatus } from '../../core/utils/server-status';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 
 /** The folder picker is a native dialog: the reply comes only once the user has chosen. */
 const DIRECTORY_DIALOG_TIMEOUT_MS = 10 * 60_000;
@@ -90,7 +95,7 @@ interface SystemInfoReply {
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent],
+  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent, ClustersSettingsComponent, ServerPortsSettingsComponent, HeldBackupCopiesComponent],
   templateUrl: './settings.component.html'
 })
 export class SettingsPageComponent implements OnInit {
@@ -156,6 +161,7 @@ export class SettingsPageComponent implements OnInit {
 
   private readonly settingsDrawer = inject(SettingsDrawerService);
   private readonly auth = inject(AuthService);
+  private readonly listPreferences = inject(ServerListPreferencesService);
   private readonly webSocket = inject(WebSocketService);
   private readonly destroyRef = inject(DestroyRef);
   private installSub?: Subscription;
@@ -178,14 +184,25 @@ export class SettingsPageComponent implements OnInit {
       { id: 'servers', label: 'Server Defaults', icon: 'tune', group: 'Server' },
       { id: 'updates', label: 'Updates', icon: 'system_update_alt', group: 'Server' },
       { id: 'storage', label: 'Storage', icon: 'folder', group: 'Server' },
+      { id: 'clusters', label: 'Clusters', icon: 'device_hub', group: 'Server' },
       { id: 'profile', label: 'My Account', icon: 'account_circle', group: 'Access' },
       { id: 'users', label: 'Users & Roles', icon: 'group', group: 'Access' },
+      { id: 'mesh', label: 'Mesh', icon: 'hub', group: 'Access' },
       ...(this.isElectron ? [{ id: 'web-server' as const, label: 'Web Server', icon: 'cloud', group: 'Access' }] : []),
       { id: 'appearance', label: 'Appearance', icon: 'palette', group: 'Application' },
       { id: 'about', label: 'About', icon: 'info', group: 'Application' }
     ];
     this.buildTabGroups();
     this.destroyRef.onDestroy(() => this.installSub?.unsubscribe());
+  }
+
+  /** The server list in the sidebar groups each operator's servers together. Kept in this browser. */
+  get groupServersByOperator(): boolean {
+    return this.listPreferences.groupByOperator;
+  }
+
+  onGroupServersByOperatorChange(event: Event): void {
+    this.listPreferences.setGroupByOperator((event.target as HTMLInputElement).checked);
   }
 
   get activeTabLabel(): string {
@@ -251,7 +268,46 @@ export class SettingsPageComponent implements OnInit {
     this.settingsDrawer.close();
   }
 
+  /** Whether this machine's app starts when someone logs in to it; null until the machine says. */
+  runAtStartup: { supported: boolean; enabled: boolean } | null = null;
+
+  onRunAtStartupChange(event: Event): void {
+    const box = event.target as HTMLInputElement;
+    const enabled = box.checked;
+    this.messaging.sendMessage<{ supported?: boolean; enabled?: boolean }>('set-run-at-startup', { enabled })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: reply => {
+          this.runAtStartup = { supported: !!reply?.supported, enabled: !!reply?.enabled };
+          // The box shows what the machine did: the click alone left it on when the change failed.
+          box.checked = this.runAtStartup.enabled;
+          if (this.runAtStartup.enabled !== enabled) {
+            this.notification.error('Could not change whether the app starts with this computer.', 'Startup');
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.notification.error('Could not change whether the app starts with this computer.', 'Startup');
+          this.loadRunAtStartup();
+        }
+      });
+  }
+
+  private loadRunAtStartup(): void {
+    this.messaging.sendMessage<{ supported?: boolean; enabled?: boolean }>('get-run-at-startup', {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: reply => {
+          this.runAtStartup = reply ? { supported: !!reply.supported, enabled: !!reply.enabled } : null;
+          this.cdr.markForCheck();
+        },
+        // The switch stays hidden.
+        error: () => undefined
+      });
+  }
+
   private loadSystemInfo(): void {
+    this.loadRunAtStartup();
     this.messaging.sendMessage<SystemInfoReply>('get-system-info', {}).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: info => {
         this.backendNodeVersion = info?.nodeVersion || null;
@@ -461,7 +517,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   getAppVersion() {
-    return environment.version || '1.2.2';
+    return environment.version || '1.3.0';
   }
 
   getPlatform() {

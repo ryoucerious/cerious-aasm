@@ -12,6 +12,8 @@ import { IpcService } from '../../core/services/ipc.service';
 import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
 import { ServerInstance } from '../../core/models/server-instance.model';
 import { GlobalConfig } from '../../core/interfaces/global-config.interface';
+import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
+import { AuthService } from '../../core/services/auth.service';
 
 describe('SettingsPageComponent', () => {
   let component: SettingsPageComponent;
@@ -90,7 +92,7 @@ describe('SettingsPageComponent', () => {
   it('groups the rail by area, keeping tab order', () => {
     expect(component.tabGroups.map(g => g.name)).toEqual(['Server', 'Access', 'Application']);
     expect(component.tabGroups[0].tabs.map(t => t.id))
-      .toEqual(['server-installation', 'servers', 'updates', 'storage']);
+      .toEqual(['server-installation', 'servers', 'updates', 'storage', 'clusters']);
   });
 
   it('should set activeTab on selectTab()', () => {
@@ -235,6 +237,97 @@ describe('SettingsPageComponent', () => {
     expect(component.webServerPort).toBe(8080);
     expect(component.autoUpdateArkServer).toBeTrue();
     expect(component.serverStartDelaySeconds).toBe(30);
+  });
+
+  // Moved here from the server list, which now groups only by the machines of a mesh.
+  it('switches grouping the server list by operator, for this browser', () => {
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
+    fixture.detectChanges();
+    TestBed.inject(SettingsDrawerService).open('servers');
+    fixture.detectChanges();
+    const toggle = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.server-list-group-by-operator')!;
+    expect(toggle.checked).toBeFalse();
+
+    toggle.click();
+    fixture.detectChanges();
+
+    expect(TestBed.inject(ServerListPreferencesService).groupByOperator).toBeTrue();
+    expect(localStorage.getItem('aasm.sidebar.groupByOperator')).toBe('1');
+    localStorage.removeItem('aasm.sidebar.groupByOperator');
+  });
+
+  // Bare text beside a link inside a flex row became three narrow columns, each wrapping on its own.
+  it('keeps each Authentication notice to one line of text beside its icon', () => {
+    ipc.isElectron = true;
+    create();
+    fixture.detectChanges();
+    TestBed.inject(SettingsDrawerService).open('web-server');
+    config.config$.next({ authenticationEnabled: true });
+    fixture.detectChanges();
+    const notices = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.settings-auth .ark-install-notice'));
+    const looseText = (notice: Element) => Array.from(notice.childNodes).some(child => child.nodeType === Node.TEXT_NODE && !!child.textContent?.trim());
+    const itemCount = (notice: Element) => notice.children.length;
+
+    expect(notices().length).withContext('no accounts yet').toBe(1);
+    expect(notices().map(looseText)).toEqual([false]);
+    expect(notices().map(itemCount)).toEqual([2]);
+
+    const auth = TestBed.inject(AuthService) as unknown as { identitySubject: BehaviorSubject<Record<string, unknown>> };
+    auth.identitySubject.next({ ...auth.identitySubject.value, accountsInUse: true });
+    fixture.detectChanges();
+
+    expect(notices()[0].textContent).toContain('Accounts are managed under');
+    expect(notices().map(looseText)).toEqual([false]);
+    expect(notices().map(itemCount)).toEqual([2]);
+  });
+
+  // After every reboot the app had to be started by hand, and the servers set to start with it too.
+  describe('starting with the computer', () => {
+    const toggle = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.run-at-startup input');
+
+    function openServerDefaults(reply: unknown): void {
+      replies['get-run-at-startup'] = reply;
+      ipc.isElectron = true;
+      create();
+      fixture.detectChanges();
+      TestBed.inject(SettingsDrawerService).open('servers');
+      fixture.detectChanges();
+    }
+
+    it('offers the switch where this machine can start the app, showing whether it does', () => {
+      openServerDefaults({ supported: true, enabled: true });
+
+      expect(toggle()?.checked).toBeTrue();
+      expect((fixture.nativeElement as HTMLElement).querySelector('.run-at-startup')?.textContent).toContain('Start Cerious AASM when this computer starts');
+    });
+
+    it('switches it, showing what the machine reports back', () => {
+      openServerDefaults({ supported: true, enabled: false });
+      replies['set-run-at-startup'] = { supported: true, enabled: true };
+
+      toggle()!.click();
+      fixture.detectChanges();
+
+      expect(sent('set-run-at-startup')).toEqual([['set-run-at-startup', { enabled: true }]]);
+      expect(toggle()!.checked).toBeTrue();
+    });
+
+    it('says so when the machine could not change it', () => {
+      openServerDefaults({ supported: true, enabled: false });
+      replies['set-run-at-startup'] = { supported: true, enabled: false };
+
+      toggle()!.click();
+      fixture.detectChanges();
+
+      expect(notification.error).toHaveBeenCalled();
+      expect(toggle()!.checked).toBeFalse();
+    });
+
+    it('is not offered where the app cannot start with the computer, such as in Docker', () => {
+      openServerDefaults({ supported: false, enabled: false });
+
+      expect(toggle()).toBeNull();
+    });
   });
 
   it('does not ask for the settings itself, since GlobalConfigService loads them when the connection is up', () => {

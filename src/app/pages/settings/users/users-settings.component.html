@@ -26,8 +26,7 @@
 
   <div class="dash-muted" *ngIf="loading">Loading accounts...</div>
 
-  <section class="settings-card users-table-card" *ngIf="!loading && view === 'users'">
-  <div class="users-table-wrap">
+  <ng-container *ngIf="!loading && view === 'users'">
     <div class="users-empty" *ngIf="!users.length">
       <i class="material-icons">group</i>
       <p>No accounts yet. Add one to let someone sign in to the web interface.</p>
@@ -36,52 +35,38 @@
       </button>
     </div>
 
-    <table class="data-table users-table accounts-table" *ngIf="users.length">
-      <thead>
-        <tr>
-          <th>User</th>
-          <th>Role</th>
-          <th>Pool</th>
-          <th>Status</th>
-          <th>Last sign-in</th>
-          <th class="users-actions">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr *ngFor="let user of users; trackBy: trackById" class="table-row">
-          <td>
-            <div class="user-cell">
-              <span class="user-avatar">{{ (user.displayName || user.username).charAt(0).toUpperCase() }}</span>
-              <span class="user-cell-text">
-                <span class="user-cell-name">{{ user.username }}</span>
-                <span class="user-cell-sub" *ngIf="user.cliLocked">Password is set on the command line</span>
-                <span class="user-cell-sub" *ngIf="user.displayName">{{ user.displayName }}</span>
-              </span>
-            </div>
-          </td>
-          <td>{{ roleName(user.roleId) }}</td>
-          <td class="pool-cell users-muted">{{ poolLabel(user) }}</td>
-          <td>
-            <span class="status-badge" [ngClass]="user.active ? 'status-running' : 'status-stopped'">
-              {{ user.active ? 'Active' : 'Disabled' }}
-            </span>
-          </td>
-          <td class="users-muted">{{ user.lastLoginAt ? (user.lastLoginAt | date:'short') : 'Never' }}</td>
-          <td class="users-actions">
-            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canEditAccount(user)" (click)="openEditUser(user)" title="Edit">
-              <i class="material-icons">edit</i>
-            </button>
-            <button type="button" class="btn btn-ghost btn-sm" *ngIf="canDeleteAccount(user)" (click)="requestDeleteUser(user)"
-                    [disabled]="user.id === currentUserId || user.cliLocked"
-                    [title]="user.cliLocked ? 'This account is provided by the command line' : (user.id === currentUserId ? 'You cannot delete your own account' : 'Delete')">
-              <i class="material-icons">delete</i>
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  </section>
+    <!-- A card each: the table squeezed six columns into the drawer. -->
+    <div class="user-card-list" *ngIf="users.length">
+      <article class="user-card" *ngFor="let user of users; trackBy: trackById">
+        <div class="user-card-top">
+          <span class="user-avatar">{{ (user.displayName || user.username).charAt(0).toUpperCase() }}</span>
+          <div class="user-card-who">
+            <h4 class="user-card-name">{{ user.username }}</h4>
+            <span class="user-card-display" *ngIf="user.displayName">{{ user.displayName }}</span>
+            <span class="user-card-note" *ngIf="user.cliLocked">Password is set on the command line</span>
+          </div>
+          <span class="status-badge user-card-status" [ngClass]="user.active ? 'status-running' : 'status-stopped'">
+            {{ user.active ? 'Active' : 'Disabled' }}
+          </span>
+        </div>
+        <dl class="user-card-facts">
+          <div class="user-card-fact"><dt>Role</dt><dd>{{ roleName(user.roleId) }}</dd></div>
+          <div class="user-card-fact"><dt>Pool</dt><dd class="user-card-pool">{{ poolLabel(user) }}</dd></div>
+          <div class="user-card-fact"><dt>Last sign-in</dt><dd>{{ user.lastLoginAt ? (user.lastLoginAt | date:'short') : 'Never' }}</dd></div>
+        </dl>
+        <div class="user-card-actions" *ngIf="canEditAccount(user) || canDeleteAccount(user)">
+          <button type="button" class="btn btn-ghost btn-sm" *ngIf="canEditAccount(user)" (click)="openEditUser(user)">
+            <i class="material-icons">edit</i> Edit
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" *ngIf="canDeleteAccount(user)" (click)="requestDeleteUser(user)"
+                  [disabled]="user.id === currentUserId || user.cliLocked"
+                  [title]="user.cliLocked ? 'This account is provided by the command line' : (user.id === currentUserId ? 'You cannot delete your own account' : '')">
+            <i class="material-icons">delete</i> Delete
+          </button>
+        </div>
+      </article>
+    </div>
+  </ng-container>
 
   <section class="settings-card users-table-card" *ngIf="!loading && view === 'roles'">
   <div class="users-table-wrap">
@@ -156,6 +141,18 @@
       <label class="form-control-label">Pool</label>
       <app-dropdown [options]="ownerOptions" [(ngModel)]="form.ownerUserId" [disabled]="saving" placeholder="Admin pool"></app-dropdown>
       <div class="form-control-label desc">The operator this account works for. An account in an operator's pool sees only that pool's servers.</div>
+    </div>
+    <div class="form-group" *ngIf="showMachineField">
+      <label class="form-control-label">Machine</label>
+      <app-dropdown [options]="machineOptions" [(ngModel)]="form.machineNodeId" [disabled]="saving" placeholder="Choose a machine..."></app-dropdown>
+      <div class="form-control-label desc">
+        The mesh machine this admin looks after: it runs, configures and updates the servers there. It sees every server, can move
+        servers between machines, and cannot add or remove machines.
+      </div>
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="form.updatesAnyMachine" [disabled]="saving" />
+        <span class="toggle-text">May update ARK and the app on every machine</span>
+      </label>
     </div>
     <div class="form-group">
       <label class="form-control-label toggle-label">

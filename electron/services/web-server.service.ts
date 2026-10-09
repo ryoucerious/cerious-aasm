@@ -3,6 +3,7 @@ import * as path from 'path';
 import { messagingService } from './messaging.service';
 import { settingsService } from './settings.service';
 import { userDatabaseService } from './auth/user-database.service';
+import { meshAuth, meshSignInRequired, onMeshSignInChanged } from './mesh/mesh-hooks';
 import * as globalConfigUtils from '../utils/global-config.utils';
 import { AuthenticatedUser, LEGACY_ADMIN_ID, ROLE_IDS, SessionUser } from '../types/auth.types';
 import type { ApiProcessSender, ChildToMainMessage, MainToChildMessage } from '../types/messaging.types';
@@ -28,6 +29,13 @@ export class WebServerService {
   private webServerStarting = false;
   private webServerPort = 3000;
   private commandLineLogin: WebServerAuthOptions | null = null;
+
+  constructor() {
+    // A child that is still starting hears it once it is ready.
+    onMeshSignInChanged(required => {
+      if (this.apiProcess && this.webServerRunning) sendToChild(this.apiProcess, { type: 'mesh-sign-in', required });
+    });
+  }
 
   /**
    * A headless run takes the web login from the command line for the rest of the process: every
@@ -62,6 +70,8 @@ export class WebServerService {
       // for every start: the GUI starts the server without authOptions and its logins use the
       // same database.
       AASM_USER_DB: '1',
+      // A mesh member's web interface needs a mesh account from its first request.
+      AASM_MESH_SIGN_IN: meshSignInRequired() ? '1' : '0',
       ELECTRON_RUN_AS_NODE: '1',
       PORT: String(port)
     };
@@ -104,6 +114,9 @@ export class WebServerService {
             this.broadcastStatus();
             if (!this.commandLineLogin) {
               void this.sendGlobalLogin(child);
+            }
+            if (meshSignInRequired()) {
+              sendToChild(child, { type: 'mesh-sign-in', required: true });
             }
             settle({ success: true, message: message.message, port: message.port });
             break;
@@ -197,7 +210,55 @@ export class WebServerService {
   }
 
   private relayToBus(child: ChildProcess, message: Extract<ChildToMainMessage, { type: 'messaging-event' }>): void {
-    const { user, authEnabled, accountGone } = this.resolveIdentity(message.user, message.authEnabled !== false);
+    const mesh = meshAuth();
+    if (mesh?.enabled()) {
+      void this.relayMesh(child, message, mesh);
+      return;
+    }
+    // A member still reaching its mesh after a restart is checked against its own copy of the
+    // accounts, but sign-in stays on.
+    const { user, authEnabled, accountGone } = this.resolveLocal(message.user, meshSignInRequired() || message.authEnabled !== false);
+    this.dispatch(child, message, user, authEnabled, accountGone);
+  }
+
+  private async relayMesh(
+    child: ChildProcess,
+    message: Extract<ChildToMainMessage, { type: 'messaging-event' }>,
+    mesh: NonNullable<ReturnType<typeof meshAuth>>
+  ): Promise<void> {
+    const claimed = message.user;
+    // Never off in a mesh: a child that has not yet heard that sign-in is required would
+    // otherwise hand an anonymous client the owner's rights over every node.
+    const authEnabled = true;
+    if (!claimed?.id || claimed.id === LEGACY_ADMIN_ID) {
+      const local = this.resolveLocal(claimed, authEnabled);
+      this.dispatch(child, message, local.user, local.authEnabled, local.accountGone);
+      return;
+    }
+    try {
+      const resolved = await mesh.resolve(claimed.id);
+      if (!resolved?.user.active) {
+        this.dispatch(child, message, null, true, true);
+        return;
+      }
+      if (typeof claimed.securityVersion === 'number' && claimed.securityVersion < resolved.securityVersion) {
+        this.dispatch(child, message, null, true, true);
+        return;
+      }
+      this.dispatch(child, message, resolved.user, authEnabled, false);
+    } catch (error) {
+      console.warn('[web-server] Could not resolve a mesh account; treating it as signed out:', error);
+      this.dispatch(child, message, null, true, false);
+    }
+  }
+
+  private dispatch(
+    child: ChildProcess,
+    message: Extract<ChildToMainMessage, { type: 'messaging-event' }>,
+    user: AuthenticatedUser | null,
+    authEnabled: boolean,
+    accountGone: boolean
+  ): void {
     const sender: ApiProcessSender = {
       type: 'api-process',
       cid: message.cid,
@@ -226,7 +287,7 @@ export class WebServerService {
    * role and permissions are read fresh, so a demotion, deactivation or deletion applies to the
    * next message rather than at the next sign-in.
    */
-  private resolveIdentity(
+  private resolveLocal(
     claimed: SessionUser | null | undefined,
     authEnabled: boolean
   ): { user: AuthenticatedUser | null; authEnabled: boolean; accountGone: boolean } {
@@ -234,6 +295,8 @@ export class WebServerService {
       return { user: null, authEnabled, accountGone: false };
     }
     if (claimed.id === LEGACY_ADMIN_ID) {
+      // In a mesh only mesh accounts sign in; the single login is this machine's alone.
+      if (meshSignInRequired()) return { user: null, authEnabled: true, accountGone: true };
       return { user: legacyAdmin(claimed.username), authEnabled, accountGone: false };
     }
     // Below, signed out means authentication on, so the client never falls back to the owner's rights.
@@ -252,7 +315,13 @@ export class WebServerService {
   private async verifyCredentialsForChild(child: ChildProcess, message: Extract<ChildToMainMessage, { type: 'auth-verify' }>): Promise<void> {
     let user: AuthenticatedUser | null = null;
     try {
-      user = await userDatabaseService.verifyCredentials(message.username, message.password);
+      const mesh = meshAuth();
+      user = mesh?.enabled()
+        ? await mesh.verify(message.username, message.password)
+        : await userDatabaseService.verifyCredentials(message.username, message.password);
+      // A member still reaching its mesh checks its own copy of the mesh accounts. An account set
+      // from the command line stays local to this machine, so it is not one of them.
+      if (user?.cliLocked && meshSignInRequired()) user = null;
     } catch (error) {
       console.error('[web-server] Credential check failed:', error);
     }

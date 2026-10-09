@@ -1,0 +1,346 @@
+<div class="mesh-settings settings-pane" *ngIf="status">
+  <div class="ark-install-notice" *ngIf="standalone">
+    <i class="material-icons">info</i>
+    <span>This install is standalone. Create a mesh on this machine, or join one with a token from a member.</span>
+  </div>
+  <div class="ark-install-notice warning mesh-blocker" *ngIf="standalone && status.blocker">
+    <i class="material-icons">error_outline</i>
+    <span><strong>This machine cannot run the mesh database, so it cannot create or join a mesh.</strong> {{ status.blocker }}</span>
+  </div>
+  <div class="ark-install-notice warning mesh-removed" *ngIf="status.enabled && status.removedFromMesh">
+    <i class="material-icons">person_remove</i>
+    <span>
+      <strong>The other machines removed this one from the mesh</strong> while it could not be reached, and they no longer take it.
+      Leave to make it standalone again: its servers stay here, and so do the accounts it knows. To come back, join again with a new token.
+    </span>
+    <button type="button" class="btn btn-danger btn-sm" (click)="askLeaveAnyway()">Leave</button>
+  </div>
+  <div class="ark-install-notice warning mesh-degraded" *ngIf="status.degraded && !status.removedFromMesh">
+    <i class="material-icons">warning</i>
+    <span>
+      <strong>Mesh Degraded.</strong> Only {{ machinesReachable }} of {{ machinesTotal }} machines can be reached, and changes to the mesh need
+      {{ quorumNeeded }}, so two halves of a split mesh can never both change it. Every machine's own servers can still be controlled.
+      Renaming, addresses, Skip new servers, adding or removing machines and accounts wait until then.
+      <ng-container *ngIf="canRemoveNodes && forceRemoveCandidates.length">A machine that is gone for good can be forced out from the ⋯ menu on its card.</ng-container>
+    </span>
+  </div>
+  <div class="ark-install-notice warning" *ngIf="status.warning && !status.removedFromMesh">
+    <i class="material-icons">info</i>
+    <span>{{ status.warning }}</span>
+  </div>
+  <div class="ark-install-notice mesh-joined-as" *ngIf="joinedAs && status.enabled">
+    <i class="material-icons">key</i>
+    <span>
+      The mesh's accounts are now the way in. This machine's admin password signs in as
+      <strong class="mono">{{ joinedAs }}</strong>, the machine admin for this machine.
+    </span>
+  </div>
+
+  <section class="settings-card mesh-own-address" *ngIf="standalone">
+    <h3 class="settings-card-title">How other machines reach this one</h3>
+    <p class="settings-card-hint" *ngIf="!otherAddress">
+      Other machines will reach this one at <strong>{{ addressText(status.advertise) }}</strong>, the address it has on its own network.
+    </p>
+    <div class="settings-card-actions" *ngIf="!otherAddress">
+      <button type="button" class="btn btn-ghost btn-sm" (click)="useOtherAddress()">Use another address</button>
+    </div>
+    <ng-container *ngIf="otherAddress">
+      <ng-container *ngTemplateOutlet="addressFields; context: { $implicit: ownAddress }"></ng-container>
+      <p class="settings-card-hint">
+        For machines outside this network, use your public IP address or a dynamic DNS name, and forward both TCP ports on your router to this machine.
+      </p>
+      <div class="settings-card-actions">
+        <button type="button" class="btn btn-ghost btn-sm" (click)="useOwnAddress()">Use this machine's own address</button>
+      </div>
+    </ng-container>
+  </section>
+
+  <section class="settings-card" *ngIf="standalone">
+    <h3 class="settings-card-title">Create a mesh</h3>
+    <p class="settings-card-hint">This machine becomes the first member. Other machines join it with an enrollment token.</p>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-create-name">Mesh name</label>
+      <input id="mesh-create-name" class="form-control" [(ngModel)]="createName" name="createName" />
+    </div>
+    <div class="form-group" *ngIf="needsAdminPassword">
+      <label class="form-control-label" for="mesh-admin-username">Admin username</label>
+      <input id="mesh-admin-username" class="form-control" [(ngModel)]="adminUsername" name="adminUsername" autocomplete="username" />
+    </div>
+    <div class="form-group" *ngIf="needsAdminPassword">
+      <label class="form-control-label" for="mesh-admin-password">Admin password</label>
+      <input id="mesh-admin-password" type="password" class="form-control" [(ngModel)]="adminPassword" name="adminPassword" autocomplete="new-password" />
+      <label class="form-control-label desc">At least 8 characters. This machine has no accounts yet, so this becomes the mesh admin.</label>
+    </div>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="create()" [disabled]="busy || !!status.blocker">
+        <i class="material-icons">hub</i> Create mesh
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="standalone">
+    <h3 class="settings-card-title">Join a mesh</h3>
+    <p class="settings-card-hint">On a machine already in the mesh, open Settings → Mesh and choose <strong>Enrollment token</strong>. Copy its join address and token here. Each token adds one machine.</p>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-member-url">Join address</label>
+      <input id="mesh-member-url" class="form-control" [(ngModel)]="memberUrl" name="memberUrl" placeholder="https://ark.example.com:4747"
+             autocomplete="off" spellcheck="false" />
+      <label class="form-control-label desc">https:// and port 4747 are filled in when left out.</label>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label" for="mesh-token">Enrollment token</label>
+      <input id="mesh-token" class="form-control" [(ngModel)]="token" name="token" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-primary" (click)="join()" [disabled]="busy || !!status.blocker">
+        <i class="material-icons">login</i> Join mesh
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="inMesh">
+    <div class="settings-card-head">
+      <div class="settings-card-head-text">
+        <h3 class="settings-card-title">{{ status.meshName || 'Mesh' }}</h3>
+        <p class="settings-card-hint">Each machine updates its own ARK install and its own app. Update one voting machine at a time. Leave returns this machine to standalone. Its servers stay here.</p>
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="canEnrollNodes" (click)="issueToken()" [disabled]="busy || status.degraded">
+        <i class="material-icons">key</i> Enrollment token
+      </button>
+    </div>
+    <div class="mesh-invite" *ngIf="issuedToken">
+      <p class="settings-card-hint">
+        On the machine joining, open Settings → Mesh, paste both into <strong>Join a mesh</strong>. This token adds <strong>one machine</strong>,
+        until {{ issuedUntil }}. Make another for each machine you add.
+      </p>
+      <div class="mesh-invite-row" *ngIf="joinAddress">
+        <span class="mesh-invite-label">Join address</span>
+        <code class="mesh-invite-value">{{ joinAddress }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="copy(joinAddress, 'Join address')">
+          <i class="material-icons">content_copy</i> Copy address
+        </button>
+      </div>
+      <div class="mesh-invite-row">
+        <span class="mesh-invite-label">Token</span>
+        <code class="mesh-invite-value">{{ issuedToken }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="copy(issuedToken, 'Token')">
+          <i class="material-icons">content_copy</i> Copy token
+        </button>
+      </div>
+    </div>
+    <p class="settings-card-hint" *ngIf="!nodes.length">No machines have joined yet.</p>
+    <div class="mesh-node-list" *ngIf="nodes.length">
+      <article class="mesh-node-card" *ngFor="let node of nodes; trackBy: trackByNodeId">
+        <div class="mesh-node-top">
+          <div class="mesh-node-identity">
+            <div class="mesh-node-title" *ngIf="renamingNodeId !== node.nodeId">
+              <h4 class="mesh-node-name">{{ node.name }}</h4>
+              <span class="mesh-node-tag" *ngIf="node.nodeId === status.nodeId">This machine</span>
+            </div>
+            <div class="mesh-node-rename-row" *ngIf="renamingNodeId === node.nodeId">
+              <input class="form-control mesh-node-rename-input" [(ngModel)]="renameText" name="renameText" maxlength="64"
+                     aria-label="Machine name" (keydown.enter)="saveRename(node)" (keydown.escape)="cancelRename()" />
+              <button type="button" class="btn btn-primary btn-sm mesh-node-rename-save" (click)="saveRename(node)">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRename()">Cancel</button>
+            </div>
+            <p class="mesh-node-meta">
+              <span>{{ versionText(node) }}</span>
+              <span class="mesh-node-address" *ngIf="node.address">{{ addressText(node.address) }}</span>
+              <span class="mesh-node-contact" *ngIf="contactText(node)">{{ contactText(node) }}</span>
+            </p>
+            <p class="mesh-node-meta mesh-node-ark-update" *ngIf="arkUpdateText(node)">{{ arkUpdateText(node) }}</p>
+            <p class="mesh-node-meta mesh-node-ports" *ngIf="portsText(node)">
+              <i class="material-icons" aria-hidden="true">warning_amber</i><span>{{ portsText(node) }}</span>
+            </p>
+          </div>
+          <div class="mesh-node-status">
+            <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
+            <!-- Occasional changes, kept off the card's face. -->
+            <div class="mesh-node-more-anchor">
+              <button type="button" class="btn btn-ghost btn-icon-only mesh-node-more" *ngIf="canManageNodes || canRemoveNodes" (click)="toggleMenu(node, $event)"
+                      title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuNodeId === node.nodeId">
+                <span class="material-icons">more_horiz</span>
+              </button>
+              <div class="card-menu mesh-node-menu" *ngIf="menuNodeId === node.nodeId" role="menu" (click)="$event.stopPropagation()">
+                <ng-container *ngIf="canManageNodes">
+                  <button type="button" class="card-menu-item" role="menuitem" [disabled]="status.degraded"
+                          (click)="closeMenu(); startRename(node)">
+                    <span class="material-icons">edit</span> Rename
+                  </button>
+                  <button type="button" class="card-menu-item" role="menuitem" [disabled]="status.degraded || savingAddress || !node.connected"
+                          (click)="closeMenu(); startAddress(node)">
+                    <span class="material-icons">lan</span> Change address
+                  </button>
+                  <div class="mesh-node-menu-divider" role="separator"></div>
+                </ng-container>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'remove'"
+                        [disabled]="status.degraded" (click)="closeMenu(); askRemove(node)">
+                  <span class="material-icons">{{ node.nodeId === status.nodeId ? 'logout' : 'link_off' }}</span> {{ node.nodeId === status.nodeId ? 'Leave' : 'Remove' }}
+                </button>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'force-remove'"
+                        (click)="closeMenu(); askForceRemove(node)">
+                  <span class="material-icons">link_off</span> Force remove
+                </button>
+                <button type="button" class="card-menu-item danger" role="menuitem" *ngIf="removeAction(node) === 'leave-anyway'"
+                        (click)="closeMenu(); askLeaveAnyway()">
+                  <span class="material-icons">logout</span> Leave anyway
+                </button>
+                <p class="mesh-node-menu-note" *ngIf="menuNote(node)">{{ menuNote(node) }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mesh-address-form" *ngIf="addressNodeId === node.nodeId">
+          <ng-container *ngTemplateOutlet="addressFields; context: { $implicit: addressForm }"></ng-container>
+          <p class="settings-card-hint">
+            For machines outside this network, use a public IP address or a dynamic DNS name, and forward both TCP ports on that machine's router to it.
+            Every other machine checks it can reach {{ node.name }} there before anything changes, then the mesh database moves. This can take a minute.
+          </p>
+          <div class="mesh-address-actions">
+            <button type="button" class="btn btn-primary btn-sm" (click)="saveAddress(node)" [disabled]="savingAddress">
+              {{ savingAddress ? 'Checking every machine can reach it…' : 'Save address' }}
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="cancelAddress()" [disabled]="savingAddress">Cancel</button>
+          </div>
+        </div>
+        <div class="mesh-node-actions">
+          <label class="toggle-label mesh-node-skip"
+                 [title]="quorumReason || 'When on, Auto-select and moves do not put servers on this machine. Its own servers keep running.'">
+            <input type="checkbox" class="toggle-switch" [checked]="node.maintenance" [disabled]="status.degraded || !canManageNodes"
+                   (change)="setSkipping(node, $event)" />
+            <span class="toggle-text">Skip new servers</span>
+          </label>
+          <div class="mesh-node-updates">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="askArkUpdate(node)"
+                    [disabled]="!canUpdate || !!updatingKey || !!arkUpdateBlock(node)"
+                    [title]="arkUpdateBlock(node)">
+              Update ARK
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="askAppUpdate(node)" [disabled]="!canUpdate || !!updatingKey || !!updateBlock(node)"
+                    [title]="updateBlock(node)">
+              Update app
+            </button>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="settings-card" *ngIf="inMesh">
+    <h3 class="settings-card-title">Reachability</h3>
+    <p class="settings-card-hint">Checks that this machine reaches each of the others on its connection port, and that their clocks agree.</p>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-ghost" (click)="diagnostics()">
+        <i class="material-icons">lan</i> Check reachability
+      </button>
+    </div>
+    <ul class="mesh-reachability" *ngIf="diagnosticLines.length">
+      <li *ngFor="let line of diagnosticLines">{{ line }}</li>
+    </ul>
+  </section>
+
+  <section class="settings-card" *ngIf="inMesh">
+    <h3 class="settings-card-title">WireGuard</h3>
+    <p class="settings-card-hint">Optional. Joining a mesh does not require WireGuard. Apply runs only when it is installed on this host.</p>
+    <div class="settings-card-actions">
+      <button type="button" class="btn btn-ghost" (click)="wireguard()">
+        <i class="material-icons">vpn_key</i> Show config
+      </button>
+      <button type="button" class="btn btn-primary" (click)="applyWireguard()" [disabled]="!wireguardText">
+        Apply on this host
+      </button>
+    </div>
+    <pre class="mesh-output" *ngIf="wireguardText">{{ wireguardText }}</pre>
+  </section>
+
+  <app-modal [title]="'Update ARK'" [show]="!!confirmingArkUpdate" [maxWidth]="'520px'" (close)="cancelArkUpdate()">
+    <div class="modal-confirmation">
+      Update ARK on {{ confirmingArkUpdate?.name }}? The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for that machine's warning time (Settings → Updates on that machine, 15 minutes unless changed), then its servers stop, the new files go in, and they start again.
+      If none of its servers is running, the update starts at once.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelArkUpdate()">Cancel</button>
+      <button type="button" class="btn btn-primary" (click)="confirmArkUpdate()">Update ARK</button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Update app'" [show]="!!confirmingAppUpdate" [maxWidth]="'520px'" (close)="cancelAppUpdate()">
+    <div class="modal-confirmation">
+      Update the app on {{ confirmingAppUpdate?.name }}? The new version downloads, then the app on {{ confirmingAppUpdate?.name }} restarts.
+      Any servers running there stop while it restarts, and players are not warned first.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelAppUpdate()">Cancel</button>
+      <button type="button" class="btn btn-primary" (click)="confirmAppUpdate()">Update app</button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Leave mesh'" [show]="showConfirmLeave" [maxWidth]="'520px'" (close)="cancelLeave()">
+    <div class="modal-confirmation">
+      Leave {{ status.meshName || 'this mesh' }}? This machine returns to standalone. Servers on it stay here.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelLeave()">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmLeave()">Leave</button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Force remove'" [show]="showForceRemove" [maxWidth]="'560px'" (close)="cancelForceRemove()">
+    <div class="modal-confirmation">
+      <p>
+        The mesh cannot agree to remove a machine while too few can be reached. Instead, every machine that stays and can be
+        reached takes a new member list without the ones ticked, and the mesh can agree again. Game servers keep running.
+      </p>
+      <div class="mesh-force-remove-choices">
+        <label class="toggle-label mesh-force-remove-choice" *ngFor="let node of forceRemoveCandidates; trackBy: trackByNodeId">
+          <input type="checkbox" [checked]="forceRemoveIds.has(node.nodeId)" [disabled]="forceRemoving" (change)="toggleForceRemove(node.nodeId, $event)" />
+          <span>{{ node.name }}</span>
+        </label>
+      </div>
+      <p class="mesh-force-remove-plan">
+        Leaves {{ forceRemovePlan.staying }} machines, {{ forceRemovePlan.reachable }} of which can be reached; they need {{ forceRemovePlan.needed }}.
+        <strong *ngIf="!forceRemovePlan.enough"> Still too few: tick more of the machines that cannot be reached.</strong>
+      </p>
+      <p class="warning-text">
+        Only do this for a machine that is gone for good. If it comes back, it is refused, and it has to leave and join again; its
+        servers stay on it.
+      </p>
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelForceRemove()" [disabled]="forceRemoving">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmForceRemove()" [disabled]="!forceRemovePlan.enough || forceRemoving">
+        {{ forceRemoving ? 'Removing…' : 'Force remove' }}
+      </button>
+    </div>
+  </app-modal>
+
+  <app-modal [title]="'Leave anyway'" [show]="showLeaveAnyway" [maxWidth]="'520px'" (close)="cancelLeaveAnyway()">
+    <div class="modal-confirmation">
+      Leave {{ status.meshName || 'this mesh' }} without the other machines? This machine returns to standalone; its servers and the
+      accounts it knows stay here. Unless they removed it already, the others still count this machine until they remove it.
+    </div>
+    <div class="action-group-modal">
+      <button type="button" class="btn" (click)="cancelLeaveAnyway()">Cancel</button>
+      <button type="button" class="btn btn-danger" (click)="confirmLeaveAnyway()">Leave anyway</button>
+    </div>
+  </app-modal>
+
+  <!-- An address: the host other machines dial, and the outside TCP ports. -->
+  <ng-template #addressFields let-form>
+    <div class="mesh-address-fields">
+      <div class="form-group mesh-address-host-group">
+        <label class="form-control-label">Address</label>
+        <input class="form-control mesh-address-host" [(ngModel)]="form.host" [ngModelOptions]="{ standalone: true }"
+               placeholder="203.0.113.5 or mesh.example.org" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Connection port</label>
+        <input type="number" class="form-control mesh-address-peer" [(ngModel)]="form.peerPort" [ngModelOptions]="{ standalone: true }" min="1" max="65535" />
+      </div>
+      <div class="form-group">
+        <label class="form-control-label">Database port</label>
+        <input type="number" class="form-control mesh-address-raft" [(ngModel)]="form.raftPort" [ngModelOptions]="{ standalone: true }" min="1" max="65535" />
+      </div>
+    </div>
+  </ng-template>
+</div>

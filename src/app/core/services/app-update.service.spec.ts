@@ -6,7 +6,7 @@ import { IpcService } from './ipc.service';
 
 describe('AppUpdateService', () => {
   let messaging: jasmine.SpyObj<MessagingService>;
-  let broadcasts: Subject<AppUpdateStatus>;
+  let channels: Record<string, Subject<AppUpdateStatus>>;
   let connected$: BehaviorSubject<boolean>;
 
   const create = (isElectron = false) => new AppUpdateService(
@@ -17,10 +17,10 @@ describe('AppUpdateService', () => {
   const statusRequests = () => messaging.sendNotification.calls.allArgs().filter(([channel]) => channel === 'get-app-update-status');
 
   beforeEach(() => {
-    broadcasts = new Subject<AppUpdateStatus>();
+    channels = {};
     connected$ = new BehaviorSubject(false);
     messaging = jasmine.createSpyObj('MessagingService', ['receiveMessage', 'sendNotification']);
-    messaging.receiveMessage.and.returnValue(broadcasts as any);
+    messaging.receiveMessage.and.callFake(((channel: string) => channels[channel] ??= new Subject<AppUpdateStatus>()) as any);
   });
 
   it('asks once at startup in the desktop app, which has no socket', () => {
@@ -49,8 +49,8 @@ describe('AppUpdateService', () => {
 
   it('keeps the latest status for a listener that comes late', () => {
     const service = create(true);
-    broadcasts.next({ status: 'available', version: '2.0.0' });
-    broadcasts.next(null as unknown as AppUpdateStatus);
+    channels['app-update-status'].next({ status: 'available', version: '2.0.0' });
+    channels['app-update-status'].next(null as unknown as AppUpdateStatus);
 
     expect(service.status).toEqual({ status: 'available', version: '2.0.0' });
   });
@@ -59,7 +59,7 @@ describe('AppUpdateService', () => {
     const service = create(false);
     service.ngOnDestroy();
 
-    broadcasts.next({ status: 'available' });
+    channels['app-update-status'].next({ status: 'available' });
     connected$.next(true);
 
     expect(service.status).toBeNull();
