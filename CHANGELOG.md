@@ -2,6 +2,55 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.3.0] - 2026-10-08
+
+The mesh. Several machines running Cerious AASM can now be joined and run as one: the servers on every machine are managed from any of them, a server moves to another machine in a few clicks, and a cluster spans machines without a shared folder. No machine is "the main one", and a machine that goes offline takes nothing down with it but its own servers. Every install, mesh or not, also gets ranges of server ports with Windows Firewall opened in one click, a Restart button and Restart All with in-game warnings, several scheduled restarts a day, and settings that can be changed while a server runs. The [Mesh guide](docs/MESH-GUIDE.md) covers all of it.
+
+> **Upgrading.**
+>
+> - Nothing about the mesh changes a standalone install until you create or join one. Every machine in a mesh has to run the same version.
+> - New servers take their ports from this machine's server ports (Settings → Server Defaults → Server Ports): 7777-7900 for game ports, 27015-27030 for query ports and 27020-27050 for RCON unless you change them, instead of ten ports up from the last server. Existing servers keep the ports they have, and any outside the ranges are listed on that card. On Windows, choose **Open in Windows Firewall** there once, so Windows stops asking about each new server.
+> - Docker: the Compose file publishes the mesh's two ports (4747 and 4002, TCP). Nothing listens on them until the container joins a mesh. Behind a reverse proxy, set `AASM_TRUST_PROXY` (see Security).
+> - On Windows, an app update now installs without the installer's windows and starts the app again by itself.
+
+### Security
+
+- **Trusted Reverse Proxies**: Behind a reverse proxy, the sign-in limiter saw the proxy's address for every client, so one person guessing a username could lock it out for everyone, and the session cookie was never marked `Secure` because the app never saw HTTPS itself. Set `AASM_TRUST_PROXY` to your proxy's address, a subnet, `loopback` or the number of proxies in front, and the app uses each client's real address and marks the cookie `Secure` when the proxy took HTTPS. `X-Forwarded-*` headers from anyone else are still ignored.
+- **Mesh Connections Are Encrypted and Checked**: Machines in a mesh talk over TLS with certificates from the mesh's own certificate authority, made when the mesh is created. A machine without one, or one the mesh removed, is refused. An enrollment token adds one machine and stops working after 15 minutes, and an account's password is stored again with Argon2id at its first sign-in to the mesh.
+
+### New Features & Improvements
+
+- **The Mesh**: Create a mesh on one machine in Settings → Mesh, then join others with an enrollment token made on any member. Windows, Linux and Docker installs can all join. Every machine runs the full app and its own ARK servers, keeps a copy of the mesh's list of machines, servers, accounts and clusters, and carries on running its servers whatever happens to the others. Changes to the whole mesh need more than half of its machines to agree, so three or more machines are recommended. A machine leaves with **Leave**, an Admin takes one out with **Remove**, and a mesh that lost machines for good can **Force remove** them so the rest can agree again.
+- **Servers on Every Machine**: Start, stop, the console, players, RCON, settings, INI files, mods, the cluster, ArkApi plugins, backups, the whitelist, and the Automation, Discord and Broadcasts pages all work for a server on another machine, from the app or the web interface on any member. Start All, Stop All and Restart All cover every machine. The sidebar groups servers by machine, the dashboard can filter by machine, and the servers of a machine that cannot be reached say **Unreachable** until it answers again.
+- **Choose the Machine for a New Server**: Add Server, Clone and Import from Backup have a **Machine** list. **Auto-select** picks the machine with the most free memory, disk and CPU and the fewest servers, skipping machines without ARK and those set to **Skip new servers**.
+- **Move a Server to Another Machine**: A stopped server moves with its settings, its saves, its whitelist and its INI files, custom lines included, with progress shown as it copies. A move that fails part way can carry on from where it stopped, and the old copy is kept for 14 days. Servers never move by themselves.
+- **Clusters Across Machines**: Settings → Clusters makes clusters any server in the mesh can join. The app keeps each cluster's transfer files on every machine over the mesh's own connection, so no shared folder is needed, and can tell a player privately when their upload has reached every machine in the cluster.
+- **Accounts and Roles Across the Mesh**: Accounts and roles are the same on every machine, and in a mesh the desktop app signs in with a mesh account too, with **Sign out** in its user menu. A joining machine's own admin password keeps working as a new **Machine Admin** account for that machine, which its sign-in page names. A Machine Admin runs the servers on their own machine, can move servers, and can update ARK and the app there.
+- **Machine Health**: A mesh indicator in the top bar, a card for each machine in Settings → Mesh (Connected or Unreachable, version, address, last contact, and a warning when Windows Firewall keeps players out), and a Machines card on the dashboard. **Check reachability** lists in plain words which machines answer, and which clocks are off. Machines can be renamed, and a machine's address can be changed once every other machine has checked it can reach it there.
+- **Update ARK and the App Machine by Machine**: Both are started from a machine's card, one machine at a time, so the servers on the others stay up. **Update ARK** is offered only for a machine whose ARK is behind Steam's latest build. Players on that machine are warned for its own warning time, and the card shows how the update is going.
+- **Backup Copies on Another Machine**: In a mesh, each new backup of a server is also kept on the machine with the most free disk, so the latest backup survives the loss of the server's own machine. The machine holding copies lists them under Settings → Storage and can restore any of them as a new server.
+- **Server Ports**: Each machine has ranges of game, query and RCON ports, in Settings → Server Defaults → Server Ports. New servers take the lowest free ports inside them, a port changed to one outside them is refused, and servers already outside them are listed. On Windows, **Open in Windows Firewall** adds the rules with one permission prompt and clears the blocks a cancelled Windows prompt left behind, so Windows no longer asks about each new server; the server page reminds you until it is done. On Linux the card shows the ufw and firewalld commands, and in Docker the ranges come from the Compose file. Each server's Firewall page now shows on Windows too, and checks its ports against the ranges.
+- **Restart a Server**: The server page has a **Restart** button for anyone who can start and stop that server. Players are warned in chat as it counts down from the server's own warning period (at 15, 10, 5, 4, 3, 2 and 1 minutes for a 15-minute one), or **Restart now** skips the warnings, and a countdown can be cancelled until it ends.
+- **Restart All**: A button in the sidebar restarts every running server in order, the start delay apart, which picks up mod updates. Players are warned for the time set in Settings → Updates, and in a mesh each machine restarts its own servers at the same time as the others.
+- **Several Scheduled Restarts a Day**: A server's Automation page takes as many restart times as you like, with **Add a time**.
+- **Change Settings While a Server Runs**: Settings can be saved while a server runs and take effect at its next restart. Each one saved since it started is marked **Next restart**, the page says how many, and RCON keeps using the password and port the server started with until then. Automation, Discord and Broadcasts settings, and the server's name, take effect at once.
+- **Start Cerious AASM When This Computer Starts**: A switch in Settings → Server Defaults → Startup, for a machine nobody sits at. Servers set to start with the app start with it.
+- **The Window Remembers Where You Left It**: The desktop window reopens at its last size and position, maximised if it was, and centred if that monitor is gone. The sign-in page has its own title bar, so the window can be moved and closed before signing in.
+- **Dashboard and Sidebar**: The dashboard has a **Search servers** box, a machine filter in a mesh, and **Show all** on Server Uptime past its top ten. The sidebar gets a search box once there are 10 or more servers, and **Group servers by operator** in Settings → Server Defaults → Server List groups it by pool.
+- **Users & Roles**: Each account is a card with its role, pool and last sign-in. A Machine Admin's machine, and whether they may update every machine, are set when the account is edited.
+- **More Tooltips**: Buttons, icons and statuses explain themselves on hover, and a greyed-out button says why it is unavailable.
+
+### Bug Fixes
+
+- **The Activity Feed Lost Who Started or Stopped a Slow Server**: An action was credited to whoever asked only if it finished within 90 seconds, and ARK can take minutes to start, or two to stop. The name is now kept until the start or stop ends, including for servers that Start All queues.
+- **Double-Clicking a Server With a Subtitle Did Not Rename It**: Only the name text took the double-click, and with an operator or machine shown under it, most of the row was the subtitle. A double-click anywhere on the row renames the server now.
+
+### Changes
+
+- **A Running Server Can Be Renamed**: The name is the app's label for the server, which is known by its id, and ARK takes its own Session Name, so the server no longer has to be stopped first.
+- **New Servers Take Ports From the Server Ports**: Instead of ten ports up from the last server, through 25 sets, a new server takes the lowest free ports inside this machine's ranges (see Server Ports).
+- **Easier-to-Read Secondary Text**: The grey used for descriptions and labels is lighter, for better contrast against the dark theme.
+
 ## [1.2.2] - 2026-10-05
 
 A hardening release, and operator pools. The web interface's sign-in and permission checks, the desktop window and the code that writes files were audited and tightened, and a long list of faults in stopping, restarting, backing up and updating servers were fixed. An admin can now hand a group of servers and the people who work them to an operator, who runs that pool and nobody else's.

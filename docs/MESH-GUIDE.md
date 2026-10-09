@@ -429,7 +429,7 @@ Each machine's card shows:
 
 ### The Machines card on the dashboard
 
-In a mesh, the dashboard's **System Resources** card becomes **Machines**. It lists every machine with **Connected** or **Unreachable**, a line such as "2 of 3 servers running · Version 1.2.2" (and **Last contact** for a machine that can't be reached), and its CPU, memory and disk. **Manage** opens **Settings → Mesh**.
+In a mesh, the dashboard's **System Resources** card becomes **Machines**. It lists every machine with **Connected** or **Unreachable**, a line such as "2 of 3 servers running · Version 1.3.0" (and **Last contact** for a machine that can't be reached), and its CPU, memory and disk. **Manage** opens **Settings → Mesh**.
 
 ### When machines can't be reached
 
