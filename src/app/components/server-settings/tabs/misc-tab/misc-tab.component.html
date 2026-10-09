@@ -12,9 +12,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
@@ -30,9 +30,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
@@ -48,9 +48,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
@@ -66,9 +66,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <div class="form-control-label desc">{{ field.description }}</div>
       </div>
     </ng-container>
@@ -82,9 +82,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
@@ -100,9 +100,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>
@@ -118,9 +118,9 @@
       <div class="form-group">
         <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
           <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-          <span class="toggle-text">{{ field.label }}</span>
+          <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
         </div>
-        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span></label>
+        <label *ngIf="field.type !== 'boolean'" class="form-control-label"><span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
         <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step" [min]="field.min ?? null" [max]="field.max ?? null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
         <div class="form-control-label desc">{{ field.description }}</div>
         <app-field-messages [key]="field.key" [errors]="fieldErrors" [warnings]="fieldWarnings"></app-field-messages>

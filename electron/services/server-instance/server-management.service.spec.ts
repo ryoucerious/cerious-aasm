@@ -27,6 +27,8 @@ jest.mock('../backup/backup.service', () => ({
     waitForBackupOperations: jest.fn(async () => undefined)
   }
 }));
+jest.mock('../../utils/ark/started-config.utils', () => ({ recordStartedConfig: jest.fn() }));
+import { recordStartedConfig } from '../../utils/ark/started-config.utils';
 jest.mock('../../utils/server-ports.utils', () => ({
   getServerPortRanges: jest.fn(() => ({
     ranges: { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } },
@@ -159,7 +161,7 @@ describe('ServerManagementService', () => {
       it('refuses a game port moved outside them', async () => {
         await expect(serverManagementService.saveInstance({ ...stored, gamePort: 7967 })).resolves.toEqual({
           success: false,
-          error: 'The game port 7967 is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server ports.'
+          error: 'The game port 7967 is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
         });
         expect(mockInstanceUtils.saveInstance).not.toHaveBeenCalled();
       });
@@ -167,16 +169,16 @@ describe('ServerManagementService', () => {
       it('refuses a game port at the top of the range, which pushes the peer port out', async () => {
         await expect(serverManagementService.saveInstance({ ...stored, gamePort: 7900 })).resolves.toEqual({
           success: false,
-          error: 'The peer port 7901, always the game port + 1, is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server ports.'
+          error: 'The peer port 7901, always the game port + 1, is outside this machine\'s game ports (7777–7900). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
         });
       });
 
       it('refuses query and RCON ports moved outside theirs', async () => {
         await expect(serverManagementService.saveInstance({ ...stored, rconPort: 27100 })).resolves.toEqual(expect.objectContaining({
-          error: 'The RCON port 27100 is outside this machine\'s RCON ports (27020–27050). Pick one inside them, or widen them in Settings → Server ports.'
+          error: 'The RCON port 27100 is outside this machine\'s RCON ports (27020–27050). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
         }));
         await expect(serverManagementService.saveInstance({ ...stored, queryPort: '27100' } as Partial<InstanceConfig>)).resolves.toEqual(expect.objectContaining({
-          error: 'The query port 27100 is outside this machine\'s query ports (27015–27030). Pick one inside them, or widen them in Settings → Server ports.'
+          error: 'The query port 27100 is outside this machine\'s query ports (27015–27030). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.'
         }));
       });
 
@@ -379,6 +381,15 @@ describe('ServerManagementService', () => {
 
       await expect(serverManagementService.prepareInstanceConfiguration('a1', { id: 'a1' })).resolves.toBeUndefined();
       expect(arkConfigService.writeArkConfigFiles).toHaveBeenCalled();
+    });
+
+    // Settings saved while it runs take effect at the next start; the page marks those that differ.
+    it('keeps the settings the server starts with', async () => {
+      const instance = { id: 'a1', rconPassword: 'pw', maxPlayers: 70 };
+
+      await serverManagementService.prepareInstanceConfiguration('a1', instance);
+
+      expect(recordStartedConfig).toHaveBeenCalledWith('a1', instance);
     });
 
     it('writes the INI files and copies the whitelist', async () => {

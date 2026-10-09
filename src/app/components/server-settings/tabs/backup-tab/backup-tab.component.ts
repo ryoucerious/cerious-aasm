@@ -1,8 +1,10 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
 import { formatBytes, formatLocalDateTime } from '../../../../core/utils/format.utils';
 import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
+import { BackupCopiesService, BackupCopy } from '../../../../core/services/backup-copies.service';
+import { NotificationService } from '../../../../core/services/notification.service';
 
 export type BackupFrequency = 'hourly' | 'daily' | 'weekly';
 
@@ -16,7 +18,63 @@ const MAX_BACKUPS_TO_KEEP = 50;
   imports: [CommonModule, FieldMessagesComponent],
   templateUrl: './backup-tab.component.html'
 })
-export class BackupTabComponent {
+export class BackupTabComponent implements OnChanges {
+  /** The server, to ask where the copy of its latest backup is kept. */
+  @Input() serverId: string | null = null;
+  /** A backup was brought back from another machine: the list has to be read again. */
+  @Output() backupsChanged = new EventEmitter<void>();
+  /** Where another machine of the mesh keeps the latest backup; null outside a mesh, or before one is kept. */
+  copy: BackupCopy | null = null;
+  bringingBack = false;
+  private readonly copies = inject(BackupCopiesService);
+  private readonly notification = inject(NotificationService);
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['serverId']) this.loadCopy();
+  }
+
+  /** The copy's backup is among this server's backups already. */
+  get copyHere(): boolean {
+    const name = this.copy?.fileName;
+    return !!name && this.backupList.some(backup => (backup.filePath || '').replace(/\\/g, '/').split('/').pop() === name);
+  }
+
+  get copiedAt(): string {
+    return this.copy ? formatLocalDateTime(new Date(this.copy.copiedAt)) : '';
+  }
+
+  onBringBack(): void {
+    const id = this.serverId;
+    const copy = this.copy;
+    if (!id || !copy || this.bringingBack) return;
+    this.bringingBack = true;
+    this.copies.bringBack(id).subscribe({
+      next: reply => {
+        this.bringingBack = false;
+        if (reply?.success) {
+          this.notification.success(`${copy.fileName} is back among this server's backups.`, 'Backup');
+          this.backupsChanged.emit();
+        } else {
+          this.notification.error(reply?.error || `Could not bring the copy back from ${copy.nodeName}.`, 'Backup');
+        }
+      },
+      error: () => {
+        this.bringingBack = false;
+        this.notification.error(`Could not bring the copy back from ${copy.nodeName}.`, 'Backup');
+      }
+    });
+  }
+
+  private loadCopy(): void {
+    this.copy = null;
+    const id = this.serverId;
+    if (!id) return;
+    this.copies.copyOf(id).subscribe({
+      next: reply => { if (this.serverId === id) this.copy = reply?.copy ?? null; },
+      error: () => { /* outside a mesh, or the machine is out of reach: nothing to show */ }
+    });
+  }
+
   @Input() backupScheduleEnabled = false;
   @Input() backupFrequency: BackupFrequency = 'daily';
   @Input() backupTime = '02:00';

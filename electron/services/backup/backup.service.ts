@@ -48,6 +48,13 @@ export class BackupService {
   private schedulerService = new BackupSchedulerService();
   private importService = new BackupImportService();
   private readonly instanceQueues = new Map<string, Promise<void>>();
+  private readonly createdListeners = new Set<(backup: BackupMetadata) => void>();
+
+  /** Called with each backup once it is made. Returns a function that stops the calls. */
+  onBackupCreated(listener: (backup: BackupMetadata) => void): () => void {
+    this.createdListeners.add(listener);
+    return () => this.createdListeners.delete(listener);
+  }
 
   /**
    * For app start: moves backups out of instance directories (older versions kept them there),
@@ -105,6 +112,13 @@ export class BackupService {
         return created;
       });
 
+      for (const listener of this.createdListeners) {
+        try {
+          listener(metadata);
+        } catch (error) {
+          console.error('[backup-service] A listener for new backups failed:', error);
+        }
+      }
       return { success: true, backupId: metadata.id, message: 'Backup created successfully' };
     } catch (error) {
       console.error('[backup-service] Failed to create backup:', error);

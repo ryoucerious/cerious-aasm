@@ -8,7 +8,7 @@ export type PartitionOp =
   | 'remote-command'
   | 'read';
 
-const PAUSED = 'Mesh is partitioned. Security and membership changes are paused until this node can see a quorum.';
+const PAUSED = 'Too few machines of the mesh can be reached right now, so this waits until more of them answer. Servers keep running.';
 
 /**
  * While this node cannot reach a Raft quorum it may still authenticate from its local

@@ -272,6 +272,23 @@ describe('TopbarComponent', () => {
     expect(component.canSignOut).toBeTrue();
   });
 
+  // In a mesh the desktop signs in to an account, and the menu said there was nothing to sign out of.
+  it('offers Sign out on the desktop while a mesh account is signed in, and only then', async () => {
+    component.isWebMode = false;
+    identity$.next({ user: null, isLocalDesktop: true, isAdmin: true, permissions: [], accountsInUse: false });
+    expect(component.canSignOut).toBeFalse();
+
+    identity$.next({
+      user: { username: 'ann', displayName: 'Ann', roleName: 'Operator' },
+      isLocalDesktop: true, isAdmin: false, permissions: ['servers.view'], accountsInUse: true
+    });
+    expect(component.canSignOut).toBeTrue();
+
+    await component.logout();
+    expect(auth.logout).toHaveBeenCalled();
+    expect(router.navigate).toHaveBeenCalledWith(['/login']);
+  });
+
   it('signs out through the auth service in web mode', async () => {
     await component.logout();
     expect(auth.logout).toHaveBeenCalled();

@@ -23,12 +23,19 @@ describe('RqliteClient against rqlited responses', () => {
   let baseUrl = '';
   let status: unknown = LEADERLESS_STATUS;
   const requested: string[] = [];
+  let synced = true;
+  let refuseRemove = false;
   const removed: string[] = [];
 
   beforeAll(async () => {
     server = http.createServer((req, res) => {
       requested.push(req.url || '');
       const url = new URL(req.url || '/', 'http://rqlite');
+      if (url.pathname === '/remove' && refuseRemove) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('leadership lost while committing log');
+        return;
+      }
       if (url.pathname === '/remove') {
         // rqlited v10.5.2 answers 405 to anything but DELETE here.
         if (req.method !== 'DELETE') {
@@ -48,6 +55,12 @@ describe('RqliteClient against rqlited responses', () => {
       if (url.pathname === '/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status));
+        return;
+      }
+      if (url.pathname === '/readyz' && url.searchParams.has('sync')) {
+        // Answered once this node has applied what the leader had committed.
+        res.writeHead(synced ? 200 : 503);
+        res.end(synced ? '[+]node ok\n[+]sync ok' : '[+]node ok\n[-]sync timeout');
         return;
       }
       if (url.pathname === '/readyz') {
@@ -84,6 +97,17 @@ describe('RqliteClient against rqlited responses', () => {
     expect(removed).toEqual(['b']);
   });
 
+  // A bare "500" said nothing about why a removed machine stayed a voter.
+  it('says why rqlited refused to take a member out', async () => {
+    refuseRemove = true;
+    try {
+      await expect(new RqliteClient(baseUrl, '', '', 'a').removeMember('b'))
+        .rejects.toThrow('rqlite remove failed (500): leadership lost while committing log');
+    } finally {
+      refuseRemove = false;
+    }
+  });
+
   it('lists each member at the Raft address the cluster holds for it', async () => {
     status = LED_STATUS;
 
@@ -115,6 +139,15 @@ describe('RqliteClient against rqlited responses', () => {
     const view = await new RqliteClient(baseUrl, '', '', 'b').status();
     expect(view.voters).toBe(2);
     expect(view.leader).toBe(false);
+  });
+
+  it('says whether this node has applied what the others agreed', async () => {
+    const client = new RqliteClient(baseUrl, '', '', 'a');
+    synced = false;
+    expect(await client.caughtUp()).toBe(false);
+    synced = true;
+    expect(await client.caughtUp()).toBe(true);
+    expect(requested.at(-1)).toMatch(/^\/readyz\?sync&timeout=\d+s$/);
   });
 
   it('is ready without a leader only when the caller does not require one', async () => {

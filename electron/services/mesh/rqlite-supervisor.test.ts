@@ -109,7 +109,7 @@ describe('RqliteSupervisor', () => {
     });
 
     it('says when it is missing', () => {
-      expect(rqliteProblem(null)).toMatch(/rqlited was not found/);
+      expect(rqliteProblem(null)).toMatch(/The mesh database is missing from this install/);
     });
   });
 });

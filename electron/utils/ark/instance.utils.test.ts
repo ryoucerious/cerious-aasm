@@ -379,7 +379,7 @@ describe('instance.utils', () => {
         const result = await saveInstance({ name: 'New', gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
         expect(result).toEqual({
-          error: 'No ports are left in this machine\'s server ports (game 7777–7778, query 27015, RCON 27020). Widen them in Settings → Server ports.'
+          error: 'No ports are left in this machine\'s server ports (game 7777–7778, query 27015, RCON 27020). Widen them in Settings → Server Defaults → Server Ports.'
         });
         expect(mockedWriteJsonAtomic).not.toHaveBeenCalled();
       } finally {

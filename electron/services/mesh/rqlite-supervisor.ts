@@ -127,7 +127,7 @@ function joinTarget(join: string): string {
   return join.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
-const RQLITED_MISSING = 'rqlited was not found. Run node scripts/fetch-rqlite.js, or set RQLITE_BIN.';
+const RQLITED_MISSING = 'The mesh database is missing from this install. Reinstall Cerious AASM. (Developers: run node scripts/fetch-rqlite.js, or set RQLITE_BIN.)';
 
 /**
  * On Linux and macOS, makes sure rqlited may be run, setting the executable bit when it was

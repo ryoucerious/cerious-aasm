@@ -25,6 +25,7 @@ describe('ServerPortsService', () => {
       readFirewall: jest.fn(async () => open),
       openFirewall: jest.fn(async () => ({ success: true as const, status: open })),
       now: jest.fn(() => now),
+      meshPorts: jest.fn(() => null),
       ...overrides
     } as jest.Mocked<ServerPortsDeps>;
     return new ServerPortsService(deps);
@@ -43,9 +44,10 @@ describe('ServerPortsService', () => {
         platform: 'windows',
         windowsFirewall: open,
         linuxCommands: null,
+        meshPorts: null,
         outside: [{ id: 'b', name: 'Center', ports: [expect.objectContaining({ label: 'Game', port: 7967 }), expect.objectContaining({ label: 'Peer', port: 7968 })] }]
       });
-      expect(deps.readFirewall).toHaveBeenCalledWith(DEFAULT_SERVER_PORT_RANGES, 'C:\\AASM');
+      expect(deps.readFirewall).toHaveBeenCalledWith(DEFAULT_SERVER_PORT_RANGES, 'C:\\AASM', null);
     });
 
     it('says why when Windows Firewall cannot be read', async () => {
@@ -64,6 +66,20 @@ describe('ServerPortsService', () => {
       const docker = { mode: 'published' as const, gamePorts: custom.game, queryPorts: custom.query, rconPorts: custom.rcon, webPort: 3000 };
       const state = await service({ platform: jest.fn(() => 'linux' as const), docker: jest.fn(() => docker) }).state();
       expect(state).toEqual(expect.objectContaining({ ranges: custom, source: 'docker', windowsFirewall: null, linuxCommands: null }));
+    });
+  });
+
+  describe('in a mesh', () => {
+    it('opens and checks the mesh\'s own ports along with the server ports', async () => {
+      const mesh = { peer: 4747, raft: 4002 };
+      const ports = service({ meshPorts: jest.fn(() => mesh) });
+
+      const state = await ports.state();
+      await ports.openFirewall();
+
+      expect(state.meshPorts).toEqual(mesh);
+      expect(deps.readFirewall).toHaveBeenCalledWith(DEFAULT_SERVER_PORT_RANGES, 'C:\\AASM', mesh);
+      expect(deps.openFirewall).toHaveBeenCalledWith(DEFAULT_SERVER_PORT_RANGES, 'C:\\AASM', mesh);
     });
   });
 
@@ -95,7 +111,7 @@ describe('ServerPortsService', () => {
       config = { ...config, serverPorts: custom };
 
       await expect(service().openFirewall()).resolves.toEqual({ success: true, state: expect.objectContaining({ windowsFirewall: open }) });
-      expect(deps.openFirewall).toHaveBeenCalledWith(custom, 'C:\\AASM');
+      expect(deps.openFirewall).toHaveBeenCalledWith(custom, 'C:\\AASM', null);
     });
 
     it('passes on why it could not', async () => {
@@ -142,7 +158,7 @@ describe('ServerPortsService', () => {
       const ports = service();
       await ports.state();
       await ports.setRanges(custom);
-      expect(deps.readFirewall).toHaveBeenLastCalledWith(custom, 'C:\\AASM');
+      expect(deps.readFirewall).toHaveBeenLastCalledWith(custom, 'C:\\AASM', null);
     });
   });
 });

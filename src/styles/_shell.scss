@@ -801,6 +801,72 @@ $sidenav-width: 248px;
 }
 
 // The search above the server list: compact, to keep the list in view.
+// Settings → Storage: a copy kept here of another machine's server backup.
+.held-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+
+  .held-copy-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .btn {
+    flex: none;
+  }
+}
+
+// The Backup tab: where another machine keeps the latest backup.
+.backup-copy-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+
+  .material-icons {
+    color: var(--success);
+  }
+
+  .backup-copy-text {
+    flex: 1;
+    min-width: 12rem;
+  }
+}
+
+// A restart of every server counting down, under the Servers heading.
+.restart-all-pending {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0.75rem 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--warning);
+
+  .material-icons {
+    font-size: 1rem;
+    margin-right: 0;
+  }
+
+  .restart-all-pending-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .btn {
+    padding: 0.1rem 0.5rem;
+  }
+}
+
 .server-list-tools {
   display: flex;
   flex-direction: column;

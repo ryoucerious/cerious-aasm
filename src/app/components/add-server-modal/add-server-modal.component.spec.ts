@@ -167,6 +167,18 @@ describe('AddServerModalComponent', () => {
         expect(component.machineOptions.map(option => option.label)).toEqual(['This machine', 'Dallas01']);
       });
 
+      // A move refuses a machine skipping new servers, so an import there could only fail.
+      it('does not offer a machine skipping new servers', () => {
+        machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }, { nodeId: 'node-2', name: 'Dallas01', skipping: true }];
+        // Opened afresh: the machines are read as the dialog opens.
+        fixture.componentRef.setInput('show', false);
+        fixture.detectChanges();
+        opened();
+        component.setImportMode('import');
+
+        expect(component.machineOptions.map(option => option.label)).toEqual(['This machine']);
+      });
+
       it('restores it here, then moves it to the machine chosen', async () => {
         replies['move-server'] = { success: true };
         component.selectedNodeId = 'node-2';

@@ -1,6 +1,6 @@
 import { Component, Input, Output, EventEmitter, OnInit, OnDestroy, OnChanges, SimpleChanges, HostListener, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Subscription } from 'rxjs';
+import { Subscription, filter, skip } from 'rxjs';
 import { FirewallService, FirewallStatus } from '../../core/services/firewall.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
@@ -11,6 +11,8 @@ import { downloadBase64File } from '../../core/utils/download.utils';
 import { serverStatusKey } from '../../core/utils/server-status';
 import { FieldDefinition } from '../../core/services/field-definitions.service';
 import { ServerNavService, ServerTabId } from '../../core/services/server-nav.service';
+import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { ModEntry } from '../../core/models/server-instance.model';
 import { BackupMetadata } from '../../core/interfaces/backup.interface';
 import { FieldMessages } from '../field-messages/field-messages.component';
@@ -66,6 +68,9 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Input() serverInstance: any;
   @Input() activeTab: TabType = 'general';
   @Input() isLocked = false;
+  /** Settings saved since the running server started, which take effect at its next restart. */
+  @Input() pendingKeys: ReadonlySet<string> = new Set();
+  @Output() restartRequested = new EventEmitter<void>();
   /** Set by the server page from the live list, which knows before this server's own copy does. */
   @Input() machineUnreachable = false;
   @Input() generalFields: FieldDefinition[] = [];
@@ -104,6 +109,7 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Output() restoreBackup = new EventEmitter<BackupMetadata>();
   @Output() downloadBackup = new EventEmitter<BackupMetadata>();
   @Output() deleteBackup = new EventEmitter<BackupMetadata>();
+  @Output() backupsChanged = new EventEmitter<void>();
   @Output() saveAutoStartSettings = new EventEmitter<void>();
   @Output() saveCrashDetectionSettings = new EventEmitter<void>();
   @Output() saveScheduledRestartSettings = new EventEmitter<void>();
@@ -134,13 +140,17 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
     private validationService: ArkServerValidationService,
     private messagingService: MessagingService,
     private configImportExportService: ConfigImportExportService,
-    private serverNav: ServerNavService
+    private serverNav: ServerNavService,
+    private settingsDrawer: SettingsDrawerService,
+    private meshNodes: MeshNodesService
   ) {
     this.isElectron = ipc.isElectron;
   }
 
   ngOnInit() {
     this.checkFirewallStatus();
+    // The server ports may have been opened in Settings meanwhile.
+    this.subscriptions.add(this.settingsDrawer.isOpen$.pipe(skip(1), filter(open => !open)).subscribe(() => this.checkFirewallStatus()));
     this.subscriptions.add(this.messagingService.sendMessage<{ degraded?: boolean; storage?: Array<{ health?: { ok?: boolean } }> }>('get-mesh-status', {}).subscribe(status => {
       const storageDown = Array.isArray(status?.storage) && status.storage.some(item => item.health && item.health.ok === false);
       this.transferNote = status?.degraded
@@ -383,6 +393,21 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
       ? { ...this.fieldWarnings, [fieldName]: validation.warning }
       : without(this.fieldWarnings, fieldName);
     return validation.isValid;
+  }
+
+  /**
+   * Windows Firewall keeps players out of this machine's server ports, and Windows asks about each
+   * new server. Only on the desktop, where they can be opened; another machine's card speaks for its own.
+   */
+  get serverPortsClosed(): boolean {
+    return this.isElectron
+      && this.firewallStatus?.platform === 'windows'
+      && this.firewallStatus.serverPorts?.portsOpen === false
+      && this.meshNodes.isHere(this.serverInstance?.nodeId);
+  }
+
+  openServerPortsSettings(): void {
+    this.settingsDrawer.open('servers');
   }
 
   checkFirewallStatus() {

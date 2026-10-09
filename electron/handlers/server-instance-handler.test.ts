@@ -46,6 +46,10 @@ jest.mock('../services/server-instance/server-management.service', () => ({
   serverManagementService: { getAllInstances: jest.fn(), getInstance: jest.fn(), saveInstance: jest.fn(), deleteInstance: jest.fn() }
 }));
 jest.mock('../services/automation/automation.service', () => ({ automationService: { setManuallyStopped: jest.fn() } }));
+jest.mock('../utils/ark/started-config.utils', () => ({ readStartedConfig: jest.fn() }));
+jest.mock('../services/backup/backup-copies.service', () => ({ backupCopies: { heldPath: jest.fn(() => null) } }));
+import { backupCopies } from '../services/backup/backup-copies.service';
+import { readStartedConfig } from '../utils/ark/started-config.utils';
 jest.mock('../services/automation/restart-countdown.service', () => ({
   restartCountdowns: { begin: jest.fn(() => 900_000), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
 }));
@@ -286,6 +290,46 @@ describe('server-instance-handler', () => {
       await request('get-pending-restarts', { requestId: 'r1' });
 
       expect(replies('get-pending-restarts')).toContainEqual({ pending: [{ instanceId: 'a', dueAt: 900_000, all: false }], requestId: 'r1' });
+    });
+  });
+
+  // A machine that was lost: its servers come back from the copies another machine kept.
+  describe('restore-backup-copy', () => {
+    it('makes a new server here from the copy this machine keeps', async () => {
+      jest.mocked(backupCopies.heldPath).mockReturnValueOnce('/copies/b1/backup_manual_1.zip');
+      mockInstance.importServerFromBackup.mockResolvedValueOnce({ success: true, instance: { id: 'new', name: 'Far again' } } as never);
+
+      await request('restore-backup-copy', { serverId: 'b1', serverName: 'Far again', requestId: 'r1' });
+
+      expect(mockInstance.importServerFromBackup).toHaveBeenCalledWith('Far again', { filePath: '/copies/b1/backup_manual_1.zip' }, true);
+      expect(mockMesh.recordServer).toHaveBeenCalledWith(expect.objectContaining({ id: 'new' }));
+      expect(replies('restore-backup-copy')).toContainEqual(expect.objectContaining({ success: true, requestId: 'r1' }));
+    });
+
+    it('says when this machine keeps no copy of that server', async () => {
+      await request('restore-backup-copy', { serverId: 'b1', serverName: 'Far again', requestId: 'r2' });
+
+      expect(replies('restore-backup-copy')).toContainEqual({ success: false, error: 'This machine keeps no copy of that server\'s backups.', requestId: 'r2' });
+    });
+  });
+
+  // The settings page marks what was saved since the server started.
+  describe('get-started-config', () => {
+    it('answers with the settings a server here started with', async () => {
+      jest.mocked(readStartedConfig).mockReturnValueOnce({ id: 'a', maxPlayers: 70 } as never);
+
+      await request('get-started-config', { id: 'a', requestId: 'r1' });
+
+      expect(replies('get-started-config')).toContainEqual({ config: { id: 'a', maxPlayers: 70 }, requestId: 'r1' });
+    });
+
+    it('asks the machine hosting a server on another machine', async () => {
+      mockMesh.queryRemote.mockResolvedValueOnce({ config: { id: 'b', maxPlayers: 20 } });
+
+      await request('get-started-config', { id: 'b', requestId: 'r2' });
+
+      expect(mockMesh.queryRemote).toHaveBeenCalledWith('b', 'started-config');
+      expect(replies('get-started-config')).toContainEqual({ config: { id: 'b', maxPlayers: 20 }, requestId: 'r2' });
     });
   });
 

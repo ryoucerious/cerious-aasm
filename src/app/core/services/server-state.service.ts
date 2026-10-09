@@ -75,10 +75,12 @@ export class ServerStateService implements OnDestroy {
   }
 
   /** Running or between states, or on a mesh machine that cannot be reached: a change would not get there. */
+  /**
+   * Only while its machine cannot be reached, which a change would not get to. A change saved while
+   * the server runs takes effect at its next start; the settings page marks which.
+   */
   areSettingsLocked(state: string | null | undefined): boolean {
-    const mappedState = this.mapServerState(state);
-    return mappedState === 'Preparing to start' || mappedState === 'Starting' || mappedState === 'Stopping' || mappedState === 'Running'
-      || mappedState === 'Unreachable';
+    return this.mapServerState(state) === 'Unreachable';
   }
 
   ngOnDestroy(): void {

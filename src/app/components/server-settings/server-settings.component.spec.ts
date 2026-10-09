@@ -8,6 +8,8 @@ import { ArkServerValidationService, FieldValidation } from '../../core/services
 import { MessagingService } from '../../core/services/messaging/messaging.service';
 import { ConfigImportExportService } from '../../core/services/config-import-export.service';
 import { ServerInstanceService } from '../../core/services/server-instance.service';
+import { SettingsDrawerService } from '../../core/services/settings-drawer.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 
 describe('ServerSettingsComponent', () => {
   let component: ServerSettingsComponent;
@@ -60,6 +62,26 @@ describe('ServerSettingsComponent', () => {
     expect(component).toBeTruthy();
   });
 
+  // Saved while it runs, a change waits for the next restart.
+  describe('settings saved since the server started', () => {
+    it('says how many wait for the next restart, and offers the restart', () => {
+      spyOn(component.restartRequested, 'emit');
+      fixture.componentRef.setInput('pendingKeys', new Set(['maxPlayers', 'mapName']));
+      showTab('general');
+      const banner = (fixture.nativeElement as HTMLElement).querySelector('.settings-pending') as HTMLElement;
+
+      expect(banner.textContent?.replace(/\s+/g, ' ')).toContain('2 settings saved since the server started take effect at its next restart');
+      (banner.querySelector('button') as HTMLButtonElement).click();
+      expect(component.restartRequested.emit).toHaveBeenCalled();
+    });
+
+    it('says nothing when none have changed', () => {
+      showTab('general');
+
+      expect((fixture.nativeElement as HTMLElement).querySelector('.settings-pending')).toBeNull();
+    });
+  });
+
   // A change could not reach the machine, and what is shown may no longer be what it runs.
   describe('a server whose machine cannot be reached', () => {
     beforeEach(() => {
@@ -82,6 +104,59 @@ describe('ServerSettingsComponent', () => {
 
       expect(labels.some(label => label?.includes('Import'))).toBeFalse();
       expect(labels.some(label => label?.includes('Copy from'))).toBeFalse();
+    });
+  });
+
+  // Settings + nudges: a standalone Windows machine only found out on the Firewall tab, or from Windows' own prompt.
+  describe('a Windows machine whose server ports are not open', () => {
+    const RANGES = { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } };
+    const firewall = (portsOpen: boolean) => ({ enabled: true, platform: 'windows' as const, serverPorts: { ranges: RANGES, source: 'settings' as const, portsOpen } });
+    const nudge = () => (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.server-ports-closed');
+
+    function onDesktop(portsOpen: boolean): void {
+      (component as unknown as { isElectron: boolean }).isElectron = true;
+      component.firewallStatus = firewall(portsOpen);
+      fixture.detectChanges();
+    }
+
+    it('says so on the server page, with a way to Server Defaults to open them', () => {
+      const drawer = TestBed.inject(SettingsDrawerService);
+      spyOn(drawer, 'open');
+      onDesktop(false);
+
+      expect(nudge()?.textContent).toContain('Windows will ask about each new server');
+      nudge()!.querySelector('button')!.click();
+
+      expect(drawer.open).toHaveBeenCalledWith('servers');
+    });
+
+    it('says nothing once they are open, or for a server on another machine', () => {
+      onDesktop(true);
+      expect(nudge()).toBeNull();
+
+      spyOn(TestBed.inject(MeshNodesService), 'isHere').and.returnValue(false);
+      onDesktop(false);
+      expect(nudge()).toBeNull();
+    });
+
+    it('stays out of the web interface, which cannot open them', () => {
+      component.firewallStatus = firewall(false);
+      fixture.detectChanges();
+      expect(nudge()).toBeNull();
+    });
+
+    it('looks again when Settings closes, so it goes once they are opened there', () => {
+      const firewallService = TestBed.inject(FirewallService);
+      onDesktop(false);
+      const drawer = TestBed.inject(SettingsDrawerService);
+      drawer.open('servers');
+      spyOn(firewallService, 'checkFirewallStatus').and.returnValue(of(firewall(true)));
+
+      drawer.close();
+      fixture.detectChanges();
+
+      expect(firewallService.checkFirewallStatus).toHaveBeenCalled();
+      expect(nudge()).toBeNull();
     });
   });
 

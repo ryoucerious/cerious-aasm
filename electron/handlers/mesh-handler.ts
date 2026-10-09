@@ -166,7 +166,7 @@ onRequest('mesh-node-update', async (payload, { sender }) => {
   const version = detail?.version ? ` to ${detail.version}` : '';
   return {
     ...result,
-    message: `App update started${version}. A Docker node replaces the app files and restarts the app process. The container stays up. Update one voting node at a time.`
+    message: `That machine is installing the app update${version}, then restarts the app. Its servers stay as they are. Update one machine at a time, so the others can keep agreeing.`
   };
 });
 

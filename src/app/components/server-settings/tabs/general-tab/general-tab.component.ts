@@ -20,6 +20,8 @@ export class GeneralTabComponent implements OnInit, OnChanges, OnDestroy {
   // Fields are addressed by key from the settings metadata, so this stays loosely typed.
   @Input() serverInstance: any = {};
   @Input() isLocked = false;
+  /** Settings saved since the running server started, marked as waiting for its next restart. */
+  @Input() pendingKeys: ReadonlySet<string> = new Set();
   @Input() generalFields: FieldDefinition[] = [];
   @Input() dropdownOpen = false;
   @Input() fieldErrors: FieldMessages = {};

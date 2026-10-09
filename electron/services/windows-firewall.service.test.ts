@@ -48,6 +48,46 @@ describe('windows-firewall.service', () => {
     });
   });
 
+  // A machine in a mesh is reached on two ports of its own: a cancelled prompt cut it off.
+  describe('in a mesh', () => {
+    const mesh = { peer: 4747, raft: 4002 };
+    const tcp = (ports: string) => rule(ports, { protocol: 'TCP' });
+
+    it('opens the mesh\'s connection and database ports for TCP as well', () => {
+      const script = buildOpenScript(ranges, root, mesh);
+      expect(script).toContain("-Protocol TCP -LocalPort '4747' -Profile Any");
+      expect(script).toContain("-Protocol TCP -LocalPort '4002' -Profile Any");
+    });
+
+    it('is open only when the mesh ports are too', () => {
+      expect(parseWindowsFirewallStatus(statusJson(), ranges, mesh).rules).toBe('other');
+      expect(parseWindowsFirewallStatus(statusJson({ rules: [rule('7777-7900'), rule('27015-27030'), tcp('4747'), tcp('4002')] }), ranges, mesh).rules).toBe('open');
+    });
+
+    it('leaves the mesh ports alone outside a mesh', () => {
+      expect(buildOpenScript(ranges, root)).not.toContain('-Protocol TCP');
+    });
+
+    // A cancelled prompt for the app or its mesh database blocks the program, and a block beats any allow.
+    it("clears the block rules a cancelled prompt left on the app's own programs", () => {
+      const script = buildOpenScript(ranges, root, mesh, ['C:\\Program Files\\Cerious AASM\\Cerious AASM.exe', "D:\\Jo's\\rqlited.exe"]);
+      expect(script).toContain("$appPrograms = @('C:\\Program Files\\Cerious AASM\\Cerious AASM.exe', 'D:\\Jo''s\\rqlited.exe')");
+      expect(script).toMatch(/\$appPrograms[\s\S]*-ieq[\s\S]*'Block'[\s\S]*Remove-NetFirewallRule/);
+    });
+
+    it("touches no program's rules but the servers' outside a mesh", () => {
+      expect(buildOpenScript(ranges, root, null, ['C:\\x.exe'])).not.toContain('$appPrograms');
+    });
+
+    it("hands the app's own programs to the script it runs as admin", async () => {
+      const run = jest.fn<ReturnType<PowerShellRunner>, Parameters<PowerShellRunner>>(async () => ({ code: 0, stdout: statusJson(), stderr: '' }));
+
+      await openWindowsFirewall(ranges, root, run, mesh, ['C:\\a.exe']);
+
+      expect(run).toHaveBeenNthCalledWith(1, buildOpenScript(ranges, root, mesh, ['C:\\a.exe']), true);
+    });
+  });
+
   describe('the scripts', () => {
     it('opens the game and query ranges for UDP, in every profile, and only those', () => {
       const script = buildOpenScript(ranges, root);

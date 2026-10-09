@@ -74,6 +74,20 @@
         </div>
       </div>
 
+      <!-- A machine that is lost must not take its servers' backups with it. -->
+      <div class="settings-section backup-copy" *ngIf="copy">
+        <h5>Copy on Another Machine</h5>
+        <p class="section-desc">The latest backup is also kept on <strong>{{ copy.nodeName }}</strong>, so it survives if this server's machine is lost.</p>
+        <div class="backup-copy-row">
+          <span class="material-icons" aria-hidden="true">cloud_done</span>
+          <span class="backup-copy-text"><span class="mono">{{ copy.fileName }}</span>, {{ formatSize(copy.size) }}, copied {{ copiedAt }}</span>
+          <button type="button" class="btn btn-sm" *ngIf="!copyHere" [disabled]="bringingBack" (click)="onBringBack()">
+            {{ bringingBack ? 'Bringing it back…' : 'Bring it back here' }}
+          </button>
+        </div>
+        <div class="form-control-label desc" *ngIf="!copyHere">It is no longer among this server's backups here. Bring it back to restore from it.</div>
+      </div>
+
       <div class="settings-section">
         <h5>Available Backups</h5>
         <p class="section-desc">Manage your existing backups - restore, download, or delete.</p>

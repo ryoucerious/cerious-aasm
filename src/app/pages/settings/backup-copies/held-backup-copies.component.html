@@ -1,0 +1,31 @@
+<section class="settings-card held-copies" *ngIf="copies.length">
+  <h3 class="settings-card-title">Backups Kept for Other Machines</h3>
+  <p class="settings-card-hint">
+    This machine keeps a copy of the latest backup of these servers, which run on other machines of
+    the mesh. If one of those machines is lost, restore its servers here.
+  </p>
+  <div class="held-copy" *ngFor="let copy of copies">
+    <div class="held-copy-text">
+      <strong>{{ copy.serverName }}</strong>
+      <span class="form-control-label desc">
+        from {{ copy.fromNodeName }}: {{ copy.fileName }}, {{ formatSize(copy.size) }}, copied {{ copiedAt(copy) }}
+      </span>
+    </div>
+    <button type="button" class="btn btn-sm" (click)="askRestore(copy)">Restore here as a new server</button>
+  </div>
+</section>
+
+<app-modal [show]="!!restoring" [title]="'Restore ' + (restoring?.serverName || 'Server')" [maxWidth]="'520px'" (close)="restoring = null">
+  <p>
+    Makes a new server on this machine from the copy of the latest backup of {{ restoring?.serverName }}.
+    Give it a name of its own: the original may still be in the mesh.
+  </p>
+  <div class="form-group">
+    <label class="form-control-label" for="restore-name">Server name</label>
+    <input type="text" class="form-control input" id="restore-name" name="restore-name" [(ngModel)]="restoreName" />
+  </div>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="restoring = null">Cancel</button>
+    <button type="button" class="btn btn-primary" [disabled]="!restoreName.trim()" (click)="confirmRestore()">Restore</button>
+  </div>
+</app-modal>

@@ -58,7 +58,7 @@ interface MeshStatus {
   removedFromMesh?: boolean;
   /** Where other machines reach this one, or would if it created or joined a mesh now. */
   advertise?: MeshAddress;
-  /** Just after a join: the machine admin this machine's own admin password now signs in as. */
+  /** Just after a join: the machine admin made for this machine's own admin password. */
   machineAdmin?: string;
 }
 
@@ -86,7 +86,8 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   token = '';
   issuedToken = '';
   issuedExpiresAt: number | null = null;
-  diagnosticText = '';
+  /** The reachability check, a line a machine. */
+  diagnosticLines: string[] = [];
   wireguardText = '';
   busy = false;
   updatingKey = '';
@@ -280,6 +281,11 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     return this.auth.can(PERMISSIONS.NODES_REMOVE);
   }
 
+  /** Making an enrollment token: Admins only, as the backend has it. */
+  get canEnrollNodes(): boolean {
+    return this.auth.can(PERMISSIONS.NODES_ENROLL);
+  }
+
   /** Under a machine's menu: why the items greyed out there cannot be used now; empty when all can. */
   menuNote(node: MeshNode): string {
     if (this.status?.degraded) {
@@ -304,8 +310,8 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   portsText(node: MeshNode): string {
     if (node.capabilities?.serverPorts?.portsOpen !== false) return '';
     return node.nodeId === this.status?.nodeId
-      ? 'Windows Firewall keeps players out of the server ports here. Open them in Settings → Server ports.'
-      : `Windows Firewall keeps players out of its server ports. Open them in Settings → Server ports on ${node.name}.`;
+      ? 'Windows Firewall keeps players out of the server ports here. Open them in Settings → Server Defaults → Server Ports.'
+      : `Windows Firewall keeps players out of its server ports. Open them in Settings → Server Defaults → Server Ports on ${node.name}.`;
   }
 
   contactText(node: MeshNode): string {
@@ -465,8 +471,10 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
    * What the red button on a machine's card does. While the mesh cannot agree, this machine can
    * leave anyway and one that cannot be reached can be forced out; otherwise Remove and Leave.
    */
-  removeAction(node: MeshNode): 'leave-anyway' | 'force-remove' | 'remove' {
-    if (!this.status?.degraded || !this.auth.can(PERMISSIONS.NODES_REMOVE)) return 'remove';
+  /** What the menu offers to take a machine out of the mesh; null for a role that may not. */
+  removeAction(node: MeshNode): 'leave-anyway' | 'force-remove' | 'remove' | null {
+    if (!this.auth.can(PERMISSIONS.NODES_REMOVE)) return null;
+    if (!this.status?.degraded) return 'remove';
     if (node.nodeId === this.status.nodeId) return 'leave-anyway';
     return node.connected ? 'remove' : 'force-remove';
   }
@@ -615,9 +623,23 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   }
 
   diagnostics(): void {
-    this.messaging.sendMessage<Record<string, unknown>>('mesh-diagnostics', {}).subscribe({
+    type Probe = { target?: string; ok?: boolean; rttMs?: number; error?: string };
+    this.messaging.sendMessage<{ probes?: Probe[]; skew?: Array<{ nodeId?: string; skewMs?: number }> }>('mesh-diagnostics', {}).subscribe({
       next: result => {
-        this.diagnosticText = JSON.stringify(result, null, 2);
+        const probes = (result?.probes || []).map(probe => probe.ok
+          ? `${probe.target} answered in ${Math.round(probe.rttMs || 0)} ms.`
+          : `${probe.target} did not answer: ${probe.error || 'no reason given'}`);
+        // A clock far off spoils sign-ins and the order of changes; a second or two does not matter.
+        const clocks = (result?.skew || [])
+          .filter(entry => Math.abs(entry.skewMs || 0) >= 2_000)
+          .map(entry => {
+            const seconds = Math.round(Math.abs(entry.skewMs || 0) / 1000);
+            // From two minutes off, in minutes: "237 seconds" does not read at a glance.
+            const amount = seconds >= 120 ? `${Math.round(seconds / 60)} minutes` : `${seconds} seconds`;
+            const name = this.nodes.find(node => node.nodeId === entry.nodeId)?.name || 'A machine';
+            return `${name}'s clock is ${amount} ${(entry.skewMs || 0) > 0 ? 'ahead of' : 'behind'} this machine's.`;
+          });
+        this.diagnosticLines = probes.length || clocks.length ? [...probes, ...clocks] : ['There are no other machines to check.'];
         this.cdr.markForCheck();
       }
     });

@@ -27,6 +27,12 @@ export interface WindowsFirewallStatus {
   portsOpen: boolean;
 }
 
+/** The ports this machine listens on for the rest of its mesh, over TCP; null outside a mesh. */
+export interface MeshPorts {
+  peer: number;
+  raft: number;
+}
+
 /** Runs a script in Windows PowerShell; `elevated` asks for admin with Windows' own prompt. */
 export type PowerShellRunner = (script: string, elevated: boolean) => Promise<{ code: number; stdout: string; stderr: string }>;
 
@@ -72,19 +78,32 @@ $enabled = @(Get-NetFirewallProfile | Where-Object { "$($_.Enabled)" -eq 'True' 
 [pscustomobject]@{ enabled = $enabled; rules = $rules; blocked = $blocked } | ConvertTo-Json -Depth 4 -Compress`;
 }
 
-/** Replaces the app's port rules with ones for `ranges`, and clears the servers' Block rules. Run as admin. */
-export function buildOpenScript(ranges: ServerPortRanges, root: string): string {
-  const description = quote('Added by Cerious AASM so players can reach its ARK servers. Settings > Server ports changes them.');
-  const allow = (name: string, range: PortRange) =>
+/**
+ * Replaces the app's port rules with ones for `ranges` (and, in a mesh, the mesh's own ports), and
+ * clears the servers' Block rules. In a mesh it also clears those on `appPrograms`, the app's own
+ * executables the other machines reach, which a cancelled prompt blocks. Run as admin.
+ */
+export function buildOpenScript(ranges: ServerPortRanges, root: string, mesh: MeshPorts | null = null, appPrograms: string[] = []): string {
+  const description = quote('Added by Cerious AASM so players, and the other machines of its mesh, can reach it. Settings > Server Defaults > Server Ports changes them.');
+  const allow = (name: string, protocol: 'UDP' | 'TCP', range: PortRange) =>
     `  New-NetFirewallRule -DisplayName ${quote(`${RULE_GROUP}: ${name}`)} -Group ${quote(RULE_GROUP)} -Description ${description} ` +
-    `-Direction Inbound -Action Allow -Protocol UDP -LocalPort ${quote(portsOf(range))} -Profile Any | Out-Null`;
+    `-Direction Inbound -Action Allow -Protocol ${protocol} -LocalPort ${quote(portsOf(range))} -Profile Any | Out-Null`;
+  const meshRules = mesh
+    ? `\n${allow('mesh connection port', 'TCP', { start: mesh.peer, end: mesh.peer })}\n${allow('mesh database port', 'TCP', { start: mesh.raft, end: mesh.raft })}`
+    : '';
+  // Matched by exact path: no other program's rules are touched.
+  const unblockApp = mesh && appPrograms.length
+    ? `\n  $appPrograms = @(${appPrograms.map(quote).join(', ')})
+  Get-NetFirewallApplicationFilter | Where-Object { $p = "$($_.Program)"; @($appPrograms | Where-Object { $_ -ieq $p }).Count -gt 0 } |
+    Get-NetFirewallRule | Where-Object { "$($_.Action)" -eq 'Block' -and "$($_.Direction)" -eq 'Inbound' } | Remove-NetFirewallRule`
+    : '';
   return `$ErrorActionPreference = 'Stop'
 try {
 ${serverFilter(root)}
   Get-NetFirewallRule -Group ${quote(RULE_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-${allow('ARK game ports', ranges.game)}
-${allow('ARK query ports', ranges.query)}
-  & $blockRules | Where-Object { $_.Action -eq 'Block' } | Remove-NetFirewallRule
+${allow('ARK game ports', 'UDP', ranges.game)}
+${allow('ARK query ports', 'UDP', ranges.query)}${meshRules}
+  & $blockRules | Where-Object { $_.Action -eq 'Block' } | Remove-NetFirewallRule${unblockApp}
   exit 0
 } catch {
   exit 2
@@ -95,25 +114,26 @@ type RawRule = { enabled?: string; action?: string; direction?: string; profile?
 
 const asArray = <T>(value: T | T[] | null | undefined): T[] => (value == null ? [] : Array.isArray(value) ? value : [value]);
 
-export function parseWindowsFirewallStatus(json: string, ranges: ServerPortRanges): WindowsFirewallStatus {
+export function parseWindowsFirewallStatus(json: string, ranges: ServerPortRanges, mesh: MeshPorts | null = null): WindowsFirewallStatus {
   const raw = JSON.parse(json) as { enabled?: boolean; rules?: RawRule | RawRule[]; blocked?: string | string[] };
   const rules = asArray(raw.rules);
   const blockedPrograms = asArray(raw.blocked).map(String);
-  const opens = (range: PortRange) => rules.some(rule =>
+  const opens = (range: PortRange, protocol = 'UDP') => rules.some(rule =>
     rule.enabled === 'True' && rule.action === 'Allow' && rule.direction === 'Inbound' && rule.profile === 'Any' &&
-    rule.protocol === 'UDP' && rule.ports === portsOf(range));
-  const state = !rules.length ? 'missing' : opens(ranges.game) && opens(ranges.query) ? 'open' : 'other';
+    rule.protocol === protocol && rule.ports === portsOf(range));
+  const meshOpen = !mesh || (opens({ start: mesh.peer, end: mesh.peer }, 'TCP') && opens({ start: mesh.raft, end: mesh.raft }, 'TCP'));
+  const state = !rules.length ? 'missing' : opens(ranges.game) && opens(ranges.query) && meshOpen ? 'open' : 'other';
   const enabled = raw.enabled !== false;
   return { enabled, rules: state, blockedPrograms, portsOpen: !enabled || (state === 'open' && !blockedPrograms.length) };
 }
 
 export async function readWindowsFirewall(
-  ranges: ServerPortRanges, root: string, run: PowerShellRunner = runPowerShell
+  ranges: ServerPortRanges, root: string, run: PowerShellRunner = runPowerShell, mesh: MeshPorts | null = null
 ): Promise<WindowsFirewallStatus | { error: string }> {
   const result = await run(buildStatusScript(root), false);
   if (result.code !== 0) return { error: `Could not read Windows Firewall: ${result.stderr.trim() || `exit code ${result.code}`}` };
   try {
-    return parseWindowsFirewallStatus(result.stdout, ranges);
+    return parseWindowsFirewallStatus(result.stdout, ranges, mesh);
   } catch {
     return { error: 'Could not read Windows Firewall: it answered with something other than the rules.' };
   }
@@ -121,11 +141,11 @@ export async function readWindowsFirewall(
 
 /** One admin prompt; the rules are read back afterwards, since the elevated script's output cannot be. */
 export async function openWindowsFirewall(
-  ranges: ServerPortRanges, root: string, run: PowerShellRunner = runPowerShell
+  ranges: ServerPortRanges, root: string, run: PowerShellRunner = runPowerShell, mesh: MeshPorts | null = null, appPrograms: string[] = []
 ): Promise<{ success: true; status: WindowsFirewallStatus } | { success: false; error: string; status?: WindowsFirewallStatus }> {
-  const applied = await run(buildOpenScript(ranges, root), true);
+  const applied = await run(buildOpenScript(ranges, root, mesh, appPrograms), true);
   if (applied.code === DECLINED) return { success: false, error: 'Windows asked for permission and it was not given, so nothing changed.' };
-  const status = await readWindowsFirewall(ranges, root, run);
+  const status = await readWindowsFirewall(ranges, root, run, mesh);
   if ('error' in status) return { success: false, error: status.error };
   if (status.portsOpen) return { success: true, status };
   return { success: false, error: 'Windows Firewall did not take the rules. A policy set by your organisation can stop it.', status };

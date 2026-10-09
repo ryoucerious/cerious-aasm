@@ -39,7 +39,8 @@ const defaultDeps: CountdownDeps = {
   },
   isRunning: serverId => serverProcessService.getInstanceState(serverId) === 'running',
   publish: change => messagingService.sendToAll('server-restart-pending', change),
-  now: Date.now
+  // Read at each call, not taken once: a clock set later, as tests do, is the one counted on.
+  now: () => Date.now()
 };
 
 function warningText(minutes: number): string {

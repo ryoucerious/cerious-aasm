@@ -15,10 +15,14 @@ import { getInstanceDir, getInstanceSaveDir, getInstancesBaseDir } from '../../u
 
 /**
  * Files of the server's own that go with it besides its config and saves: the exclusive join
- * list (copied next to the executable at every start), and the record of transfer data already
- * brought into its cluster, so it is not brought in again on the destination.
+ * list (copied next to the executable at every start), the record of transfer data already
+ * brought into its cluster, so it is not brought in again on the destination, and its own copy of
+ * the INI files, which keeps the lines added by hand that the app has no setting for.
  */
-const CARRIED_FILES = ['config.json', 'PlayersExclusiveJoinList.txt', 'cluster-import.json'];
+const CARRIED_FILES = [
+  'config.json', 'PlayersExclusiveJoinList.txt', 'cluster-import.json',
+  'Config/WindowsServer/GameUserSettings.ini', 'Config/WindowsServer/Game.ini'
+];
 
 /** The files a move sends, relative to the server directory, in checksum order. */
 export function checkpointManifest(serverId: string): string[] {

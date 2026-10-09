@@ -40,7 +40,7 @@
     <ng-container *ngFor="let field of generalFields">
       <div class="form-group">
         <ng-container *ngIf="field.type === 'multi-toggle'; else defaultField">
-          <label class="form-control-label">{{ field.label }}</label>
+          <label class="form-control-label">{{ field.label }} <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span></label>
           <div class="toggle-group" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; align-items: flex-start;">
             <ng-container *ngFor="let opt of textOptions(field)">
               <span style="display: inline-flex; align-items: center;">
@@ -56,10 +56,10 @@
         <ng-template #defaultField>
           <div *ngIf="field.type === 'boolean'" class="form-control-label toggle-label">
             <input type="checkbox" class="toggle-switch" [(ngModel)]="serverInstance[field.key]" (change)="onSaveSettings()" [disabled]="isLocked" tabindex="0" />
-            <span class="toggle-text">{{ field.label }}</span>
+            <span class="toggle-text">{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
           </div>
           <label *ngIf="field.type !== 'boolean'" class="form-control-label">
-            <span>{{ field.label }}</span>
+            <span>{{ field.label }}</span> <span class="pending-mark" *ngIf="pendingKeys.has(field.key)" title="Saved since the server started; takes effect at its next restart">Next restart</span>
           </label>
           <input *ngIf="field.type === 'number'" class="form-control input" type="number" [step]="field.step || 1" [min]="field.min || null" [max]="field.max || null" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />
           <input *ngIf="field.type === 'text'" class="form-control input" type="text" [(ngModel)]="serverInstance[field.key]" (blur)="onSaveSettings(); onValidateField(field.key, serverInstance[field.key])" [disabled]="isLocked" />

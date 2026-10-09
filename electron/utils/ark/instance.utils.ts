@@ -154,7 +154,7 @@ export async function saveInstance(instance: Partial<InstanceConfig>): Promise<S
     if (needsOtherPorts(config, others, ranges)) {
       const free = nextFreePortsIn(ranges, others);
       if (!free) {
-        return { error: `No ports are left in this machine's server ports (${describeRanges(ranges)}). Widen them in Settings → Server ports.` };
+        return { error: `No ports are left in this machine's server ports (${describeRanges(ranges)}). Widen them in Settings → Server Defaults → Server Ports.` };
       }
       config.gamePort = free.gamePort;
       config.queryPort = free.queryPort;

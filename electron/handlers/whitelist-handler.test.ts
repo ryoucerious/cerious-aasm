@@ -1,5 +1,6 @@
 import { messagingService } from '../services/messaging.service';
 import { whitelistService } from '../services/whitelist.service';
+import { setHostRouter } from '../services/host-routing';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn() }
@@ -88,6 +89,23 @@ describe('whitelist-handler', () => {
 
       expect(method).not.toHaveBeenCalled();
       expect(replies(channel)).toEqual([{ success: false, error: 'Invalid instance ID' }]);
+    });
+  });
+
+  // A server on another machine: its whitelist file is there.
+  describe('a server hosted on another machine', () => {
+    const router = jest.fn(async () => ({ success: true, playerIds: ['p1'] }));
+    beforeEach(() => { router.mockClear(); setHostRouter(router); });
+    afterEach(() => setHostRouter(null));
+
+    it.each([
+      ['load-whitelist', true, {}], ['add-to-whitelist', false, { playerId: 'p1' }],
+      ['remove-from-whitelist', false, { playerId: 'p1' }], ['clear-whitelist', false, {}]
+    ])('runs %s on that machine', async (channel, read, extra) => {
+      await handlers[channel as string]({ instanceId: 'far', ...(extra as object) }, sender);
+
+      expect(router).toHaveBeenCalledWith(channel, 'far', { instanceId: 'far', ...(extra as object) }, read, sender);
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith(channel, { success: true, playerIds: ['p1'] }, sender);
     });
   });
 });

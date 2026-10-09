@@ -88,7 +88,7 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
         </ng-container>
 
         <!-- Outside Docker's published ports: the server ports of the machine it runs on, which its
-             firewall opens once for every server (Settings → Server ports). -->
+             firewall opens once for every server (Settings → Server Defaults → Server Ports). -->
         <div class="form-group page-intro machine-ports" *ngIf="(!dockerPublished || otherMachine) && portChecks.length">
           <h4>This Server's Ports</h4>
           <ul class="docker-port-checks">
@@ -103,14 +103,14 @@ AASM_RCON_PORTS={{ composeRange(d.rconPorts) }}</pre>
           </ul>
           <div class="form-control-label desc" *ngIf="portsOutOfRange > 0">
             Change the port in this server's settings to one inside the range, or widen the ranges in
-            Settings → Server ports{{ otherMachine ? ' on ' + otherMachine : '' }}.
+            Settings → Server Defaults → Server Ports{{ otherMachine ? ' on ' + otherMachine : '' }}.
           </div>
           <p class="machine-ports-firewall" *ngIf="portsOpen === true">
             Windows Firewall lets players reach {{ machineLabel }} server ports.
           </p>
           <p class="machine-ports-firewall blocked" *ngIf="portsOpen === false">
             Windows Firewall keeps players out of {{ machineLabel }} server ports. Open them in
-            Settings → Server ports{{ otherMachine ? ' on ' + otherMachine : '' }}: Windows asks for permission once.
+            Settings → Server Defaults → Server Ports{{ otherMachine ? ' on ' + otherMachine : '' }}: Windows asks for permission once.
           </p>
         </div>
 

@@ -52,6 +52,11 @@ export class MeshRepository {
     );
   }
 
+  /** This machine's copy of the mesh is current: what it reads is what the others agreed. */
+  async caughtUp(): Promise<boolean> {
+    return this.db.caughtUp ? this.db.caughtUp() : true;
+  }
+
   async hasQuorum(): Promise<boolean> {
     return (await this.db.status()).hasQuorum;
   }
@@ -98,6 +103,20 @@ export class MeshRepository {
   /** Only the name, so nothing else a member is writing about itself at the same time is lost. */
   async setNodeName(nodeId: string, name: string): Promise<void> {
     await this.db.exec('UPDATE nodes SET name = ? WHERE node_id = ?', [name, nodeId]);
+  }
+
+  /**
+   * What a machine's heartbeat records about itself, and nothing else: a rename or Skip new servers
+   * made meanwhile is not written back over with what the heartbeat read before it.
+   */
+  async recordHeartbeat(
+    nodeId: string,
+    beat: Pick<NodeRecord, 'version' | 'protocolVersion' | 'certSerial' | 'capabilities' | 'lastSeen'>
+  ): Promise<void> {
+    await this.db.exec(
+      'UPDATE nodes SET version = ?, protocol_version = ?, cert_serial = ?, capabilities = ?, last_seen = ? WHERE node_id = ?',
+      [beat.version, beat.protocolVersion, beat.certSerial, JSON.stringify(beat.capabilities), beat.lastSeen, nodeId]
+    );
   }
 
   async upsertNode(node: NodeRecord): Promise<void> {

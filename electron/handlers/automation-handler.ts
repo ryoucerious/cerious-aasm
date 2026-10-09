@@ -12,13 +12,13 @@ onRequest('configure-autostart', payload => {
   const { serverId, autoStartOnAppLaunch, autoStartOnBoot } = payload;
   if (!validateInstanceId(serverId)) return INVALID_ID;
   return automationService.configureAutostart(serverId, autoStartOnAppLaunch, autoStartOnBoot);
-});
+}, { host: { idKey: 'serverId' } });
 
 onRequest('configure-crash-detection', payload => {
   const { serverId, enabled, checkInterval, maxRestartAttempts } = payload;
   if (!validateInstanceId(serverId)) return INVALID_ID;
   return automationService.configureCrashDetection(serverId, enabled, checkInterval, maxRestartAttempts);
-});
+}, { host: { idKey: 'serverId' } });
 
 onRequest('configure-discord-webhook', async payload => {
   const { serverId, config } = payload;
@@ -26,7 +26,7 @@ onRequest('configure-discord-webhook', async payload => {
   const invalid = validateDiscordConfig(config);
   if (invalid) return { success: false, error: invalid };
   return saveToInstance(serverId, { discordConfig: config });
-});
+}, { host: { idKey: 'serverId' } });
 
 onRequest('configure-broadcasts', async payload => {
   const { serverId, broadcastConfig, broadcasts } = payload;
@@ -44,19 +44,20 @@ onRequest('configure-broadcasts', async payload => {
     await schedulerService.initSchedule(serverId);
   }
   return result;
-});
+}, { host: { idKey: 'serverId' } });
 
 onRequest('configure-scheduled-restart', payload => {
-  const { serverId, enabled, frequency, time, days, warningMinutes } = payload;
+  const { serverId, enabled, frequency, time, times, days, warningMinutes } = payload;
   if (!validateInstanceId(serverId)) return INVALID_ID;
-  return automationService.configureScheduledRestart(serverId, enabled, frequency, time, days, warningMinutes);
-});
+  // Several times a day, or the one time older pages send.
+  return automationService.configureScheduledRestart(serverId, enabled, frequency, Array.isArray(times) ? times : time, days, warningMinutes);
+}, { host: { idKey: 'serverId' } });
 
 onRequest('get-automation-status', payload => {
   const { serverId } = payload;
   if (!validateInstanceId(serverId)) return INVALID_ID;
   return automationService.getAutomationStatus(serverId);
-});
+}, { host: { idKey: 'serverId', read: true } });
 
 onRequest('auto-start-on-app-launch', async () => {
   await automationService.handleAutoStartOnAppLaunch();

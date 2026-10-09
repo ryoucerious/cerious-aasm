@@ -247,7 +247,8 @@ export interface ServerInstance {
   maxRestartAttempts?: number; // Max restart attempts before giving up
   scheduledRestartEnabled?: boolean; // Enable scheduled restarts
   restartFrequency?: 'none' | 'daily' | 'weekly' | 'custom'; // How often to restart
-  restartTime?: string; // Time to restart (HH:MM format)
+  restartTime?: string; // Time to restart (HH:MM format); the first of restartTimes
+  restartTimes?: string[]; // Every time of day to restart (HH:MM); unset in older versions
   restartDays?: number[]; // Days of week to restart (0=Sunday, 1=Monday, etc.)
   restartWarningMinutes?: number; // Minutes to warn players before restart
 

@@ -124,7 +124,7 @@ describe('FirewallTabComponent', () => {
       render(windows(false), { gamePort: 7777, queryPort: 27015, rconPort: 27020 });
 
       expect(text()).toContain('Windows Firewall keeps players out of this machine\'s server ports');
-      expect(text()).toContain('Settings → Server ports');
+      expect(text()).toContain('Settings → Server Defaults → Server Ports');
       expect(text()).not.toContain('sudo ufw');
       expect(text()).not.toContain('Linux Firewall Configuration');
     });
@@ -162,7 +162,7 @@ describe('FirewallTabComponent', () => {
       expect(component.portChecks.filter(c => !c.ok).map(c => c.label)).toEqual(['Game', 'Peer']);
       expect(text()).toContain('outside asa-1\'s server ports 8000–8100');
       expect(text()).toContain('Windows Firewall keeps players out of asa-1\'s server ports');
-      expect(text()).toContain('Settings → Server ports on asa-1');
+      expect(text()).toContain('Settings → Server Defaults → Server Ports on asa-1');
       expect(text()).not.toContain('sudo ufw');
     });
   });

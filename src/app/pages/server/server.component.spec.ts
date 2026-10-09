@@ -16,6 +16,7 @@ import { ServerLifecycleService } from '../../core/services/server-lifecycle.ser
 import { EventSubscriptionService } from '../../core/services/event-subscription.service';
 import { AuthService } from '../../core/services/auth.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { RestartsService } from '../../core/services/restarts.service';
 import { SaveInstanceResult } from '../../core/models/server-instance.model';
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockServerInstanceService } from '../../../../test/mocks/mock-server-instance.service';
@@ -38,7 +39,13 @@ describe('ServerComponent', () => {
   let moveDestinations: Array<{ nodeId: string; name: string }>;
   let destinationsAskedFor: unknown;
 
+  let restarts: jasmine.SpyObj<RestartsService> & { changed$: unknown };
+  let restartsChanged: Subject<void>;
+
   beforeEach(async () => {
+    restartsChanged = new Subject<void>();
+    restarts = Object.assign(jasmine.createSpyObj('RestartsService', ['restart', 'cancel', 'dueAt']), { changed$: restartsChanged.asObservable() });
+    restarts.dueAt.and.returnValue(null);
     denied = new Set();
     moveDestinations = [];
     destinationsAskedFor = null;
@@ -107,7 +114,8 @@ describe('ServerComponent', () => {
             changed$: of(undefined),
             destinationsFor: (server: unknown) => { destinationsAskedFor = server; return moveDestinations; }
           }
-        }
+        },
+        { provide: RestartsService, useValue: restarts }
       ],
       schemas: [NO_ERRORS_SCHEMA]
     }).compileComponents();
@@ -118,6 +126,94 @@ describe('ServerComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  // Settings saved while it runs take effect at the next restart; the page marks which.
+  describe('settings saved since the server started', () => {
+    const started = { id: 'a', name: 'Island', maxPlayers: 70, restartTime: '02:00', broadcastConfig: { enabled: false } };
+
+    beforeEach(() => {
+      component.activeServerInstance = { ...started, state: 'running', maxPlayers: 50, restartTime: '04:00', broadcastConfig: { enabled: true } } as never;
+      spyOn(TestBed.inject(LiveServersService), 'find').and.returnValue({ id: 'a', name: 'Island', state: 'running', startedAt: 1_000 } as never);
+    });
+
+    it('asks the server\'s machine what it started with, once each time it starts', () => {
+      (mockMessaging.sendMessage as jasmine.Spy).and.callFake((channel: string) => of(channel === 'get-started-config' ? { config: started } : null));
+
+      component.refreshStartedConfig();
+      component.refreshStartedConfig();
+
+      const asked = (mockMessaging.sendMessage as jasmine.Spy).calls.allArgs().filter(([channel]) => channel === 'get-started-config');
+      expect(asked).toEqual([['get-started-config', { id: 'a' }]]);
+    });
+
+    it('marks what takes effect at the next start, not what takes effect now', () => {
+      (mockMessaging.sendMessage as jasmine.Spy).and.callFake((channel: string) => of(channel === 'get-started-config' ? { config: started } : null));
+      component.refreshStartedConfig();
+
+      expect([...component.pendingKeys]).toEqual(['maxPlayers']);
+    });
+
+    it('marks nothing for a server that is not running', () => {
+      (mockMessaging.sendMessage as jasmine.Spy).and.callFake((channel: string) => of(channel === 'get-started-config' ? { config: started } : null));
+      component.refreshStartedConfig();
+      // The live list says so first: the page's own copy follows state events.
+      (TestBed.inject(LiveServersService).find as jasmine.Spy).and.returnValue({ id: 'a', name: 'Island', state: 'stopped' } as never);
+      component.activeServerInstance = { ...component.activeServerInstance, state: 'stopped' } as never;
+
+      expect(component.pendingKeys.size).toBe(0);
+    });
+  });
+
+  // Players hear the countdown a scheduled restart gives them, unless it is restarted now.
+  describe('restarting', () => {
+    beforeEach(() => {
+      component.activeServerInstance = { id: 'a', name: 'Island', restartWarningMinutes: 10 } as never;
+    });
+
+    it('asks first, offering the server\'s own warning time', () => {
+      component.askRestart();
+
+      expect(component.showRestart).toBeTrue();
+      expect(component.restartWarningMinutes).toBe(10);
+    });
+
+    it('warns for 5 minutes when the server has no warning time of its own', () => {
+      component.activeServerInstance = { id: 'a', name: 'Island' } as never;
+
+      component.askRestart();
+
+      expect(component.restartWarningMinutes).toBe(5);
+    });
+
+    it('restarts after the warning, or now', () => {
+      component.askRestart();
+      component.confirmRestart(true);
+      expect(restarts.restart).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'a' }), 10);
+      expect(component.showRestart).toBeFalse();
+
+      component.askRestart();
+      component.confirmRestart(false);
+      expect(restarts.restart).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'a' }), 0);
+    });
+
+    // The page's clock ticked every 30 seconds, so a countdown just begun read a minute high.
+    it('reads the clock again when a restart begins or ends', () => {
+      component.ngOnInit();
+      component.now = 0;
+
+      restartsChanged.next();
+
+      expect(Date.now() - component.now).toBeLessThan(1000);
+    });
+
+    it('cancels a restart counting down, and shows when it is due', () => {
+      restarts.dueAt.and.returnValue(900_000);
+
+      expect(component.restartDueAt).toBe(900_000);
+      component.cancelRestart();
+      expect(restarts.cancel).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'a' }));
+    });
   });
 
   it('should initialize event subscriptions on ngOnInit', () => {

@@ -7,6 +7,8 @@ import { serverManagementService } from '../services/server-instance/server-mana
 import { serverProcessService } from '../services/server-instance/server-process.service';
 import { automationService } from '../services/automation/automation.service';
 import { restartCountdowns } from '../services/automation/restart-countdown.service';
+import { readStartedConfig } from '../utils/ark/started-config.utils';
+import { backupCopies } from '../services/backup/backup-copies.service';
 import { activityLogService } from '../services/activity-log.service';
 import { identifySender, isDesktopWindow, SenderIdentity } from '../services/auth/permission-gate';
 import { filterInstancesForUser } from '../services/auth/pool-access';
@@ -461,6 +463,21 @@ onRequest('import-server-from-backup', async (payload, { sender, afterReply }) =
   return { success: result.success, instance, message: result.message, error: result.error };
 }, { fallbackError: 'Failed to import server from backup' });
 
+// A machine that was lost: its servers come back here from the copies of their latest backups.
+onRequest('restore-backup-copy', async (payload, { sender, afterReply }) => {
+  const { serverId, serverName } = payload;
+  const file = typeof serverId === 'string' ? backupCopies.heldPath(serverId) : null;
+  if (!file) return { success: false, error: 'This machine keeps no copy of that server\'s backups.' };
+  const result = await serverInstanceService.importServerFromBackup(serverName, { filePath: file }, true);
+  let instance = result.instance;
+  if (result.success && instance) {
+    instance = await stampImportedPool(instance, sender);
+    await meshService.recordServer(instance);
+    afterReply(() => serverInstanceService.broadcastInstances());
+  }
+  return { success: result.success, instance, message: result.message, error: result.error };
+}, { fallbackError: 'Failed to restore the backup copy' });
+
 async function stampImportedPool(imported: InstanceConfig, sender: MessageSender): Promise<InstanceConfig> {
   const identity = identifySender(sender);
   if (identity.isAdmin) return imported;
@@ -524,6 +541,17 @@ onRequest('cancel-server-restart', async (payload, { sender }) => {
   if (remote) return remote;
   return { success: restartCountdowns.cancel(id), instanceId: id };
 }, { onError: (error, payload) => ({ success: false, instanceId: payload.id, error }) });
+
+/**
+ * The settings a server started with, from the machine hosting it, so the settings page can mark the
+ * ones saved since, which take effect at its next start.
+ */
+onRequest('get-started-config', async payload => {
+  const { id } = payload;
+  const remote = await meshService.queryRemote<{ config?: unknown }>(id, 'started-config');
+  if (remote) return { config: remote.config ?? null };
+  return { config: readStartedConfig(id) };
+}, { fallbackError: 'Could not read the settings the server started with' });
 
 /** The restarts counting down here. Those on other machines arrive as their countdowns start. */
 onRequest('get-pending-restarts', () => ({ pending: restartCountdowns.pending() }));

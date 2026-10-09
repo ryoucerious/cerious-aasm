@@ -80,6 +80,17 @@ describe('checkpoint', () => {
       expect(checkpointManifest('isle')).toEqual(['PlayersExclusiveJoinList.txt', SAVE, 'cluster-import.json', 'config.json']);
     });
 
+    // Lines typed into the INI files that the app has no setting for live only there: a move dropped them.
+    it('carries the server\'s own INI files, with the lines added to them by hand', () => {
+      writeServer('isle');
+      const config = path.join(servers, 'isle', 'Config', 'WindowsServer');
+      fs.mkdirSync(config, { recursive: true });
+      fs.writeFileSync(path.join(config, 'GameUserSettings.ini'), '[ServerSettings]\nCustomThing=1\n');
+      fs.writeFileSync(path.join(config, 'Game.ini'), '[/script/shootergame.shootergamemode]\nOtherThing=2\n');
+
+      expect(checkpointManifest('isle')).toEqual(['Config/WindowsServer/Game.ini', 'Config/WindowsServer/GameUserSettings.ini', SAVE, 'config.json']);
+    });
+
     it('checksums the listed files the same way the destination does', async () => {
       writeServer('isle');
 

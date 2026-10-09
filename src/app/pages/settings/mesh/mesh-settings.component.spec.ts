@@ -13,6 +13,8 @@ describe('MeshSettingsComponent', () => {
   let sendMessage: jasmine.Spy;
   let notification: MockNotificationService;
   let canManageNodes: boolean;
+  /** Permissions the signed-in role lacks, beyond nodes.manage. */
+  let denied = new Set<string>();
   /** What rename-mesh-node answers. */
   let renameReply: unknown;
   /** What other channels answer, by channel; get-mesh-status answers with the status opened. */
@@ -21,6 +23,7 @@ describe('MeshSettingsComponent', () => {
   let statusEvents: Subject<unknown>;
 
   beforeEach(() => {
+    denied = new Set<string>();
     canManageNodes = true;
     renameReply = null;
     replies = {};
@@ -38,7 +41,7 @@ describe('MeshSettingsComponent', () => {
       providers: [
         { provide: MessagingService, useValue: { sendMessage, receiveMessage: (channel: string) => (channel === 'mesh-status' ? statusEvents : NEVER) } },
         { provide: NotificationService, useValue: notification },
-        { provide: AuthService, useValue: { can: (permission: string) => permission !== 'nodes.manage' || canManageNodes, identity: { accountsInUse: true }, refresh: async () => undefined } }
+        { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission) && (permission !== 'nodes.manage' || canManageNodes), identity: { accountsInUse: true }, refresh: async () => undefined } }
       ]
     }).compileComponents();
     fixture = TestBed.createComponent(MeshSettingsComponent);
@@ -147,6 +150,38 @@ describe('MeshSettingsComponent', () => {
     });
   });
 
+  // It printed the raw answer: braces, rttMs and all.
+  it('says plainly which machines answered the reachability check', async () => {
+    replies['mesh-diagnostics'] = {
+      probes: [{ target: 'asa-1', ok: true, rttMs: 12 }, { target: 's001', ok: false, rttMs: 0, error: 'connect ECONNREFUSED' }],
+      skew: [{ nodeId: 'n2', skewMs: 5_000 }, { nodeId: 'n3', skewMs: 300 }]
+    };
+    const page = await open({ ...standalone, enabled: true, meshName: 'Mesh', nodeId: 'n1', nodes: [
+      { nodeId: 'n1', name: 'PC 1', status: 'alive', connected: true }, { nodeId: 'n2', name: 'asa-1', status: 'alive', connected: true }
+    ] });
+
+    Array.from(page.querySelectorAll('button')).find(button => button.textContent?.includes('Check reachability'))!.click();
+    fixture.detectChanges();
+
+    const lines = Array.from(page.querySelectorAll('.mesh-reachability li')).map(item => item.textContent?.trim());
+    expect(lines).toEqual(['asa-1 answered in 12 ms.', 's001 did not answer: connect ECONNREFUSED', 'asa-1\'s clock is 5 seconds ahead of this machine\'s.']);
+    expect(page.querySelector('.mesh-output')).toBeNull();
+  });
+
+  // A Docker machine drifted 237 seconds: in minutes, that reads at a glance.
+  it('gives a clock far off in minutes', async () => {
+    replies['mesh-diagnostics'] = { probes: [], skew: [{ nodeId: 'n2', skewMs: -237_000 }] };
+    const page = await open({ ...standalone, enabled: true, meshName: 'Mesh', nodeId: 'n1', nodes: [
+      { nodeId: 'n1', name: 'PC 1', status: 'alive', connected: true }, { nodeId: 'n2', name: 'Docker 1', status: 'alive', connected: true }
+    ] });
+
+    Array.from(page.querySelectorAll('button')).find(button => button.textContent?.includes('Check reachability'))!.click();
+    fixture.detectChanges();
+
+    expect(Array.from(page.querySelectorAll('.mesh-reachability li')).map(item => item.textContent?.trim()))
+      .toEqual(['Docker 1\'s clock is 4 minutes behind this machine\'s.']);
+  });
+
   // The cards had grown a row of seven controls. Occasional changes moved into a ⋯ menu.
   describe('a machine\'s menu', () => {
     const node = (nodeId: string, name: string, extra: Record<string, unknown> = {}) =>
@@ -154,6 +189,23 @@ describe('MeshSettingsComponent', () => {
     const inMesh = (nodes: unknown[]) => ({ ...standalone, enabled: true, meshName: 'Mesh', voterCount: nodes.length, nodes });
     const cardLabels = (page: HTMLElement, index: number) =>
       Array.from(cardAt(page, index).querySelectorAll('button')).map(button => button.textContent?.trim());
+
+    // The backend refused these to anyone but an Admin; the page still offered them.
+    it('offers no Enrollment token to a role that cannot add machines', async () => {
+      denied.add('nodes.enroll');
+      const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'Docker 1')]));
+
+      expect(Array.from(page.querySelectorAll('button')).some(button => button.textContent?.includes('Enrollment token'))).toBeFalse();
+    });
+
+    it('offers no Remove or Leave, and no empty menu, to a role that cannot change the machines', async () => {
+      denied.add('nodes.remove');
+      canManageNodes = false;
+      const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'Docker 1')]));
+
+      expect(cardAt(page, 0).querySelector('.mesh-node-more')).toBeNull();
+      expect(cardAt(page, 1).querySelector('.mesh-node-more')).toBeNull();
+    });
 
     it('holds Rename, Change address, and Remove last in red', async () => {
       const page = await open(inMesh([node('n1', 'PC 1'), node('n2', 'Docker 1')]));
@@ -234,8 +286,8 @@ describe('MeshSettingsComponent', () => {
       ]));
       const warning = (index: number) => cardAt(page, index).querySelector('.mesh-node-ports span')?.textContent?.trim();
 
-      expect(warning(0)).toBe('Windows Firewall keeps players out of the server ports here. Open them in Settings → Server ports.');
-      expect(warning(1)).toBe('Windows Firewall keeps players out of its server ports. Open them in Settings → Server ports on asa-1.');
+      expect(warning(0)).toBe('Windows Firewall keeps players out of the server ports here. Open them in Settings → Server Defaults → Server Ports.');
+      expect(warning(1)).toBe('Windows Firewall keeps players out of its server ports. Open them in Settings → Server Defaults → Server Ports on asa-1.');
       expect(warning(2)).withContext('not known').toBeUndefined();
       expect(warning(3)).toBeUndefined();
     });

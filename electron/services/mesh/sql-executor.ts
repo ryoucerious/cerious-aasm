@@ -17,6 +17,8 @@ export interface SqlExecutor {
   exec(sql: string, params?: unknown[], consistency?: Consistency): Promise<number>;
   query<T extends Record<string, unknown>>(sql: string, params?: unknown[], consistency?: Consistency): Promise<T[]>;
   status(): Promise<ExecutorStatus>;
+  /** This node has applied what the others agreed, so its local reads are current. Absent: always. */
+  caughtUp?(): Promise<boolean>;
 }
 
 /** Opens the WASM SQLite the rest of the app already uses, so mesh tests share one driver. */

@@ -1,5 +1,6 @@
 import { RconCommandNotSentError, connectRcon, disconnectRcon, getRconPassword, isRconConnected, sendRconCommand } from '../utils/rcon.utils';
 import * as instanceUtils from '../utils/ark/instance.utils';
+import { forRcon } from '../utils/ark/started-config.utils';
 
 export interface RconConnectionResult {
   success: boolean;
@@ -39,10 +40,12 @@ export class RconService {
         return { success: false, connected: false, instanceId: instanceId || '', error: 'Invalid instance ID' };
       }
 
-      const instance = instanceUtils.getInstance(instanceId);
-      if (!instance) {
+      const saved = instanceUtils.getInstance(instanceId);
+      if (!saved) {
         return { success: false, connected: false, instanceId, error: 'Instance not found' };
       }
+      // The port and password it started with: one saved since waits for its next start.
+      const instance = forRcon(saved);
       if (!instance.rconPort || !getRconPassword(instance)) {
         return { success: false, connected: false, instanceId, error: 'RCON not configured for this instance' };
       }
@@ -72,7 +75,8 @@ export class RconService {
    */
   async reconnectRcon(instanceId: string, timeoutMs: number): Promise<boolean> {
     try {
-      const instance = instanceUtils.getInstance(instanceId);
+      const saved = instanceUtils.getInstance(instanceId);
+      const instance = saved ? forRcon(saved) : null;
       if (!instance?.rconPort || !getRconPassword(instance)) return false;
       return await new Promise<boolean>(resolve => {
         // Cancelling the attempt answers the callback below with false.

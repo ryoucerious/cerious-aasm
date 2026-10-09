@@ -18,18 +18,22 @@ export class AutomationConfigService {
     return this.apply(serverId, { crashDetectionEnabled: enabled, crashDetectionInterval: checkInterval, maxRestartAttempts });
   }
 
+  /** `time` is one HH:MM, or several for more than one restart a day. */
   configureScheduledRestart(
     serverId: string,
     enabled: boolean,
     frequency: AutomationSettings['restartFrequency'],
-    time: string,
+    time: string | string[],
     days: number[],
     warningMinutes: number
   ): Promise<AutomationConfigResult> {
+    const times = restartTimesFrom(time);
     return this.apply(serverId, {
       scheduledRestartEnabled: enabled,
       restartFrequency: frequency,
-      restartTime: time,
+      // The first time is restartTime too, for older versions, which know only one.
+      restartTime: times[0] ?? '02:00',
+      restartTimes: times,
       restartDays: days,
       restartWarningMinutes: warningMinutes
     });
@@ -53,4 +57,10 @@ export class AutomationConfigService {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
+}
+
+/** Valid HH:MM times, each once, in order of the day. */
+function restartTimesFrom(time: string | string[]): string[] {
+  const times = (Array.isArray(time) ? time : [time]).filter(value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value));
+  return [...new Set(times)].sort();
 }

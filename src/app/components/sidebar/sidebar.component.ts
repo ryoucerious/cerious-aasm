@@ -1,5 +1,5 @@
-import { Component, EventEmitter, Output, ChangeDetectionStrategy, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { Subscription } from 'rxjs';
+import { Component, EventEmitter, Output, ChangeDetectionStrategy, OnInit, OnDestroy, ChangeDetectorRef, inject } from '@angular/core';
+import { Subscription, interval } from 'rxjs';
 import { NgFor, NgIf, NgClass } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
@@ -21,6 +21,8 @@ import { SettingsDrawerService } from '../../core/services/settings-drawer.servi
 import { AppUpdateService } from '../../core/services/app-update.service';
 import { IpcService } from '../../core/services/ipc.service';
 import { AuthService } from '../../core/services/auth.service';
+import { RestartsService } from '../../core/services/restarts.service';
+import { GlobalConfigService } from '../../core/services/global-config.service';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { environment } from '../../../environments/environment';
 
@@ -108,6 +110,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
   serverToDelete: ServerInstance | null = null;
   showConfirmStartAllModal = false;
   showConfirmStopAllModal = false;
+  showConfirmRestartAllModal = false;
+  /** The countdown Restart all offers: the warning time ARK updates give, from Settings → Updates. */
+  restartAllWarningMinutes = 15;
+  private readonly restarts = inject(RestartsService);
+  private readonly globalConfig = inject(GlobalConfigService);
 
   private subs: Subscription[] = [];
   private isLinux = false;
@@ -143,6 +150,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    this.subs.push(this.restarts.changed$.subscribe(() => this.cdr.markForCheck()));
+    // The minutes left on a restart of all count down.
+    this.subs.push(interval(15_000).subscribe(() => {
+      if (this.restarts.restartingAllAt() !== null) this.cdr.markForCheck();
+    }));
     this.subs.push(this.appUpdate.status$.subscribe(status => {
       this.appUpdateState = status?.status ?? null;
       this.appUpdatePending = AppUpdateService.isPending(status);
@@ -596,6 +608,30 @@ export class SidebarComponent implements OnInit, OnDestroy {
   onConfirmStopAll(): void {
     this.showConfirmStopAllModal = false;
     this.serverLifecycle.stopAllServers();
+  }
+
+  restartAllServers(): void {
+    this.restartAllWarningMinutes = Number(this.globalConfig.updateWarningMinutes) || 15;
+    this.showConfirmRestartAllModal = true;
+    this.cdr.markForCheck();
+  }
+
+  /** Every machine restarts its own running servers in order, after the countdown or now. */
+  onConfirmRestartAll(warnFirst: boolean): void {
+    this.showConfirmRestartAllModal = false;
+    this.restarts.restartAll(warnFirst ? this.restartAllWarningMinutes : 0);
+  }
+
+  cancelRestartAll(): void {
+    this.restarts.cancelAll();
+  }
+
+  /** "Restarting all in 12 min" while a restart of all counts down; empty otherwise. */
+  get restartAllText(): string {
+    const dueAt = this.restarts.restartingAllAt();
+    if (dueAt === null) return '';
+    const minutes = Math.ceil((dueAt - Date.now()) / 60_000);
+    return minutes > 0 ? `Restarting all in ${minutes} min` : 'Restarting all now';
   }
 }
 

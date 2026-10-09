@@ -16,6 +16,7 @@ import { UsersSettingsComponent } from './users/users-settings.component';
 import { ProfileSettingsComponent } from './profile/profile-settings.component';
 import { MeshSettingsComponent } from './mesh/mesh-settings.component';
 import { ClustersSettingsComponent } from './clusters/clusters-settings.component';
+import { HeldBackupCopiesComponent } from './backup-copies/held-backup-copies.component';
 import { ServerPortsSettingsComponent } from './server-ports/server-ports-settings.component';
 import { SettingsDrawerService, SettingsSection } from '../../core/services/settings-drawer.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -94,7 +95,7 @@ interface SystemInfoReply {
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent, ClustersSettingsComponent, ServerPortsSettingsComponent],
+  imports: [NgFor, NgIf, NgClass, DatePipe, ModalComponent, FormsModule, DrawerComponent, UsersSettingsComponent, ProfileSettingsComponent, MeshSettingsComponent, ClustersSettingsComponent, ServerPortsSettingsComponent, HeldBackupCopiesComponent],
   templateUrl: './settings.component.html'
 })
 export class SettingsPageComponent implements OnInit {

@@ -9,7 +9,7 @@ export const MIN_PROTOCOL_VERSION = 1;
 
 export function protocolError(peer: number, local = PROTOCOL_VERSION): string | null {
   if (Number.isInteger(peer) && peer >= MIN_PROTOCOL_VERSION && peer <= local) return null;
-  return `Protocol ${peer} is not compatible with ${local}.`;
+  return `These machines run versions of Cerious AASM that cannot work together (protocol ${peer} and ${local}). Update them to the same version.`;
 }
 
 /**
@@ -37,11 +37,16 @@ export const COMMAND_PROTOCOL: Record<ControlCommand['operation'], number> = {
   'ark-api': 2,
   'cancel-restart': 2,
   'restart-all': 2,
-  'cancel-restart-all': 2
+  'cancel-restart-all': 2,
+  'take-backup-copy': 2,
+  'drop-backup-copy': 2,
+  'fetch-backup-copy': 2,
+  'server-request': 2
 };
 
 /** Read-only questions one node asks the node hosting a server. Not commands: never logged, no quorum. */
-export type MeshQuery = 'state' | 'logs' | 'players' | 'rcon-status' | 'online-players' | 'ini' | 'ark-api';
+export type MeshQuery = 'state' | 'logs' | 'players' | 'rcon-status' | 'online-players' | 'ini' | 'ark-api' | 'started-config' | 'backup-copy'
+  | 'server-request';
 export const QUERY_PROTOCOL = 2;
 
 /** Commands issued further from now than this are refused. Raft does not depend on this clock. */
@@ -286,7 +291,8 @@ export interface ControlCommand {
   targetNode: string;
   operation: 'start' | 'stop' | 'force-stop' | 'restart' | 'delete' | 'move' | 'save-config'
     | 'start-all' | 'stop-all' | 'rcon' | 'connect-rcon' | 'disconnect-rcon' | 'save-ini' | 'set-ownership'
-    | 'update-ark' | 'update-app' | 'set-address' | 'ark-api' | 'cancel-restart' | 'restart-all' | 'cancel-restart-all';
+    | 'update-ark' | 'update-app' | 'set-address' | 'ark-api' | 'cancel-restart' | 'restart-all' | 'cancel-restart-all'
+    | 'take-backup-copy' | 'drop-backup-copy' | 'fetch-backup-copy' | 'server-request';
   serverId: string;
   /** Move only: the node that receives the server. */
   destinationNodeId?: string;
@@ -318,6 +324,8 @@ export interface MeshStatus {
   warning: string | null;
   /** False when the mesh has no accounts yet, so the desktop can create the first one. */
   hasAccounts: boolean;
+  /** The account this machine's own admin password signs in as since it joined, while it can. */
+  ownLogin?: string;
   /** In a mesh, but not yet back in touch with it after a restart. Not standalone: it must not offer to create or join one. */
   reconnecting?: boolean;
   /** Where other machines reach this one: as it joined with, or, outside a mesh, as it would advertise. */

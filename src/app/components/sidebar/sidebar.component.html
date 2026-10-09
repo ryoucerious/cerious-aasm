@@ -18,11 +18,21 @@
           <button type="button" class="nav-mini-btn" title="Stop all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="stopAllServers()">
             <span class="material-icons">stop</span>
           </button>
+          <button type="button" class="nav-mini-btn" title="Restart all servers" *ngIf="servers.length" [disabled]="!canStopAll" (click)="restartAllServers()">
+            <span class="material-icons">restart_alt</span>
+          </button>
           <button type="button" class="nav-mini-btn" title="Add server" *ngIf="canCreateServer" (click)="onAddServerClick()">
             <span class="material-icons">add</span>
           </button>
         </div>
         <span class="material-icons nav-section-chevron">{{ showServers ? 'expand_more' : 'chevron_right' }}</span>
+      </div>
+
+      <!-- A restart of every server counting down: the players are hearing the warnings. -->
+      <div class="restart-all-pending" *ngIf="restartAllText" role="status">
+        <span class="material-icons spinner" aria-hidden="true">autorenew</span>
+        <span class="restart-all-pending-text">{{ restartAllText }}</span>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="cancelRestartAll()">Cancel</button>
       </div>
 
       <div class="server-list-tools" *ngIf="showServers && servers.length >= searchFrom">
@@ -159,6 +169,20 @@
   <div class="action-group-modal">
     <button type="button" (click)="showConfirmStartAllModal = false" class="btn">Cancel</button>
     <button type="button" (click)="onConfirmStartAll()" class="btn btn-primary">Start All</button>
+  </div>
+</app-modal>
+
+<app-modal [title]="'Restart All Servers'" [show]="showConfirmRestartAllModal" [maxWidth]="'520px'" (close)="showConfirmRestartAllModal = false">
+  <p>
+    Players on every running server are warned in game for {{ restartAllWarningMinutes }} {{ restartAllWarningMinutes === 1 ? 'minute' : 'minutes' }}.
+    Then each machine restarts its servers in order, the start delay apart, which also picks up mod updates.
+    You can cancel it until then.
+  </p>
+  <p class="form-control-label desc">The warning time is the one ARK updates use, in Settings → Updates.</p>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="showConfirmRestartAllModal = false">Cancel</button>
+    <button type="button" class="btn" (click)="onConfirmRestartAll(false)">Restart all now</button>
+    <button type="button" class="btn btn-primary" (click)="onConfirmRestartAll(true)">Warn players and restart all</button>
   </div>
 </app-modal>
 

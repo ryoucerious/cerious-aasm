@@ -220,7 +220,10 @@ export class AutoUpdateService {
     }
   }
 
-  /** Quits and installs a downloaded update. */
+  /**
+   * Quits and installs a downloaded update, then starts the app again. Silently: the update may
+   * come from another machine in the mesh, or the web interface, with no one here to click Next.
+   */
   quitAndInstall(): void {
     if (this.manualOnly) return;
 
@@ -231,7 +234,7 @@ export class AutoUpdateService {
 
     if (this.updateDownloaded) {
       console.log('[auto-update] Quitting to install the update');
-      autoUpdater.quitAndInstall();
+      autoUpdater.quitAndInstall(true, true);
     } else {
       console.warn('[auto-update] No update downloaded yet.');
     }

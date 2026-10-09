@@ -28,12 +28,20 @@ import type { InstanceConfig } from '../../types/server-instance.types';
 import { localRuntime } from '../runtime/local-runtime';
 import { ArkApiAction, isReadOnlyArkApiAction, runArkApiAction } from '../ark-api-actions';
 import { restartCountdowns } from '../automation/restart-countdown.service';
+import { readStartedConfig } from '../../utils/ark/started-config.utils';
+import { backupService } from '../backup/backup.service';
+import { backupCopies } from '../backup/backup-copies.service';
+import { BackupPathUtils } from '../../utils/backup.utils';
+import type { BackupMetadata } from '../../types/backup.types';
+import { runForwardedRequest, setHostRouter } from '../host-routing';
+import { identifySender } from '../auth/permission-gate';
+import type { MessageSender } from '../../types/messaging.types';
 import { serverInstanceService, setInventoryMerge } from '../server-instance/server-instance.service';
 import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHost, certificateFingerprint, certificateIssuedBy, certificateSerial, normalizeSerial, hostsFromEndpoint, publicKeyFromPrivatePem } from './certificates';
 import { executeCommand } from './command-router';
 import { providerForProfile } from './cluster-storage';
 import { clockSkewMs, probeTcp, wgInstalled, wireguardConfig, wireguardPrivateKey, applyWireguard } from './diagnostics';
-import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteLocalNode, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
+import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteLocalNode, noteMeshListenPorts, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
 import { latestAccountsBeforeJoin, localLoginToCarry, machineAdminName, readAccountsSnapshot, type CarriedLogin } from './machine-admin';
 import { MeshRepository } from './mesh-repository';
 import { SCHEMA_VERSION } from './schema';
@@ -45,7 +53,7 @@ import {
 import { chooseNode, moveServer, type PlacementInput } from './placement';
 import { partitionDecision } from './partition-policy';
 import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents, type AddressProbe, type JoinRequest, type JoinResponse, type PeerServer } from './peer-server';
-import { addressFromEndpoints, memberUrlOf, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
+import { addressFromEndpoints, memberUrlOf, meshAddressOf, ownLanAddress, peerUrlFor, raftAddrFor } from './mesh-address';
 import { reconcile, type ReconcileMemory } from './reconciler';
 import { DesiredIntents } from './desired-intent';
 import { PendingConfigs } from './pending-configs';
@@ -72,8 +80,13 @@ const RELAY_CHANNELS = new Set([
 ]);
 /** Commands about one server. The node running one must be the node hosting that server. */
 const SERVER_COMMANDS = new Set<ControlCommand['operation']>([
-  'start', 'stop', 'force-stop', 'restart', 'cancel-restart', 'delete', 'move', 'rcon', 'connect-rcon', 'disconnect-rcon', 'save-ini', 'set-ownership'
+  'start', 'stop', 'force-stop', 'restart', 'cancel-restart', 'delete', 'move', 'rcon', 'connect-rcon', 'disconnect-rcon', 'save-ini', 'set-ownership',
+  'fetch-backup-copy', 'server-request'
 ]);
+/** How long a restarted machine waits for its copy of the mesh to catch up before going by what it has. */
+const CATCH_UP_WAIT_MS = 60_000;
+/** A backup can be large: long enough for a few gigabytes over a slow link. */
+const BACKUP_COPY_TIMEOUT_MS = 60 * 60_000;
 /** The figure each live channel reports, kept for a server on another node. */
 const LIVE_FIGURES: Record<string, 'players' | 'cpu' | 'memory'> = {
   'server-instance-players': 'players', 'server-instance-cpu': 'cpu', 'server-instance-memory': 'memory'
@@ -119,6 +132,11 @@ export class MeshService {
   private rqlite: RqliteClient | null = null;
   private secrets: LocalSecrets | null = null;
   private readonly seenHeartbeats = new Map<string, { at: number; skewMs: number }>();
+  /** Renames of this machine made here: a check that read the nodes before one keeps its hands off the name. */
+  private ownRenames = 0;
+  /** This machine's copy of the mesh had caught up since it last started its part of the mesh. */
+  private storeCaughtUp = false;
+  private resumedAt = 0;
   /** Starts and stops decided here that the mesh has not stored yet. Open while attached. */
   private intents: DesiredIntents | null = null;
   /** Configs saved here that the mesh has not stored yet. Open while attached. */
@@ -236,14 +254,14 @@ export class MeshService {
 
   private scheduleResume(delayMs = RESUME_RETRY_MS): void {
     if (this.resumeTimer) return;
-    this.resumeTimer = setTimeout(() => { void this.resumeIfJoined(); }, delayMs);
+    this.resumeTimer = setTimeout(() => this.quietly(this.resumeIfJoined(), 'rejoin the mesh'), delayMs);
   }
 
   /** Starts this node's rqlited and waits until it answers, with or without a leader. */
   private async startLocalCopy(nodeId: string, secrets: LocalSecrets): Promise<RqliteClient> {
     await this.startRqlite(nodeId, secrets);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
-    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'The mesh database did not start on this machine. Restart the app to try again.');
     return client;
   }
 
@@ -272,7 +290,7 @@ export class MeshService {
     fs.rmSync(rqliteDir(), { recursive: true, force: true });
     await this.startRqlite(identity.nodeId, secrets);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, identity.nodeId);
-    if (!await waitReady(client, this.supervisor)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    if (!await waitReady(client, this.supervisor)) throw new Error(this.supervisor.failure() || 'The mesh database did not start on this machine. Restart the app to try again.');
     this.repo = new MeshRepository(client);
     this.rqlite = client;
     this.secrets = secrets;
@@ -365,7 +383,7 @@ export class MeshService {
       }).catch(error => console.warn('[mesh] Could not withdraw the unfinished join:', error instanceof Error ? error.message : error));
       await this.supervisor.stop();
       fs.rmSync(rqliteDir(), { recursive: true, force: true });
-      throw new Error(this.supervisor.detail() || this.supervisor.failure() || 'Joined, but rqlite did not become ready');
+      throw new Error(this.supervisor.detail() || this.supervisor.failure() || 'Joined, but the mesh database did not start on this machine. Restart the app to try again.');
     }
     this.repo = new MeshRepository(client);
     this.rqlite = client;
@@ -387,7 +405,8 @@ export class MeshService {
     fs.rmSync(carriedLoginMarker(), { force: true });
     let machineAdmin: string | null = null;
     try {
-      machineAdmin = await this.carryLogin(nodeId, joinedIdentity.name, carried);
+      const carriedAs = await this.carryLogin(nodeId, joinedIdentity.name, carried);
+      if (carriedAs.created) machineAdmin = carriedAs.username;
     } catch (error) {
       // Tried again at each check until it is in.
       console.warn('[mesh] Could not yet bring this machine\'s admin password into the mesh:', messageOf(error));
@@ -413,20 +432,23 @@ export class MeshService {
 
   /**
    * Makes this machine's own admin password a numbered machine admin for it, so whoever ran it can
-   * still sign in once the mesh's accounts are the only way in. Nothing when the mesh already has
-   * a machine admin for it or that password. The name signed in with, or null. Throws while a
-   * write cannot be made; it is tried again then.
+   * still sign in once the mesh's accounts are the only way in. Nothing new when the mesh already
+   * has that password, or a machine admin for it. The name signed in with, or null, and whether it
+   * was made now. Throws while a write cannot be made; it is tried again then.
    */
-  private async carryLogin(nodeId: string, nodeName: string, login: CarriedLogin | null): Promise<string | null> {
+  private async carryLogin(nodeId: string, nodeName: string, login: CarriedLogin | null): Promise<{ username: string | null; created: boolean }> {
     const repo = this.repo!;
-    const done = (username: string | null) => {
+    const done = (username: string | null, created = false) => {
       fs.writeFileSync(carriedLoginMarker(), JSON.stringify({ username, at: Date.now() }));
-      return username;
+      return { username, created };
     };
     if (!login) return done(null);
     const [users, scopes] = await Promise.all([repo.listUsers(), repo.listMachineAdmins()]);
-    // A machine that created the mesh brought its accounts with it, the password among them.
-    if (scopes.some(scope => scope.nodeId === nodeId) || users.some(user => user.passwordHash === login.passwordHash)) return done(null);
+    // The password may be in the mesh already, brought by the machine that created it: the sign-in
+    // page names that account instead.
+    const holder = users.find(user => user.passwordHash === login.passwordHash && user.enabled);
+    if (holder) return done(holder.username);
+    if (scopes.some(scope => scope.nodeId === nodeId)) return done(null);
     this.requireQuorum('security-write');
     const { username, displayName } = machineAdminName(users.map(user => user.username), nodeName, isRunningInDocker() ? '' : os.hostname());
     if (!await repo.getRole(ROLE_IDS.MACHINE_ADMIN)) {
@@ -442,7 +464,7 @@ export class MeshService {
     });
     await repo.setMachineAdmin(userId, nodeId, false);
     console.log(`[mesh] This machine's admin password (its ${login.source} "${login.username}") now signs in as "${username}", the machine admin for ${nodeName}.`);
-    return done(username);
+    return done(username, true);
   }
 
   private carryWarned = false;
@@ -602,7 +624,7 @@ export class MeshService {
     console.warn(`[mesh] ${asker.name} removed this machine from the mesh; it is standalone again.`);
     this.removedFromMesh = false;
     // After the reply: leaving stops the peer server this request came in on.
-    setTimeout(() => { void this.leaveLocally(); }, 0);
+    setTimeout(() => this.quietly(this.leaveLocally(), 'leave the mesh'), 0);
     return { ok: true };
   }
 
@@ -924,6 +946,10 @@ export class MeshService {
       case 'rcon-status': return localRuntime.rconStatus(serverId);
       case 'online-players': return { instanceId: serverId, players: await localRuntime.onlinePlayers(serverId) };
       case 'ini': return { instanceId: serverId, content: localRuntime.readIni(serverId, String(args.filename || '')) };
+      case 'started-config': return { config: readStartedConfig(serverId) };
+      case 'backup-copy': return { copy: backupCopies.sent(serverId) };
+      // A page of this server open on another machine: the handler runs here, as for a page here.
+      case 'server-request': return runForwardedRequest(String(args.channel || ''), recordOf(args.payload), true);
       case 'ark-api': {
         // A query is not logged and needs no quorum, so only a read may come this way.
         const action = String(args.action || '');
@@ -1330,9 +1356,19 @@ export class MeshService {
       if (current.operation === 'start-all' || current.operation === 'stop-all') return this.allHere(current.operation, current.serverIds || []);
       if (current.operation === 'restart-all') return this.restartAllHere(current.serverIds || [], warningMinutes);
       if (current.operation === 'cancel-restart-all') return { success: true, detail: { cancelled: restartCountdowns.cancelAll() } };
+      if (current.operation === 'server-request') {
+        const reply = await runForwardedRequest(String(args.channel || ''), recordOf(args.payload), false) as { success?: unknown; error?: unknown } | null;
+        return { success: reply?.success !== false, error: typeof reply?.error === 'string' ? reply.error : undefined, detail: reply ?? undefined };
+      }
+      if (current.operation === 'take-backup-copy') return this.takeBackupCopy(current.serverId, args);
+      if (current.operation === 'drop-backup-copy') {
+        backupCopies.drop(current.serverId);
+        return { success: true };
+      }
+      if (current.operation === 'fetch-backup-copy') return this.fetchBackupCopy(current.serverId);
       if (current.operation === 'delete') {
         const deleted = await this.deleteHostedServer(current.serverId, () => localRuntime.deleteInstance(current.serverId));
-        if (deleted.success) void serverInstanceService.broadcastInstances();
+        if (deleted.success) this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
         return { success: deleted.success, error: deleted.error };
       }
       if (current.operation === 'set-address') return this.changeOwnAddress(meshAddressOf(args));
@@ -1528,6 +1564,164 @@ export class MeshService {
     }));
   }
 
+  /** Work started and not waited for: a failure is logged rather than left unhandled. */
+  private quietly(task: Promise<unknown>, what: string): void {
+    task.catch(error => console.warn(`[mesh] Could not ${what}:`, messageOf(error)));
+  }
+
+  /** Requests about a server on another machine run there: see host-routing. */
+  private readonly stopRoutingToHosts = (setHostRouter((channel, serverId, payload, read, sender) =>
+    this.routeToHost(channel, serverId, payload, read, sender)), () => setHostRouter(null));
+
+  /**
+   * A request about a server hosted on another machine: a read as a query, which needs no quorum,
+   * a change as a logged command. Null for a server hosted here, or outside a mesh.
+   */
+  private async routeToHost(channel: string, serverId: string, payload: Record<string, unknown>, read: boolean, sender: MessageSender): Promise<unknown | null> {
+    if (!this.repo || !this.isEnabled()) return null;
+    const row = await this.repo.getServer(serverId);
+    const localId = this.identity()?.nodeId;
+    if (!row || !localId || row.nodeId === localId) return null;
+    if (read) return this.queryRemote(serverId, 'server-request', { channel, payload });
+    const actor = identifySender(sender).user?.username || 'desktop';
+    const result = await this.forwardIfRemote('server-request', serverId, actor, { channel, payload });
+    if (!result) return null;
+    return result.detail && typeof result.detail === 'object' ? result.detail : { success: result.success, error: result.error };
+  }
+
+  /** After each backup here, one other machine keeps a copy of it, in place of the copy before. */
+  private readonly stopCopyingBackups = backupService.onBackupCreated(backup => {
+    void this.copyLatestBackup(backup).catch(error => console.warn('[mesh] Could not copy a backup to another machine:', messageOf(error)));
+  });
+
+  /** The machine to keep a copy of a backup on: reachable now, with the most free disk. */
+  private async backupHolder(): Promise<NodeRecord | null> {
+    const localId = this.identity()?.nodeId;
+    const nodes = (await this.repo!.listNodes(this.identity()?.meshId))
+      .filter(node => node.nodeId !== localId && node.status !== 'removed' && this.reachable(node.nodeId))
+      .sort((a, b) => (b.capabilities?.freeDiskBytes || 0) - (a.capabilities?.freeDiskBytes || 0));
+    return nodes[0] ?? null;
+  }
+
+  private async copyLatestBackup(backup: BackupMetadata): Promise<void> {
+    if (!this.repo || !this.isEnabled()) return;
+    const localId = this.identity()?.nodeId || '';
+    const row = await this.repo.getServer(backup.instanceId);
+    if (!row || row.nodeId !== localId) return;
+    const holder = await this.backupHolder();
+    if (!holder) {
+      console.warn(`[mesh] No other machine can be reached to keep a copy of the latest backup of ${row.name}.`);
+      return;
+    }
+    const fileName = path.basename(backup.filePath);
+    const self = await this.repo.getNode(localId);
+    const command = (target: NodeRecord, operation: ControlCommand['operation'], args?: Record<string, unknown>): ControlCommand => ({
+      commandId: randomUUID(), correlationId: randomUUID(), actor: 'backup', targetNode: target.nodeId, operation,
+      serverId: backup.instanceId, ...(args ? { args } : {}), expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+    });
+    const taken = await this.sendCommand(holder, command(holder, 'take-backup-copy', {
+      serverName: row.name, fileName, size: backup.size, fromNodeId: localId, fromNodeName: self?.name || ''
+    }), BACKUP_COPY_TIMEOUT_MS);
+    if (!taken.success) {
+      console.warn(`[mesh] ${holder.name} could not keep a copy of the latest backup of ${row.name}: ${taken.error || 'no reason was given'}`);
+      return;
+    }
+    backupCopies.recordSent(backup.instanceId, { nodeId: holder.nodeId, nodeName: holder.name, fileName, size: backup.size });
+    console.log(`[mesh] ${holder.name} keeps a copy of the latest backup of ${row.name}.`);
+    // Only the latest: a copy an earlier backup left on another machine goes.
+    const others = (await this.repo.listNodes(this.identity()?.meshId))
+      .filter(node => node.nodeId !== localId && node.nodeId !== holder.nodeId && node.status !== 'removed');
+    await Promise.all(others.map(node => this.sendCommand(node, command(node, 'drop-backup-copy')).catch(() => null)));
+  }
+
+  /** Holder side: fetches the backup from the machine that made it, in place of the copy before. */
+  private async takeBackupCopy(serverId: string, args: Record<string, unknown>): Promise<CommandResult> {
+    const from = await this.repo!.getNode(String(args.fromNodeId || ''));
+    const certs = readCertPaths();
+    if (!from || !certs) return { success: false, error: 'The machine with that backup is not available.' };
+    const fileName = String(args.fileName || '');
+    const tls = { ca: fs.readFileSync(certs.caCert, 'utf8'), cert: fs.readFileSync(certs.nodeCert, 'utf8'), key: fs.readFileSync(certs.nodeKey, 'utf8') };
+    const url = `${from.endpoints.peerUrl.replace(/\/$/, '')}/v1/backup-file?serverId=${encodeURIComponent(serverId)}&fileName=${encodeURIComponent(fileName)}`;
+    return backupCopies.hold({
+      serverId, serverName: String(args.serverName || serverId), fileName, size: Number(args.size) || 0,
+      fromNodeId: from.nodeId, fromNodeName: String(args.fromNodeName || from.name)
+    }, dest => peerDownload({ url, dest, ...tls, timeoutMs: BACKUP_COPY_TIMEOUT_MS }));
+  }
+
+  /** A backup of a server hosted here, by its own file name only: never a path out of its folder. */
+  private backupFileHere(serverId: string, fileName: string): string | null {
+    const hostedHere = !!serverId && meshServer(serverId)?.nodeId === this.identity()?.nodeId;
+    if (!hostedHere || !/^[\w.-]+\.zip$/.test(fileName)) return null;
+    const file = path.join(BackupPathUtils.getInstanceBackupDir(getInstanceDir(serverId)), fileName);
+    return fs.existsSync(file) ? file : null;
+  }
+
+  /**
+   * A backup of a server on another machine, fetched into this machine's downloads folder so it can
+   * be shown and opened here. Null for a server hosted here, or outside a mesh.
+   */
+  async fetchBackupForDownload(serverId: string, backupId: string): Promise<{ success: boolean; filePath?: string; fileName?: string; error?: string } | null> {
+    if (!this.repo || !this.isEnabled()) return null;
+    const row = await this.repo.getServer(serverId);
+    const localId = this.identity()?.nodeId;
+    if (!row || !localId || row.nodeId === localId) return null;
+    const located = await this.queryRemote<{ success?: boolean; fileName?: string; error?: string }>(serverId, 'server-request', {
+      channel: 'locate-backup', payload: { instanceId: serverId, backupId }
+    });
+    const fileName = located?.fileName;
+    if (!located?.success || !fileName || !/^[\w.-]+\.zip$/.test(fileName)) return { success: false, error: located?.error || 'That backup was not found.' };
+    const host = await this.repo.getNode(row.nodeId);
+    const certs = readCertPaths();
+    if (!host || !certs) return { success: false, error: 'The machine with that backup is not available.' };
+    const dir = path.join(getDefaultInstallDir(), 'downloads', serverId);
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, fileName);
+    const tls = { ca: fs.readFileSync(certs.caCert, 'utf8'), cert: fs.readFileSync(certs.nodeCert, 'utf8'), key: fs.readFileSync(certs.nodeKey, 'utf8') };
+    const url = `${host.endpoints.peerUrl.replace(/\/$/, '')}/v1/backup-file?serverId=${encodeURIComponent(serverId)}&fileName=${encodeURIComponent(fileName)}`;
+    const fetched = await peerDownload({ url, dest, ...tls, timeoutMs: BACKUP_COPY_TIMEOUT_MS });
+    return fetched ? { success: true, filePath: dest, fileName } : { success: false, error: `Could not fetch ${fileName} from ${host.name}.` };
+  }
+
+  /** Host side: brings the latest copy back into the server's backups, from the machine keeping it. */
+  async fetchBackupCopy(serverId: string): Promise<CommandResult> {
+    const sent = backupCopies.sent(serverId);
+    const holder = sent ? await this.repo?.getNode(sent.nodeId) : null;
+    const certs = readCertPaths();
+    if (!sent || !holder || holder.status === 'removed' || !certs) return { success: false, error: 'No other machine keeps a copy of this server\'s latest backup.' };
+    const dir = BackupPathUtils.getInstanceBackupDir(getInstanceDir(serverId));
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, sent.fileName);
+    if (fs.existsSync(dest)) return { success: true, detail: { fileName: sent.fileName, alreadyHere: true } };
+    const tls = { ca: fs.readFileSync(certs.caCert, 'utf8'), cert: fs.readFileSync(certs.nodeCert, 'utf8'), key: fs.readFileSync(certs.nodeKey, 'utf8') };
+    const url = `${holder.endpoints.peerUrl.replace(/\/$/, '')}/v1/backup-copy-file?serverId=${encodeURIComponent(serverId)}`;
+    const fetched = await peerDownload({ url, dest, ...tls, timeoutMs: BACKUP_COPY_TIMEOUT_MS });
+    return fetched
+      ? { success: true, detail: { fileName: sent.fileName } }
+      : { success: false, error: `Could not bring the copy back from ${holder.name}.` };
+  }
+
+  /**
+   * On the leader: takes out of Raft each machine the mesh marked removed that is still a voter, so a
+   * removal whose Raft step failed (a leadership change, say) is finished rather than left counting.
+   */
+  private async dropRemovedVoters(nodes: NodeRecord[]): Promise<void> {
+    const rqlite = this.rqlite;
+    if (!rqlite) return;
+    const status = await rqlite.status().catch(() => null);
+    if (!status?.leader) return;
+    const removed = new Set(nodes.filter(node => node.status === 'removed').map(node => node.nodeId));
+    if (!removed.size) return;
+    for (const member of await rqlite.members().catch(() => [])) {
+      if (!removed.has(member.id)) continue;
+      try {
+        await rqlite.removeMember(member.id);
+        console.log(`[mesh] Took ${member.id}, which was removed from the mesh, out of Raft.`);
+      } catch (error) {
+        console.warn(`[mesh] Could not take ${member.id}, which was removed from the mesh, out of Raft yet:`, messageOf(error));
+      }
+    }
+  }
+
   /** Stops a server hosted here and starts it again: the end of a restart's countdown. */
   private async restartHosted(id: string): Promise<void> {
     const stopped = await localRuntime.stop(id);
@@ -1583,7 +1777,7 @@ export class MeshService {
   private async recordSaved(saved: InstanceConfig): Promise<void> {
     await this.recordServer(saved);
     messagingService.sendToAll('server-instance-updated', saved);
-    void serverInstanceService.broadcastInstances();
+    this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
   }
 
   /** Records configs saved here while the mesh could not take them. */
@@ -1846,7 +2040,7 @@ export class MeshService {
       },
       release: async id => {
         archiveInstance(id);
-        void serverInstanceService.broadcastInstances();
+        this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
       },
       restart: async id => { await localRuntime.start(id); }
     });
@@ -1968,7 +2162,10 @@ export class MeshService {
     const node = await this.repo!.getNode(nodeId);
     if (!node) throw new Error('That node was not found.');
     await this.repo!.setNodeName(nodeId, clean);
-    if (nodeId === this.identity()?.nodeId) this.keepOwnName(clean);
+    if (nodeId === this.identity()?.nodeId) {
+      this.ownRenames++;
+      this.keepOwnName(clean);
+    }
     this.publishStatus();
   }
 
@@ -2110,8 +2307,10 @@ export class MeshService {
       this.repo.leaderNodeId()
     ]);
     const warning = voters < 3
-      ? 'A mesh of fewer than 3 voting nodes cannot elect a new leader if one node stops. Local ARK servers keep running either way.'
+      ? 'With fewer than 3 machines, the mesh cannot make changes while any one of them is off. Servers keep running either way. A third machine avoids this.'
       : null;
+    const carried = carriedLoginName();
+    const ownLogin = carried && users.some(user => user.username === carried && user.enabled) ? carried : null;
     return {
       enabled: true,
       degraded: !quorum,
@@ -2127,6 +2326,7 @@ export class MeshService {
       protocolVersion: PROTOCOL_VERSION,
       warning,
       hasAccounts: users.length > 0,
+      ...(ownLogin ? { ownLogin } : {}),
       nodes: nodes.map(node => ({
         ...node,
         connected: node.status !== 'removed' && (
@@ -2185,6 +2385,7 @@ export class MeshService {
 
   /** Forgets mesh membership on this machine. Local servers and accounts stay. */
   private async leaveLocally(): Promise<void> {
+    noteMeshListenPorts(null);
     const identity = this.identity();
     if (identity?.meshId) writeNodeIdentity({ ...identity, meshId: '' });
     await this.stop();
@@ -2193,7 +2394,7 @@ export class MeshService {
     setMeshDesktopMode(false);
     this.noteDesktopAuth();
     this.publishStatus();
-    void serverInstanceService.broadcastInstances();
+    this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
   }
 
   /**
@@ -2234,7 +2435,7 @@ export class MeshService {
     await this.supervisor.stop();
     await this.startRqlite(nodeId, secrets);
     const client = new RqliteClient(`http://127.0.0.1:${HTTP_PORT}`, secrets.httpUser, secrets.httpPass, nodeId);
-    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'The mesh database did not start on this machine. Restart the app to try again.');
     this.repo = new MeshRepository(client);
     this.rqlite = client;
   }
@@ -2274,6 +2475,7 @@ export class MeshService {
     this.attachedIdentity = identity;
     const certs = readCertPaths();
     if (certs && !this.peer) {
+      noteMeshListenPorts({ peer: this.secrets?.peerPort || PEER_PORT, raft: RAFT_PORT });
       this.peer = await startPeerServer(this.secrets?.peerPort || PEER_PORT, {
         certPem: fs.readFileSync(certs.nodeCert, 'utf8'),
         keyPem: fs.readFileSync(certs.nodeKey, 'utf8'),
@@ -2295,6 +2497,9 @@ export class MeshService {
         },
         // Cluster file contents, for another member that has to place a version this one recorded.
         onClusterObject: sha256 => this.clusterSync?.objectPath(sha256) ?? null,
+        // A backup of a server here, and the copies this machine keeps of others' backups.
+        onBackupFile: (serverId, fileName) => this.backupFileHere(serverId, fileName),
+        onBackupCopyFile: serverId => backupCopies.heldPath(serverId),
         // Another member is about to change its address: whether this one reaches it there.
         onProbeAddress: (askerId, body) => this.probeAddress(askerId, body),
         onForceRemove: (askerId, body) => this.takePartInForceRemoval(askerId, body),
@@ -2323,6 +2528,8 @@ export class MeshService {
     setMeshMember(true);
     setMeshDesktopMode(true);
     this.noteDesktopAuth();
+    this.storeCaughtUp = false;
+    this.resumedAt = Date.now();
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => { void this.reconcileLocal(nodeId); }, 5000);
     this.startClusterSync(nodeId);
@@ -2531,8 +2738,8 @@ export class MeshService {
         // A write: it needs quorum. Without it the heartbeats below still go out, so the members
         // that remain keep seeing each other; the record catches up once quorum is back.
         try {
-          await this.repo.upsertNode({
-            ...self, version, protocolVersion: PROTOCOL_VERSION, certSerial: serial, capabilities: collectCapabilities(), lastSeen: Date.now()
+          await this.repo.recordHeartbeat(nodeId, {
+            version, protocolVersion: PROTOCOL_VERSION, certSerial: serial, capabilities: collectCapabilities(), lastSeen: Date.now()
           });
         } catch {
           /* recorded at a later heartbeat */
@@ -2544,18 +2751,24 @@ export class MeshService {
       let refused = 0;
       await Promise.all(nodes.filter(node => node.nodeId !== nodeId && node.status !== 'removed').map(async node => {
         try {
+          const sentAt = Date.now();
           const response = await peerRequest({
             url: `${node.endpoints.peerUrl.replace(/\/$/, '')}/v1/heartbeat`,
             method: 'POST',
             // nodeId is for an older receiver; a current one takes it from the certificate.
-            body: { nodeId, sentAt: Date.now(), resources: this.localResources, clusterSync: this.clusterSync?.summary() ?? {}, arkUpdate: arkUpdateProgress() },
+            body: { nodeId, sentAt, resources: this.localResources, clusterSync: this.clusterSync?.summary() ?? {}, arkUpdate: arkUpdateProgress() },
             ca: fs.readFileSync(certs.caCert, 'utf8'),
             cert: fs.readFileSync(certs.nodeCert, 'utf8'),
             key: fs.readFileSync(certs.nodeKey, 'utf8'),
             timeoutMs: 3000
           });
           if (response.status === 200) {
-            this.seenHeartbeats.set(node.nodeId, { at: Date.now(), skewMs: 0 });
+            // Its clock, from the time in its answer, taken as halfway through the round trip.
+            const theirNow = (response.body as { now?: unknown } | null)?.now;
+            const skewMs = typeof theirNow === 'number'
+              ? clockSkewMs(theirNow, (sentAt + Date.now()) / 2)
+              : this.seenHeartbeats.get(node.nodeId)?.skewMs ?? 0;
+            this.seenHeartbeats.set(node.nodeId, { at: Date.now(), skewMs });
             accepted++;
           } else if (/does not belong to a member/i.test(String((response.body as { error?: unknown })?.error ?? ''))) {
             refused++;
@@ -2596,7 +2809,7 @@ export class MeshService {
         console.error(`[mesh] Could not set aside the local copy of ${instance.id}:`, error);
       }
     }
-    if (changed) void serverInstanceService.broadcastInstances();
+    if (changed) this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
   }
 
   /**
@@ -2793,7 +3006,7 @@ export class MeshService {
     this.rqlite = client;
     this.secrets = next;
     writeSecrets(next);
-    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'rqlite did not become ready');
+    if (!await waitReady(client, this.supervisor, 40, false)) throw new Error(this.supervisor.failure() || 'The mesh database did not start on this machine. Restart the app to try again.');
     console.log('[mesh] Switched to the database password set when a node was removed.');
     return true;
   }
@@ -2801,6 +3014,8 @@ export class MeshService {
   private async reconcileLocal(nodeId: string): Promise<void> {
     // While this machine changes its address its rqlited restarts; the next check picks up after.
     if (!this.repo || this.changingAddress) return;
+    // A rename here while this check reads the nodes would otherwise be undone with the name it read.
+    const renames = this.ownRenames;
     try {
       if (await this.adoptClusterCredential(nodeId)) return;
       this.quorum = await this.repo.hasQuorum();
@@ -2819,6 +3034,8 @@ export class MeshService {
         this.repo.listNodes(this.identity()?.meshId)
       ]);
       let servers = listed;
+      // A removal whose Raft step failed left that machine a voter, counted towards every majority.
+      if (this.quorum) await this.dropRemovedVoters(nodes);
       // Left over from machines removed before Remove forgot their servers.
       const removedIds = new Set(nodes.filter(node => node.status === 'removed').map(node => node.nodeId));
       if (this.quorum && servers.some(server => removedIds.has(server.nodeId))) {
@@ -2836,7 +3053,7 @@ export class MeshService {
             if (ports) {
               console.log(`[mesh] ${server.name} moved here onto ports a server here uses, or outside this machine's server ports; it now uses game ${ports.gamePort}, query ${ports.queryPort}, RCON ${ports.rconPort}.`);
             }
-            void serverInstanceService.broadcastInstances();
+            this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
           }
         } catch (error) {
           console.error(`[mesh] Could not take in the files for ${server.serverId}:`, error);
@@ -2845,7 +3062,7 @@ export class MeshService {
       this.syncSubscriptions(nodeId, nodes);
       // A name another member gave this machine, kept for when it joins a mesh again.
       const own = nodes.find(node => node.nodeId === nodeId);
-      if (own?.name) this.keepOwnName(own.name);
+      if (own?.name && renames === this.ownRenames) this.keepOwnName(own.name);
       const { instances } = await localRuntime.listInstances();
       this.setAsideStrayCopies(nodeId, servers, nodes, instances);
       if (this.quorum) await this.publishLocalConfigs(nodeId, servers, instances);
@@ -2864,7 +3081,13 @@ export class MeshService {
       } catch (error) {
         console.warn('[mesh] Could not keep a copy of the clusters here:', messageOf(error));
       }
-      await reconcile(nodeId, servers.map(server => ({
+      // Just after a restart this machine's copy of the mesh can be old: a server it reads as running
+      // may have been stopped since. Nothing starts or stops on it until it has caught up, or a minute
+      // has passed (cut off from the others, it never does).
+      if (!this.storeCaughtUp) {
+        this.storeCaughtUp = (await this.repo.caughtUp().catch(() => false)) || Date.now() - this.resumedAt >= CATCH_UP_WAIT_MS;
+      }
+      if (this.storeCaughtUp) await reconcile(nodeId, servers.map(server => ({
         serverId: server.serverId,
         nodeId: server.nodeId,
         desiredState: this.intents?.get(server.serverId) ?? server.desiredState,
@@ -2879,7 +3102,7 @@ export class MeshService {
       }, this.reconcileMemory);
       this.peer?.broadcast({ type: 'status', nodeId, at: Date.now(), quorum: this.quorum });
       this.publishStatus();
-      void this.publishInventoryIfChanged();
+      void this.publishInventoryIfChanged().catch(error => console.warn('[mesh] Could not publish the server list:', messageOf(error)));
     } catch (error) {
       console.error('[mesh] Reconcile failed:', error);
     } finally {
@@ -2920,6 +3143,10 @@ export class MeshService {
         createdAt: Date.now(),
         updatedAt: Date.now()
       });
+      // A machine admin keeps the machine it looks after; without it, it looks after none.
+      if (row.roleId === ROLE_IDS.MACHINE_ADMIN && row.machineNodeId) {
+        await this.repo!.setMachineAdmin(row.id, row.machineNodeId, !!row.updatesAnyMachine);
+      }
     }
     if (rows.length === 0 && password) {
       const verifier = await hashArgon2id(password);
@@ -2954,7 +3181,7 @@ export class MeshService {
         if (await this.repo.getServer(instance.id)) continue;
         await this.recordServer({ ...instance, nodeId });
       }
-      void serverInstanceService.broadcastInstances();
+      this.quietly(serverInstanceService.broadcastInstances(), 'send the server list to the pages');
     } catch (error) {
       console.error('[mesh] Could not record local servers:', error);
     }
@@ -3322,10 +3549,19 @@ function rqliteDir(): string {
   return path.join(meshRoot(), 'rqlite');
 }
 
-/** Present from a create or join until this machine's own clusters are in the mesh. */
 /** Written once this machine's own admin password is in the mesh, or it had none to bring. */
 function carriedLoginMarker(): string {
   return path.join(meshRoot(), 'carried-login.json');
+}
+
+/** The account this machine's own admin password signs in as, as the marker recorded it; null for none or unreadable. */
+function carriedLoginName(): string | null {
+  try {
+    const marker = JSON.parse(fs.readFileSync(carriedLoginMarker(), 'utf8')) as { username?: unknown };
+    return typeof marker.username === 'string' && marker.username ? marker.username : null;
+  } catch {
+    return null;
+  }
 }
 
 /** This machine's single web login, as the web server saved it: bcrypt, never the password. */
@@ -3339,6 +3575,7 @@ function readWebLogin(): { username?: string; passwordHash?: string } | null {
   };
 }
 
+/** Present from a create or join until this machine's own clusters are in the mesh. */
 function adoptClustersMarker(): string {
   return path.join(meshRoot(), 'adopt-clusters');
 }
@@ -3432,13 +3669,7 @@ function readCertPaths(): { nodeKey: string; nodeCert: string; caCert: string } 
 function advertiseHost(): string {
   const configured = process.env.AASM_ADVERTISE_HOST?.trim();
   if (configured) return configured;
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const entry of entries || []) {
-      const family = entry.family as string | number;
-      if ((family === 'IPv4' || family === 4) && !entry.internal) return entry.address;
-    }
-  }
-  return '127.0.0.1';
+  return ownLanAddress(os.networkInterfaces()) ?? '127.0.0.1';
 }
 
 function envPort(name: string, fallback: number): number {
@@ -3454,4 +3685,9 @@ async function waitReady(client: RqliteClient, supervisor: RqliteSupervisor, att
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   return false;
+}
+
+/** A payload that arrived from another machine, as a record; anything else reads as {}. */
+function recordOf(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }

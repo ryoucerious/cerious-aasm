@@ -74,9 +74,24 @@ jest.mock('../auth/user-database.service', () => ({
   }
 }));
 jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
+// The reachability probe opens a real connection; the clock arithmetic stays real.
+jest.mock('./diagnostics', () => ({ ...jest.requireActual('./diagnostics'), probeTcp: jest.fn(async () => ({ ok: true, rttMs: 1 })) }));
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null) }));
 jest.mock('../docker-runtime-update', () => ({ relaunchInPlace: jest.fn() }));
 jest.mock('../host-resources', () => ({ sampleHostResources: jest.fn() }));
+jest.mock('../../utils/ark/started-config.utils', () => ({ readStartedConfig: jest.fn(() => ({ id: 'isle', maxPlayers: 70 })) }));
+jest.mock('../backup/backup.service', () => ({ backupService: { onBackupCreated: jest.fn(() => () => undefined) } }));
+jest.mock('../backup/backup-copies.service', () => ({
+  backupCopies: {
+    hold: jest.fn(async () => ({ success: true })), drop: jest.fn(), heldPath: jest.fn(() => null), recordSent: jest.fn(),
+    sent: jest.fn(() => null), list: jest.fn(() => [])
+  }
+}));
+import { backupService } from '../backup/backup.service';
+import { backupCopies } from '../backup/backup-copies.service';
+import { BackupPathUtils } from '../../utils/backup.utils';
+import { registerForwardable, routeToHost } from '../host-routing';
+import { meshListenPorts } from './mesh-hooks';
 jest.mock('../automation/restart-countdown.service', () => ({
   restartCountdowns: { begin: jest.fn(() => 900_000), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
 }));
@@ -120,8 +135,12 @@ class FakeRqlite {
     return this.executor.query<T>(sql, params, consistency);
   }
   status() { return this.executor.status(); }
+  /** False while a restarted node is still applying what the others agreed: its reads can be old. */
+  synced = true;
+  async caughtUp() { return this.synced; }
   async ready(options: { requireLeader?: boolean } = {}) { return this.view.hasQuorum || options.requireLeader === false; }
-  async removeMember() { /* not used here */ }
+  removed: string[] = [];
+  async removeMember(nodeId: string) { this.removed.push(nodeId); this.raftMembers = this.raftMembers.filter(member => member.id !== nodeId); }
   async members() { return this.raftMembers.map(member => ({ ...member })); }
   async backup() { return Buffer.alloc(0); }
 }
@@ -967,6 +986,41 @@ describe('MeshService', () => {
       expect(await repo.listMachineAdmins()).toEqual([{ userId: user!.userId, nodeId: LOCAL, updatesAny: false }]);
     }, 30_000);
 
+    // Joining sends the desktop to its sign-in page, and the name was only shown on the page it left.
+    it('names that account to the sign-in page for as long as it can sign in', async () => {
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([{
+        id: 'a1', username: 'admin', displayName: 'admin', passwordHash: '$2b$12$' + 'h'.repeat(53), roleId: 'admin', active: true,
+        ownerUserId: null, cliLocked: false, machineNodeId: null, updatesAnyMachine: false
+      }]);
+      const joined = await service.joinMesh({ memberUrl: MEMBER, token, name: 'Germany01' });
+
+      expect((await service.status()).ownLogin).toBe(joined.machineAdmin);
+
+      const user = await repo.getUserByUsername(joined.machineAdmin!);
+      await repo.upsertUser({ ...user!, enabled: false });
+      expect((await service.status()).ownLogin).toBeUndefined();
+    }, 30_000);
+
+    // PC 1 joined a mesh that already had its password, under an account it had before: no new
+    // account was made, and the sign-in page named none.
+    it('names the account that already has this machine\'s password, and makes no other', async () => {
+      const hash = '$2b$12$' + 'k'.repeat(53);
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([{
+        id: 'a1', username: 'admin', displayName: 'admin', passwordHash: hash, roleId: 'admin', active: true,
+        ownerUserId: null, cliLocked: false, machineNodeId: null, updatesAnyMachine: false
+      }]);
+      await repo.upsertUser({
+        userId: 'existing', username: 'admin1', displayName: 'Admin 1', passwordHash: hash, passwordParameters: 'bcrypt', hashAlg: 'bcrypt',
+        enabled: true, securityVersion: 1, roleId: 'admin', ownerUserId: null, createdAt: 1, updatedAt: 1
+      });
+
+      const joined = await service.joinMesh({ memberUrl: MEMBER, token, name: 'Germany01' });
+
+      expect(joined.machineAdmin).toBeUndefined();
+      expect((await service.status()).ownLogin).toBe('admin1');
+      expect(await repo.listMachineAdmins()).toEqual([]);
+    }, 30_000);
+
     it('keeps a copy of this machine\'s accounts before the mesh\'s replace them', async () => {
       await service.joinMesh({ memberUrl: MEMBER, token });
 
@@ -1035,6 +1089,18 @@ describe('MeshService', () => {
       expect((await service.status()).blocker).toBe('rqlited was not found.');
     });
 
+    // A machine admin the creating machine brought arrived with no machine, so it looked after none.
+    it('keeps the machine each machine admin it brings looks after', async () => {
+      jest.mocked(userDatabaseService.exportCredentialRows).mockReturnValue([{
+        id: 'ma1', username: 'admin2-pc-1', displayName: 'Admin 2, PC 1', passwordHash: '$2b$12$' + 'm'.repeat(53), roleId: 'machine-admin',
+        active: true, ownerUserId: null, cliLocked: false, machineNodeId: 'pc-1-node', updatesAnyMachine: true
+      }]);
+
+      await service.createMesh({ name: 'Brought' });
+
+      expect(await repo.listMachineAdmins()).toEqual([{ userId: 'ma1', nodeId: 'pc-1-node', updatesAny: true }]);
+    }, 30_000);
+
     it('creates a mesh at the address typed in, listening on its own ports', async () => {
       await service.createMesh({ name: 'Public', address: { host: 'mesh-a.example.com', peerPort: 14747, raftPort: 14002 } });
 
@@ -1055,6 +1121,33 @@ describe('MeshService', () => {
       await service.resumeIfJoined();
 
       expect(supervisorStarts()[0]).toMatchObject({ raftAddr: 'mesh-a.example.com:14002', raftBind: '0.0.0.0:4002', httpAddr: '127.0.0.1:4001' });
+    });
+  });
+
+  // A removal whose Raft step failed left the machine a voter: the mesh counted it towards a majority.
+  describe('voters of machines that were removed', () => {
+    const GONE = '33333333-3333-4333-8333-333333333333';
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL));
+      await repo.upsertNode({ ...nodeRow(GONE, '3', 'https://10.0.0.3:4747'), status: 'removed' });
+      rqlite.raftMembers = [{ id: LOCAL, addr: '127.0.0.1:4002', voter: true }, { id: GONE, addr: '10.0.0.3:4002', voter: true }];
+    });
+
+    it('takes a removed machine that is still a voter out of Raft, on the leader', async () => {
+      view.leader = true;
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(rqlite.removed).toEqual([GONE]);
+    });
+
+    it('leaves that to the leader', async () => {
+      view.leader = false;
+      await service.resumeIfJoined();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(rqlite.removed).toEqual([]);
     });
   });
 
@@ -1125,6 +1218,33 @@ describe('MeshService', () => {
       await tick();
 
       await service.executeLocalCommand(command('restart', 's1'));
+
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
+    });
+
+    // After a restart this machine's copy of the mesh is old until it catches up: a server it reads
+    // as running there may have been stopped since. Started on that and stopped five seconds later.
+    it('starts and stops nothing on what it reads before its copy of the mesh has caught up', async () => {
+      await place('s1', 'running');
+      rqlite.synced = false;
+      await service.resumeIfJoined();
+      await tick();
+      await tick();
+      expect(localRuntime.start).not.toHaveBeenCalled();
+
+      rqlite.synced = true;
+      await tick();
+
+      expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
+    });
+
+    // Alone, cut off from the others, it never catches up: its servers still have to run.
+    it('goes by what it has once it has waited a minute for its copy to catch up', async () => {
+      await place('s1', 'running');
+      rqlite.synced = false;
+      await service.resumeIfJoined();
+
+      await jest.advanceTimersByTimeAsync(65_000);
 
       expect(jest.mocked(localRuntime.start).mock.calls).toEqual([['s1']]);
     });
@@ -2105,6 +2225,132 @@ describe('MeshService', () => {
       });
     });
 
+    // A machine that is lost must not take its servers' backups with it.
+    describe('a copy of the latest backup on another machine', () => {
+      const THIRD = '33333333-3333-4333-8333-333333333333';
+      const backup = (instanceId = 'isle') => ({
+        id: 'b1', instanceId, name: 'backup', createdAt: new Date(), size: 5, type: 'manual' as const,
+        filePath: path.join(root, 'backups', instanceId, 'backup_manual_1.zip')
+      });
+      const fromNodes = (operation: string) => commands().filter(command => (command.body as { operation: string }).operation === operation);
+      const peer = () => jest.mocked(startPeerServer).mock.calls[0][1];
+
+      beforeEach(async () => {
+        await repo.upsertNode({ ...nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'), capabilities: { ...nodeRow(REMOTE).capabilities, freeDiskBytes: 100 } });
+        await repo.upsertNode({ ...nodeRow(THIRD, '3', 'https://10.0.0.3:4747'), capabilities: { ...nodeRow(THIRD).capabilities, freeDiskBytes: 900 } });
+        await place('isle', LOCAL);
+        await service.resumeIfJoined();
+        peer().onHeartbeat(REMOTE, Date.now());
+        peer().onHeartbeat(THIRD, Date.now());
+        jest.mocked(peerRequest).mockClear();
+        jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { success: true } });
+        jest.mocked(backupCopies.recordSent).mockClear();
+      });
+
+      const backupMade = async (made = backup()) => {
+        await jest.mocked(backupService.onBackupCreated).mock.calls.at(-1)![0](made);
+        await jest.advanceTimersByTimeAsync(0);
+      };
+
+      it('asks the reachable machine with the most free disk to keep a copy of each new backup', async () => {
+        await backupMade();
+
+        expect(fromNodes('take-backup-copy')).toHaveLength(1);
+        expect(fromNodes('take-backup-copy')[0].url).toBe('https://10.0.0.3:4747/v1/command');
+        expect(fromNodes('take-backup-copy')[0].body).toMatchObject({
+          serverId: 'isle', targetNode: THIRD, args: { fileName: 'backup_manual_1.zip', size: 5, fromNodeId: LOCAL }
+        });
+        expect(backupCopies.recordSent).toHaveBeenCalledWith('isle', expect.objectContaining({ nodeId: THIRD, fileName: 'backup_manual_1.zip', size: 5 }));
+      });
+
+      // Only the latest: a copy an earlier backup left on another machine goes.
+      it('has the other machines drop a copy an earlier backup left there', async () => {
+        await backupMade();
+
+        expect(fromNodes('drop-backup-copy').map(command => command.url)).toEqual(['https://10.0.0.2:4747/v1/command']);
+      });
+
+      it('keeps no copy when no other machine can be reached', async () => {
+        // The others go quiet: nothing answers this machine's heartbeats either.
+        jest.mocked(peerRequest).mockRejectedValue(new Error('ECONNREFUSED'));
+        await jest.advanceTimersByTimeAsync(10 * 60_000);
+        jest.mocked(peerRequest).mockClear();
+
+        await backupMade();
+
+        expect(fromNodes('take-backup-copy')).toEqual([]);
+        expect(backupCopies.recordSent).not.toHaveBeenCalled();
+      });
+
+      it('fetches a copy from the machine that made the backup, when asked to keep one', async () => {
+        jest.mocked(peerDownload).mockResolvedValue(true);
+        const result = await service.executeLocalCommand({
+          commandId: 'c1', correlationId: 'c', actor: 'backup', targetNode: LOCAL, operation: 'take-backup-copy', serverId: 'far',
+          args: { serverName: 'Far', fileName: 'backup_manual_1.zip', size: 5, fromNodeId: REMOTE, fromNodeName: 'asa-1' },
+          expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+        } as never);
+
+        expect(result.success).toBe(true);
+        const [copy, fetch] = jest.mocked(backupCopies.hold).mock.calls.at(-1)!;
+        expect(copy).toEqual({ serverId: 'far', serverName: 'Far', fileName: 'backup_manual_1.zip', size: 5, fromNodeId: REMOTE, fromNodeName: 'asa-1' });
+        await fetch('/tmp/part');
+        expect(jest.mocked(peerDownload).mock.calls.at(-1)![0]).toMatchObject({
+          url: 'https://10.0.0.2:4747/v1/backup-file?serverId=far&fileName=backup_manual_1.zip', dest: '/tmp/part'
+        });
+      });
+
+      it('drops a copy when asked', async () => {
+        await service.executeLocalCommand({
+          commandId: 'c2', correlationId: 'c', actor: 'backup', targetNode: LOCAL, operation: 'drop-backup-copy', serverId: 'far',
+          expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+        } as never);
+
+        expect(backupCopies.drop).toHaveBeenCalledWith('far');
+      });
+
+      it('lets another machine fetch only the backups of servers it hosts', async () => {
+        // Known to be hosted here once the first check of the servers has run.
+        await jest.advanceTimersByTimeAsync(5_000);
+        const dir = BackupPathUtils.getInstanceBackupDir(path.join(root, 'servers', 'isle'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'backup_manual_1.zip'), '12345');
+
+        expect(peer().onBackupFile!('isle', 'backup_manual_1.zip')).toBe(path.join(dir, 'backup_manual_1.zip'));
+        expect(peer().onBackupFile!('isle', '../../secret.zip')).toBeNull();
+        expect(peer().onBackupFile!('isle', 'missing.zip')).toBeNull();
+        expect(peer().onBackupFile!('far', 'backup_manual_1.zip')).toBeNull();
+      });
+
+      it('lets another machine fetch the copy it keeps', () => {
+        jest.mocked(backupCopies.heldPath).mockReturnValueOnce('/copies/far/backup_manual_1.zip');
+
+        expect(peer().onBackupCopyFile!('far')).toBe('/copies/far/backup_manual_1.zip');
+      });
+
+      it('brings the copy back from the machine keeping it, into the server\'s backups', async () => {
+        jest.mocked(backupCopies.sent).mockReturnValue({ nodeId: REMOTE, nodeName: 'asa-1', fileName: 'backup_manual_1.zip', size: 5, copiedAt: 1 });
+        jest.mocked(peerDownload).mockResolvedValue(true);
+
+        const result = await service.executeLocalCommand({
+          commandId: 'c3', correlationId: 'c', actor: 'ada', targetNode: LOCAL, operation: 'fetch-backup-copy', serverId: 'isle',
+          expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+        } as never);
+
+        expect(result.success).toBe(true);
+        expect(jest.mocked(peerDownload).mock.calls.at(-1)![0]).toMatchObject({
+          url: 'https://10.0.0.2:4747/v1/backup-copy-file?serverId=isle',
+          dest: path.join(BackupPathUtils.getInstanceBackupDir(path.join(root, 'servers', 'isle')), 'backup_manual_1.zip')
+        });
+      });
+
+      it('says where the latest copy of a server it hosts is', async () => {
+        jest.mocked(backupCopies.sent).mockReturnValue({ nodeId: REMOTE, nodeName: 'asa-1', fileName: 'backup_manual_1.zip', size: 5, copiedAt: 1 });
+
+        expect(await peer().onQuery!({ serverId: 'isle', query: 'backup-copy', args: {} }))
+          .toEqual({ copy: { nodeId: REMOTE, nodeName: 'asa-1', fileName: 'backup_manual_1.zip', size: 5, copiedAt: 1 } });
+      });
+    });
+
     it('stops the listed servers on the host and records the ones that stopped', async () => {
       await place('a', LOCAL);
       await repo.setDesiredState('a', LOCAL, 'running');
@@ -2172,6 +2418,100 @@ describe('MeshService', () => {
       await expect(service.queryRemote('isle', 'state')).rejects.toThrow(/ECONNREFUSED/);
     });
 
+    // The pages of a server on another machine (backups, automation and the rest) act there.
+    describe('requests about a server on another machine', () => {
+      const sender = { send: jest.fn() } as never;
+
+      beforeEach(async () => {
+        jest.mocked(peerRequest).mockReset();
+        jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { success: true } });
+        await place('isle', LOCAL);
+        await place('far', REMOTE);
+        await service.resumeIfJoined();
+      });
+
+      /** What the machine hosting far answers, by the route asked. */
+      const answers = (query: unknown, command: unknown) => jest.mocked(peerRequest).mockImplementation(async options =>
+        ({ status: 200, body: options.url.endsWith('/v1/query') ? query : options.url.endsWith('/v1/command') ? command : { success: true } }) as never);
+
+      // Opened in Windows Firewall with the server ports, while this machine is in a mesh.
+      it('says which ports it listens on for the mesh, and forgets them when it leaves', async () => {
+        expect(meshListenPorts()).toEqual({ peer: 4747, raft: 4002 });
+
+        await service.leaveWithoutQuorum();
+
+        expect(meshListenPorts()).toBeNull();
+      });
+
+      it('passes a read to the machine hosting the server as a query, and answers with its reply', async () => {
+        answers({ backups: ['b1'] }, null);
+
+        const reply = await routeToHost('get-backup-list', 'far', { instanceId: 'far' }, true, sender);
+
+        expect(reply).toEqual({ backups: ['b1'] });
+        const sent = jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith('/v1/query')).at(-1)!;
+        expect(sent.url).toBe('https://10.0.0.2:4747/v1/query');
+        expect(sent.body).toEqual({ serverId: 'far', query: 'server-request', args: { channel: 'get-backup-list', payload: { instanceId: 'far' } } });
+      });
+
+      it('passes a change as a command, and answers with the reply the handler gave there', async () => {
+        answers(null, { success: true, detail: { success: true, backupId: 'b2' } });
+
+        const reply = await routeToHost('create-backup', 'far', { instanceId: 'far', type: 'manual' }, false, sender);
+
+        expect(reply).toEqual({ success: true, backupId: 'b2' });
+        const sent = jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith('/v1/command')).at(-1)!;
+        expect(sent.url).toBe('https://10.0.0.2:4747/v1/command');
+        expect(sent.body).toMatchObject({ operation: 'server-request', serverId: 'far', args: { channel: 'create-backup', payload: { instanceId: 'far', type: 'manual' } } });
+      });
+
+      it('leaves a server hosted here to this machine', async () => {
+        await expect(routeToHost('get-backup-list', 'isle', { instanceId: 'isle' }, true, sender)).resolves.toBeNull();
+      });
+
+      it('runs the request another machine passed here, for a server it hosts', async () => {
+        registerForwardable('get-test-list', true, async payload => ({ items: [payload.instanceId] }));
+        registerForwardable('make-test', false, async payload => ({ success: true, made: payload.instanceId }));
+        const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+
+        expect(await peer.onQuery!({ serverId: 'isle', query: 'server-request', args: { channel: 'get-test-list', payload: { instanceId: 'isle' } } }))
+          .toEqual({ items: ['isle'] });
+        const result = await service.executeLocalCommand({
+          commandId: 'sr-1', correlationId: 'c', actor: 'ada', targetNode: LOCAL, operation: 'server-request', serverId: 'isle',
+          args: { channel: 'make-test', payload: { instanceId: 'isle' } }, expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+        } as never);
+        expect(result).toMatchObject({ success: true, detail: { success: true, made: 'isle' } });
+      });
+
+      // Download on the desktop shows the file in the file explorer: it has to be on this machine.
+      it('fetches a backup of a server on another machine here, to download', async () => {
+        answers({ success: true, fileName: 'backup_manual_3.zip' }, null);
+        jest.mocked(peerDownload).mockResolvedValue(true);
+
+        const result = await service.fetchBackupForDownload('far', 'b3');
+
+        const asked = jest.mocked(peerRequest).mock.calls.map(([options]) => options).filter(options => options.url.endsWith('/v1/query')).at(-1)!;
+        expect(asked.body).toEqual({ serverId: 'far', query: 'server-request', args: { channel: 'locate-backup', payload: { instanceId: 'far', backupId: 'b3' } } });
+        const dest = path.join(root, 'downloads', 'far', 'backup_manual_3.zip');
+        expect(jest.mocked(peerDownload).mock.calls.at(-1)![0]).toMatchObject({
+          url: 'https://10.0.0.2:4747/v1/backup-file?serverId=far&fileName=backup_manual_3.zip', dest
+        });
+        expect(result).toEqual({ success: true, filePath: dest, fileName: 'backup_manual_3.zip' });
+      });
+
+      it('leaves a backup of a server here alone', async () => {
+        await expect(service.fetchBackupForDownload('isle', 'b1')).resolves.toBeNull();
+      });
+
+      it('refuses to run a change that came as a read', async () => {
+        registerForwardable('change-test', false, async () => ({ success: true }));
+        const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+
+        await expect(peer.onQuery!({ serverId: 'isle', query: 'server-request', args: { channel: 'change-test', payload: {} } }))
+          .rejects.toThrow('change-test cannot be run for another machine.');
+      });
+    });
+
     it('answers queries only about servers it hosts', async () => {
       await place('isle', LOCAL);
       await place('far', REMOTE);
@@ -2181,6 +2521,14 @@ describe('MeshService', () => {
 
       expect(await peer.onQuery!({ serverId: 'isle', query: 'state', args: {} })).toEqual({ state: 'running', instanceId: 'isle' });
       await expect(peer.onQuery!({ serverId: 'far', query: 'state', args: {} })).rejects.toThrow(/not hosted/);
+    });
+
+    it('answers with the settings a server it hosts started with', async () => {
+      await place('isle', LOCAL);
+      await service.resumeIfJoined();
+      const peer = jest.mocked(startPeerServer).mock.calls[0][1];
+
+      expect(await peer.onQuery!({ serverId: 'isle', query: 'started-config', args: {} })).toEqual({ config: { id: 'isle', maxPlayers: 70 } });
     });
 
     it('sends an RCON command for a remote server to its host', async () => {
@@ -3153,6 +3501,31 @@ describe('MeshService', () => {
 
       expect(heartbeats().length).toBeGreaterThanOrEqual(3);
     });
+
+    // A Docker machine 4 minutes behind showed no clock line: the answer to this machine's own
+    // heartbeat set the difference back to 0 every few seconds.
+    it("reports the other machine's clock from the answer to its heartbeat", async () => {
+      jest.mocked(peerRequest).mockImplementation(async options => options.url.endsWith('/v1/heartbeat')
+        ? { status: 200, body: { ok: true, now: Date.now() - 237_000 } }
+        : { status: 200, body: { ok: true } });
+
+      await jest.advanceTimersByTimeAsync(20_000);
+
+      const { skew } = await service.diagnostics();
+      expect(skew.map(entry => [entry.nodeId, Math.round(entry.skewMs / 1000)])).toEqual([[REMOTE, -237]]);
+    });
+
+    it('keeps the difference it measured when an answer carries no time', async () => {
+      jest.mocked(peerRequest).mockImplementation(async options => options.url.endsWith('/v1/heartbeat')
+        ? { status: 200, body: { ok: true, now: Date.now() + 5_000 } }
+        : { status: 200, body: { ok: true } });
+      await jest.advanceTimersByTimeAsync(10_000);
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { ok: true } });
+
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      expect((await service.diagnostics()).skew.map(entry => Math.round(entry.skewMs / 1000))).toEqual([5]);
+    });
   });
 
   describe('naming machines', () => {
@@ -3173,6 +3546,17 @@ describe('MeshService', () => {
 
       expect((await repo.getNode(REMOTE))?.name).toBe('Game Box');
       expect((await service.status()).nodes.find(node => node.nodeId === REMOTE)?.name).toBe('Game Box');
+    });
+
+    // A heartbeat that read the row before a rename wrote the old name back with everything else.
+    it('records a heartbeat without touching the name or Skip new servers', async () => {
+      await repo.upsertNode({ ...nodeRow(REMOTE, '2', 'https://10.0.0.2:4747'), name: 'Game Box', maintenance: true, status: 'maintenance' });
+
+      await repo.recordHeartbeat(REMOTE, { version: '9.9.9', protocolVersion: 2, certSerial: '7', capabilities: nodeRow(REMOTE).capabilities, lastSeen: 42 });
+
+      expect(await repo.getNode(REMOTE)).toEqual(expect.objectContaining({
+        name: 'Game Box', maintenance: true, status: 'maintenance', version: '9.9.9', certSerial: '7', lastSeen: 42
+      }));
     });
 
     it('renames this machine, and keeps the name for when it joins a mesh again', async () => {

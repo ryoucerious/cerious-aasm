@@ -20,6 +20,19 @@ import { ServerLifecycleService } from '../../core/services/server-lifecycle.ser
 import { EventSubscriptionService, ServerPageState } from '../../core/services/event-subscription.service';
 import { AuthService } from '../../core/services/auth.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
+import { RestartsService } from '../../core/services/restarts.service';
+
+/** What a scheduled restart warns for when the server's Automation settings say nothing. */
+const DEFAULT_RESTART_WARNING_MINUTES = 5;
+
+/** Settings that take effect at once, or are not ARK's: never waiting for a restart. */
+const APPLIED_AT_ONCE = new Set([
+  'id', 'nodeId', 'state', 'status', 'players', 'memory', 'cpu', 'startedAt', 'message', 'configRevision', 'sortOrder',
+  'operatorUserId', 'managerUserId', 'autoStartOnAppLaunch', 'autoStartOnBoot', 'crashDetectionEnabled',
+  'crashDetectionInterval', 'maxRestartAttempts', 'scheduledRestartEnabled', 'restartFrequency', 'restartTime',
+  'restartTimes', 'restartDays', 'restartWarningMinutes', 'broadcastConfig', 'discordConfig'
+]);
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 import { MoveServerDialogComponent } from '../../components/move-server-dialog/move-server-dialog.component';
 import { PERMISSIONS } from '../../core/models/auth.model';
 import { serverStatusKey } from '../../core/utils/server-status';
@@ -85,6 +98,7 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   private readonly serverNav = inject(ServerNavService);
   private readonly liveServers = inject(LiveServersService);
   private readonly meshNodes = inject(MeshNodesService);
+  private readonly restarts = inject(RestartsService);
   private activeServer: ServerInstanceDraft | null = null;
   private activeServerSub?: Subscription;
   private subscriptions: Subscription[] = [];
@@ -164,6 +178,81 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     this.cdr.markForCheck();
   }
 
+  /** The settings the running server started with, from its machine; null until heard. */
+  private startedConfig: Record<string, unknown> | null = null;
+  /** Server and start the settings above are for: asked again only when it starts again. */
+  private startedKey = '';
+  private pendingCache: { signature: string; keys: ReadonlySet<string> } = { signature: '', keys: new Set() };
+
+  /** The server is up, so its settings may differ from those saved since. */
+  private get running(): boolean {
+    const key = serverStatusKey(this.liveServer?.state ?? this.activeServerInstance?.state);
+    return key === 'running' || key === 'starting';
+  }
+
+  /** Asks the server's machine what it started with, once each time it starts. */
+  refreshStartedConfig(): void {
+    const id = this.activeServerInstance?.id;
+    if (!id || !this.running) return;
+    const key = `${id}:${this.liveServer?.startedAt ?? ''}`;
+    if (key === this.startedKey) return;
+    this.startedKey = key;
+    this.messaging.sendMessage<{ config?: Record<string, unknown> | null }>('get-started-config', { id }).subscribe({
+      next: reply => {
+        if (this.startedKey !== key) return;
+        this.startedConfig = reply?.config ?? null;
+        this.cdr.markForCheck();
+      },
+      error: () => { /* no marks; the settings still save */ }
+    });
+  }
+
+  /**
+   * The settings saved since the running server started, which take effect at its next start.
+   * Those that take effect at once (automation, broadcasts, Discord, ownership) are left out.
+   */
+  get pendingKeys(): ReadonlySet<string> {
+    const server = this.activeServerInstance as Record<string, unknown> | null;
+    const started = this.startedConfig;
+    if (!server || !started || started['id'] !== server['id'] || !this.running) return EMPTY_KEYS;
+    const keys = [...new Set([...Object.keys(server), ...Object.keys(started)])]
+      .filter(key => !APPLIED_AT_ONCE.has(key) && JSON.stringify(server[key] ?? null) !== JSON.stringify(started[key] ?? null))
+      .sort();
+    const signature = keys.join('|');
+    // The same set while nothing changes: a new one each check would read as a change.
+    if (signature !== this.pendingCache.signature) this.pendingCache = { signature, keys: new Set(keys) };
+    return this.pendingCache.keys;
+  }
+
+  /** The Restart dialog is open. */
+  showRestart = false;
+  /** The countdown the dialog offers: the server's own warning time, as a scheduled restart uses. */
+  restartWarningMinutes = DEFAULT_RESTART_WARNING_MINUTES;
+
+  /** When a restart asked for from the app is due, here or on the machine hosting the server. */
+  get restartDueAt(): number | null {
+    return this.restarts.dueAt(this.activeServerInstance?.id);
+  }
+
+  askRestart(): void {
+    this.restartWarningMinutes = Number(this.activeServerInstance?.restartWarningMinutes) || DEFAULT_RESTART_WARNING_MINUTES;
+    this.showRestart = true;
+    this.cdr.markForCheck();
+  }
+
+  /** After the countdown, or now. */
+  confirmRestart(warnFirst: boolean): void {
+    this.showRestart = false;
+    const server = this.activeServerInstance;
+    if (server?.id) this.restarts.restart(server as ServerInstance, warnFirst ? this.restartWarningMinutes : 0);
+    this.cdr.markForCheck();
+  }
+
+  cancelRestart(): void {
+    const server = this.activeServerInstance;
+    if (server?.id) this.restarts.cancel(server as ServerInstance);
+  }
+
   /** The backend refuses RCON for roles without the permission; the panel is simply not shown. */
   /** Not for a server whose mesh machine cannot be reached: a command would not get there. */
   get canUseRcon(): boolean {
@@ -187,7 +276,15 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
       }));
     }
 
-    this.subscriptions.push(this.liveServers.servers$.subscribe(() => this.cdr.markForCheck()));
+    this.subscriptions.push(this.liveServers.servers$.subscribe(() => {
+      this.refreshStartedConfig();
+      this.cdr.markForCheck();
+    }));
+    // A countdown begun or ended is read against the time now, not the last 30-second tick.
+    this.subscriptions.push(this.restarts.changed$.subscribe(() => {
+      this.now = Date.now();
+      this.cdr.markForCheck();
+    }));
     this.subscriptions.push(interval(30000).subscribe(() => {
       this.now = Date.now();
       this.cdr.markForCheck();
@@ -588,7 +685,8 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     this.automationService.configureScheduledRestart(server.id, {
       enabled: server.scheduledRestartEnabled || false,
       frequency: server.restartFrequency || 'daily',
-      time: server.restartTime || '02:00',
+      time: server.restartTimes?.[0] || server.restartTime || '02:00',
+      times: server.restartTimes?.length ? server.restartTimes : [server.restartTime || '02:00'],
       days: server.restartDays || [1],
       warningMinutes: server.restartWarningMinutes || 5
     }).subscribe({
@@ -606,10 +704,10 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     });
   }
 
-  /** Mods cannot change while the server runs; the page disables the controls, this backs it up. */
+  /** A change could not reach a machine that cannot be reached; the page disables the controls, this backs it up. */
   private modsEditable(): boolean {
     if (!this.settingsLocked) return true;
-    this.notificationService.warning('Stop the server before changing its mods.', 'Mods');
+    this.notificationService.warning('Its machine cannot be reached, so its mods cannot be changed now.', 'Mods');
     return false;
   }
 }

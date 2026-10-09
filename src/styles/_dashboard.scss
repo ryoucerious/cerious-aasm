@@ -1219,6 +1219,22 @@ $server-card-detail-gap: 0.25rem;
 }
 
 // As tall as the buttons beside it, just narrower (.btn-icon-only reserves a taller box).
+// A restart counting down from the app: the players are hearing the warnings.
+.server-header-restart {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+
+  .material-icons {
+    font-size: 1.1rem;
+    margin-right: 0;
+  }
+}
+
 .server-header-actions .server-header-more {
   min-width: 0;
   min-height: 0;
@@ -1260,6 +1276,36 @@ $server-card-detail-gap: 0.25rem;
     font-size: 1.15rem;
     font-weight: $font-semibold;
     color: var(--text-strong);
+  }
+}
+
+// Saved since the server started: takes effect at its next restart.
+.pending-mark {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.settings-pending {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+
+  span {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .btn {
+    flex: none;
   }
 }
 

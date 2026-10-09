@@ -166,8 +166,17 @@ export class AuthService {
     return { success: true, status: response.status };
   }
 
-  /** Ends the web session. Resolves false when the server did not confirm it; never rejects. */
+  /**
+   * Ends the session: the web session, or on the desktop the mesh account signed in there.
+   * Resolves false when it was not confirmed; never rejects.
+   */
   async logout(): Promise<boolean> {
+    if (this.ipc.isElectron) {
+      const res = await this.send<{ success?: boolean }>('mesh-logout', {});
+      if (!res?.success) return false;
+      await this.refresh();
+      return true;
+    }
     try {
       const response = await fetch('/api/logout', { method: 'POST', credentials: 'include' });
       if (!response.ok) {

@@ -71,6 +71,10 @@ export interface PeerHandlers {
    * it (apply). `nodeId` is the asking member, from its certificate. Throws with the reason to refuse.
    */
   onForceRemove?(nodeId: string, body: { phase?: unknown; removing?: unknown; members?: unknown }): Promise<{ ok: true }>;
+  /** A backup of a server hosted here, for the member keeping a copy of it; null when there is no such file. */
+  onBackupFile?(serverId: string, fileName: string): string | null;
+  /** The copy this machine keeps of a server's latest backup, for the machine bringing it back; null when none. */
+  onBackupCopyFile?(serverId: string): string | null;
   /** A member removed this machine from the mesh. `nodeId` is that member, from its certificate. */
   onRemoved?(nodeId: string): Promise<{ ok: true }>;
 }
@@ -214,6 +218,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, handl
       }
       await handlers.onCheckpointFile(url.searchParams.get('serverId') || '', url.searchParams.get('rel') || '', req, offset);
       send(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'GET' && (url.pathname === '/v1/backup-file' || url.pathname === '/v1/backup-copy-file')) {
+      const serverId = url.searchParams.get('serverId') || '';
+      const file = url.pathname === '/v1/backup-file'
+        ? handlers.onBackupFile?.(serverId, url.searchParams.get('fileName') || '') ?? null
+        : handlers.onBackupCopyFile?.(serverId) ?? null;
+      if (!file || !fs.existsSync(file)) {
+        send(res, 404, { error: 'Not here' });
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
+      fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/cluster-object' && handlers.onClusterObject) {

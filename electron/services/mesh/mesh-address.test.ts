@@ -1,4 +1,4 @@
-import { addressFromEndpoints, memberUrlOf, meshAddressOf, peerUrlFor, raftAddrFor } from './mesh-address';
+import { addressFromEndpoints, memberUrlOf, meshAddressOf, ownLanAddress, peerUrlFor, raftAddrFor } from './mesh-address';
 
 describe('mesh addresses', () => {
   describe('an address typed in', () => {
@@ -62,5 +62,49 @@ describe('mesh addresses', () => {
   it('reads the address back from a member\'s record', () => {
     expect(addressFromEndpoints('https://192.168.1.155:4747', '192.168.1.155:4002')).toEqual({ host: '192.168.1.155', peerPort: 4747, raftPort: 4002 });
     expect(addressFromEndpoints('not a url', '')).toBeNull();
+  });
+
+  // The first adapter Windows lists is often WSL's or Hyper-V's, which no other machine can reach.
+  describe('the address this machine offers by default', () => {
+    const v4 = (address: string) => ({ address, family: 'IPv4', internal: false, netmask: '255.255.255.0', mac: '00:00:00:00:00:00', cidr: null });
+
+    it('passes over WSL and Hyper-V adapters for the network the machine is on', () => {
+      expect(ownLanAddress({
+        'vEthernet (WSL (Hyper-V firewall))': [v4('172.29.160.1')],
+        'vEthernet (Default Switch)': [v4('172.20.48.1')],
+        'Ethernet': [v4('192.168.1.20')]
+      })).toBe('192.168.1.20');
+    });
+
+    it('passes over VirtualBox, VMware and Docker bridges, on Windows or Linux', () => {
+      expect(ownLanAddress({
+        'VirtualBox Host-Only Network': [v4('192.168.56.1')],
+        'VMware Network Adapter VMnet8': [v4('192.168.80.1')],
+        'Wi-Fi': [v4('10.0.0.15')]
+      })).toBe('10.0.0.15');
+      expect(ownLanAddress({
+        docker0: [v4('172.17.0.1')], 'br-3f2a9c1d': [v4('172.18.0.1')], virbr0: [v4('192.168.122.1')], enp3s0: [v4('192.168.0.50')]
+      })).toBe('192.168.0.50');
+    });
+
+    it('prefers the local network to a VPN, but takes the VPN over a virtual adapter', () => {
+      expect(ownLanAddress({ tailscale0: [v4('100.101.102.103')], eth0: [v4('192.168.1.5')] })).toBe('192.168.1.5');
+      expect(ownLanAddress({ 'vEthernet (WSL)': [v4('172.29.160.1')], ZeroTier: [v4('10.147.17.4')] })).toBe('10.147.17.4');
+    });
+
+    it('passes over an address Windows made up for an unplugged adapter', () => {
+      expect(ownLanAddress({ 'Ethernet 2': [v4('169.254.12.34')], 'Wi-Fi': [v4('192.168.1.7')] })).toBe('192.168.1.7');
+    });
+
+    it('takes a container\'s own eth0, and skips IPv6 and the loopback', () => {
+      expect(ownLanAddress({
+        lo: [{ ...v4('127.0.0.1'), internal: true }],
+        eth0: [{ ...v4('fe80::1'), family: 'IPv6' }, { ...v4('172.20.0.5'), family: 4 }]
+      })).toBe('172.20.0.5');
+    });
+
+    it('has none to offer without a network', () => {
+      expect(ownLanAddress({ lo: [{ ...v4('127.0.0.1'), internal: true }] })).toBeNull();
+    });
   });
 });

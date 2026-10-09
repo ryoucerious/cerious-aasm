@@ -119,6 +119,15 @@ describe('ServerHeaderComponent', () => {
       expect(moveItem()).toBeNull();
     });
 
+    it('moves a server that crashed, which is off like a stopped one', () => {
+      fixture.componentRef.setInput('live', { ...component.live, state: 'crashed' });
+      fixture.componentRef.setInput('server', { ...component.server, state: 'Crashed' });
+      fixture.componentRef.setInput('canMove', true);
+      fixture.detectChanges();
+
+      expect(component.canMoveNow).toBeTrue();
+    });
+
     it('says to stop a running server before moving it', () => {
       fixture.componentRef.setInput('canMove', true);
       spyOn(component.moveServer, 'emit');
@@ -181,17 +190,58 @@ describe('ServerHeaderComponent', () => {
     expect(component.uptime).toBe('--');
   });
 
+  const actionButton = (label: string) =>
+    Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.server-header-actions button'))
+      .find(button => button.textContent?.replace(/\s+/g, ' ').trim().endsWith(label)) ?? null;
+
   it('emits the lifecycle events', () => {
     spyOn(component.startServer, 'emit');
     spyOn(component.stopServer, 'emit');
     spyOn(component.forceStopServer, 'emit');
-    const el: HTMLElement = fixture.nativeElement;
-    (el.querySelector('.server-header-actions .btn:nth-child(2)') as HTMLButtonElement).click();
-    (el.querySelector('.server-header-actions .btn:nth-child(3)') as HTMLButtonElement).click();
+    actionButton('Stop')!.click();
+    actionButton('Force')!.click();
     expect(component.stopServer.emit).toHaveBeenCalled();
     expect(component.forceStopServer.emit).toHaveBeenCalled();
     component.startServer.emit();
     expect(component.startServer.emit).toHaveBeenCalled();
+  });
+
+  // Operators and server managers could only stop and start again.
+  describe('restarting', () => {
+    it('offers Restart while the server runs', () => {
+      spyOn(component.restartServer, 'emit');
+
+      actionButton('Restart')!.click();
+
+      expect(component.restartServer.emit).toHaveBeenCalled();
+    });
+
+    it('offers no Restart for a server that is not running', () => {
+      fixture.componentRef.setInput('live', { id: 'a', name: 'Ragnarok', state: 'stopped' });
+      fixture.componentRef.setInput('server', { ...component.server, state: 'Stopped' });
+      fixture.detectChanges();
+
+      expect(actionButton('Restart')!.disabled).toBeTrue();
+    });
+
+    it('shows a restart counting down, with a way to cancel it', () => {
+      spyOn(component.cancelRestart, 'emit');
+      fixture.componentRef.setInput('restartDueAt', now + 12 * 60_000 - 1);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+
+      expect(el.querySelector('.server-header-restart')?.textContent?.replace(/\s+/g, ' ').trim()).toContain('Restarting in 12 min');
+      expect(actionButton('Restart')).toBeNull();
+      actionButton('Cancel restart')!.click();
+      expect(component.cancelRestart.emit).toHaveBeenCalled();
+    });
+
+    it('says when the restart is under way', () => {
+      fixture.componentRef.setInput('restartDueAt', now - 1);
+      fixture.detectChanges();
+
+      expect((fixture.nativeElement as HTMLElement).querySelector('.server-header-restart')?.textContent).toContain('Restarting now');
+    });
   });
 
   it('renders nothing without a server', () => {

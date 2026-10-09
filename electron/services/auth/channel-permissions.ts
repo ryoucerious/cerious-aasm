@@ -48,8 +48,9 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-run-at-startup': PERMISSIONS.SETTINGS_VIEW,
   'set-run-at-startup': PERMISSIONS.SETTINGS_MANAGE,
   'get-server-ports': PERMISSIONS.SETTINGS_VIEW,
-  'set-server-ports': PERMISSIONS.SETTINGS_MANAGE,
-  'open-server-ports-firewall': PERMISSIONS.SETTINGS_MANAGE,
+  // Narrowed in the handler: settings.manage, or the Machine Admin of the machine.
+  'set-server-ports': PERMISSIONS.SETTINGS_VIEW,
+  'open-server-ports-firewall': PERMISSIONS.SETTINGS_VIEW,
   'get-host-resources': null,
   'get-player-history': null,
   'check-firewall-enabled': null,
@@ -112,6 +113,10 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
   'get-scheduler-status': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
   'download-backup': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'get-backup-copy': byInstanceId(PERMISSIONS.BACKUPS_VIEW),
+  'fetch-backup-copy': byInstanceId(PERMISSIONS.BACKUPS_RESTORE),
+  'list-held-backup-copies': PERMISSIONS.BACKUPS_VIEW,
+  'restore-backup-copy': PERMISSIONS.SERVERS_CREATE,
   'create-backup': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
   'save-backup-settings': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
   'start-backup-scheduler': byInstanceId(PERMISSIONS.BACKUPS_CREATE),
@@ -213,6 +218,7 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'restart-server-instance': byId(PERMISSIONS.SERVERS_CONTROL),
   'cancel-server-restart': byId(PERMISSIONS.SERVERS_CONTROL),
   'get-pending-restarts': PERMISSIONS.SERVERS_VIEW,
+  'get-started-config': byId(PERMISSIONS.SERVERS_CONFIGURE),
   'get-mesh-audit': PERMISSIONS.MESH_VIEW
 };
 

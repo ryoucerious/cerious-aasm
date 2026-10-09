@@ -44,8 +44,14 @@ describe('channel-permissions', () => {
     expect(permissionForChannel('cancel-restart-all')).toBe('servers.control');
     expect(permissionForChannel('cancel-server-restart')).toBe('servers.control');
     expect(permissionForChannel('get-pending-restarts')).toBe('servers.view');
-    expect(permissionForChannel('set-server-ports')).toBe('settings.manage');
-    expect(permissionForChannel('open-server-ports-firewall')).toBe('settings.manage');
+    expect(permissionForChannel('get-started-config')).toBe('servers.configure');
+    expect(permissionForChannel('get-backup-copy')).toBe('backups.view');
+    expect(permissionForChannel('fetch-backup-copy')).toBe('backups.restore');
+    expect(permissionForChannel('list-held-backup-copies')).toBe('backups.view');
+    expect(permissionForChannel('restore-backup-copy')).toBe('servers.create');
+    // Narrowed in the handler: settings.manage, or the Machine Admin of the machine.
+    expect(permissionForChannel('set-server-ports')).toBe('settings.view');
+    expect(permissionForChannel('open-server-ports-firewall')).toBe('settings.view');
     expect(permissionForChannel('set-run-at-startup')).toBe('settings.manage');
   });
 

@@ -129,7 +129,7 @@ const CATEGORY_KEYS: Record<string, string[]> = {
   automation: [
     'autoStartOnAppLaunch', 'crashDetectionEnabled', 'crashDetectionInterval',
     'maxRestartAttempts', 'scheduledRestartEnabled', 'restartFrequency',
-    'restartTime', 'restartDays', 'restartWarningMinutes',
+    'restartTime', 'restartTimes', 'restartDays', 'restartWarningMinutes',
   ],
   whitelist: [
     'useExclusiveList', 'exclusiveJoinPlayerIds', 'exclusiveJoinPlayers', 'whitelistKickMessage',

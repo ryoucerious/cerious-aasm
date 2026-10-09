@@ -104,7 +104,7 @@
         <h3 class="settings-card-title">{{ status.meshName || 'Mesh' }}</h3>
         <p class="settings-card-hint">Each machine updates its own ARK install and its own app. Update one voting machine at a time. Leave returns this machine to standalone. Its servers stay here.</p>
       </div>
-      <button type="button" class="btn btn-primary btn-sm" (click)="issueToken()" [disabled]="busy || status.degraded">
+      <button type="button" class="btn btn-primary btn-sm" *ngIf="canEnrollNodes" (click)="issueToken()" [disabled]="busy || status.degraded">
         <i class="material-icons">key</i> Enrollment token
       </button>
     </div>
@@ -157,7 +157,7 @@
             <span class="mesh-node-pill" [ngClass]="connectionTone(node)">{{ connection(node) }}</span>
             <!-- Occasional changes, kept off the card's face. -->
             <div class="mesh-node-more-anchor">
-              <button type="button" class="btn btn-ghost btn-icon-only mesh-node-more" (click)="toggleMenu(node, $event)"
+              <button type="button" class="btn btn-ghost btn-icon-only mesh-node-more" *ngIf="canManageNodes || canRemoveNodes" (click)="toggleMenu(node, $event)"
                       title="More actions" aria-label="More actions" aria-haspopup="menu" [attr.aria-expanded]="menuNodeId === node.nodeId">
                 <span class="material-icons">more_horiz</span>
               </button>
@@ -228,13 +228,15 @@
 
   <section class="settings-card" *ngIf="inMesh">
     <h3 class="settings-card-title">Reachability</h3>
-    <p class="settings-card-hint">Checks the peer and Raft ports. The mesh does not require a VPN for this.</p>
+    <p class="settings-card-hint">Checks that this machine reaches each of the others on its connection port, and that their clocks agree.</p>
     <div class="settings-card-actions">
       <button type="button" class="btn btn-ghost" (click)="diagnostics()">
         <i class="material-icons">lan</i> Check reachability
       </button>
     </div>
-    <pre class="mesh-output" *ngIf="diagnosticText">{{ diagnosticText }}</pre>
+    <ul class="mesh-reachability" *ngIf="diagnosticLines.length">
+      <li *ngFor="let line of diagnosticLines">{{ line }}</li>
+    </ul>
   </section>
 
   <section class="settings-card" *ngIf="inMesh">
@@ -253,7 +255,7 @@
 
   <app-modal [title]="'Update ARK'" [show]="!!confirmingArkUpdate" [maxWidth]="'520px'" (close)="cancelArkUpdate()">
     <div class="modal-confirmation">
-      Update ARK on {{ confirmingArkUpdate?.name }}? The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for 15 minutes (the warning time in Settings → Updates), then its servers stop, the new files go in, and they start again.
+      Update ARK on {{ confirmingArkUpdate?.name }}? The update downloads while its servers keep running. Once it is ready, players on its servers are warned in chat for that machine's warning time (Settings → Updates on that machine, 15 minutes unless changed), then its servers stop, the new files go in, and they start again.
       If none of its servers is running, the update starts at once.
     </div>
     <div class="action-group-modal">

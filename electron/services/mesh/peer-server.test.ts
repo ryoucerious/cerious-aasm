@@ -32,6 +32,9 @@ describe('peer server checkpoint uploads', () => {
   let held: unknown = null;
   /** Cluster file contents this node keeps, by sha256. */
   const clusterObjects = new Map<string, string>();
+  /** serverId/fileName → the backup file this machine would hand out. */
+  const backupFiles = new Map<string, string>();
+  const heldCopies = new Map<string, string>();
   const onHeartbeat = jest.fn();
   const onProbeAddress = jest.fn();
 
@@ -60,6 +63,8 @@ describe('peer server checkpoint uploads', () => {
       onProbeAddress,
       onCheckpointBegin: async () => held as never,
       onClusterObject: sha256 => clusterObjects.get(sha256) ?? null,
+      onBackupFile: (serverId, fileName) => backupFiles.get(`${serverId}/${fileName}`) ?? null,
+      onBackupCopyFile: serverId => heldCopies.get(serverId) ?? null,
       onCheckpointFile: async (serverId, rel, body, offset) => {
         const chunks: Buffer[] = [];
         for await (const chunk of body) chunks.push(chunk as Buffer);
@@ -163,6 +168,42 @@ describe('peer server checkpoint uploads', () => {
       const dest = path.join(dir, 'stolen');
 
       expect(await peerDownload({ url: url('c'.repeat(64)), dest, ca: caPem })).toBe(false);
+      expect(fs.existsSync(dest)).toBe(false);
+    });
+  });
+
+  // The latest backup of each server is kept on a second machine as well.
+  describe('backups and the copies kept of them', () => {
+    it('hands a member a backup of a server here, and the copy it keeps', async () => {
+      const backup = path.join(dir, 'backup_manual_1.zip');
+      fs.writeFileSync(backup, 'zip bytes');
+      backupFiles.set('isle/backup_manual_1.zip', backup);
+      heldCopies.set('far', backup);
+
+      const fetched = path.join(dir, 'fetched.zip');
+      expect(await peerDownload({ url: `https://127.0.0.1:${port}/v1/backup-file?serverId=isle&fileName=backup_manual_1.zip`, dest: fetched, ca: caPem, ...client })).toBe(true);
+      expect(fs.readFileSync(fetched, 'utf8')).toBe('zip bytes');
+
+      const back = path.join(dir, 'back.zip');
+      expect(await peerDownload({ url: `https://127.0.0.1:${port}/v1/backup-copy-file?serverId=far`, dest: back, ca: caPem, ...client })).toBe(true);
+      expect(fs.readFileSync(back, 'utf8')).toBe('zip bytes');
+    });
+
+    it('says it has no such backup, or no copy', async () => {
+      const dest = path.join(dir, 'nothing.zip');
+
+      expect(await peerDownload({ url: `https://127.0.0.1:${port}/v1/backup-file?serverId=isle&fileName=other.zip`, dest, ca: caPem, ...client })).toBe(false);
+      expect(await peerDownload({ url: `https://127.0.0.1:${port}/v1/backup-copy-file?serverId=nowhere`, dest, ca: caPem, ...client })).toBe(false);
+      expect(fs.existsSync(dest)).toBe(false);
+    });
+
+    it('gives no backup to a machine that is not a member', async () => {
+      const backup = path.join(dir, 'private.zip');
+      fs.writeFileSync(backup, 'x');
+      backupFiles.set('isle/private.zip', backup);
+      const dest = path.join(dir, 'stolen.zip');
+
+      expect(await peerDownload({ url: `https://127.0.0.1:${port}/v1/backup-file?serverId=isle&fileName=private.zip`, dest, ca: caPem })).toBe(false);
       expect(fs.existsSync(dest)).toBe(false);
     });
   });

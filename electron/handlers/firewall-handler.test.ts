@@ -18,6 +18,12 @@ jest.mock('../utils/server-ports.utils', () => ({
   getServerPortRanges: jest.fn(() => ({ ranges: RANGES, source: 'settings' }))
 }));
 import { serverPortsService } from '../services/server-ports.service';
+jest.mock('../services/auth/permission-gate', () => ({
+  identifySender: jest.fn(() => ({ user: null, permissions: [], isAdmin: true, isLocalDesktop: true })),
+  isDesktopWindow: jest.requireActual('../services/auth/permission-gate').isDesktopWindow
+}));
+jest.mock('../services/mesh/mesh-hooks', () => ({ localNode: jest.fn(() => 'n1') }));
+import { identifySender } from '../services/auth/permission-gate';
 
 const RANGES = { game: { start: 7777, end: 7900 }, query: { start: 27015, end: 27030 }, rcon: { start: 27020, end: 27050 } };
 
@@ -271,6 +277,38 @@ describe('firewall-handler', () => {
       await handlers['open-server-ports-firewall']({ requestId: 'r1' }, sender);
 
       expect(replies('open-server-ports-firewall')).toEqual([{ success: true, state, requestId: 'r1' }]);
+    });
+
+    // A Machine Admin looks after one machine: its firewall is theirs to open, no other machine's.
+    describe('who may change them', () => {
+      const machineAdmin = (machineNodeId: string) => ({
+        user: { roleId: 'machine-admin', machineNodeId }, permissions: ['settings.view'], isAdmin: false, isLocalDesktop: false
+      });
+      afterEach(() => jest.mocked(identifySender).mockReturnValue({ user: null, permissions: [], isAdmin: true, isLocalDesktop: true } as never));
+
+      it('lets the Machine Admin of this machine open its ports and change its ranges', async () => {
+        jest.mocked(identifySender).mockReturnValue(machineAdmin('n1') as never);
+        jest.mocked(serverPortsService.openFirewall).mockResolvedValue({ success: true, state } as never);
+        jest.mocked(serverPortsService.setRanges).mockResolvedValue({ success: true, state } as never);
+
+        await handlers['open-server-ports-firewall']({ requestId: 'm1' }, sender);
+        await handlers['set-server-ports']({ ranges: RANGES, requestId: 'm2' }, sender);
+
+        expect(replies('open-server-ports-firewall')).toContainEqual({ success: true, state, requestId: 'm1' });
+        expect(replies('set-server-ports')).toContainEqual({ success: true, state, requestId: 'm2' });
+      });
+
+      it('refuses a Machine Admin of another machine, and a role that may only look', async () => {
+        jest.mocked(serverPortsService.openFirewall).mockClear();
+        jest.mocked(identifySender).mockReturnValue(machineAdmin('n2') as never);
+        await handlers['open-server-ports-firewall']({ requestId: 'm3' }, sender);
+        jest.mocked(identifySender).mockReturnValue({ user: { roleId: 'viewer' }, permissions: ['settings.view'], isAdmin: false } as never);
+        await handlers['set-server-ports']({ ranges: RANGES, requestId: 'm4' }, sender);
+
+        expect(serverPortsService.openFirewall).not.toHaveBeenCalled();
+        expect(replies('open-server-ports-firewall')).toContainEqual({ success: false, error: 'Only an Admin, or the Machine Admin of this machine, can change its server ports.', requestId: 'm3' });
+        expect(replies('set-server-ports')).toContainEqual({ success: false, error: 'Only an Admin, or the Machine Admin of this machine, can change its server ports.', requestId: 'm4' });
+      });
     });
 
     // Windows asks for permission on this machine's screen, where a web client's user may not be.

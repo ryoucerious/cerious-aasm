@@ -21,6 +21,7 @@ import { ServerListPreferencesService } from '../../core/services/server-list-pr
 import { MockMessagingService } from '../../../../test/mocks/mock-messaging.service';
 import { MockNotificationService } from '../../../../test/mocks/mock-notification.service';
 import { MockGlobalConfigService } from '../../../../test/mocks/mock-global-config.service';
+import { RestartsService } from '../../core/services/restarts.service';
 
 describe('SidebarComponent', () => {
   let component: SidebarComponent;
@@ -48,7 +49,11 @@ describe('SidebarComponent', () => {
   const stopped = { id: '1', name: 'Alpha', state: 'stopped' };
   const running = { id: '2', name: 'Beta', state: 'running', players: 3 };
 
+  let restarts: jasmine.SpyObj<RestartsService> & { changed$: unknown };
+
   beforeEach(async () => {
+    restarts = Object.assign(jasmine.createSpyObj('RestartsService', ['restartAll', 'cancelAll', 'restartingAllAt']), { changed$: of(undefined) });
+    restarts.restartingAllAt.and.returnValue(null);
     servers$ = new BehaviorSubject<any[]>([]);
     activeServer$ = new BehaviorSubject<any>(null);
     routerEvents$ = new Subject<any>();
@@ -107,6 +112,7 @@ describe('SidebarComponent', () => {
         { provide: ToastrService, useValue: { success: () => {}, error: () => {}, info: () => {}, warning: () => {} } },
         { provide: NotificationService, useValue: notification },
         { provide: GlobalConfigService, useClass: MockGlobalConfigService },
+        { provide: RestartsService, useValue: restarts },
         { provide: WebSocketService, useValue: { connected$: of(false) } },
         { provide: SettingsDrawerService, useValue: settingsDrawer },
         { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission), identity, identity$: of(identity) } },
@@ -612,6 +618,45 @@ describe('SidebarComponent', () => {
     servers$.next([stopped, { ...running, state: 'starting' }]);
     fixture.detectChanges();
     expect(stopAll().disabled).toBeFalse();
+  });
+
+  // Catches mod updates, which ARK fetches as a server starts.
+  describe('restarting every server', () => {
+    const restartAll = () => fixture.nativeElement.querySelector('button[title="Restart all servers"]') as HTMLButtonElement;
+
+    it('is offered only while a server is running', () => {
+      servers$.next([stopped]);
+      fixture.detectChanges();
+      expect(restartAll().disabled).toBeTrue();
+
+      servers$.next([stopped, running]);
+      fixture.detectChanges();
+      expect(restartAll().disabled).toBeFalse();
+    });
+
+    it('asks first, then restarts every server after the warning, or now', () => {
+      component.restartAllServers();
+      expect(component.showConfirmRestartAllModal).toBeTrue();
+      expect(component.restartAllWarningMinutes).toBe(15);
+
+      component.onConfirmRestartAll(true);
+      expect(restarts.restartAll).toHaveBeenCalledWith(15);
+      expect(component.showConfirmRestartAllModal).toBeFalse();
+
+      component.restartAllServers();
+      component.onConfirmRestartAll(false);
+      expect(restarts.restartAll).toHaveBeenCalledWith(0);
+    });
+
+    it('shows it counting down, with a way to cancel it', () => {
+      restarts.restartingAllAt.and.returnValue(Date.now() + 12 * 60_000 - 1_000);
+      fixture.detectChanges();
+      const pending = fixture.nativeElement.querySelector('.restart-all-pending') as HTMLElement;
+
+      expect(pending.textContent?.replace(/\s+/g, ' ')).toContain('Restarting all in 12 min');
+      (pending.querySelector('button') as HTMLButtonElement).click();
+      expect(restarts.cancelAll).toHaveBeenCalled();
+    });
   });
 
   it('starts and stops all servers once confirmed', () => {

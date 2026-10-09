@@ -34,10 +34,14 @@ export class ServerHeaderComponent {
   @Input() rconConnected = false;
   /** The user may move servers and another machine in the mesh can take this one. */
   @Input() canMove = false;
+  /** When a restart asked for from the app is due; null when none is counting down. */
+  @Input() restartDueAt: number | null = null;
 
   @Output() startServer = new EventEmitter<void>();
   @Output() stopServer = new EventEmitter<void>();
   @Output() forceStopServer = new EventEmitter<void>();
+  @Output() restartServer = new EventEmitter<void>();
+  @Output() cancelRestart = new EventEmitter<void>();
   @Output() moveServer = new EventEmitter<void>();
 
   private readonly meshNodes = inject(MeshNodesService);
@@ -126,9 +130,17 @@ export class ServerHeaderComponent {
     return this.stateKey === 'running';
   }
 
+  /** "Restarting in 12 min", counting down with the page's clock; "Restarting now" once it is due. */
+  get restartText(): string {
+    if (this.restartDueAt === null) return '';
+    const minutes = Math.ceil((this.restartDueAt - this.now) / 60_000);
+    return minutes > 0 ? `Restarting in ${minutes} min` : 'Restarting now';
+  }
+
   /** Only a server that is off moves; the machine hosting it refuses one that is not. */
   get canMoveNow(): boolean {
-    return this.canMove && this.stateKey === 'stopped';
+    // Off: stopped, or crashed or errored, which the machine hosting it accepts as well.
+    return this.canMove && (this.stateKey === 'stopped' || this.stateKey === 'crashed' || this.stateKey === 'error');
   }
 
   get canForceStop(): boolean {

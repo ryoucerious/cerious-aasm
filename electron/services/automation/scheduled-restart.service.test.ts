@@ -85,6 +85,34 @@ describe('ScheduledRestartService', () => {
       expect(automation.status).toEqual({ isMonitoring: false, isScheduled: true, nextRestart: new Date(2025, 8, 29, 4, 0) });
     });
 
+    // Admins wanted more than one restart a day.
+    it('restarts at the soonest of several times a day', () => {
+      const automation = schedule({ restartTimes: ['20:30', '02:00', '14:00'] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 14, 0));
+    });
+
+    it('schedules the next of the times once a restart is done', async () => {
+      const automation = schedule({ restartTimes: ['02:00', '14:00', '20:30'], restartWarningMinutes: 0 });
+
+      await jest.advanceTimersByTimeAsync(11 * 60 * 60_000 + 1_000);
+
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(1);
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 20, 30));
+    });
+
+    it('restarts at each of the times on the chosen days of a weekly schedule', () => {
+      const automation = schedule({ restartFrequency: 'weekly', restartDays: [3], restartTimes: ['18:00', '06:00'] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 9, 1, 6, 0));
+    });
+
+    it('uses the one time saved by older versions', () => {
+      const automation = schedule({ restartTime: '05:00', restartTimes: [] });
+
+      expect(automation.status.nextRestart).toEqual(new Date(2025, 8, 29, 5, 0));
+    });
+
     it('schedules a weekly restart on the nearest chosen day', () => {
       const automation = schedule({ restartFrequency: 'weekly', restartTime: '02:00', restartDays: [1, 3] });
 

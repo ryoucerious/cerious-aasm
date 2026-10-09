@@ -279,10 +279,10 @@ describe('mesh control plane', () => {
     }
     expect(keys.privateKeyPem).not.toContain(ca.keyPem);
     expect(protocolError(PROTOCOL_VERSION)).toBeNull();
-    expect(protocolError(PROTOCOL_VERSION + 1)).toMatch(/not compatible/);
-    expect(protocolError(0)).toMatch(/not compatible/);
+    expect(protocolError(PROTOCOL_VERSION + 1)).toMatch(/cannot work together/);
+    expect(protocolError(0)).toMatch(/cannot work together/);
     // A newer build still accepts a node one protocol version behind, so a mesh can be updated node by node.
     expect(protocolError(1, 2)).toBeNull();
-    expect(protocolError(3, 2)).toMatch(/not compatible/);
+    expect(protocolError(3, 2)).toMatch(/cannot work together/);
   });
 });

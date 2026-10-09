@@ -77,7 +77,8 @@ export class AddServerModalComponent implements OnChanges {
       ? [{ value: '', label: 'Auto-select' }, ...choices.map(node => ({ value: node.nodeId, label: node.skipping ? `${node.name} (skipping new servers)` : node.name }))]
       : [];
     this.importOptions = choices.length
-      ? [{ value: '', label: 'This machine' }, ...choices.filter(node => !this.meshNodes.isHere(node.nodeId)).map(node => ({ value: node.nodeId, label: node.name }))]
+      // A move refuses a machine skipping new servers, so an import could only fail there.
+      ? [{ value: '', label: 'This machine' }, ...choices.filter(node => !this.meshNodes.isHere(node.nodeId) && !node.skipping).map(node => ({ value: node.nodeId, label: node.name }))]
       : [];
     this.cdr.markForCheck();
   }

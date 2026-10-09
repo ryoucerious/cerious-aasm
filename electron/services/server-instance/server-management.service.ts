@@ -29,6 +29,7 @@ import { schedulerService } from '../scheduler.service';
 import { whitelistService } from '../whitelist.service';
 import { serverMonitoringService } from './server-monitoring.service';
 import { changedPortsOutsideRanges } from '../../utils/ark/port-sets';
+import { recordStartedConfig } from '../../utils/ark/started-config.utils';
 import { getServerPortRanges } from '../../utils/server-ports.utils';
 import { serverProcessService } from './server-process.service';
 
@@ -42,7 +43,7 @@ function refusePortsOutsideRanges(stored: Partial<InstanceConfig>, next: Partial
   const { start, end } = outside.range;
   const range = start === end ? `${start}` : `${start}–${end}`;
   const port = outside.label === 'Peer' ? `${outside.port}, always the game port + 1,` : `${outside.port}`;
-  return `The ${PORT_NAMES[outside.label]} ${port} is outside this machine's ${RANGE_NAMES[outside.label]} ports (${range}). Pick one inside them, or widen them in Settings → Server ports.`;
+  return `The ${PORT_NAMES[outside.label]} ${port} is outside this machine's ${RANGE_NAMES[outside.label]} ports (${range}). Pick one inside them, or widen them in Settings → Server Defaults → Server Ports.`;
 }
 
 export class ServerManagementService {
@@ -255,6 +256,9 @@ export class ServerManagementService {
       instance.rconPassword = generateRandomPassword(16);
       await this.saveGeneratedRconPassword(instanceId, instance.rconPassword);
     }
+
+    // What it starts with: settings saved while it runs wait for the next start, and the page marks them.
+    recordStartedConfig(instanceId, instance);
 
     try {
       arkConfigService.writeArkConfigFiles(instanceDir, instance, instanceId);

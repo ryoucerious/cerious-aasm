@@ -54,7 +54,7 @@ export interface PortOutsideRange {
   range: PortRange;
 }
 
-/** Settings → Server ports. Mirrors ServerPortsState in electron/services/server-ports.service.ts. */
+/** Settings → Server Defaults → Server Ports. Mirrors ServerPortsState in electron/services/server-ports.service.ts. */
 export interface ServerPortsState {
   ranges: ServerPortRanges;
   source: 'docker' | 'settings';
@@ -63,6 +63,8 @@ export interface ServerPortsState {
   windowsFirewallError?: string;
   linuxCommands: string | null;
   outside: Array<{ id: string; name: string; ports: PortOutsideRange[] }>;
+  /** In a mesh: the ports the other machines reach this one on, opened along with the server ports. */
+  meshPorts?: { peer: number; raft: number } | null;
 }
 
 export interface ServerPortsReply {

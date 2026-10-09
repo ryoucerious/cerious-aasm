@@ -1,6 +1,7 @@
 import { RconService } from './rcon.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import * as rconUtils from '../utils/rcon.utils';
+import * as startedConfig from '../utils/ark/started-config.utils';
 
 describe('RconService', () => {
   let service: RconService;
@@ -40,6 +41,17 @@ describe('RconService', () => {
     const result = await service.connectRcon('id');
     expect(result).toEqual({ success: true, connected: true, instanceId: 'id', error: undefined });
     expect(connect).toHaveBeenCalledWith('id', expect.objectContaining({ serverAdminPassword: 'admin' }), expect.any(Function));
+  });
+
+  // A new password or port saved while it runs is only the server's from its next start.
+  it('connectRcon uses the port and password the server started with', async () => {
+    jest.spyOn(instanceUtils, 'getInstance').mockReturnValue({ id: 'id', rconPort: 27030, rconPassword: 'new' });
+    jest.spyOn(startedConfig, 'forRcon').mockReturnValue({ id: 'id', rconPort: 27020, rconPassword: 'old' });
+    const connect = jest.spyOn(rconUtils, 'connectRcon').mockImplementation((_id, _config, onStatus) => onStatus?.(true));
+
+    await service.connectRcon('id');
+
+    expect(connect).toHaveBeenCalledWith('id', expect.objectContaining({ rconPort: 27020, rconPassword: 'old' }), expect.any(Function));
   });
 
   it('connectRcon resolves success if connected', async () => {

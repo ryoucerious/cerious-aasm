@@ -126,6 +126,24 @@ describe('BackupService', () => {
       expect(internals.cleanupService.cleanupArkSaveFiles).not.toHaveBeenCalled();
     });
 
+    // A mesh keeps a copy of each server's latest backup on another machine.
+    it('tells its listeners about each backup it makes, after making it', async () => {
+      const heard: unknown[] = [];
+      const stop = service.onBackupCreated(backup => heard.push(backup));
+
+      await service.createBackup('a1', 'manual');
+      stop();
+      await service.createBackup('a1', 'manual');
+
+      expect(heard).toEqual([expect.objectContaining({ id: 'b1' })]);
+    });
+
+    it('makes the backup even when a listener fails', async () => {
+      service.onBackupCreated(() => { throw new Error('boom'); });
+
+      await expect(service.createBackup('a1', 'manual')).resolves.toEqual(expect.objectContaining({ success: true }));
+    });
+
     it('also prunes ARK\'s own world copies after a scheduled backup', async () => {
       await service.createBackup('a1', 'scheduled');
 

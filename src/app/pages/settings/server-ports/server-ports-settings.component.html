@@ -43,6 +43,9 @@
         <button type="button" class="btn btn-primary" (click)="openFirewall()">Open in Windows Firewall</button>
       </div>
       <label class="form-control-label desc" *ngIf="isDesktop">Windows asks for permission once. After that it doesn't ask about new servers here.</label>
+      <label class="form-control-label desc" *ngIf="state.meshPorts as mesh">
+        The ports the other machines of the mesh reach this one on, {{ mesh.peer }} and {{ mesh.raft }} (TCP), are opened too.
+      </label>
       <label class="form-control-label desc" *ngIf="!isDesktop">
         Open them from the desktop app on this machine: Windows asks for permission on its screen.
       </label>

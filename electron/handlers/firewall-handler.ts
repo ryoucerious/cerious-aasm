@@ -4,7 +4,10 @@ import { getDockerNetworkInfo } from '../utils/docker-network.utils';
 import { onRequest } from './handler.utils';
 import { serverPortsService } from '../services/server-ports.service';
 import { getServerPortRanges } from '../utils/server-ports.utils';
-import { isDesktopWindow } from '../services/auth/permission-gate';
+import { identifySender, isDesktopWindow } from '../services/auth/permission-gate';
+import { localNode } from '../services/mesh/mesh-hooks';
+import { PERMISSIONS, ROLE_IDS } from '../types/auth.types';
+import type { MessageSender } from '../types/messaging.types';
 
 const ARK_FAILURE = 'Failed to generate ARK server firewall instructions';
 const WEB_FAILURE = 'Failed to generate web server firewall instructions';
@@ -70,13 +73,27 @@ onRequest('check-firewall-enabled', () => {
   onError: error => ({ success: false, platform: getPlatform(), enabled: false, message: CHECK_FAILURE, error })
 });
 
-// Settings → Server ports: the ranges this machine's servers take their ports from.
+// Settings → Server Defaults → Server Ports: the ranges this machine's servers take their ports from.
 onRequest('get-server-ports', () => serverPortsService.state(), { fallbackError: 'Could not read the server ports' });
 
-onRequest('set-server-ports', payload => serverPortsService.setRanges(payload.ranges), { fallbackError: 'Could not save the server ports' });
+const NOT_YOURS = 'Only an Admin, or the Machine Admin of this machine, can change its server ports.';
+
+/** The machine's own settings: whoever manages settings, or the Machine Admin who looks after this machine. */
+function maySetServerPorts(sender: MessageSender): boolean {
+  const identity = identifySender(sender);
+  if (identity.isAdmin || identity.permissions.includes(PERMISSIONS.SETTINGS_MANAGE)) return true;
+  const user = identity.user;
+  return user?.roleId === ROLE_IDS.MACHINE_ADMIN && !!user.machineNodeId && user.machineNodeId === localNode();
+}
+
+onRequest('set-server-ports', (payload, { sender }) => {
+  if (!maySetServerPorts(sender)) return { success: false, error: NOT_YOURS };
+  return serverPortsService.setRanges(payload.ranges);
+}, { fallbackError: 'Could not save the server ports' });
 
 // Windows asks for permission on this machine's screen, where a web client's user may not be.
 onRequest('open-server-ports-firewall', (_payload, { sender }) => {
+  if (!maySetServerPorts(sender)) return { success: false, error: NOT_YOURS };
   if (!isDesktopWindow(sender)) {
     return { success: false, error: 'Open the ports from the desktop app on this machine: Windows asks for permission on its screen.' };
   }

@@ -25,6 +25,8 @@ export class LoginComponent implements OnInit {
   isLoading = false;
   /** A mesh with no accounts yet: this form creates the admin instead of checking a password. */
   creatingAdmin = false;
+  /** The account this machine's own admin password signs in as, since it joined the mesh. */
+  ownLogin = '';
   readonly isElectron: boolean;
 
   constructor() {
@@ -33,8 +35,10 @@ export class LoginComponent implements OnInit {
 
   ngOnInit(): void {
     if (!this.isElectron) return;
-    this.messaging.sendMessage<{ enabled?: boolean; hasAccounts?: boolean }>('get-mesh-status', {}).subscribe(status => {
+    this.messaging.sendMessage<{ enabled?: boolean; hasAccounts?: boolean; ownLogin?: string }>('get-mesh-status', {}).subscribe(status => {
       this.creatingAdmin = !!status?.enabled && status.hasAccounts === false;
+      this.ownLogin = status?.ownLogin || '';
+      if (this.ownLogin && !this.username) this.username = this.ownLogin;
       this.cdr.markForCheck();
     });
   }
@@ -46,9 +50,9 @@ export class LoginComponent implements OnInit {
 
   get hint(): string {
     if (!this.isElectron) return '';
-    return this.creatingAdmin
-      ? 'This mesh has no accounts yet. The password needs at least 8 characters.'
-      : 'This machine is in a mesh. Sign in with your account.';
+    if (this.creatingAdmin) return 'This mesh has no accounts yet. The password needs at least 8 characters.';
+    const own = this.ownLogin ? ` This machine's own admin password signs in as ${this.ownLogin}.` : '';
+    return `This machine is in a mesh. Sign in with your account.${own}`;
   }
 
   // The password goes exactly as typed: spaces are characters like any other.

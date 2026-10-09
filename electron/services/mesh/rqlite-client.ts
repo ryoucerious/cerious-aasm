@@ -84,10 +84,27 @@ export class RqliteClient implements SqlExecutor {
     }
   }
 
+  /**
+   * True once this node has applied every entry the leader had committed when asked. Right after a
+   * restart it serves its snapshot until it has, and a read then can be older than the mesh.
+   */
+  async caughtUp(): Promise<boolean> {
+    try {
+      const response = await this.request('GET', '/readyz?sync&timeout=2s');
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
   async removeMember(nodeId: string): Promise<void> {
     // DELETE: rqlited answers 405 to a POST here, which left removed nodes voting.
     const response = await this.request('DELETE', '/remove', JSON.stringify({ id: nodeId }));
-    if (response.status >= 400) throw new Error(`rqlite remove failed (${response.status})`);
+    if (response.status >= 400) {
+      // rqlited says why in the body: "not leader", "leadership lost", a node it does not know.
+      const reason = response.body.toString('utf8').trim().slice(0, 200);
+      throw new Error(`rqlite remove failed (${response.status})${reason ? `: ${reason}` : ''}`);
+    }
   }
 
   async backup(): Promise<Buffer> {

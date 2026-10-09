@@ -92,9 +92,22 @@
         </div>
 
         <div class="form-group">
-          <label class="form-control-label">Restart time</label>
-          <input type="time" class="form-control input" [(ngModel)]="serverInstance.restartTime" (blur)="onSaveScheduledRestartSettings()" [disabled]="!serverInstance.scheduledRestartEnabled" />
-          <div class="form-control-label desc">Time of day to restart the server (24-hour format).</div>
+          <label class="form-control-label">Restart times</label>
+          <div class="restart-times">
+            <div class="restart-time-row" *ngFor="let time of restartTimes; let i = index; trackBy: trackByIndex">
+              <input type="time" class="form-control input" [ngModel]="time" (ngModelChange)="onRestartTimeChange(i, $event)"
+                     (blur)="onSaveScheduledRestartSettings()" [disabled]="!serverInstance.scheduledRestartEnabled"
+                     [attr.aria-label]="'Restart time ' + (i + 1)" />
+              <button type="button" class="btn btn-ghost btn-icon-only" *ngIf="restartTimes.length > 1" (click)="onRemoveRestartTime(i)"
+                      [disabled]="!serverInstance.scheduledRestartEnabled" title="Remove this time" aria-label="Remove this time">
+                <span class="material-icons">close</span>
+              </button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm restart-time-add" (click)="onAddRestartTime()" [disabled]="!serverInstance.scheduledRestartEnabled">
+              <span class="material-icons">add</span> Add a time
+            </button>
+          </div>
+          <div class="form-control-label desc">Times of day to restart the server (24-hour format). Add more for several restarts a day.</div>
         </div>
 
         <div class="form-group">

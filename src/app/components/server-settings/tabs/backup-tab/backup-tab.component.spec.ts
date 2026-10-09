@@ -1,6 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BackupTabComponent } from './backup-tab.component';
 import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
+import { BackupCopiesService, BackupCopy } from '../../../../core/services/backup-copies.service';
+import { NotificationService } from '../../../../core/services/notification.service';
+import { of } from 'rxjs';
 
 describe('BackupTabComponent', () => {
   let component: BackupTabComponent;
@@ -11,9 +14,22 @@ describe('BackupTabComponent', () => {
     size: 1048576, type: 'scheduled', filePath: 'C:/backups/b1.zip'
   };
 
+  let copies: jasmine.SpyObj<BackupCopiesService>;
+  let notification: jasmine.SpyObj<NotificationService>;
+  let copy: BackupCopy | null;
+
   beforeEach(async () => {
+    copy = null;
+    copies = jasmine.createSpyObj('BackupCopiesService', ['copyOf', 'bringBack']);
+    copies.copyOf.and.callFake(() => of({ copy }));
+    copies.bringBack.and.returnValue(of({ success: true }));
+    notification = jasmine.createSpyObj('NotificationService', ['success', 'error', 'info', 'warning']);
     await TestBed.configureTestingModule({
-      imports: [BackupTabComponent]
+      imports: [BackupTabComponent],
+      providers: [
+        { provide: BackupCopiesService, useValue: copies },
+        { provide: NotificationService, useValue: notification }
+      ]
     }).compileComponents();
     fixture = TestBed.createComponent(BackupTabComponent);
     component = fixture.componentInstance;
@@ -173,5 +189,52 @@ describe('BackupTabComponent', () => {
 
   it('should track by backup id', () => {
     expect(component.trackByBackupId(0, backup)).toBe('b1');
+  });
+
+  // A machine that is lost must not take its servers' backups with it.
+  describe('the copy kept on another machine', () => {
+    const kept = (): BackupCopy => ({ nodeId: 'n2', nodeName: 'asa-1', fileName: 'backup_manual_9.zip', size: 2048, copiedAt: Date.now() });
+    const section = () => (fixture.nativeElement as HTMLElement).querySelector('.backup-copy') as HTMLElement | null;
+
+    function show(serverId: string, list: BackupMetadata[] = []): void {
+      fixture.componentRef.setInput('backupList', list);
+      fixture.componentRef.setInput('serverId', serverId);
+      fixture.detectChanges();
+    }
+
+    it('says which machine keeps the latest backup, and offers to bring it back', () => {
+      copy = kept();
+      show('srv1');
+
+      expect(copies.copyOf).toHaveBeenCalledWith('srv1');
+      expect(section()!.textContent).toContain('asa-1');
+      expect(section()!.textContent).toContain('backup_manual_9.zip');
+      expect(section()!.querySelector('button')!.textContent).toContain('Bring it back here');
+    });
+
+    it('offers nothing to bring back when that backup is here already', () => {
+      copy = { ...kept(), fileName: 'b1.zip' };
+      show('srv1', [backup]);
+
+      expect(section()!.querySelector('button')).toBeNull();
+    });
+
+    it('brings it back, then asks for the list again', () => {
+      copy = kept();
+      show('srv1');
+      spyOn(component.backupsChanged, 'emit');
+
+      section()!.querySelector('button')!.click();
+
+      expect(copies.bringBack).toHaveBeenCalledWith('srv1');
+      expect(component.backupsChanged.emit).toHaveBeenCalled();
+      expect(notification.success).toHaveBeenCalledWith(jasmine.stringContaining('backup_manual_9.zip'), 'Backup');
+    });
+
+    it('shows nothing outside a mesh, or before a copy is kept', () => {
+      show('srv1');
+
+      expect(section()).toBeNull();
+    });
   });
 });

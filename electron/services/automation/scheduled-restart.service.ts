@@ -62,7 +62,7 @@ export class ScheduledRestartService {
     const automation = this.automations.get(serverId);
     if (!automation) return;
 
-    const nextRestart = computeNextRun(restartSchedule(automation.settings), after);
+    const nextRestart = nextRestartAt(automation.settings, after);
     if (!nextRestart) {
       console.warn(`[scheduled-restart] Not scheduling restarts for ${serverId}: a "${automation.settings.restartFrequency}" schedule with these settings never runs`);
       return;
@@ -158,6 +158,21 @@ export class ScheduledRestartService {
       this.countdowns.set(serverId, { timer, finish });
     });
   }
+}
+
+/** The restart times; older versions saved only one, as restartTime. */
+export function restartTimesOf(settings: Pick<AutomationSettings, 'restartTime' | 'restartTimes'>): string[] {
+  const times = (settings.restartTimes || []).filter(time => typeof time === 'string' && time);
+  return times.length ? times : [settings.restartTime];
+}
+
+/** The soonest of the restart times after `after`, or null when the schedule never runs. */
+function nextRestartAt(settings: AutomationSettings, after: Date): Date | null {
+  const schedule = restartSchedule(settings);
+  const next = restartTimesOf(settings)
+    .map(time => computeNextRun({ ...schedule, time }, after))
+    .filter((date): date is Date => date !== null);
+  return next.length ? new Date(Math.min(...next.map(date => date.getTime()))) : null;
 }
 
 // Only daily and weekly are offered; the UI shows 'custom' as the chosen days at the chosen time.

@@ -83,3 +83,35 @@ export function addressFromEndpoints(peerUrl: string, raftAddr: string): MeshAdd
     return null;
   }
 }
+
+type InterfaceAddress = { address: string; family: string | number; internal: boolean };
+
+// Adapters other machines cannot reach: WSL, Hyper-V, VirtualBox, VMware, Docker, KVM and the like.
+const VIRTUAL_ADAPTER = /vethernet|hyper-v|wsl|default switch|virtualbox|vmware|vmnet|docker|^br-|^veth|virbr|lxcbr|lxdbr|^cni|flannel|calico|weave|^kube|npcap|loopback|bluetooth/i;
+// Networks laid over the internet. Fine for a mesh, but the local network comes first.
+const VPN_ADAPTER = /tailscale|zerotier|^zt|^wg|wireguard|^tun|^tap|^utun|^ppp|vpn|nordlynx|hamachi|radmin/i;
+
+/**
+ * The address this machine offers other machines by default: its own on the local network, not
+ * the first adapter the system lists, which on Windows is often WSL's or Hyper-V's. Null without one.
+ */
+export function ownLanAddress(interfaces: Record<string, InterfaceAddress[] | undefined>): string | null {
+  let best: { address: string; rank: number } | null = null;
+  for (const [name, entries] of Object.entries(interfaces)) {
+    for (const entry of entries || []) {
+      if ((entry.family !== 'IPv4' && entry.family !== 4) || entry.internal) continue;
+      const rank = rankOf(name, entry.address);
+      if (!best || rank < best.rank) best = { address: entry.address, rank };
+    }
+  }
+  return best?.address ?? null;
+}
+
+function rankOf(name: string, address: string): number {
+  const [a, b] = address.split('.').map(Number);
+  if (a === 169 && b === 254) return 4;
+  if (VIRTUAL_ADAPTER.test(name)) return 3;
+  if (VPN_ADAPTER.test(name) || (a === 100 && b >= 64 && b <= 127)) return 2;
+  const isPrivate = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  return isPrivate ? 0 : 1;
+}

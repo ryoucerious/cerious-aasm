@@ -78,6 +78,18 @@ export function noteMeshServers(servers: MeshServerSummary[]): void {
   if (!same) for (const listener of meshServerListeners) listener();
 }
 
+/** The ports this machine listens on for the rest of its mesh: the firewall opens them too. */
+let listenPorts: { peer: number; raft: number } | null = null;
+
+export function noteMeshListenPorts(ports: { peer: number; raft: number } | null): void {
+  listenPorts = ports;
+}
+
+/** Null outside a mesh. */
+export function meshListenPorts(): { peer: number; raft: number } | null {
+  return listenPorts;
+}
+
 let localNodeId: string | null = null;
 
 /** This machine's node, while it is in a mesh: where a server with no mesh placement runs. */

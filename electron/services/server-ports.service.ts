@@ -5,9 +5,11 @@ import { getLinuxServerPortsInstructions } from '../utils/firewall.utils';
 import { loadGlobalConfig, saveGlobalConfig, type GlobalConfig } from '../utils/global-config.utils';
 import { getDefaultInstallDir, getPlatform } from '../utils/platform.utils';
 import { getServerPortRanges, type ServerPortsSource } from '../utils/server-ports.utils';
-import { openWindowsFirewall, readWindowsFirewall, type WindowsFirewallStatus } from './windows-firewall.service';
+import { openWindowsFirewall, readWindowsFirewall, type MeshPorts, type WindowsFirewallStatus } from './windows-firewall.service';
+import { meshListenPorts } from './mesh/mesh-hooks';
+import { findRqliteBinary } from './mesh/rqlite-supervisor';
 
-/** What Settings → Server ports shows for this machine. */
+/** What Settings → Server Defaults → Server Ports shows for this machine. */
 export interface ServerPortsState {
   ranges: ServerPortRanges;
   source: ServerPortsSource;
@@ -19,6 +21,8 @@ export interface ServerPortsState {
   linuxCommands: string | null;
   /** Servers here with ports outside the ranges, which players cannot reach through the firewall. */
   outside: Array<{ id: string; name: string; ports: PortOutsideRange[] }>;
+  /** In a mesh: the ports the other machines reach this one on, opened with the server ports. */
+  meshPorts: MeshPorts | null;
 }
 
 export interface ServerPortsDeps {
@@ -29,9 +33,11 @@ export interface ServerPortsDeps {
   instances(): Promise<Array<{ id: string; name?: string } & PortCarrier>>;
   /** The folder the servers live under: whose executables a cancelled prompt may have blocked. */
   root(): string;
-  readFirewall: typeof readWindowsFirewall;
-  openFirewall: typeof openWindowsFirewall;
+  readFirewall(ranges: ServerPortRanges, root: string, mesh: MeshPorts | null): ReturnType<typeof readWindowsFirewall>;
+  openFirewall(ranges: ServerPortRanges, root: string, mesh: MeshPorts | null): ReturnType<typeof openWindowsFirewall>;
   now(): number;
+  /** The ports this machine listens on for its mesh, or null outside one. */
+  meshPorts(): MeshPorts | null;
 }
 
 const defaultDeps: ServerPortsDeps = {
@@ -41,10 +47,17 @@ const defaultDeps: ServerPortsDeps = {
   saveConfig: saveGlobalConfig,
   instances: getAllInstances,
   root: () => loadGlobalConfig().serverDataDir || getDefaultInstallDir(),
-  readFirewall: (ranges, root) => readWindowsFirewall(ranges, root),
-  openFirewall: (ranges, root) => openWindowsFirewall(ranges, root),
-  now: Date.now
+  readFirewall: (ranges, root, mesh) => readWindowsFirewall(ranges, root, undefined, mesh),
+  // In a mesh, the app and its mesh database are what the other machines reach.
+  openFirewall: (ranges, root, mesh) => openWindowsFirewall(ranges, root, undefined, mesh, mesh ? appPrograms() : []),
+  now: () => Date.now(),
+  meshPorts: meshListenPorts
 };
+
+/** This app's executable and its mesh database's: Windows' prompt asks about each by program. */
+function appPrograms(): string[] {
+  return [process.execPath, findRqliteBinary()].filter((program): program is string => !!program);
+}
 
 /** Windows Firewall is read again after this long, for the mesh heartbeat. */
 const FIREWALL_STALE_MS = 10 * 60_000;
@@ -68,9 +81,14 @@ export class ServerPortsService {
     return this.deps.platform() === 'windows' && !this.deps.docker();
   }
 
+  /** What the firewall has to open: the server ports, and the mesh's own in a mesh. */
+  private openingKey(ranges: ServerPortRanges): string {
+    return JSON.stringify([ranges, this.deps.meshPorts()]);
+  }
+
   private async readFirewall(ranges: ServerPortRanges): Promise<WindowsFirewallStatus | { error: string }> {
-    const status = await this.deps.readFirewall(ranges, this.deps.root());
-    if (!('error' in status)) this.lastRead = { key: JSON.stringify(ranges), portsOpen: status.portsOpen, at: this.deps.now() };
+    const status = await this.deps.readFirewall(ranges, this.deps.root(), this.deps.meshPorts());
+    if (!('error' in status)) this.lastRead = { key: this.openingKey(ranges), portsOpen: status.portsOpen, at: this.deps.now() };
     return status;
   }
 
@@ -89,7 +107,8 @@ export class ServerPortsService {
       windowsFirewall: firewall && !('error' in firewall) ? firewall : null,
       ...(firewall && 'error' in firewall ? { windowsFirewallError: firewall.error } : {}),
       linuxCommands: platform === 'linux' && !docker ? getLinuxServerPortsInstructions(ranges) : null,
-      outside
+      outside,
+      meshPorts: this.deps.meshPorts()
     };
   }
 
@@ -109,7 +128,7 @@ export class ServerPortsService {
     if (!this.usesWindowsFirewall()) {
       return { success: false, error: 'Only Windows can open its firewall from here. On Linux, run the commands shown.' };
     }
-    const result = await this.deps.openFirewall(this.ranges().ranges, this.deps.root());
+    const result = await this.deps.openFirewall(this.ranges().ranges, this.deps.root(), this.deps.meshPorts());
     const state = await this.state();
     return result.success ? { success: true, state } : { success: false, error: result.error, state };
   }
@@ -122,7 +141,7 @@ export class ServerPortsService {
   portsOpen(): boolean | null {
     if (!this.usesWindowsFirewall()) return null;
     const { ranges } = this.ranges();
-    const key = JSON.stringify(ranges);
+    const key = this.openingKey(ranges);
     const current = this.lastRead?.key === key ? this.lastRead : null;
     if ((!current || this.deps.now() - current.at > FIREWALL_STALE_MS) && !this.reading) {
       this.reading = this.readFirewall(ranges)

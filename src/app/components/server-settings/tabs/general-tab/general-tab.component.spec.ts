@@ -191,4 +191,12 @@ describe('GeneralTabComponent', () => {
       expect(setServerOperator).toHaveBeenCalledWith('s1', null);
     });
   });
+
+  it('marks a setting saved since the server started', () => {
+    fixture.componentRef.setInput('pendingKeys', new Set(['mapName']));
+    fixture.detectChanges();
+
+    const mark = (fixture.nativeElement as HTMLElement).querySelector('.pending-mark');
+    expect(mark?.textContent?.trim()).toBe('Next restart');
+  });
 });

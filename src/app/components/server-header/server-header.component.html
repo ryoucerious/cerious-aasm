@@ -37,6 +37,16 @@
     <button type="button" class="btn" (click)="stopServer.emit()" [disabled]="!canStop">
       <span class="material-icons">stop</span> Stop
     </button>
+    <button type="button" class="btn" *ngIf="restartDueAt === null" (click)="restartServer.emit()" [disabled]="!canStop">
+      <span class="material-icons">restart_alt</span> Restart
+    </button>
+    <!-- A restart counting down: the players are hearing the warnings. -->
+    <span class="server-header-restart" *ngIf="restartDueAt !== null" role="status">
+      <span class="material-icons spinner" aria-hidden="true">autorenew</span>{{ restartText }}
+    </span>
+    <button type="button" class="btn btn-ghost" *ngIf="restartDueAt !== null" (click)="cancelRestart.emit()">
+      <span class="material-icons">close</span> Cancel restart
+    </button>
     <button type="button" class="btn btn-ghost" (click)="forceStopServer.emit()" [disabled]="!canForceStop" title="Force stop">
       <span class="material-icons">power_off</span> Force
     </button>

@@ -362,11 +362,11 @@ export class TopbarComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * There is only something to sign out of in the web interface with authentication on.
-   * The desktop app is the machine owner and has no session to end.
+   * The web interface with authentication on, or a mesh account signed in on the desktop.
+   * The desktop outside a mesh is the machine owner and has no session to end.
    */
   get canSignOut(): boolean {
-    if (!this.isWebMode) return false;
+    if (!this.isWebMode) return !!this.account;
     return this.authenticationEnabled || !!this.account;
   }
 
@@ -393,10 +393,10 @@ export class TopbarComponent implements OnInit, OnDestroy {
     return item.id;
   }
 
-  /** Web mode only: end the session and return to the login page. */
+  /** Ends the session and returns to the login page. */
   async logout(): Promise<void> {
     this.closeAll();
-    if (!this.isWebMode) return;
+    if (!this.canSignOut) return;
     if (await this.auth.logout()) {
       this.router.navigate(['/login']);
     } else {

@@ -25,7 +25,7 @@ const ROWS: Array<{ key: RangeKey; label: string; protocol: string }> = [
 ];
 
 /**
- * Settings → Server ports: the ranges this machine's servers take their ports from, and its
+ * Settings → Server Defaults → Server Ports: the ranges this machine's servers take their ports from, and its
  * firewall for them. Windows Firewall opens them with one admin prompt; Linux gets the commands;
  * in Docker they come from docker-compose.yml. Every new server then fits inside them, so neither
  * firewall has to be touched again, and on Windows nobody has to answer a prompt per server.
