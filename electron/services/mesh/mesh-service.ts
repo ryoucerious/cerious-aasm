@@ -119,6 +119,24 @@ interface LocalSecrets {
   raftAddr?: string;
 }
 
+/** The request a command stands for, as this machine's activity feed knows it. */
+const COMMAND_CHANNELS: Partial<Record<string, string>> = {
+  start: 'start-server-instance',
+  stop: 'stop-server-instance',
+  'force-stop': 'force-stop-server-instance',
+  restart: 'restart-server-instance',
+  'cancel-restart': 'cancel-server-restart',
+  rcon: 'rcon-command',
+  'save-ini': 'save-ini-file',
+  'save-config': 'save-server-instance',
+  'start-all': 'start-all-instances',
+  'stop-all': 'stop-all-instances',
+  'restart-all': 'restart-all-instances'
+};
+
+/** Actors that are not a person: the desktop before anyone signed in, and the app's own backup copies. */
+const UNNAMED_ACTORS = new Set(['desktop', 'backup']);
+
 /**
  * Opt-in mesh. Standalone installs never start rqlite. When a mesh is on, this service is the
  * only place that turns a remote click into a command; the hosting node's reconciler is the
@@ -1285,6 +1303,8 @@ export class MeshService {
       if (row && row.nodeId !== localId) return { success: false, error: 'That server is not hosted on this node.' };
     }
     const result = await executeCommand(this.repo, command, async current => {
+      // Here, once per command: a command sent again is not credited twice.
+      this.creditCommand(current);
       const args = current.args || {};
       if (current.operation === 'rcon') {
         const answer = await localRuntime.rcon(current.serverId, String(args.command || ''));
@@ -2718,6 +2738,21 @@ export class MeshService {
       if (isRunningInDocker()) relaunchInPlace();
       else autoUpdateService.quitAndInstall();
     }, 1000);
+  }
+
+  /**
+   * This machine's activity feed credits what a command causes here (a server stopping, an RCON
+   * command run) to whoever sent it from another machine, as for a request made here.
+   */
+  private creditCommand(command: ControlCommand): void {
+    const person = command.actor && !UNNAMED_ACTORS.has(command.actor) ? command.actor : null;
+    const args = command.args || {};
+    if (command.operation === 'server-request') {
+      messagingService.noteForwardedAction(String(args.channel || ''), recordOf(args.payload), person);
+      return;
+    }
+    const channel = COMMAND_CHANNELS[command.operation] || command.operation;
+    messagingService.noteForwardedAction(channel, { ...args, ...(command.serverId ? { instanceId: command.serverId } : {}) }, person);
   }
 
   /** Writes this node's version and asks every other node for a heartbeat, so the list can show who is up. */

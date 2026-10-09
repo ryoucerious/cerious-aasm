@@ -63,7 +63,7 @@ jest.mock('../server-instance/server-instance.service', () => ({
   serverInstanceService: { broadcastInstances: jest.fn(async () => undefined) },
   setInventoryMerge: jest.fn()
 }));
-jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn(), invalidateWebSessions: jest.fn() } }));
+jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.fn(), invalidateWebSessions: jest.fn(), noteForwardedAction: jest.fn() } }));
 jest.mock('../auth/user-database.service', () => ({
   userDatabaseService: {
     exportCredentialRows: jest.fn(() => []),
@@ -2552,6 +2552,48 @@ describe('MeshService', () => {
 
       expect(localRuntime.rcon).toHaveBeenCalledWith('isle', 'ListPlayers');
       expect(result).toEqual({ success: true, detail: { response: 'No Players Connected' } });
+    });
+
+    // The host's activity named nobody: the name came with the command and went no further.
+    describe('crediting what another machine asked for, in this machine\'s activity', () => {
+      beforeEach(async () => {
+        await place('isle', LOCAL);
+        await service.resumeIfJoined();
+        jest.mocked(localRuntime.rcon).mockResolvedValue({ instanceId: 'isle', response: '' } as never);
+      });
+
+      it('credits whoever sent it, once however often the command arrives', async () => {
+        await service.executeLocalCommand(command('rcon', { command: 'ListPlayers' }));
+        await service.executeLocalCommand(command('rcon', { command: 'ListPlayers' }));
+
+        expect(messagingService.noteForwardedAction).toHaveBeenCalledTimes(1);
+        expect(messagingService.noteForwardedAction)
+          .toHaveBeenCalledWith('rcon-command', expect.objectContaining({ instanceId: 'isle', command: 'ListPlayers' }), 'ada');
+      });
+
+      it('credits nobody for the desktop before anyone signed in, or for the app\'s own copies', async () => {
+        await service.executeLocalCommand({ ...command('rcon', { command: 'ListPlayers' }), commandId: 'c-desktop', actor: 'desktop' });
+        await service.executeLocalCommand({ ...command('rcon', { command: 'ListPlayers' }), commandId: 'c-backup', actor: 'backup' });
+
+        expect(jest.mocked(messagingService.noteForwardedAction).mock.calls.map(call => call[2])).toEqual([null, null]);
+      });
+
+      it('credits a page\'s request under the page\'s own channel', async () => {
+        await service.executeLocalCommand({
+          ...command('rcon', {}), commandId: 'c-request', operation: 'server-request',
+          args: { channel: 'delete-backup', payload: { instanceId: 'isle', backupId: 'b1' } }
+        } as never);
+
+        expect(messagingService.noteForwardedAction).toHaveBeenCalledWith('delete-backup', { instanceId: 'isle', backupId: 'b1' }, 'ada');
+      });
+
+      it('credits a stop under the channel the activity knows', async () => {
+        jest.mocked(localRuntime.stop).mockResolvedValue({ success: true, instanceId: 'isle' } as never);
+
+        await service.executeLocalCommand({ ...command('rcon', {}), commandId: 'c-stop', operation: 'stop' } as never);
+
+        expect(messagingService.noteForwardedAction).toHaveBeenCalledWith('stop-server-instance', expect.objectContaining({ instanceId: 'isle' }), 'ada');
+      });
     });
 
     // The ArkApi tab acted on the machine it was opened on, wherever the server ran.

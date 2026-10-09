@@ -149,6 +149,14 @@ describe('GeneralTabComponent', () => {
     const dropdowns = () => (fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section app-dropdown').length;
     const statics = () => Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.ownership-section .form-control-static')).map(el => el.textContent?.trim());
 
+    // The settings that change the game come first; who owns the server is set once.
+    it('comes last on the page', () => {
+      setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
+
+      const sections = (fixture.nativeElement as HTMLElement).querySelectorAll('.settings-section');
+      expect(sections[sections.length - 1].classList).toContain('ownership-section');
+    });
+
     it('lets an admin choose both the pool and the assignee', () => {
       setServer({ id: 's1', operatorUserId: 'op1', managerUserId: null });
 

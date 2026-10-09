@@ -75,6 +75,16 @@ describe('MessagingService', () => {
       expect(observer.noteAction).toHaveBeenCalledWith('get-server-instances', {}, 'viewer1');
     });
 
+    // A stop another machine of the mesh asked for never came in on this bus, so it named nobody.
+    it('credits an action another machine asked for to whoever asked', () => {
+      const observer = { noteAction: jest.fn(), recordFromBroadcast: jest.fn() };
+      service.setObserver(observer);
+
+      service.noteForwardedAction('stop-server-instance', { instanceId: 'isle' }, 'ada');
+
+      expect(observer.noteAction).toHaveBeenCalledWith('stop-server-instance', { instanceId: 'isle' }, 'ada');
+    });
+
     it('does not let a failing observer stop a message', () => {
       const debug = jest.spyOn(console, 'debug').mockImplementation(() => {});
       service.setObserver({ noteAction: () => { throw new Error('db locked'); }, recordFromBroadcast: jest.fn() });

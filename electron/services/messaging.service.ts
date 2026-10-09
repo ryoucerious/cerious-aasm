@@ -304,6 +304,14 @@ export class MessagingService extends EventEmitter {
     return Array.from(this.wsServer.clients as Set<Socket>).filter(client => client.readyState === WebSocket.OPEN);
   }
 
+  /**
+   * Credits something another machine of the mesh asked for here, as if it had come in on this
+   * channel, so the activity feed names whoever asked. The bus itself never saw the request.
+   */
+  noteForwardedAction(channel: string, payload: unknown, username: string | null): void {
+    this.notifyObserver(observer => observer.noteAction(channel, payload, username));
+  }
+
   private notifyObserver(call: (observer: BusObserver) => void): void {
     if (!this.observer) return;
     try {

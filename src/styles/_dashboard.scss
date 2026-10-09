@@ -1294,7 +1294,15 @@ $server-card-detail-gap: 0.25rem;
   white-space: nowrap;
 }
 
-.settings-pending {
+// The notices above a server's settings leave room before the page's first heading.
+.server-ports-closed,
+.settings-pending,
+.settings-unreachable {
+  margin-bottom: 1rem;
+}
+
+.settings-pending,
+.server-ports-closed {
   display: flex;
   align-items: center;
   gap: 0.6rem;

@@ -78,6 +78,11 @@ export class ActivityLogService {
   private lastState: Record<string, string> = {};
   /** Who last asked for something, per instance and globally, with the time they asked. */
   private recentActors: Record<string, { username: string; at: number }> = {};
+  /**
+   * Who asked for a start or stop still under way, per instance. ARK can take minutes to come up,
+   * or two to go down, so the name is held until the change ends rather than for the usual window.
+   */
+  private pendingActors: Record<string, string> = {};
   /** Last seen player count per instance, to turn counts into join/leave events. */
   private lastPlayers: Record<string, number> = {};
   private instanceNames: Record<string, string> = {};
@@ -160,8 +165,17 @@ export class ActivityLogService {
           if (state === 'starting') this.lastPlayers[instanceId] = 0;
           else if (state === 'stopped' || state === 'crashed') delete this.lastPlayers[instanceId];
           const name = this.nameOf(instanceId);
+          // A start or stop under way keeps the name of whoever asked until it ends, from the
+          // queue Start All puts servers in, through starting, to running.
+          if (state === 'queued' || state === 'starting' || state === 'stopping') {
+            const asked = (state === 'starting' ? this.pendingActors[instanceId] : undefined) ?? this.actorFor(instanceId);
+            if (asked) this.pendingActors[instanceId] = asked;
+            else delete this.pendingActors[instanceId];
+            return;
+          }
           // A crash is nobody's doing, so it is never credited to whoever last acted.
-          const actor = this.actorFor(instanceId);
+          const actor = this.pendingActors[instanceId] ?? this.actorFor(instanceId);
+          delete this.pendingActors[instanceId];
           if (state === 'running') this.record('start', `${name} started`, instanceId, actor);
           else if (state === 'stopped' && previous && previous !== 'stopped') this.record('stop', `${name} stopped`, instanceId, actor);
           else if (state === 'crashed') this.record('crash', `${name} crashed`, instanceId, null);
