@@ -41,6 +41,20 @@ describe('SchedulerService', () => {
   });
 
   describe('initSchedule', () => {
+    it('restores command-only schedules and executes at the first minute, then stops deleted jobs', async () => {
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({
+        rconSchedules: [{ id: 'wipe', enabled: true, command: 'DestroyWildDinos', mode: 'interval', intervalMinutes: 1 }]
+      });
+      await service.initSchedule('inst1');
+      await jest.advanceTimersByTimeAsync(59_999);
+      expect(mockRcon.executeRconCommand).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledWith('inst1', 'DestroyWildDinos', undefined, expect.any(Function));
+      (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({ rconSchedules: [] });
+      await service.initSchedule('inst1');
+      await jest.advanceTimersByTimeAsync(120_000);
+      expect(mockRcon.executeRconCommand).toHaveBeenCalledTimes(1);
+    });
     it('should initialize from broadcastConfig', async () => {
       (mockInstanceUtils.getInstance as jest.Mock<any>).mockReturnValue({
         broadcastConfig: {

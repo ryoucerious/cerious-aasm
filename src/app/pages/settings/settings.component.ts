@@ -110,6 +110,32 @@ export class SettingsPageComponent implements OnInit {
   accountsInUse = false;
   maxBackupDownloadSizeMB = 100;
   serverDataDir = '';
+  backupLocation = '';
+  curseForgeApiKey = '';
+
+  async saveCoreModKey(): Promise<void> {
+    const key = this.curseForgeApiKey.trim();
+    try {
+      const config = await this.configService.loadConfig();
+      await this.configService.saveConfig({ ...config, curseForgeApiKey: key });
+      this.curseForgeApiKey = key;
+      this.notification.success('Core mod API key saved on this host', 'Settings');
+    } catch (error) {
+      this.notification.error(error instanceof Error ? error.message : 'Could not save API key', 'Settings');
+    }
+  }
+
+  async saveBackupLocation(): Promise<void> {
+    const location = this.backupLocation;
+    try {
+      const config = await this.configService.loadConfig();
+      await this.configService.saveConfig({ ...config, backupLocation: location });
+      this.backupLocation = location;
+      this.notification.success('Backup location saved', 'Settings');
+    } catch (error) {
+      this.notification.error(error instanceof Error ? error.message : 'Could not save backup location', 'Settings');
+    }
+  }
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
   serverStartDelaySeconds = 60;
@@ -517,7 +543,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   getAppVersion() {
-    return environment.version || '1.3.0';
+    return environment.version || '1.3.1';
   }
 
   getPlatform() {
@@ -726,6 +752,8 @@ export class SettingsPageComponent implements OnInit {
     this.authenticationEnabled = !!config.authenticationEnabled;
     this.maxBackupDownloadSizeMB = config.maxBackupDownloadSizeMB ?? 100;
     this.serverDataDir = config.serverDataDir || '';
+    this.backupLocation = config.backupLocation || '';
+    this.curseForgeApiKey = config.curseForgeApiKey || '';
     this.autoUpdateArkServer = !!config.autoUpdateArkServer;
     this.updateWarningMinutes = config.updateWarningMinutes || 15;
     this.serverStartDelaySeconds = config.serverStartDelaySeconds || 60;

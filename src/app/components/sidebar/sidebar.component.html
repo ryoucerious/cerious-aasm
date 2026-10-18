@@ -174,7 +174,7 @@
 <app-modal [title]="'Restart All Servers'" [show]="showConfirmRestartAllModal" [maxWidth]="'520px'" (close)="showConfirmRestartAllModal = false">
   <p>
     Players on every running server are warned in game for {{ restartAllWarningMinutes }} {{ restartAllWarningMinutes === 1 ? 'minute' : 'minutes' }}.
-    Then each machine restarts its servers in order, the start delay apart, which also picks up mod updates.
+    Each server completes its warning, save and restart cycle before the next server begins, including across machines. This also picks up mod updates.
     You can cancel it until then.
   </p>
   <p class="form-control-label desc">The warning time is the one ARK updates use, in Settings → Updates.</p>

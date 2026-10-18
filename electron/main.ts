@@ -74,6 +74,7 @@ import { meshService } from './services/mesh/mesh-service';
 import { userDatabaseService } from './services/auth/user-database.service';
 import { scopeBroadcast } from './services/auth/pool-broadcast';
 import { cleanupAllRconConnections } from './utils/rcon.utils';
+import { coreModMonitor } from './services/core-mod-monitor.service';
 import { loadGlobalConfig } from './utils/global-config.utils';
 import { readWindowState, trackWindowState } from './utils/window-state.utils';
 import { releaseInstallLockIfHeld } from './utils/installer.utils';
@@ -165,6 +166,7 @@ function cleanup(): void {
   // First, so crash detection never sees the kills below as crashes to restart.
   try {
     automationService.cleanup();
+    coreModMonitor.stop();
   } catch (error) {
     console.error('[main] Error stopping automation:', error);
   }
@@ -535,6 +537,7 @@ app.on('ready', async () => {
   createWindow();
   initializeBackupSystem().catch(error => console.error('[main] Backup system failed to start:', error));
   automationService.initializeAutomation();
+  coreModMonitor.start();
 
   // Feeds the dashboard's 24-hour player chart, once a minute.
   playerHistoryService.start(playerCountsByInstance);

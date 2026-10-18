@@ -26,6 +26,7 @@ import { backupService } from '../backup/backup.service';
 import { carryClusterData } from '../clusters/cluster-import';
 import { validateDiscordConfig } from '../discord.service';
 import { schedulerService } from '../scheduler.service';
+import { validateRconSchedules } from '../rcon-schedule.service';
 import { whitelistService } from '../whitelist.service';
 import { serverMonitoringService } from './server-monitoring.service';
 import { changedPortsOutsideRanges } from '../../utils/ark/port-sets';
@@ -120,6 +121,7 @@ export class ServerManagementService {
         return { success: false, error: invalidDiscordConfig };
       }
 
+      validateRconSchedules(instance.rconSchedules);
       const saved = await instanceUtils.saveInstance(instance);
       if (saved.error !== undefined) {
         return { success: false, error: saved.error };

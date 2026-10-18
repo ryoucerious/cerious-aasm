@@ -1,4 +1,8 @@
 import * as path from 'path';
+import { prepareBackupDirectory, validateBackupLocation } from '../../utils/backup-location.utils';
+import { loadGlobalConfig } from '../../utils/global-config.utils';
+import { rconService } from '../rcon.service';
+import { BackupPathUtils } from '../../utils/backup.utils';
 import {
   BackupDownloadResult,
   BackupListResult,
@@ -71,9 +75,13 @@ export class BackupService {
 
     for (const instance of instances) {
       const serverPath = instanceUtils.getInstanceDir(instance.id);
-      await this.operationsService.migrateLegacyBackups(serverPath);
-      // Queued like a backup, so a backup started meanwhile never loses its temporary archive.
-      await this.exclusive(instance.id, () => this.operationsService.removeStaleTempFiles(serverPath));
+      try {
+        await this.operationsService.migrateLegacyBackups(serverPath);
+        // Queued like a backup, so a backup started meanwhile never loses its temporary archive.
+        await this.exclusive(instance.id, () => this.operationsService.removeStaleTempFiles(serverPath));
+      } catch (error) {
+        console.error(`[backup-service] Could not initialize backups for ${instance.id}:`, error);
+      }
     }
 
     // Each instance on its own: one unreadable backup-settings.json must not leave every instance
@@ -101,9 +109,13 @@ export class BackupService {
       const customName = typeof name === 'string' ? name : undefined;
 
       const metadata = await this.exclusive(instanceId, async () => {
+        if (getNormalizedInstanceState(instanceId).toLowerCase() === 'running') {
+          const saved = await rconService.executeRconCommand(instanceId, 'SaveWorld');
+          if (!saved.success) throw new Error('Could not save the running world before backup. Check the RCON connection.');
+        }
         const created = await this.operationsService.createBackupInternal(instanceId, serverPath, backupType, customName);
         const settings = await this.settingsService.getBackupSettingsInternal(serverPath);
-        if (settings) {
+        if (settings && path.dirname(created.filePath) === BackupPathUtils.getInstanceBackupDir(serverPath)) {
           await this.cleanupService.cleanupOldBackups(serverPath, settings.maxBackupsToKeep, dir => this.operationsService.getInstanceBackupsInternal(dir));
           if (backupType === 'scheduled') {
             await this.cleanupService.cleanupArkSaveFiles(serverPath, settings.maxBackupsToKeep);
@@ -240,7 +252,11 @@ export class BackupService {
       }
 
       const stored: BackupSettings = { ...settings, instanceId, maxBackupsToKeep: clampBackupsToKeep(settings.maxBackupsToKeep) };
-      await this.settingsService.saveBackupSettingsInternal(stored, serverPath);
+      if (settings.backupLocation !== undefined) stored.backupLocation = validateBackupLocation(settings.backupLocation);
+      await this.exclusive(instanceId, async () => {
+        prepareBackupDirectory(instanceId, stored.backupLocation || loadGlobalConfig().backupLocation || '');
+        await this.settingsService.saveBackupSettingsInternal(stored, serverPath);
+      });
       if (stored.enabled) {
         this.schedulerService.startBackupSchedulerInternal(instanceId, stored, this.createBackup.bind(this));
       } else {

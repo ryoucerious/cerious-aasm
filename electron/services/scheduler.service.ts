@@ -1,4 +1,5 @@
 import { rconService } from './rcon.service';
+import { rconSchedules } from './rcon-schedule.service';
 import * as instanceUtils from '../utils/ark/instance.utils';
 import { BroadcastConfig, ScheduledBroadcast } from '../types/server-instance.types';
 
@@ -30,13 +31,13 @@ export class SchedulerService {
       messages = instance.broadcasts;
     }
 
-    if (!messages?.length) {
+    if (!messages?.length && !instance?.rconSchedules?.length) {
       this.stopScheduler(instanceId);
       delete this.activeBroadcasts[instanceId];
       return;
     }
 
-    this.updateBroadcasts(instanceId, messages);
+    this.updateBroadcasts(instanceId, messages || []);
     this.startScheduler(instanceId);
   }
 
@@ -55,18 +56,23 @@ export class SchedulerService {
   }
 
   startScheduler(instanceId: string): void {
-    this.stopScheduler(instanceId);
+    this.stopScheduler(instanceId, false);
+    // Arm intervals now so a one-minute schedule runs on the first minute tick.
+    void rconSchedules.tick(instanceId);
 
     this.intervals[instanceId] = setInterval(() => {
+      void rconSchedules.tick(instanceId);
       void this.checkBroadcasts(instanceId);
     }, CHECK_INTERVAL_MS);
     this.initialTimeouts[instanceId] = setTimeout(() => {
       delete this.initialTimeouts[instanceId];
+      void rconSchedules.tick(instanceId);
       void this.checkBroadcasts(instanceId);
     }, FIRST_CHECK_DELAY_MS);
   }
 
-  stopScheduler(instanceId: string): void {
+  stopScheduler(instanceId: string, forget = true): void {
+    if (forget) rconSchedules.forget(instanceId);
     clearInterval(this.intervals[instanceId]);
     delete this.intervals[instanceId];
     clearTimeout(this.initialTimeouts[instanceId]);

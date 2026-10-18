@@ -1,4 +1,5 @@
 export interface BackupSettings {
+  backupLocation?: string;
   instanceId: string;
   enabled: boolean;
   frequency: 'hourly' | 'daily' | 'weekly';

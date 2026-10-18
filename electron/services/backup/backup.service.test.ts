@@ -1,4 +1,7 @@
 import { BackupService } from './backup.service';
+import { rconService } from '../rcon.service';
+jest.mock('../../utils/backup.utils', () => ({ BackupPathUtils: { getInstanceBackupDir: () => '/backups/a1' } }));
+jest.mock('../rcon.service', () => ({ rconService: { executeRconCommand: jest.fn(async () => ({ success: true })) } }));
 import * as instanceUtils from '../../utils/ark/instance.utils';
 import { getNormalizedInstanceState, setInstanceState } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { messagingService } from '../messaging.service';
@@ -117,6 +120,18 @@ describe('BackupService', () => {
   });
 
   describe('createBackup', () => {
+    it('saves a running world before reading files and refuses a failed save', async () => {
+      jest.mocked(getNormalizedInstanceState).mockReturnValueOnce('running');
+      await expect(service.createBackup('a1', 'scheduled')).resolves.toMatchObject({ success: true });
+      expect(rconService.executeRconCommand).toHaveBeenCalledWith('a1', 'SaveWorld');
+      expect(jest.mocked(rconService.executeRconCommand).mock.invocationCallOrder[0])
+        .toBeLessThan(internals.operationsService.createBackupInternal.mock.invocationCallOrder[0]);
+      internals.operationsService.createBackupInternal.mockClear();
+      jest.mocked(getNormalizedInstanceState).mockReturnValueOnce('running');
+      jest.mocked(rconService.executeRconCommand).mockResolvedValueOnce({ success: false, error: 'Disconnected' });
+      await expect(service.createBackup('a1', 'scheduled')).resolves.toMatchObject({ success: false });
+      expect(internals.operationsService.createBackupInternal).not.toHaveBeenCalled();
+    });
     it('backs up, then applies the retention setting', async () => {
       await expect(service.createBackup('a1', 'manual', 'Before update'))
         .resolves.toEqual({ success: true, backupId: 'b1', message: 'Backup created successfully' });
@@ -390,3 +405,7 @@ describe('BackupService', () => {
 async function flush(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
+jest.mock('../../utils/backup-location.utils', () => ({
+  ...jest.requireActual('../../utils/backup-location.utils'),
+  prepareBackupDirectory: jest.fn(() => '/install/backups/a1')
+}));

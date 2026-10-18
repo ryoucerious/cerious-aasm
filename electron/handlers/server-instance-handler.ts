@@ -140,36 +140,56 @@ onRequest('stop-all-instances', async (_payload, { sender, afterReply }) => {
   return { success: true, stopping: eligible.map(instance => instance.id) };
 });
 
-/** Stops every server in `ids` together, then starts them again in sidebar order, the start delay apart. */
-async function restartAllHere(ids: string[]): Promise<void> {
-  await serverLifecycleService.stopAllInstances(ids);
-  const { started } = await serverLifecycleService.startAllInstances(undefined, ids);
-  for (const id of started) await meshService.noteDesired(id, 'running');
-}
+const restartSequences = new Map<string, { cancelled: boolean; current?: string }>();
 
-// Catches mod updates, which ARK fetches as a server starts. Each machine restarts its own running
-// servers, at the same time as the others, after the same countdown.
+// A single coordinator waits for each host's complete countdown/save/stop/start cycle.
 onRequest('restart-all-instances', async (payload, { sender, afterReply }) => {
   const identity = identifySender(sender);
   const warningMinutes = warningMinutesOf(payload);
   const { localVisible, remote } = await planAll(identity);
   const running = localVisible.map(instance => instance.id).filter(id => UP.has(serverProcessService.getNormalizedInstanceState(id)));
   const actor = identity.user?.username || 'desktop';
-  afterReply(() => meshService.commandHosts('restart-all', remote, actor, { warningMinutes }).then(results => reportHosts(results, 'restart', sender)));
-  if (!warningMinutes) {
-    afterReply(() => restartAllHere(running));
-    return { success: true, restarting: running };
-  }
-  const dueAt = running.length ? restartCountdowns.begin(running, warningMinutes, true, restartAllHere) : null;
-  return { success: true, restarting: running, dueAt };
+  if (restartSequences.has(actor)) return { success: false, error: 'Your Restart All sequence is already running.' };
+  const ids = [...running, ...[...remote.values()].flat()];
+  const sequence: { cancelled: boolean; current?: string } = { cancelled: false };
+  restartSequences.set(actor, sequence);
+  afterReply(() => { void (async () => {
+    try {
+      for (const id of ids) {
+        if (sequence.cancelled) break;
+        sequence.current = id;
+        const remoteResult = await meshService.forwardIfRemote('restart', id, actor, { warningMinutes, wait: true, all: true });
+        const success = remoteResult ? remoteResult.success : await restartCountdowns.beginAndWait(id, warningMinutes, true, async () => {
+          const result = await restartHere(id);
+          if (!result.success) throw new Error(result.error || 'Restart failed');
+          await localRuntime.waitUntilRunning(id);
+        });
+        if (!success) {
+          if (!sequence.cancelled) messagingService.sendToOriginator('notification', { type: 'error', message: `Restart All stopped at ${id}; its restart was cancelled or failed.` }, sender);
+          break;
+        }
+      }
+    } catch (error) {
+      messagingService.sendToOriginator('notification', { type: 'error', message: `Restart All stopped: ${error instanceof Error ? error.message : 'Host unavailable'}` }, sender);
+    } finally { restartSequences.delete(actor); }
+  })(); });
+  return { success: true, restarting: ids, dueAt: warningMinutes && ids.length ? Date.now() + warningMinutes * 60_000 : null };
 });
 
 onRequest('cancel-restart-all', async (_payload, { sender, afterReply }) => {
   const identity = identifySender(sender);
-  const { remote } = await planAll(identity);
-  const cancelled = restartCountdowns.cancelAll();
-  afterReply(() => meshService.commandHosts('cancel-restart-all', remote, identity.user?.username || 'desktop')
-    .then(results => reportHosts(results, 'cancel the restart of', sender)));
+  const actor = identity.user?.username || 'desktop';
+  const sequence = restartSequences.get(actor);
+  const cancelled: string[] = [];
+  if (sequence) {
+    sequence.cancelled = true;
+    if (sequence.current) {
+      const id = sequence.current;
+      cancelled.push(id);
+      restartCountdowns.cancel(id);
+      afterReply(async () => { await meshService.forwardIfRemote('cancel-restart', id, actor); });
+    }
+  }
   return { success: true, cancelled };
 });
 
@@ -318,6 +338,10 @@ onRequest('save-server-instance', async (payload, { sender, afterReply }) => {
     ? (await meshService.remoteInstance(String(instance.id))) ?? instanceUtils.getInstance(instance.id)
     : null;
   const identity = identifySender(sender);
+  if (!identity.isAdmin && !identity.permissions.includes(PERMISSIONS.RCON_USE)
+    && JSON.stringify(instance?.rconSchedules || []) !== JSON.stringify(previous?.rconSchedules || [])) {
+    return { success: false, error: 'RCON permission is required to change scheduled commands.' };
+  }
 
   // The channel opens on either permission; which half applies depends on whether the server exists.
   if (!identity.isAdmin) {
@@ -508,7 +532,7 @@ onRequest('reorder-server-instances', async payload => {
 
 /** Minutes of warning asked for: whole, and none for anything that is not a number. */
 function warningMinutesOf(payload: { warningMinutes?: unknown }): number {
-  return Math.max(0, Math.floor(Number(payload?.warningMinutes) || 0));
+  return Math.min(60, Math.max(0, Math.floor(Number(payload?.warningMinutes) || 0)));
 }
 
 /** Stops a server here and starts it again. */

@@ -41,6 +41,8 @@ export class ModsTabComponent {
   @Output() addMod = new EventEmitter<{id: string, name: string}>();
   @Output() removeMod = new EventEmitter<ModEntry>();
   @Output() toggleMod = new EventEmitter<ModEntry>();
+  @Output() toggleCoreMod = new EventEmitter<ModEntry>();
+  @Output() moveMod = new EventEmitter<{ id: string; direction: number }>();
   @Output() updateModSettings = new EventEmitter<{mod: ModEntry, settings: Record<string, string>}>();
 
   showAddModModal = false;

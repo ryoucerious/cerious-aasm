@@ -10,6 +10,7 @@ export type DesktopFile = File & { path?: string };
  * invoke and send refuse channels outside their allow-lists.
  */
 export interface ElectronApi {
+  getPathForFile?(file: File): string;
   invoke(channel: ElectronInvokeChannel, ...args: unknown[]): Promise<unknown>;
   send(channel: ElectronSendChannel, ...args: unknown[]): void;
   /** Returns the unsubscribe function. `event` is an empty object. */

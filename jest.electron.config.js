@@ -1,5 +1,7 @@
 module.exports = {
   testEnvironment: 'node',
+  // Avoid cross-context Math lookup failures in node-forge certificate tests on Node 24.
+  sandboxInjectedGlobals: ['Math'],
   roots: ['<rootDir>/electron'],
   testMatch: [
     '**/?(*.)+(spec|test).ts'

@@ -10,10 +10,13 @@ jest.mock('./platform.utils', () => ({
 }));
 
 const mockPath = require('path');
+jest.mock('./global-config.utils', () => ({ loadGlobalConfig: () => ({}) }));
+jest.mock('./backup-location.utils', () => ({ checkedBackupDirectory: (id: string) => require('path').join('/install/dir', 'backups', id) }));
 
 describe('backup.utils', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    require('fs').readFileSync.mockImplementation(() => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); });
     mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
     mockPath.basename.mockImplementation((p: string) => p.split('/').filter(Boolean).pop() || '');
   });

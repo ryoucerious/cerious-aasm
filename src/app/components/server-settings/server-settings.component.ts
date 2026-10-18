@@ -85,6 +85,8 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Input() backupTime = '02:00';
   @Input() backupDayOfWeek = 0;
   @Input() maxBackupsToKeep = 10;
+  @Input() backupLocation = '';
+  @Output() backupLocationChange = new EventEmitter<string>();
   @Input() backupList: BackupMetadata[] = [];
 
   @Output() openDirectory = new EventEmitter<void>();
@@ -99,6 +101,8 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Output() addMod = new EventEmitter<{id: string, name: string}>();
   @Output() removeMod = new EventEmitter<ModEntry>();
   @Output() toggleMod = new EventEmitter<ModEntry>();
+  @Output() toggleCoreMod = new EventEmitter<ModEntry>();
+  @Output() moveMod = new EventEmitter<{ id: string; direction: number }>();
   @Output() updateModSettings = new EventEmitter<{mod: ModEntry, settings: Record<string, string>}>();
   @Output() createManualBackup = new EventEmitter<void>();
   @Output() backupScheduleToggle = new EventEmitter<void>();

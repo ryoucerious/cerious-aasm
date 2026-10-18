@@ -5,6 +5,19 @@
       </div>
 
       <div class="settings-section">
+        <h5>Backup Location</h5>
+        <p class="section-desc">Choose a folder inside this server's backup area on its hosting machine.</p>
+        <div class="form-group span-all">
+          <label class="form-control-label" for="serverBackupLocation">Backup folder override</label>
+          <input id="serverBackupLocation" #location class="form-control input" [value]="backupLocation"
+                 (blur)="location.value !== backupLocation && backupLocationChange.emit(location.value)"
+                 maxlength="160" placeholder="Use app default" aria-describedby="serverBackupLocationHelp serverBackupLocationArchives" />
+          <div id="serverBackupLocationHelp" class="form-control-label desc">Leave blank to use the app default. For a custom folder, use letters, numbers, spaces, hyphens or underscores, with / between folders (for example, archive/daily).</div>
+          <div id="serverBackupLocationArchives" class="form-control-label desc">Existing backups stay in their original folder. Select that folder again to access them.</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <h5>Manual Backup</h5>
         <p class="section-desc">Create an immediate backup of your server files.</p>
 

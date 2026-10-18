@@ -14,7 +14,8 @@ jest.mock('../services/ark-api-plugin.service', () => ({
     downloadAsaApi: jest.fn(),
     readZipAsBase64: jest.fn(),
     installPluginFromZipData: jest.fn(),
-    installPluginFromUrl: jest.fn()
+    installPluginFromUrl: jest.fn(),
+    exportCloneFiles: jest.fn(), importCloneFiles: jest.fn()
   }
 }));
 jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ isAsaApiLoaderInstalled: jest.fn() }));
@@ -41,6 +42,25 @@ describe('ark-api-handler', () => {
   function replies(channel: string): unknown[] {
     return mockMessaging.sendToOriginator.mock.calls.filter(([replyChannel]) => replyChannel === channel).map(call => call[1]);
   }
+
+  it('exports and imports cloned plugins locally in standalone mode', async () => {
+    mockPlugins.exportCloneFiles.mockReturnValue('YXJjaGl2ZQ==');
+    await handlers['export-ark-api-clone']({ instanceId: 'a1' }, sender);
+    expect(mockPlugins.exportCloneFiles).toHaveBeenCalledWith('a1');
+    await handlers['import-ark-api-clone']({ instanceId: 'b2', zipData: 'YXJjaGl2ZQ==' }, sender);
+    expect(mockPlugins.importCloneFiles).toHaveBeenCalledWith('b2', 'YXJjaGl2ZQ==');
+  });
+
+  it('routes clone reads and writes to their respective mesh hosts', async () => {
+    mockMesh.queryRemote.mockResolvedValueOnce({ success: true, zipData: 'YXJjaGl2ZQ==' });
+    await handlers['export-ark-api-clone']({ instanceId: 'a1' }, sender);
+    expect(mockMesh.queryRemote).toHaveBeenCalledWith('a1', 'ark-api', { action: 'clone-export' });
+    expect(mockPlugins.exportCloneFiles).not.toHaveBeenCalled();
+    mockMesh.forwardIfRemote.mockResolvedValueOnce({ success: true } as any);
+    await handlers['import-ark-api-clone']({ instanceId: 'b2', zipData: 'YXJjaGl2ZQ==' }, sender);
+    expect(mockMesh.forwardIfRemote).toHaveBeenCalledWith('ark-api', 'b2', 'desktop', { action: 'clone-import', zipData: 'YXJjaGl2ZQ==' });
+    expect(mockPlugins.importCloneFiles).not.toHaveBeenCalled();
+  });
 
   describe('get-asaapi-status', () => {
     it.each([

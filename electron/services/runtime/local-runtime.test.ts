@@ -22,6 +22,25 @@ jest.mock('../messaging.service', () => ({ messagingService: { sendToAll: jest.f
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { messagingService } from '../messaging.service';
 import { localRuntime } from './local-runtime';
+import { getNormalizedInstanceState } from '../../utils/ark/ark-server/ark-server-state.utils';
+
+describe('LocalRuntime readiness', () => {
+  afterEach(() => jest.useRealTimers());
+  it('waits through startup and rejects a failed process', async () => {
+    jest.useFakeTimers();
+    jest.mocked(getNormalizedInstanceState).mockReturnValue('starting');
+    let finished = false;
+    const ready = localRuntime.waitUntilRunning('s1').then(() => { finished = true; });
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(finished).toBe(false);
+    jest.mocked(getNormalizedInstanceState).mockReturnValue('running');
+    await jest.advanceTimersByTimeAsync(1000);
+    await ready;
+    expect(finished).toBe(true);
+    jest.mocked(getNormalizedInstanceState).mockReturnValue('stopped');
+    await expect(localRuntime.waitUntilRunning('s1')).rejects.toThrow('did not start');
+  });
+});
 
 const startServerInstance = serverInstanceService.startServerInstance as jest.Mock;
 const sendToAll = messagingService.sendToAll as jest.Mock;

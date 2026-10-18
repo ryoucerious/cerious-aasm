@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { EMPTY, Subject, Subscription, catchError, defer, finalize, map, of, switchMap } from 'rxjs';
 import { FILE_TRANSFER_TIMEOUT_MS, MessagingService } from '../../../../core/services/messaging/messaging.service';
-import { fileToBase64 } from '../../../../core/utils/file.utils';
+import { fileToBase64, desktopFilePath } from '../../../../core/utils/file.utils';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ModalComponent } from '../../../modal/modal.component';
 import type { DesktopFile } from '../../../../core/types/electron-api';
@@ -210,8 +210,9 @@ export class ArkApiTabComponent implements OnChanges, OnDestroy {
     this.installingFromZip = true;
     this.cdr.markForCheck();
     let request;
-    if (file.path) {
-      request = this.messaging.sendMessage<ActionReply>('install-plugin-from-zip', { instanceId, zipPath: file.path });
+    const zipPath = desktopFilePath(file);
+    if (zipPath) {
+      request = this.messaging.sendMessage<ActionReply>('install-plugin-from-zip', { instanceId, zipPath });
     } else {
       let zipData: string;
       try {

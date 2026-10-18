@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import * as electron from 'electron';
 
 // All the sandboxed, context-isolated page can reach of the main process; the frontend declares
 // the same shape in src/app/core/types/electron-api.d.ts. A sandboxed preload can require only
@@ -17,6 +18,11 @@ function isOneOf<T extends string>(allowed: readonly T[], channel: unknown): cha
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  getPathForFile(file: File): string {
+    // webUtils replaced File.path in Electron 32; keep compatibility with packaged Electron 21.
+    const webUtils = (electron as unknown as { webUtils?: { getPathForFile(file: File): string } }).webUtils;
+    return webUtils ? webUtils.getPathForFile(file) : (file as File & { path?: string }).path || '';
+  },
   invoke(channel: InvokeChannel, ...args: unknown[]): Promise<unknown> {
     if (!isOneOf(INVOKE_CHANNELS, channel)) {
       return Promise.reject(new Error(`Channel not allowed: ${String(channel)}`));

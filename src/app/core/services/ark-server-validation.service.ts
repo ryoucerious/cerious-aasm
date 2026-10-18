@@ -144,7 +144,8 @@ export class ArkServerValidationService {
       return { field: 'name', isValid: false, error: `${fieldLabel} cannot exceed 100 characters`, label };
     }
 
-    const invalidChars = /[<>:"/\\|?*]/;
+    // Names are display text; instance IDs, not names, form filesystem paths.
+    const invalidChars = /[\x00-\x1f\x7f]/;
     if (invalidChars.test(name)) {
       return { field: 'name', isValid: false, error: `${fieldLabel} contains invalid characters`, label };
     }

@@ -77,7 +77,8 @@ export class BackupOperationsService {
       const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
       const stats = await fs.promises.lstat(itemPath);
 
-      if (item.toLowerCase().includes('backup') || stats.isSymbolicLink()) {
+      if (item.toLowerCase().includes('backup') || stats.isSymbolicLink()
+        || /^(logs|crashreports)$/i.test(item) || /\.(log|pid|lock)$/i.test(item)) {
         continue;
       }
 
@@ -89,7 +90,19 @@ export class BackupOperationsService {
         }
         await this.addToZip(zip, itemPath, itemRelativePath);
       } else if (stats.isFile() && !isWin64Dir) {
-        zip.addFile(itemRelativePath, await fs.promises.readFile(itemPath));
+        zip.addFile(itemRelativePath, await this.readSnapshotFile(itemPath));
+      }
+    }
+  }
+
+  /** SaveWorld can briefly lock a world file on Windows. Never silently omit persistent data. */
+  private async readSnapshotFile(filePath: string): Promise<Buffer> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await fs.promises.readFile(filePath); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= 4 || !['EBUSY', 'EPERM', 'EACCES'].includes(code || '')) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
       }
     }
   }
@@ -120,7 +133,7 @@ export class BackupOperationsService {
   /** The instance's backups, newest first. */
   async getInstanceBackupsInternal(serverPath: string): Promise<BackupMetadata[]> {
     const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
-    const instanceId = path.basename(backupDir);
+    const instanceId = path.basename(serverPath);
 
     let files: string[];
     try {
@@ -136,7 +149,8 @@ export class BackupOperationsService {
     for (const file of files.filter(name => BackupFilenameUtils.isBackupFile(name))) {
       try {
         const filePath = path.join(backupDir, file);
-        const stats = await fs.promises.stat(filePath);
+        const stats = await fs.promises.lstat(filePath);
+        if (!stats.isFile() || stats.isSymbolicLink()) continue;
         const metadata = BackupFilenameUtils.parseFilename(file, filePath, instanceId, stats.mtime);
         if (metadata) {
           metadata.size = stats.size;
@@ -163,6 +177,8 @@ export class BackupOperationsService {
     // config.json is what puts the server in the list. A restore that fails partway (a file locked
     // by a running server on Windows) or a backup without one must not make the server vanish.
     const configPath = path.join(serverPath, 'config.json');
+    const settingsPath = BackupPathUtils.getSettingsFilePath(serverPath);
+    const preservedSettings = fs.existsSync(settingsPath) ? await fs.promises.readFile(settingsPath) : null;
     let preservedConfig: Buffer | null = null;
     try {
       preservedConfig = await fs.promises.readFile(configPath);
@@ -182,6 +198,7 @@ export class BackupOperationsService {
     } finally {
       // Before the temp cleanup, so a cleanup failure cannot skip it.
       try {
+        if (preservedSettings) await fs.promises.writeFile(settingsPath, preservedSettings);
         if (preservedConfig && !fs.existsSync(configPath)) {
           await fs.promises.writeFile(configPath, preservedConfig);
         }
@@ -213,7 +230,10 @@ export class BackupOperationsService {
     if (!match) {
       throw new Error(`Backup with ID ${backupId} not found`);
     }
-    return path.join(backupDir, match);
+    const filePath = path.join(backupDir, match);
+    const stat = await fs.promises.lstat(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Backup must be a regular file');
+    return filePath;
   }
 
   /** Moves backups from inside the instance directory, where older versions kept them. Idempotent. */

@@ -1,4 +1,5 @@
 export interface GlobalConfig {
+  backupLocation?: string;
   startWebServerOnLoad: boolean;
   webServerPort: number;
   authenticationEnabled: boolean;

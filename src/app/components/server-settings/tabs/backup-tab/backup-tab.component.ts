@@ -80,6 +80,8 @@ export class BackupTabComponent implements OnChanges {
   @Input() backupTime = '02:00';
   @Input() backupDayOfWeek = 0;
   @Input() maxBackupsToKeep = 10;
+  @Input() backupLocation = '';
+  @Output() backupLocationChange = new EventEmitter<string>();
   @Input() backupList: BackupMetadata[] = [];
   @Input() backupFrequencyDropdownOpen = false;
   @Input() backupDayDropdownOpen = false;

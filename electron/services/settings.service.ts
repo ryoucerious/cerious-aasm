@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { prepareBackupDirectory, validateBackupLocation } from '../utils/backup-location.utils';
 import * as fs from 'fs';
 import * as bcrypt from 'bcrypt';
 import type { ChildProcess } from 'child_process';
@@ -43,6 +44,11 @@ export class SettingsService {
       }
       const incoming: Partial<GlobalConfig> & { authenticationPasswordSet?: unknown } = { ...config };
       delete incoming.authenticationPasswordSet;
+      if (incoming.backupLocation !== undefined) {
+        incoming.backupLocation = validateBackupLocation(incoming.backupLocation);
+        // Individual server folders are checked again when resolved on their hosting machine.
+        prepareBackupDirectory();
+      }
 
       if (!canChangeLogin) {
         const { authenticationEnabled, authenticationUsername, authenticationPassword } = globalConfigUtils.loadGlobalConfig();

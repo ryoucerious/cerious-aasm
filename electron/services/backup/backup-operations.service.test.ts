@@ -60,6 +60,27 @@ describe('BackupOperationsService (real fs)', () => {
   }
 
   describe('createBackupInternal', () => {
+    it('creates, lists, restores and deletes backups in the configured folder, preserving its settings', async () => {
+      const settingsPath = path.join(serverPath, 'backup-settings.json');
+      const settings = JSON.stringify({ backupLocation: 'archive/daily' });
+      fs.writeFileSync(settingsPath, settings);
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'Custom');
+      expect(made.filePath).toBe(path.join(backupDir, 'archive/daily/Custom.zip'));
+      expect((await service.getInstanceBackupsInternal(serverPath))[0].instanceId).toBe('a1');
+      await service.restoreBackupInternal('Custom', serverPath);
+      expect(fs.readFileSync(settingsPath, 'utf8')).toBe(settings);
+      expect(world()).toBe('world v1');
+      await service.deleteBackupInternal('Custom', serverPath);
+      expect(await service.getInstanceBackupsInternal(serverPath)).toEqual([]);
+    });
+    it('retries a transient sharing violation without omitting the file', async () => {
+      const read = jest.spyOn(fs.promises, 'readFile');
+      read.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }));
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'Live');
+      const zip = new AdmZip(made.filePath);
+      expect(zip.getEntries().some(entry => entry.entryName.endsWith('.ark'))).toBe(true);
+      expect(read).toHaveBeenCalled();
+    });
     it('archives the instance and describes the new backup', async () => {
       const metadata = await service.createBackupInternal('a1', serverPath, 'manual', 'Before update');
 

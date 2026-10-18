@@ -3,7 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { Observable, switchMap } from 'rxjs';
+import { Observable, switchMap, firstValueFrom } from 'rxjs';
 import { ModalComponent } from '../modal/modal.component';
 import { DropdownComponent, DropdownOption } from '../dropdown/dropdown.component';
 import { SaveInstanceResult, ServerInstance } from '../../core/models/server-instance.model';
@@ -13,7 +13,7 @@ import { IpcService } from '../../core/services/ipc.service';
 import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { MessagingService, MOVE_TIMEOUT_MS } from '../../core/services/messaging/messaging.service';
 import type { DesktopFile } from '../../core/types/electron-api';
-import { fileToBase64 } from '../../core/utils/file.utils';
+import { fileToBase64, desktopFilePath } from '../../core/utils/file.utils';
 
 export type ImportMode = 'create' | 'import' | 'clone';
 
@@ -116,11 +116,11 @@ export class AddServerModalComponent implements OnChanges {
     return false;
   }
 
-  onAddServer(): void {
+  onAddServer(): void | Promise<void> {
     if (!this.canAddServer()) return;
     if (this.importMode === 'create') this.createNewServer();
-    else if (this.importMode === 'import') this.importFromBackup();
-    else this.cloneServer();
+    else if (this.importMode === 'import') return this.importFromBackup();
+    else return this.cloneServer();
   }
 
   /** Cancel, Escape or the backdrop. Ignored while a server is being added, as the Cancel button is. */
@@ -133,7 +133,7 @@ export class AddServerModalComponent implements OnChanges {
     const file: DesktopFile | undefined = (event.target as HTMLInputElement | null)?.files?.[0];
     if (file && file.name.endsWith('.zip')) {
       this.selectedBackupFile = file;
-      this.selectedBackupFilePath = this.ipc.isElectron && file.path ? file.path : file.name;
+      this.selectedBackupFilePath = this.ipc.isElectron ? desktopFilePath(file) : '';
       this.cdr.markForCheck();
     }
   }
@@ -156,15 +156,30 @@ export class AddServerModalComponent implements OnChanges {
     });
   }
 
-  private cloneServer(): void {
+  private async cloneServer(): Promise<void> {
     if (!this.selectedServerToClone) return;
     this.busy = true;
-    // Not the source's machine: the one chosen, or Auto-select's.
-    const { id, nodeId, ...source } = withoutRuntimeFields(this.selectedServerToClone);
-    this.serverInstanceService.save({ ...source, name: this.serverName, sessionName: this.serverName, ...this.placementFields() }).subscribe({
-      next: result => this.handleSaveResult(result, 'Failed to clone server'),
-      error: () => this.fail('Failed to clone server')
-    });
+    let created: ServerInstance | undefined;
+    try {
+      const reply = await firstValueFrom(this.messaging.sendMessage<{ instance?: ServerInstance }>('get-server-instance', { id: this.selectedServerToClone.id }));
+      if (!reply?.instance) throw new Error('Source server is unavailable');
+      const files = await firstValueFrom(this.messaging.sendMessage<{ success?: boolean; zipData?: string; error?: string }>('export-ark-api-clone', { instanceId: reply.instance.id }, { timeoutMs: MOVE_TIMEOUT_MS }));
+      if (!files?.success || !files.zipData) throw new Error(files?.error || 'Could not read the source API plugins');
+      const { id, nodeId, ...source } = withoutRuntimeFields(reply.instance);
+      const useExclusiveList = source.useExclusiveList === true || String(source.useExclusiveList) === 'true' || /(?:^|\s)-exclusivejoin(?:\s|$)/i.test(String(source.launchParameters || ''));
+      const result = await firstValueFrom(this.serverInstanceService.save({ ...source, useExclusiveList, name: this.serverName, sessionName: this.serverName, ...this.placementFields() }));
+      if (!result.success || !result.instance) throw new Error(result.error || 'Could not create the clone');
+      created = result.instance;
+      const installed = await firstValueFrom(this.messaging.sendMessage<{ success?: boolean; error?: string }>('import-ark-api-clone', { instanceId: created.id, zipData: files.zipData }, { timeoutMs: MOVE_TIMEOUT_MS }));
+      if (!installed?.success) throw new Error(installed?.error || 'Could not copy API plugins');
+      this.handleSaveResult(result, 'Failed to clone server');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Failed to clone server';
+      if (created) {
+        this.notificationService.warning(`Server created, but plugin copy failed: ${reason}`);
+        this.finish(created);
+      } else this.fail(reason);
+    }
   }
 
   private async importFromBackup(): Promise<void> {

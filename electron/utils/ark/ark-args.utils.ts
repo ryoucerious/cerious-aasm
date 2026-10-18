@@ -196,7 +196,11 @@ export function getArkLaunchParameters(config: LaunchConfig): string[] {
 
   let enabledModIds: unknown[] = [];
   if (Array.isArray(config.enabledMods)) {
-    enabledModIds = config.enabledMods;
+    const enabled = new Set(config.enabledMods.map(id => String(id).trim()));
+    // mods is the panel's authoritative load order; enabledMods is membership only.
+    enabledModIds = Array.isArray(config.mods) && config.mods.length
+      ? config.mods.map(mod => mod && typeof mod === 'object' ? mod.id : mod).filter(id => enabled.has(String(id).trim()))
+      : config.enabledMods;
   } else if (Array.isArray(config.mods)) {
     // Older configs hold `{ id, enabled }` objects.
     enabledModIds = config.mods.map(mod =>

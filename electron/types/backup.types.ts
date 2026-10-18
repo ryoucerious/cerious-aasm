@@ -1,4 +1,6 @@
 export interface BackupSettings {
+  /** Empty inherits the hosting app's default backup folder. */
+  backupLocation?: string;
   instanceId: string;
   enabled: boolean;
   frequency: 'hourly' | 'daily' | 'weekly';

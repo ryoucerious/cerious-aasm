@@ -271,6 +271,23 @@ describe('rcon.utils', () => {
   });
 
   describe('sendRconCommand', () => {
+    it('does not send a scheduled command removed while queued', async () => {
+      const client = connectNow();
+      let enabled = true;
+      const first = sendRconCommand('a1', 'ListPlayers');
+      const scheduled = sendRconCommand('a1', 'DestroyWildDinos', undefined, () => enabled);
+      const cancelled = expect(scheduled).rejects.toBeInstanceOf(RconCommandNotSentError);
+      await flushMicrotasks();
+      enabled = false;
+      client.emit('response', 'No Players Connected');
+      await first;
+      await cancelled;
+      expect(client.send.mock.calls).toEqual([['ListPlayers']]);
+      const next = sendRconCommand('a1', 'SaveWorld');
+      await flushMicrotasks();
+      client.emit('response', 'Saved');
+      await expect(next).resolves.toBe('Saved');
+    });
     it('sends the command and resolves with the response', async () => {
       const client = connectNow();
 

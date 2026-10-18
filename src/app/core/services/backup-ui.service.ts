@@ -18,6 +18,7 @@ interface BackupUIState {
   /** 0 is Sunday. */
   backupDayOfWeek: number;
   maxBackupsToKeep: number;
+  backupLocation: string;
   isCreatingBackup: boolean;
 }
 
@@ -37,6 +38,7 @@ export class BackupUIService {
     backupTime: '02:00',
     backupDayOfWeek: 1,
     maxBackupsToKeep: 10,
+    backupLocation: '',
     isCreatingBackup: false
   };
 
@@ -139,7 +141,8 @@ export class BackupUIService {
           backupFrequency: response.settings.frequency || 'daily',
           backupTime: response.settings.time || '02:00',
           backupDayOfWeek: response.settings.dayOfWeek ?? 1,
-          maxBackupsToKeep: response.settings.maxBackupsToKeep || 10
+          maxBackupsToKeep: response.settings.maxBackupsToKeep || 10,
+          backupLocation: response.settings.backupLocation || ''
         });
       },
       error: error => {
@@ -158,16 +161,19 @@ export class BackupUIService {
       frequency: state.backupFrequency,
       time: state.backupTime,
       dayOfWeek: state.backupDayOfWeek,
-      maxBackupsToKeep: state.maxBackupsToKeep
+      maxBackupsToKeep: state.maxBackupsToKeep,
+      backupLocation: state.backupLocation
     };
 
     this.backupService.saveBackupSettings(settings).subscribe({
       next: response => {
         if (response.success) {
           this.notificationService.success('Backup settings saved successfully', 'Settings');
+          this.fetchBackupList(instanceId);
           this.applySchedule(instanceId, state.backupScheduleEnabled);
         } else {
           this.notificationService.error(response.error || 'Failed to save backup settings', 'Settings Error');
+          this.loadBackupSettings(instanceId);
         }
       },
       error: error => {
@@ -275,11 +281,11 @@ export class BackupUIService {
     if (instanceId === this.shownInstanceId) return;
     this.shownInstanceId = instanceId;
     const {
-      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep,
+      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, backupLocation,
       showDeleteBackupModal, backupToDelete, showBackupNameModal, backupName, isCreatingBackup
     } = this.initialState;
     this.patchState({
-      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep,
+      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, backupLocation,
       showDeleteBackupModal, backupToDelete, showBackupNameModal, backupName, isCreatingBackup
     });
   }

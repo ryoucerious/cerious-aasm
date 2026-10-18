@@ -6,6 +6,7 @@ jest.mock('electron', () => ({
 }));
 
 interface ExposedApi {
+  getPathForFile(file: unknown): string;
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
   send(channel: string, ...args: unknown[]): void;
   on(channel: string, listener: (event: unknown, ...args: unknown[]) => void): () => void;
@@ -26,6 +27,10 @@ describe('preload', () => {
   });
 
   describe('invoke', () => {
+    it('supports chosen-file paths on older Electron', () => {
+      expect(api.getPathForFile({ path: 'C:/plugin.zip' })).toBe('C:/plugin.zip');
+      expect(api.getPathForFile({})).toBe('');
+    });
     it.each(['message', 'window-is-maximized'])('forwards %s to the main process', async channel => {
       mockIpc.invoke.mockResolvedValueOnce('answer');
 

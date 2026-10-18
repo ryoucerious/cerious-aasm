@@ -1,0 +1,53 @@
+<div class="settings-section">
+  <h5>Scheduled RCON Commands</h5>
+  <p class="section-desc">Run commands at repeat intervals or daily times in the hosting machine's timezone. Missed runs while disconnected are skipped.</p>
+
+  <div *ngFor="let job of jobs; let i = index; trackBy: trackById" class="rcon-schedule">
+    <div class="schedule-header">
+      <h6>Schedule {{ i + 1 }}</h6>
+      <button type="button" class="btn btn-ghost btn-sm" (click)="remove(job)" [attr.aria-label]="'Remove schedule ' + (i + 1)">
+        <span class="material-icons" aria-hidden="true">delete_outline</span> Remove Schedule
+      </button>
+    </div>
+    <div class="form-group span-all">
+      <label class="form-control-label toggle-label">
+        <input type="checkbox" class="toggle-switch" [(ngModel)]="job.enabled" (change)="commit(job)" />
+        <span class="slider"></span>
+        <span class="toggle-text">Enable this schedule</span>
+      </label>
+    </div>
+    <div class="form-group">
+      <label class="form-control-label" [id]="'rcon-mode-label-' + job.id">Schedule type</label>
+      <div class="custom-dropdown" (click)="$event.stopPropagation()" (keydown.escape)="closeDropdown()" (focusout)="!$any($event.currentTarget).contains($event.relatedTarget) && closeDropdown()">
+        <button type="button" class="form-control input" (click)="openDropdown = openDropdown === job.id ? null : job.id" [attr.aria-labelledby]="'rcon-mode-label-' + job.id" aria-haspopup="listbox" [attr.aria-expanded]="openDropdown === job.id">
+          <span>{{ job.mode === 'daily' ? 'Daily times' : 'Repeat interval' }}</span>
+          <span class="material-icons" aria-hidden="true">arrow_drop_down</span>
+        </button>
+        <div *ngIf="openDropdown === job.id" class="dropdown-menu show" role="listbox" [attr.aria-labelledby]="'rcon-mode-label-' + job.id">
+          <div *ngFor="let mode of modes" role="option" tabindex="0" [class.selected]="job.mode === mode.value" [attr.aria-selected]="job.mode === mode.value" (click)="selectMode(job, mode.value)" (keydown.enter)="selectMode(job, mode.value)" (keydown.space)="$event.preventDefault(); selectMode(job, mode.value)">{{ mode.label }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="form-group" *ngIf="job.mode === 'interval'">
+      <label class="form-control-label" [for]="'rcon-interval-' + job.id">Minutes between runs</label>
+      <input [id]="'rcon-interval-' + job.id" class="form-control input" type="number" min="1" max="10080" step="1" [(ngModel)]="job.intervalMinutes" (blur)="commit(job)" />
+      <div class="form-control-label desc">Repeat every 1 to 10080 minutes.</div>
+    </div>
+    <div class="form-group" *ngIf="job.mode === 'daily'">
+      <label class="form-control-label" [for]="'rcon-times-' + job.id">Daily times</label>
+      <input [id]="'rcon-times-' + job.id" #times class="form-control input" [value]="job.times?.join(', ') || ''" (blur)="setTimes(job, times.value)" placeholder="06:00, 18:00" />
+      <div class="form-control-label desc">Use 24-hour times separated by commas, for example 06:00, 18:00.</div>
+    </div>
+    <div class="form-group span-all">
+      <label class="form-control-label" [for]="'rcon-command-' + job.id">Command</label>
+      <input [id]="'rcon-command-' + job.id" class="form-control input" [(ngModel)]="job.command" (blur)="commit(job)" placeholder="DestroyWildDinos" maxlength="2000" />
+      <div class="form-control-label desc">Enter any RCON command. Changes save when you leave a field.</div>
+    </div>
+    <p *ngIf="errors[job.id]" class="schedule-error" role="alert">{{ errors[job.id] }} Changes to this schedule have not been saved.</p>
+  </div>
+
+  <p *ngIf="!jobs.length" class="section-desc">No RCON schedules configured.</p>
+  <div class="form-group span-all">
+    <div><button type="button" class="btn btn-ghost" (click)="add()" [disabled]="jobs.length >= 50"><span class="material-icons" aria-hidden="true">add</span> Add RCON Schedule</button></div>
+  </div>
+</div>

@@ -127,6 +127,8 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   // Mods and plugins
   'curseforge-search-mods': PERMISSIONS.MODS_MANAGE,
   'curseforge-get-mod': PERMISSIONS.MODS_MANAGE,
+  'export-ark-api-clone': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'import-ark-api-clone': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'curseforge-open-website': PERMISSIONS.MODS_MANAGE,
   'get-asaapi-status': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'get-asaapi-latest': PERMISSIONS.MODS_MANAGE,

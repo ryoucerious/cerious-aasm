@@ -1,6 +1,8 @@
 import * as path from 'path';
+import * as fs from 'fs';
+import { loadGlobalConfig } from './global-config.utils';
+import { checkedBackupDirectory } from './backup-location.utils';
 import { BackupMetadata } from '../types/backup.types';
-import { getDefaultInstallDir } from './platform.utils';
 
 const MAX_NAME_LENGTH = 50;
 // Windows refuses these as file names, with or without an extension; COM and LPT take 0-9 and the
@@ -102,7 +104,13 @@ export class BackupPathUtils {
    */
   static getInstanceBackupDir(serverPath: string): string {
     const instanceId = path.basename(serverPath);
-    return path.join(getDefaultInstallDir(), 'backups', instanceId);
+    let settings: { backupLocation?: string } = {};
+    try {
+      settings = JSON.parse(fs.readFileSync(this.getSettingsFilePath(serverPath), 'utf8').replace(/^\uFEFF/, ''));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return checkedBackupDirectory(instanceId, settings.backupLocation || loadGlobalConfig().backupLocation || '');
   }
 
   /** Where older versions kept backups, inside the instance directory. Read only to migrate them. */

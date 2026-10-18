@@ -32,6 +32,59 @@ interface GitHubRelease {
 }
 
 export class ArkApiPluginService {
+  private cloneBase(instanceId: string): string {
+    let directory = getInstanceDir(instanceId);
+    for (const part of ['', 'ShooterGame', 'Binaries', 'Win64']) {
+      if (part) directory = path.join(directory, part);
+      if (fs.existsSync(directory) && fs.lstatSync(directory).isSymbolicLink()) throw new Error('API clone paths must not contain links');
+    }
+    return directory;
+  }
+  /** Only API files, never the world, base game, logs or links. Used across hosts when cloning. */
+  exportCloneFiles(instanceId: string): string {
+    const base = this.cloneBase(instanceId);
+    const zip = new AdmZip();
+    let total = 0;
+    const add = (relative: string) => {
+      const file = path.join(base, relative);
+      if (!fs.existsSync(file)) return;
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || /(^|[/\\])(logs|crashreports)([/\\]|$)|\.(log|lock|pid)$/i.test(relative)) return;
+      if (stat.isDirectory()) {
+        for (const name of fs.readdirSync(file)) add(path.join(relative, name));
+      } else if (stat.isFile()) {
+        total += stat.size;
+        if (total > 50 * 1024 * 1024) throw new Error('API files exceed the 50 MB clone transfer limit');
+        zip.addFile(relative.replace(/\\/g, '/'), fs.readFileSync(file));
+      }
+    };
+    add('ArkApi');
+    add('AsaApiLoader.exe');
+    return zip.toBuffer().toString('base64');
+  }
+
+  importCloneFiles(instanceId: string, data: string): void {
+    const base = this.cloneBase(instanceId);
+    const zip = new AdmZip(Buffer.from(data, 'base64'));
+    let total = 0;
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      const parts = name.replace(/\/$/, '').split('/');
+      if (!(name.startsWith('ArkApi/') || name === 'AsaApiLoader.exe')
+        || parts.some(part => !part || part === '.' || part === '..' || /[<>:"|?*\x00-\x1f]|[. ]$/.test(part)
+          || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(part))) throw new Error('Unsafe API clone archive');
+      total += entry.header.size;
+      if (total > 50 * 1024 * 1024) throw new Error('API files exceed the 50 MB clone limit');
+      let target = base;
+      for (const part of parts) {
+        target = path.join(target, part);
+        if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error('API clone destination contains a link');
+      }
+    }
+    fs.mkdirSync(base, { recursive: true });
+    zip.extractAllTo(base, false);
+  }
+
   private getWin64Dir(instanceId: string): string {
     return path.join(getInstanceDir(instanceId), 'ShooterGame', 'Binaries', 'Win64');
   }

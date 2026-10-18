@@ -19,7 +19,7 @@ export function parsePort(value: unknown): number | undefined {
 export function validateServerName(name: string): boolean {
   if (!name || typeof name !== 'string') return false;
   if (name.length > 100) return false;
-  return /^[a-zA-Z0-9\s\-_().,:;!@#$%^&*+=\[\]{}|\\\/'"?<>~`]{1,100}$/.test(name);
+  return name.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(name);
 }
 
 /** For display strings: strips control characters and trims. Never use it on a password. */

@@ -338,6 +338,9 @@ describe('ark-args.utils', () => {
   });
 
   describe('getArkLaunchParameters', () => {
+    it('uses panel order rather than the order mods were enabled', () => {
+      expect(getArkLaunchParameters({ mods: ['3', '1', '2'], enabledMods: ['2', '3'] })).toContain('-mods=3,2');
+    });
     it('should handle enabledMods array', () => {
       const config = { mods: [], enabledMods: ['123', '456'] };
       const params = getArkLaunchParameters(config);

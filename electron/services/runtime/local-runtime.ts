@@ -18,6 +18,17 @@ import { rconService } from '../rcon.service';
  * Nothing here talks to another machine.
  */
 export class LocalRuntime {
+  /** A spawned process is still loading ARK; bulk restarts wait until it is actually running. */
+  async waitUntilRunning(id: string, timeoutMs = 20 * 60_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = this.state(id);
+      if (state === 'running') return;
+      if (state !== 'starting' && state !== 'queued') throw new Error(`Server ${id} did not start (${state})`);
+      if (Date.now() >= deadline) throw new Error(`Server ${id} did not become ready within 20 minutes`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
   listInstances(): Promise<{ instances: InstanceConfig[] }> {
     return serverManagementService.getAllInstances();
   }

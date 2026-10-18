@@ -10,6 +10,7 @@ import { serverManagementService } from '../services/server-instance/server-mana
 import { rconService } from '../services/rcon.service';
 import { identifySender } from '../services/auth/permission-gate';
 import { meshService } from '../services/mesh/mesh-service';
+import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 
 jest.mock('../services/messaging.service', () => ({
   messagingService: { on: jest.fn(), sendToOriginator: jest.fn(), sendToAll: jest.fn(), sendToAllOthers: jest.fn() }
@@ -77,6 +78,7 @@ describe('restarting from the app', () => {
     jest.mocked(getStandardEventCallbacks).mockReturnValue({ onLog: jest.fn(), onState: jest.fn() });
     jest.mocked(serverProcessService.getInstanceState).mockImplementation(id => states.get(id) || 'stopped');
     jest.mocked(serverProcessService.getNormalizedInstanceState).mockImplementation(id => states.get(id) || 'stopped');
+    jest.mocked(getNormalizedInstanceState).mockImplementation(id => states.get(id) || 'stopped');
     jest.mocked(rconService.executeRconCommand).mockImplementation(async (id: string, command: string) => {
       events.push(`${id}: ${command.replace(/^broadcast /, '')}`);
       return { success: true, response: '', instanceId: id };
@@ -173,7 +175,7 @@ describe('restarting from the app', () => {
       states.set('b', 'running');
     });
 
-    it('counts down on the running servers only, then stops them all and starts them in order', async () => {
+    it('completes each running server countdown and restart before warning the next', async () => {
       await request('restart-all-instances', { warningMinutes: 5, requestId: 'r1' });
 
       expect(replies('restart-all-instances')).toEqual([{ success: true, restarting: ['a', 'b'], dueAt: Date.now() + 5 * MINUTE, requestId: 'r1' }]);
@@ -181,7 +183,10 @@ describe('restarting from the app', () => {
 
       expect(events.filter(event => event.startsWith('c'))).toEqual([]);
       expect(events.filter(event => event.startsWith('a: '))).toHaveLength(6);
-      expect(events.slice(-2)).toEqual(['stop all a,b', 'start all a,b']);
+      expect(events.slice(-3)).toEqual(['stop a', 'start a', 'b: Server will restart in 5 minutes!']);
+      expect(meshService.noteDesired).not.toHaveBeenCalledWith('b', 'running');
+      await jest.advanceTimersByTimeAsync(5 * MINUTE);
+      expect(events.slice(-2)).toEqual(['stop b', 'start b']);
       expect(meshService.noteDesired).toHaveBeenCalledWith('b', 'running');
     });
 
@@ -194,7 +199,7 @@ describe('restarting from the app', () => {
       await request('cancel-restart-all', { requestId: 'r2' });
       await jest.advanceTimersByTimeAsync(15 * MINUTE);
 
-      expect(replies('cancel-restart-all')).toEqual([{ success: true, cancelled: ['a', 'b'], requestId: 'r2' }]);
+      expect(replies('cancel-restart-all')).toEqual([{ success: true, cancelled: ['a'], requestId: 'r2' }]);
       expect(serverLifecycleService.stopAllInstances).not.toHaveBeenCalled();
       expect(events.slice(-3)).toEqual(['c: Server restarting now!', 'stop c', 'start c']);
     });

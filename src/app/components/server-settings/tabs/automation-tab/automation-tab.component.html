@@ -128,4 +128,5 @@
           <div class="form-control-label desc">Select which days of the week to restart the server.</div>
         </div>
         </div>
+        <app-rcon-schedules [server]="serverInstance" (save)="saveRconSchedules.emit()"></app-rcon-schedules>
       </div>

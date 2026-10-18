@@ -919,7 +919,7 @@ export class MeshService {
       expiry: Date.now() + 60_000,
       issuedAt: Date.now(),
       expectedRevision: server.configRevision
-    });
+    }, operation === 'restart' && args?.wait ? (Math.min(60, Number(args.warningMinutes) || 0) + 60) * 60_000 : undefined);
   }
 
   /**
@@ -1348,6 +1348,14 @@ export class MeshService {
       }
       // With minutes of warning, the players hear the countdown a scheduled restart gives them first.
       const warningMinutes = Math.max(0, Math.floor(Number(args.warningMinutes) || 0));
+      if (current.operation === 'restart' && args.wait === true) {
+        if (!UP_STATES.has(localRuntime.state(current.serverId))) return { success: true };
+        const success = await restartCountdowns.beginAndWait(current.serverId, warningMinutes, args.all === true, async () => {
+          await this.restartHosted(current.serverId);
+          await localRuntime.waitUntilRunning(current.serverId);
+        });
+        return { success, error: success ? undefined : 'Restart cancelled or failed' };
+      }
       if (current.operation === 'restart' && warningMinutes) {
         const dueAt = restartCountdowns.begin([current.serverId], warningMinutes, false, async ([id]) => { await this.restartHosted(id); });
         return { success: true, detail: { dueAt } };
@@ -1746,10 +1754,10 @@ export class MeshService {
   private async restartHosted(id: string): Promise<void> {
     const stopped = await localRuntime.stop(id);
     if (!stopped.success) {
-      console.error(`[mesh] Could not stop ${id} to restart it: ${stopped.error}`);
-      return;
+      throw new Error(`Could not stop ${id} to restart it: ${stopped.error}`);
     }
     const started = await localRuntime.start(id);
+    if (!started.started) throw new Error(`Could not start ${id}: ${started.portError || 'Start failed'}`);
     if (started.started) await this.noteDesired(id, 'running');
   }
 

@@ -10,3 +10,11 @@ export function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+/** Only the preload can resolve a file picked in a modern Electron renderer. */
+export function desktopFilePath(file: File): string {
+  try {
+    return window.electronAPI?.getPathForFile?.(file) || (file as File & { path?: string }).path || '';
+  } catch {
+    return '';
+  }
+}

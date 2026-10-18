@@ -2,6 +2,36 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.3.1] - 2026-10-18
+
+More control over backups, mods and automation, with fixes for cloning, plugin uploads and backups of running servers.
+
+> **Upgrading.**
+>
+> - Update every machine in a mesh to the same version.
+> - Backup locations are relative folders inside each server's app-managed backup area on its hosting machine. Leaving the server setting blank inherits that machine's app default. Existing backups are not moved when the location changes; select their previous location to access them again. Docker locations remain inside the app's mounted data volume.
+> - Core-mod checks need a CurseForge API key in Settings → Updates on each hosting machine, or the CURSEFORGE_API_KEY environment variable. The first check establishes a baseline without restarting servers.
+
+### New Features & Improvements
+
+- **Configurable Backup Locations**: Settings → Storage has an app default, and each server's Backups tab can override it. Both are available from the desktop and web interfaces. In a mesh, server backup settings and operations run on the machine hosting that server.
+- **Scheduled RCON Commands**: A server's Automation tab can hold several independent commands, each with a repeat interval of one minute or more, or several daily times in the hosting machine's timezone. Commands are not limited to dino wipes. Missed occurrences while disconnected are skipped, and changing schedules requires RCON permission.
+- **Core Mods**: Mark a mod as core for an individual server. Every 15 minutes, its host checks CurseForge for new files and uses the normal warning, save and restart cycle when an enabled core mod updates. Other servers using that mod without marking it core are left alone.
+- **Mod Load Order**: Move mods up or down on the Mods tab. Enabled mods now follow that same order in the server's launch command.
+
+### Bug Fixes
+
+- **Restart All Ran Servers Together**: Restart All now completes each server's countdown, save, stop and startup before proceeding to the next, including servers on other mesh machines. It follows the signed-in user's server access, rejects duplicate sequences from that user, and stops the sequence when a restart fails or is cancelled.
+- **ASA API ZIP Uploads Failed in Electron**: Plugin uploads resolve the selected file's native path through the desktop bridge when available, with a byte-upload fallback for browsers and files without a native path.
+- **Clones Lost Whitelist and Plugin Settings**: Cloning reads the source's full current configuration, preserves the enabled whitelist switch, and copies ArkApi plugin files, configuration and the ASA API loader to the new server, including across mesh hosts. A failed plugin copy is reported instead of claiming the clone completed successfully.
+- **Transferred Server Names Blocked Settings Changes**: Display names containing punctuation such as asterisks, quotes, parentheses and slashes no longer block saving a server's settings. Server directories continue to use validated IDs, and control characters remain forbidden in names.
+- **Backups Failed While Servers Were Running**: Backups save the running world first, exclude transient logs and lock files, and retry temporary file-access failures. A failed world save or a persistently unreadable required file fails the backup instead of silently producing an incomplete archive.
+
+### Security
+
+- **Backup Locations Stay Inside the App**: Host-side validation rejects absolute paths, traversal, Windows device names and alternate data streams. Existing path components are checked for symlinks and junctions whenever a backup directory is resolved, and server-specific folders keep backup locations separate.
+- **Plugin Clone Archives Are Restricted**: Clone transfers are limited to ArkApi files and the loader, enforce archive size limits, and reject unsafe paths and linked destination folders.
+
 ## [1.3.0] - 2026-10-08
 
 The mesh. Several machines running Cerious AASM can now be joined and run as one: the servers on every machine are managed from any of them, a server moves to another machine in a few clicks, and a cluster spans machines without a shared folder. No machine is "the main one", and a machine that goes offline takes nothing down with it but its own servers. Every install, mesh or not, also gets ranges of server ports with Windows Firewall opened in one click, a Restart button and Restart All with in-game warnings, several scheduled restarts a day, and settings that can be changed while a server runs. The [Mesh guide](docs/MESH-GUIDE.md) covers all of it.

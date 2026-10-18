@@ -49,6 +49,7 @@ jest.mock('../runtime/local-runtime', () => ({
     logs: jest.fn(),
     start: jest.fn(),
     stop: jest.fn(),
+    waitUntilRunning: jest.fn(async () => undefined),
     forceStop: jest.fn(),
     state: jest.fn(),
     startedAt: jest.fn(),
@@ -93,7 +94,7 @@ import { BackupPathUtils } from '../../utils/backup.utils';
 import { registerForwardable, routeToHost } from '../host-routing';
 import { meshListenPorts } from './mesh-hooks';
 jest.mock('../automation/restart-countdown.service', () => ({
-  restartCountdowns: { begin: jest.fn(() => 900_000), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
+  restartCountdowns: { begin: jest.fn(() => 900_000), beginAndWait: jest.fn(), cancel: jest.fn(() => true), cancelAll: jest.fn(() => ['a']), pending: jest.fn(() => []) }
 }));
 import { restartCountdowns } from '../automation/restart-countdown.service';
 jest.mock('../ark-api-actions', () => ({
@@ -2211,6 +2212,23 @@ describe('MeshService', () => {
         expect(restartCountdowns.begin).toHaveBeenCalledWith(['a'], 15, false, expect.any(Function));
         expect(localRuntime.stop).not.toHaveBeenCalled();
         expect(result).toMatchObject({ success: true, detail: { dueAt: 900_000 } });
+      });
+
+      it('acknowledges a sequenced restart only after the host completes startup', async () => {
+        jest.mocked(localRuntime.state).mockReturnValue('running');
+        jest.mocked(localRuntime.stop).mockResolvedValueOnce({ success: true });
+        jest.mocked(localRuntime.start).mockResolvedValueOnce({ started: true });
+        let ready!: () => void;
+        jest.mocked(localRuntime.waitUntilRunning).mockImplementationOnce(() => new Promise(resolve => { ready = resolve; }));
+        jest.mocked(restartCountdowns.beginAndWait).mockImplementationOnce(async (_id, _minutes, _all, restart) => { await restart(); return true; });
+        let completed = false;
+        const pending = service.executeLocalCommand(command('restart', { args: { warningMinutes: 5, wait: true, all: true } })).then(result => { completed = true; return result; });
+        for (let i = 0; i < 100 && !ready; i++) await Promise.resolve();
+        expect(ready).toBeDefined();
+        expect(completed).toBe(false);
+        ready();
+        expect(await pending).toMatchObject({ success: true });
+        expect(restartCountdowns.beginAndWait).toHaveBeenCalledWith('a', 5, true, expect.any(Function));
       });
 
       it('cancels a server\'s restart', async () => {

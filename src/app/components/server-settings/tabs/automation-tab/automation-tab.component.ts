@@ -1,5 +1,6 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RconSchedulesComponent } from './rcon-schedules.component';
 import { FormsModule } from '@angular/forms';
 import { ServerInstance } from '../../../../core/models/server-instance.model';
 import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
@@ -7,7 +8,7 @@ import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/f
 @Component({
   selector: 'app-automation-tab',
   standalone: true,
-  imports: [CommonModule, FormsModule, FieldMessagesComponent],
+  imports: [CommonModule, FormsModule, FieldMessagesComponent, RconSchedulesComponent],
   styleUrls: ['./automation-tab.component.scss'],
   templateUrl: './automation-tab.component.html'
 })
@@ -18,6 +19,7 @@ export class AutomationTabComponent {
   @Input() fieldWarnings: FieldMessages = {};
 
   @Output() saveAutoStartSettings = new EventEmitter<void>();
+  @Output() saveRconSchedules = new EventEmitter<void>();
   @Output() saveCrashDetectionSettings = new EventEmitter<void>();
   @Output() saveScheduledRestartSettings = new EventEmitter<void>();
   @Output() validateField = new EventEmitter<{key: string, value: unknown}>();

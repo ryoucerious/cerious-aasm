@@ -44,6 +44,15 @@ onRequest('list-ark-api-plugins', (payload, { sender }) => {
   return arkApi(instanceId, 'list', {}, sender);
 });
 
+onRequest('export-ark-api-clone', (payload, { sender }) => {
+  if (!validateInstanceId(payload.instanceId)) return INVALID_ID;
+  return arkApi(payload.instanceId, 'clone-export', {}, sender);
+});
+onRequest('import-ark-api-clone', (payload, { sender }) => {
+  if (!validateInstanceId(payload.instanceId)) return INVALID_ID;
+  return arkApi(payload.instanceId, 'clone-import', { zipData: payload.zipData }, sender);
+});
+
 onRequest('remove-ark-api-plugin', (payload, { sender }) => {
   const { instanceId, folderName } = payload;
   if (!validateInstanceId(instanceId)) return INVALID_ID;

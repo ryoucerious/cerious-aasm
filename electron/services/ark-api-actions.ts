@@ -2,9 +2,9 @@ import { arkApiPluginService } from './ark-api-plugin.service';
 import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
 
 /** What the ArkApi tab can ask of a server's machine. */
-export type ArkApiAction = 'status' | 'list' | 'remove' | 'install-zip' | 'install-url' | 'download-asaapi';
+export type ArkApiAction = 'status' | 'list' | 'remove' | 'install-zip' | 'install-url' | 'download-asaapi' | 'clone-export' | 'clone-import';
 
-const READ_ONLY: ReadonlySet<string> = new Set<ArkApiAction>(['status', 'list']);
+const READ_ONLY: ReadonlySet<string> = new Set<ArkApiAction>(['status', 'list', 'clone-export']);
 
 /** Far above any plugin: a cap on what a client can make a machine decode and unpack. */
 const MAX_PLUGIN_ZIP_BYTES = 50 * 1024 * 1024;
@@ -20,6 +20,14 @@ export function isReadOnlyArkApiAction(action: string): boolean {
  */
 export async function runArkApiAction(instanceId: string, action: ArkApiAction, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   switch (action) {
+    case 'clone-export':
+      return { success: true, zipData: arkApiPluginService.exportCloneFiles(instanceId) };
+    case 'clone-import': {
+      const zipData = String(args.zipData ?? '');
+      if (zipData.length * 3 / 4 > MAX_PLUGIN_ZIP_BYTES) throw new Error('API files exceed the 50 MB clone limit');
+      arkApiPluginService.importCloneFiles(instanceId, zipData);
+      return { success: true };
+    }
     case 'status': {
       const installed = isAsaApiLoaderInstalled(instanceId);
       return { success: true, installed, loaderExe: installed ? 'AsaApiLoader.exe' : null };

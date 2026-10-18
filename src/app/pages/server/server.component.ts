@@ -108,6 +108,12 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   get backupTime() { return this.backupUIService.currentState.backupTime; }
   get backupDayOfWeek() { return this.backupUIService.currentState.backupDayOfWeek; }
   get maxBackupsToKeep() { return this.backupUIService.currentState.maxBackupsToKeep; }
+  get backupLocation() { return this.backupUIService.currentState.backupLocation; }
+
+  onBackupLocationChange(backupLocation: string) {
+    this.backupUIService.updateBackupSettings({ backupLocation });
+    this.saveBackupSettings();
+  }
   get backupList() { return this.backupUIService.currentState.backupList; }
   get showBackupNameModal() { return this.backupUIService.currentState.showBackupNameModal; }
   get showDeleteBackupModal() { return this.backupUIService.currentState.showDeleteBackupModal; }
@@ -432,7 +438,7 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
 
     const enabled = server.enabledMods ?? [];
     if (mod.enabled) {
-      server.enabledMods = enabled.includes(mod.id) ? enabled : [...enabled, mod.id];
+      server.enabledMods = (server.mods || []).filter(id => enabled.includes(id) || id === mod.id);
     } else {
       server.enabledMods = enabled.filter(id => id !== mod.id);
     }
@@ -442,6 +448,30 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   }
 
   /** Builds the mod rows from the server's mod ids, enabled list and stored names. */
+  onMoveMod({ id, direction }: { id: string; direction: number }): void {
+    const server = this.activeServerInstance;
+    if (!server || !this.modsEditable() || ![-1, 1].includes(direction)) return;
+    const mods = [...(server.mods || [])];
+    const from = mods.indexOf(id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= mods.length) return;
+    [mods[from], mods[to]] = [mods[to], mods[from]];
+    server.mods = mods;
+    server.enabledMods = mods.filter(mod => (server.enabledMods || mods).includes(mod));
+    this.loadModList();
+    this.saveSettings();
+  }
+
+  onToggleCoreMod(mod: ModEntry): void {
+    const server = this.activeServerInstance;
+    if (!server || !this.modsEditable()) return;
+    const core = new Set(server.coreMods || []);
+    if (core.has(mod.id)) core.delete(mod.id); else core.add(mod.id);
+    server.coreMods = [...core];
+    this.loadModList();
+    this.saveSettings();
+  }
+
   loadModList() {
     const server = this.activeServerInstance;
     const mods = server?.mods ?? [];
@@ -458,7 +488,7 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
     this.modList = mods.map(id => {
       const stored: ModSettings = modSettings[id] ?? {};
       const { _name, ...settings } = stored;
-      return { id, name: _name || `Mod ${id}`, enabled: enabledMods.includes(id), settings };
+      return { id, name: _name || `Mod ${id}`, enabled: enabledMods.includes(id), ...(server.coreMods ? { core: server.coreMods.includes(id) } : {}), settings };
     });
   }
 

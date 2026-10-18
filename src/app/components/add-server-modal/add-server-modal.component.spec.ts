@@ -25,7 +25,7 @@ describe('AddServerModalComponent', () => {
   beforeEach(async () => {
     ipc = { isElectron: false };
     machines = [];
-    replies = {};
+    replies = { 'export-ark-api-clone': { success: true, zipData: 'archive' }, 'import-ark-api-clone': { success: true } };
     sendMessage = jasmine.createSpy('sendMessage').and.callFake((channel: string) => of(replies[channel] ?? null));
     router = jasmine.createSpyObj('Router', ['navigate']);
     router.navigate.and.returnValue(Promise.resolve(true));
@@ -128,7 +128,7 @@ describe('AddServerModalComponent', () => {
     });
 
     // Only a new server could be placed; a clone or an import always landed where it did.
-    it('places a clone on the machine chosen, not the source\'s, or lets Auto-select pick', () => {
+    it('places a clone on the machine chosen, not the source\'s, or lets Auto-select pick', async () => {
       machines = [{ nodeId: 'node-1', name: 'PC 1', skipping: false }, { nodeId: 'node-2', name: 'Dallas01', skipping: false }];
       const page = opened();
       component.setImportMode('clone');
@@ -139,7 +139,8 @@ describe('AddServerModalComponent', () => {
       component.serverName = 'Copy';
       component.selectedServerToClone = { id: 'src', name: 'Source', nodeId: 'node-1' } as any;
       component.selectedNodeId = 'node-2';
-      component.onAddServer();
+      replies['get-server-instance'] = { instance: component.selectedServerToClone };
+      await component.onAddServer();
       expect(serverInstanceService.save.calls.mostRecent().args[0].nodeId).toBe('node-2');
 
       // Again from the start: the first clone closed the dialog.
@@ -147,7 +148,8 @@ describe('AddServerModalComponent', () => {
       component.setImportMode('clone');
       component.serverName = 'Copy 2';
       component.selectedServerToClone = { id: 'src', name: 'Source', nodeId: 'node-1' } as any;
-      component.onAddServer();
+      replies['get-server-instance'] = { instance: component.selectedServerToClone };
+      await component.onAddServer();
       expect(serverInstanceService.save).toHaveBeenCalledTimes(2);
       expect('nodeId' in serverInstanceService.save.calls.mostRecent().args[0]).toBeFalse();
     });
@@ -208,25 +210,29 @@ describe('AddServerModalComponent', () => {
     });
   });
 
-  it('clones without carrying the source id', () => {
+  it('clones without carrying the source id and copies plugins', async () => {
     component.setImportMode('clone');
     component.serverName = 'Copy';
     component.selectedServerToClone = { id: 'src', name: 'Source', maxPlayers: 20 } as any;
-    component.onAddServer();
+    replies['get-server-instance'] = { instance: { ...component.selectedServerToClone, useExclusiveList: true } };
+    await component.onAddServer();
     const saved = serverInstanceService.save.calls.mostRecent().args[0];
+    expect(saved.useExclusiveList).toBeTrue();
     expect(saved.id).toBeUndefined();
     expect(saved).toEqual(jasmine.objectContaining({ name: 'Copy', sessionName: 'Copy', maxPlayers: 20 }));
+    expect(sendMessage).toHaveBeenCalledWith('import-ark-api-clone', { instanceId: 'new', zipData: 'archive' }, jasmine.anything());
   });
 
-  it('clones only the settings, not what the source server is doing', () => {
+  it('clones only the settings, not what the source server is doing', async () => {
     component.setImportMode('clone');
     component.serverName = 'Copy';
     component.selectedServerToClone = {
       id: 'src', name: 'Source', maxPlayers: 20, state: 'running', status: 'online', players: 5, cpu: 30, memory: 8000, startedAt: 1
     } as any;
-    component.onAddServer();
+    replies['get-server-instance'] = { instance: component.selectedServerToClone };
+    await component.onAddServer();
     const saved = serverInstanceService.save.calls.mostRecent().args[0];
-    expect(saved).toEqual({ name: 'Copy', sessionName: 'Copy', maxPlayers: 20 });
+    expect(saved).toEqual({ name: 'Copy', sessionName: 'Copy', maxPlayers: 20, useExclusiveList: false });
   });
 
   it('frees the dialog when the defaults cannot be loaded', () => {
@@ -325,7 +331,7 @@ describe('AddServerModalComponent', () => {
     const file = new File(['x'], 'save.zip');
     chooseFile(file);
     expect(component.selectedBackupFile).toBe(file);
-    expect(component.selectedBackupFilePath).toBe('save.zip');
+    expect(component.selectedBackupFilePath).toBe('');
     chooseFile(new File(['x'], 'notes.txt'));
     expect(component.selectedBackupFile).toBe(file);
   });

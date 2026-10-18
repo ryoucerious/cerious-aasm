@@ -125,8 +125,9 @@ const CATEGORY_KEYS: Record<string, string[]> = {
     'clusterRef', 'clusterId', 'clusterName', 'clusterOrder', 'clusterRole',
     'clusterDirOverride', 'noTransferFromFiltering',
   ],
-  mods: ['mods', 'enabledMods', 'modSettings'],
+  mods: ['mods', 'enabledMods', 'modSettings', 'coreMods'],
   automation: [
+    'rconSchedules',
     'autoStartOnAppLaunch', 'crashDetectionEnabled', 'crashDetectionInterval',
     'maxRestartAttempts', 'scheduledRestartEnabled', 'restartFrequency',
     'restartTime', 'restartTimes', 'restartDays', 'restartWarningMinutes',

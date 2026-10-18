@@ -209,7 +209,8 @@ export function disconnectRcon(instanceId: string): void {
 export function sendRconCommand(
   instanceId: string,
   command: string,
-  timeoutMs: number = DEFAULT_RCON_COMMAND_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_RCON_COMMAND_TIMEOUT_MS,
+  shouldSend?: () => boolean
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     let settled = false;
@@ -232,6 +233,14 @@ export function sendRconCommand(
       const connection = connections.get(instanceId);
       if (settled || !connection) {
         settle(() => reject(new RconCommandNotSentError('RCON not connected')));
+        done();
+        return;
+      }
+      // Scheduled commands may have been removed while waiting behind another command.
+      try {
+        if (shouldSend && !shouldSend()) throw new RconCommandNotSentError('RCON command cancelled before sending');
+      } catch (error) {
+        settle(() => reject(error));
         done();
         return;
       }

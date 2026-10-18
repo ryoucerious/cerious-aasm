@@ -70,7 +70,8 @@ describe('ArkServerValidationService', () => {
     expect(service.validateServerName('ValidName').isValid).toBeTrue();
     expect(service.validateServerName('').isValid).toBeFalse();
     expect(service.validateServerName('A'.repeat(101)).isValid).toBeFalse();
-    expect(service.validateServerName('Invalid<Name>').isValid).toBeFalse();
+    expect(service.validateServerName('ARK * "PvE" (EU) / 2').isValid).toBeTrue();
+    expect(service.validateServerName('Bad\nName').isValid).toBeFalse();
   });
 
   it('should validate session name', () => {
@@ -93,7 +94,7 @@ describe('ArkServerValidationService', () => {
   });
 
   it('should invalidate server name with invalid characters', () => {
-    const result = service.validateServerName('Invalid<Name>');
+    const result = service.validateServerName('Invalid\u0000Name');
     expect(result.isValid).toBeFalse();
     expect(result.error).toContain('invalid characters');
   });

@@ -22,6 +22,7 @@ export interface CountdownDeps {
 }
 
 interface Countdown {
+  settled?: (completed: boolean) => void;
   ids: Set<string>;
   dueAt: number;
   all: boolean;
@@ -61,15 +62,20 @@ export class RestartCountdownService {
    * Counts down `minutes` on `serverIds`, warning their players at each mark, then runs `restart`
    * with those still running. A server already counting down moves onto this countdown.
    */
-  begin(serverIds: string[], minutes: number, all: boolean, restart: (ids: string[]) => Promise<void>): number {
+  begin(serverIds: string[], minutes: number, all: boolean, restart: (ids: string[]) => Promise<void>, settled?: (completed: boolean) => void): number {
     for (const id of serverIds) this.leave(id);
     const marks = warningMarks(minutes);
     const start = this.deps.now();
-    const countdown: Countdown = { ids: new Set(serverIds), dueAt: start + marks[0] * MINUTE_MS, all, timer: null, restart };
+    const countdown: Countdown = { ids: new Set(serverIds), dueAt: start + marks[0] * MINUTE_MS, all, timer: null, restart, settled };
     this.countdowns.add(countdown);
     for (const id of serverIds) this.deps.publish({ instanceId: id, dueAt: countdown.dueAt, all });
     this.reach(countdown, marks, 0);
     return countdown.dueAt;
+  }
+
+  /** Resolves after the complete restart, or false if cancelled, skipped or failed. */
+  beginAndWait(serverId: string, minutes: number, all: boolean, restart: () => Promise<void>): Promise<boolean> {
+    return new Promise(resolve => this.begin([serverId], minutes, all, restart, resolve));
   }
 
   /** Cancels a server's restart, telling its players. False when it had none. */
@@ -115,10 +121,12 @@ export class RestartCountdownService {
     const ids = [...countdown.ids].filter(id => this.deps.isRunning(id));
     for (const id of countdown.ids) this.deps.publish({ instanceId: id, dueAt: null, all: countdown.all });
     for (const id of ids) this.tell(id, 'Server restarting now!');
-    if (!ids.length) return;
+    if (!ids.length) { countdown.settled?.(false); return; }
     try {
       await countdown.restart(ids);
+      countdown.settled?.(true);
     } catch (error) {
+      countdown.settled?.(false);
       console.error(`[restart] Could not restart ${ids.join(', ')}:`, error);
     }
   }
@@ -131,6 +139,7 @@ export class RestartCountdownService {
       if (!countdown.ids.size) {
         if (countdown.timer) clearTimeout(countdown.timer);
         this.countdowns.delete(countdown);
+        countdown.settled?.(false);
       }
       return countdown;
     }

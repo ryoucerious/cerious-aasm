@@ -49,6 +49,8 @@ export interface ExclusiveJoinPlayer {
  * not validated, so treat values defensively; every other ARK setting passes through untouched.
  */
 export interface InstanceConfig extends Partial<AutomationSettings> {
+  rconSchedules?: import('../services/rcon-schedule.service').RconSchedule[];
+  coreMods?: string[];
   id: string;
   name?: string;
   sessionName?: string;

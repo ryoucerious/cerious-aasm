@@ -112,7 +112,7 @@ export class RconService {
   }
 
   /** Never rejects: failures, including a timeout (`timeoutMs`, default 30 s), come back as `error`. */
-  async executeRconCommand(instanceId: string, command: string, timeoutMs?: number): Promise<RconCommandResult> {
+  async executeRconCommand(instanceId: string, command: string, timeoutMs?: number, shouldSend?: () => boolean): Promise<RconCommandResult> {
     try {
       if (!instanceId || !command) {
         return { success: false, instanceId: instanceId || '', error: 'Invalid instance ID or command' };
@@ -121,7 +121,9 @@ export class RconService {
         return { success: false, instanceId, error: 'RCON not connected for this instance', notSent: true };
       }
 
-      const response = await sendRconCommand(instanceId, command, timeoutMs);
+      const response = await (shouldSend
+        ? sendRconCommand(instanceId, command, timeoutMs, shouldSend)
+        : sendRconCommand(instanceId, command, timeoutMs));
       return { success: true, response, instanceId };
     } catch (error) {
       console.error(`[rcon-service] RCON command failed for ${instanceId}:`, error instanceof Error ? error.message : error);

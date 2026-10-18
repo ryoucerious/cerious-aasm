@@ -43,6 +43,7 @@ describe('BackupUIService', () => {
     cdr = jasmine.createSpyObj('ChangeDetectorRef', ['markForCheck']);
     messaging.receiveMessage.and.returnValue(EMPTY);
     backup.getBackupList.and.returnValue(of({ success: true, backups: [] }));
+    backup.getBackupSettings.and.returnValue(of({ success: true, settings: { instanceId: 'instanceId', enabled: false, frequency: 'daily', time: '02:00', maxBackupsToKeep: 10 } }));
     service = new BackupUIService(backup, notification, messaging);
   });
 

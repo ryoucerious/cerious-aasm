@@ -1,4 +1,5 @@
 export interface ServerInstance {
+  rconSchedules?: RconSchedule[];
   id: string;
   name: string;
   status?: 'online' | 'offline' | 'loading';
@@ -25,6 +26,7 @@ export interface ServerInstance {
   mods?: string[];
   /** Ids from `mods` that are loaded; older configs lack it, which means all of them. */
   enabledMods?: string[];
+  coreMods?: string[];
   /** Per mod id: its INI settings, plus the display name under `_name`. */
   modSettings?: Record<string, ModSettings>;
 
@@ -163,7 +165,7 @@ export interface ServerInstance {
 
   // Launch parameters - additional command-line arguments
   launchParameters?: string; // Extra launch arguments like -MapModID=, -TotalConversionMod=, etc.
-  
+
   // Wine/Proton compatibility (Linux only)
   disableWineCompatFlags?: boolean; // Disable Wine/Proton compatibility flags (advanced users only)
 
@@ -286,9 +288,18 @@ export interface ServerInstance {
 }
 
 export type ModSettings = Record<string, string> & { _name?: string };
+export interface RconSchedule {
+  id: string;
+  enabled: boolean;
+  command: string;
+  mode: 'interval' | 'daily';
+  intervalMinutes?: number;
+  times?: string[];
+}
 
 /** A row of the mods page. */
 export interface ModEntry {
+  core?: boolean;
   id: string;
   name: string;
   enabled: boolean;

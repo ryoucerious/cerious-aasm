@@ -5,6 +5,8 @@ import { readJsonOrQuarantine, writeJsonAtomic } from './fs.utils';
 import type { ServerPortRanges } from './ark/port-sets';
 
 export interface GlobalConfig {
+  /** Relative folder within each server's app-managed backup area. */
+  backupLocation?: string;
   startWebServerOnLoad: boolean;
   webServerPort: number;
   authenticationEnabled: boolean;

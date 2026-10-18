@@ -419,6 +419,15 @@ describe('ServerComponent', () => {
   });
 
   describe('mods', () => {
+    it('moves mods and keeps enabled membership in that order', () => {
+      component.activeServerInstance = { id: 'srv1', name: 'One', mods: ['1', '2', '3'], enabledMods: ['3', '1'] };
+      component.onMoveMod({ id: '3', direction: -1 });
+      expect(component.activeServerInstance.mods).toEqual(['1', '3', '2']);
+      expect(component.activeServerInstance.enabledMods).toEqual(['1', '3']);
+      component.onToggleCoreMod(component.modList[1]);
+      expect(component.activeServerInstance.coreMods).toEqual(['3']);
+      expect(mockServerConfig.saveServerSettings).toHaveBeenCalled();
+    });
     beforeEach(() => {
       component.activeServerInstance = { id: 'srv1', name: 'One', mods: ['1'], enabledMods: ['1'], modSettings: { '1': { _name: 'One', Speed: '2' } } };
       component.loadModList();

@@ -138,6 +138,8 @@
       (addMod)="addMod.emit($event)"
       (removeMod)="removeMod.emit($event)"
       (toggleMod)="toggleMod.emit($event)"
+      (toggleCoreMod)="toggleCoreMod.emit($event)"
+      (moveMod)="moveMod.emit($event)"
       (updateModSettings)="updateModSettings.emit($event)">
     </app-mods-tab>
 
@@ -156,6 +158,8 @@
       [backupTime]="backupTime"
       [backupDayOfWeek]="backupDayOfWeek"
       [maxBackupsToKeep]="maxBackupsToKeep"
+      [backupLocation]="backupLocation"
+      (backupLocationChange)="backupLocationChange.emit($event)"
       [backupList]="backupList"
       [backupFrequencyDropdownOpen]="backupFrequencyDropdownOpen"
       [backupDayDropdownOpen]="backupDayDropdownOpen"
@@ -184,6 +188,7 @@
       [fieldErrors]="fieldErrors"
       [fieldWarnings]="fieldWarnings"
       (saveAutoStartSettings)="saveAutoStartSettings.emit()"
+      (saveRconSchedules)="settingsChanged.emit()"
       (saveCrashDetectionSettings)="saveCrashDetectionSettings.emit()"
       (saveScheduledRestartSettings)="saveScheduledRestartSettings.emit()"
       (validateField)="validateField($event.key, $event.value)"
