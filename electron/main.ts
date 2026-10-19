@@ -2,6 +2,10 @@
 // root:4755, and Ubuntu 24.04 then aborts with a setuid_sandbox_host FATAL.
 import './sandbox-bootstrap';
 import { execFileSync, execSync } from 'child_process';
+import { resumeAfterUpdate, setBeforeRestart } from './utils/app-relaunch';
+
+// A process an updater started, with the command line the previous one handed over.
+resumeAfterUpdate();
 
 const isHeadlessMode = process.argv.includes('--headless');
 const isLinux = process.platform === 'linux';
@@ -121,6 +125,7 @@ if (isPrimaryInstance) {
   // Asynchronous: server starts wait for it, so it can never match a server this run starts.
   void cleanupOrphanedArkProcesses();
   app.on('second-instance', showRunningInstance);
+  setBeforeRestart(cleanup);
 } else {
   console.info('[main] Cerious AASM is already running; this launch exits.');
   app.quit();

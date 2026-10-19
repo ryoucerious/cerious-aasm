@@ -52,6 +52,11 @@ if [ "$(id -u)" = "0" ]; then
   own /home/aasm/.config
   # The rest of the home folder; -xdev keeps it out of the mounts above.
   own /home/aasm -xdev
+  # The app files an in-place update replaces, and /app itself, which it writes into.
+  own /app -maxdepth 0
+  own /app/package.json
+  own /app/dist
+  own /app/electron
 
   exec setpriv --reuid=aasm --regid=aasm --init-groups "$0" "$@"
 fi
@@ -151,6 +156,15 @@ apply_runtime() {
   if [ "$use" != "1" ]; then
     return 0
   fi
+  # A failed copy part way through would leave no app to start, and set -e would stop the
+  # container. Keep the image's app instead.
+  local target
+  for target in /app /app/package.json /app/dist /app/electron; do
+    if [ -e "$target" ] && [ ! -w "$target" ]; then
+      echo "[cerious-aasm] Cannot apply the in-place app update: $(id -un) cannot write ${target}. Starting the image's version; update with docker compose pull." >&2
+      return 0
+    fi
+  done
   echo "[cerious-aasm] Applying the in-place app update from ${overlay}"
   if [ -d "${overlay}/dist" ]; then
     rm -rf /app/dist

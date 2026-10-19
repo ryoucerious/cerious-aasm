@@ -266,9 +266,69 @@ describe('SidebarComponent', () => {
     (component as any).appUpdateExplain = false;
     (component as any).appUpdateState = 'available';
     component.onAppUpdateClick();
+    expect(appUpdate.download).not.toHaveBeenCalled();
+    expect(component.showConfirmAppUpdate).toBeTrue();
+    component.confirmAppUpdate();
     expect(appUpdate.download).toHaveBeenCalled();
+    expect(component.showConfirmAppUpdate).toBeFalse();
     expect(settingsDrawer.open).not.toHaveBeenCalled();
     expect(component.showUpdateHelp).toBeFalse();
+  });
+
+  it('does nothing when the update is cancelled', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'download');
+    spyOn(appUpdate, 'install');
+    (appUpdate as any).statusSubject.next({ status: 'downloaded', version: '9.0.0' });
+    component.onAppUpdateClick();
+    expect(component.appUpdateConfirmRestarts).toBeTrue();
+    component.cancelAppUpdate();
+    component.confirmAppUpdate();
+    expect(component.showConfirmAppUpdate).toBeFalse();
+    expect(appUpdate.download).not.toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+  });
+
+  it('downloads and installs on a Docker host from the browser', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'download');
+    (appUpdate as any).statusSubject.next({ status: 'available', version: '9.0.0', inPlace: true, manual: false });
+    expect(component.appUpdateExplain).toBeFalse();
+    expect(component.appUpdateTitle).toContain('Download and install');
+    component.onAppUpdateClick();
+    expect(component.appUpdateConfirmLabel).toBe('Download and install');
+    expect(component.appUpdateConfirmRestarts).toBeTrue();
+    component.confirmAppUpdate();
+    expect(appUpdate.download).toHaveBeenCalled();
+    expect(component.showUpdateHelp).toBeFalse();
+    (appUpdate as any).statusSubject.next({ status: 'downloading', inPlace: true, percent: 30 });
+    expect(component.appUpdateBusy).toBeTrue();
+    expect(component.appUpdatePercent).toBe(30);
+  });
+
+  it('downloads, then installs, a desktop host\'s update from the browser', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    spyOn(appUpdate, 'download');
+    spyOn(appUpdate, 'install');
+    (appUpdate as any).statusSubject.next({ status: 'available', version: '9.0.0' });
+    expect(component.appUpdateExplain).toBeFalse();
+    expect(component.appUpdateTitle).toBe('Download v9.0.0');
+    component.onAppUpdateClick();
+    expect(component.appUpdateConfirmRestarts).toBeFalse();
+    component.confirmAppUpdate();
+    expect(appUpdate.download).toHaveBeenCalled();
+    (appUpdate as any).statusSubject.next({ status: 'downloaded', version: '9.0.0' });
+    component.onAppUpdateClick();
+    expect(component.appUpdateConfirmText).toBe('Install v9.0.0 now?');
+    component.confirmAppUpdate();
+    expect(appUpdate.install).toHaveBeenCalled();
+  });
+
+  it('explains how to update a host that cannot install from the app', () => {
+    const appUpdate = TestBed.inject(AppUpdateService);
+    (appUpdate as any).statusSubject.next({ status: 'available', version: '9.0.0', manual: true, instructions: 'Install the package' });
+    expect(component.appUpdateExplain).toBeTrue();
+    expect(component.appUpdateIcon).toBe('info');
   });
 
   it('explains how to update in the browser instead of installing', () => {
@@ -292,6 +352,8 @@ describe('SidebarComponent', () => {
     (component as any).appUpdateExplain = false;
     (component as any).appUpdateState = 'downloaded';
     component.onAppUpdateClick();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    component.confirmAppUpdate();
     expect(appUpdate.install).toHaveBeenCalled();
   });
 

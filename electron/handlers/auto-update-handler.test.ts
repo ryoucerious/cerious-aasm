@@ -10,7 +10,8 @@ jest.mock('../services/auto-update.service', () => ({
     getLastStatus: jest.fn(),
     isUpdateReady: jest.fn(),
     quitAndInstall: jest.fn(),
-    downloadUpdate: jest.fn()
+    downloadUpdate: jest.fn(),
+    installsAfterDownload: jest.fn(() => false)
   }
 }));
 
@@ -29,6 +30,18 @@ describe('auto-update-handler', () => {
   });
 
   describe('check-for-app-update', () => {
+    it('installs a Docker or headless update automatically after downloading and replying', async () => {
+      jest.useFakeTimers();
+      mockAutoUpdate.installsAfterDownload.mockReturnValueOnce(true);
+      mockAutoUpdate.downloadUpdate.mockResolvedValueOnce(undefined);
+      mockAutoUpdate.isUpdateReady.mockReturnValueOnce(true);
+      await handlers['download-app-update']({}, sender);
+      expect(mockAutoUpdate.quitAndInstall).not.toHaveBeenCalled();
+      expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('download-app-update', { success: true }, sender);
+      jest.advanceTimersByTime(1000);
+      expect(mockAutoUpdate.quitAndInstall).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
+    });
     it('checks and replies without a requestId', async () => {
       mockAutoUpdate.checkForUpdates.mockResolvedValue(undefined);
 
@@ -114,12 +127,18 @@ describe('auto-update-handler', () => {
 
   describe('download-app-update', () => {
     it('downloads and replies', async () => {
+      jest.useFakeTimers();
       mockAutoUpdate.downloadUpdate.mockResolvedValue(undefined);
+      mockAutoUpdate.isUpdateReady.mockReturnValue(true);
 
       await handlers['download-app-update'](undefined, sender);
 
       expect(mockAutoUpdate.downloadUpdate).toHaveBeenCalled();
       expect(mockMessaging.sendToOriginator).toHaveBeenCalledWith('download-app-update', { success: true }, sender);
+      // On a desktop the user picks when to install.
+      jest.advanceTimersByTime(1000);
+      expect(mockAutoUpdate.quitAndInstall).not.toHaveBeenCalled();
+      jest.useRealTimers();
     });
 
     it('replies a failure when the download fails', async () => {

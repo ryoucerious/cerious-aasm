@@ -69,6 +69,17 @@ function arkCapability(): Pick<NodeCapabilities, 'ark'> {
   return { ark: { installedBuild: build.installedBuildId, latestBuild: build.latestBuildId, updateAvailable: build.updateAvailable } };
 }
 
+/** Whether the others may start an app update here: one that needs a prompt answered cannot run unattended. */
+function appUpdateCapability(): Pick<NodeCapabilities, 'appUpdate'> {
+  try {
+    // Required here, not imported: it loads electron-updater, which most users of this module never need.
+    const { autoUpdateService } = require('../auto-update.service') as typeof import('../auto-update.service');
+    return { appUpdate: autoUpdateService.unattendedUpdate() };
+  } catch {
+    return {};
+  }
+}
+
 export function collectCapabilities(): NodeCapabilities {
   let freeDiskBytes = 0;
   try {
@@ -90,6 +101,7 @@ export function collectCapabilities(): NodeCapabilities {
     freeDiskBytes,
     cpuPercent: 0,
     serverPorts: { ranges: getServerPortRanges().ranges, portsOpen: serverPortsService.portsOpen() },
-    ...arkCapability()
+    ...arkCapability(),
+    ...appUpdateCapability()
   };
 }

@@ -216,8 +216,8 @@
                     [title]="arkUpdateBlock(node)">
               Update ARK
             </button>
-            <button type="button" class="btn btn-ghost btn-sm" (click)="askAppUpdate(node)" [disabled]="!canUpdate || !!updatingKey || !!updateBlock(node)"
-                    [title]="updateBlock(node)">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="askAppUpdate(node)" [disabled]="!canUpdate || !!updatingKey || !!appUpdateBlock(node)"
+                    [title]="appUpdateBlock(node)">
               Update app
             </button>
           </div>

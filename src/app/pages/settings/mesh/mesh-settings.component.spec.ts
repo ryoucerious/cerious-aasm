@@ -488,6 +488,23 @@ describe('MeshSettingsComponent', () => {
         'ARK is not installed on asa-1.'
       ]);
     });
+
+    // A UAC or password prompt would wait on a machine no one is at, with its app stopped.
+    it('does not offer to update the app on a machine that would wait for someone there', async () => {
+      const reason = 'Installing asks for an administrator password on its screen. Update it from its own window, or run it as root.';
+      const page = await open(inMesh([
+        node('n1', 'PC 1', { capabilities: { ...outOfDate, appUpdate: { unattended: false, reason } } }),
+        node('n2', 'Docker 1', { capabilities: { ...outOfDate, appUpdate: { unattended: true, reason: null } } }),
+        node('n3', 'asa-1')
+      ]));
+
+      expect(cardButton(page, 0, 'Update app').disabled).toBeTrue();
+      expect(cardButton(page, 0, 'Update app').title).toBe(`PC 1 cannot update without someone there. ${reason}`);
+      expect(cardButton(page, 0, 'Update ARK').disabled).toBeFalse();
+      expect(cardButton(page, 1, 'Update app').disabled).toBeFalse();
+      // An older version does not say: it is offered as before.
+      expect(cardButton(page, 2, 'Update app').disabled).toBeFalse();
+    });
   });
 
   // "Why can I not rename my own machines?" The banner said changes wait for quorum, not what that meant.

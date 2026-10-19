@@ -17,6 +17,9 @@ jest.mock('../../utils/platform.utils', () => ({
 
 jest.mock('../server-ports.service', () => ({ serverPortsService: { portsOpen: jest.fn(() => null) } }));
 jest.mock('../ark-update.service', () => ({ arkBuildStatus: jest.fn(() => null) }));
+jest.mock('../auto-update.service', () => ({
+  autoUpdateService: { unattendedUpdate: jest.fn(() => ({ unattended: false, reason: 'It is installed for all users.' })) }
+}));
 import { arkBuildStatus } from '../ark-update.service';
 jest.mock('../../utils/server-ports.utils', () => ({
   getServerPortRanges: jest.fn(() => ({
@@ -53,6 +56,10 @@ describe('node identity', () => {
     jest.mocked(arkBuildStatus).mockReturnValue(null);
 
     expect(collectCapabilities()).not.toHaveProperty('ark');
+  });
+
+  it('tells the others whether an app update installs with no one at this machine', () => {
+    expect(collectCapabilities().appUpdate).toEqual({ unattended: false, reason: 'It is installed for all users.' });
   });
 
   it('tells the others which ports its servers take, and whether its firewall lets players in', () => {

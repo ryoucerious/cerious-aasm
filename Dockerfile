@@ -73,9 +73,11 @@ FROM base AS runtime
 ENV NODE_ENV=production
 ENV AASM_DOCKER=1
 
+# aasm owns /app itself too: the in-place app update replaces dist, electron and package.json in it.
 RUN mkdir -p /tmp/.X11-unix /home/aasm/.local/share/cerious-aasm /home/aasm/.config \
     && chmod 1777 /tmp/.X11-unix \
-    && chown -R aasm:aasm /home/aasm
+    && chown -R aasm:aasm /home/aasm \
+    && chown aasm:aasm /app
 
 COPY --from=build --chown=aasm:aasm /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=aasm:aasm /app/node_modules ./node_modules

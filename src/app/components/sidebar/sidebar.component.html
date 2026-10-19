@@ -152,6 +152,17 @@
   </div>
 </app-modal>
 
+<app-modal [title]="appUpdateConfirmTitle" [show]="showConfirmAppUpdate" [maxWidth]="'520px'" (close)="cancelAppUpdate()">
+  <div class="modal-confirmation">{{ appUpdateConfirmText }}</div>
+  <p *ngIf="appUpdateConfirmRestarts" class="warning-text">
+    The app restarts to finish the update, so any servers running on this machine are stopped. Players are not warned.
+  </p>
+  <div class="action-group-modal">
+    <button type="button" class="btn" (click)="cancelAppUpdate()">Cancel</button>
+    <button type="button" class="btn btn-primary" (click)="confirmAppUpdate()">{{ appUpdateConfirmLabel }}</button>
+  </div>
+</app-modal>
+
 <app-modal [title]="'Confirm Delete'" [show]="showConfirmDeleteModal" (close)="onCancelDelete()">
   <div class="modal-confirmation">
     Are you sure you want to delete <span class="modal-target">{{ serverToDelete?.name }}</span>?

@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { appVersion } from '../utils/app-version';
+import { runBeforeRestart } from '../utils/app-relaunch';
 import { fetchLatestRelease, isNewerVersion, UPDATER_USER_AGENT, type GitHubReleaseAsset } from '../utils/github-release.utils';
 import { getDefaultInstallDir, isRunningInDocker } from '../utils/platform.utils';
 
@@ -18,6 +19,21 @@ const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function runtimeRoot(): string {
   return path.join(getDefaultInstallDir(), 'runtime');
+}
+
+/**
+ * Whether the entrypoint, running as this same user, can copy a runtime over the app. Images
+ * before 1.3.1 left /app to root, and the update would be skipped on every start.
+ */
+export function canApplyInPlace(appRoot = path.resolve(__dirname, '..', '..')): boolean {
+  for (const target of [appRoot, ...['package.json', 'dist', 'electron'].map(name => path.join(appRoot, name))]) {
+    try {
+      fs.accessSync(target, fs.constants.W_OK);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || target === appRoot) return false;
+    }
+  }
+  return true;
 }
 
 export function findRuntimeAsset(assets: GitHubReleaseAsset[]): GitHubReleaseAsset | null {
@@ -38,9 +54,12 @@ export function assertArchivePaths(entries: string[]): void {
  * Downloads the release's runtime archive onto the data volume. The entrypoint copies it
  * over the image's app files on the next process start, so the container is not recreated.
  */
-export async function stageDockerRuntimeUpdate(current = appVersion()): Promise<{ version: string }> {
+export async function stageDockerRuntimeUpdate(current = appVersion(), onProgress?: (percent: number) => void): Promise<{ version: string }> {
   if (!isRunningInDocker()) {
     throw new Error('In-place app update runs inside the Docker install.');
+  }
+  if (!canApplyInPlace()) {
+    throw new Error('This image cannot apply an update in place. On the Docker host, run: docker compose pull && docker compose up -d');
   }
   const release = await fetchLatestRelease();
   const remote = (release?.tag_name || '').replace(/^v/, '');
@@ -54,7 +73,7 @@ export async function stageDockerRuntimeUpdate(current = appVersion()): Promise<
   const download = path.join(os.tmpdir(), `cerious-aasm-runtime-${process.pid}.tar.gz`);
   const staging = `${runtimeRoot()}.staging`;
   try {
-    await downloadAsset(asset, download);
+    await downloadAsset(asset, download, onProgress);
     await verifyDigest(asset, download);
     const entries = await listArchive(download);
     assertArchivePaths(entries);
@@ -68,6 +87,7 @@ export async function stageDockerRuntimeUpdate(current = appVersion()): Promise<
     fs.mkdirSync(staging, { recursive: true });
     await extractArchive(download, staging);
     const stagedVersion = readStagedVersion(staging);
+    if (stagedVersion !== remote) throw new Error('The runtime archive version does not match the release.');
     if (!isNewerVersion(stagedVersion, current)) {
       throw new Error(`The archive is ${stagedVersion}, which is not newer than ${current}.`);
     }
@@ -84,6 +104,7 @@ export async function stageDockerRuntimeUpdate(current = appVersion()): Promise<
 /** Leaves the container's entrypoint running and starts the app process again. */
 export function relaunchInPlace(): void {
   console.log('[docker-runtime] Restarting the app process in place');
+  runBeforeRestart();
   try {
     const { app } = require('electron') as { app?: { exit?: (code: number) => void } };
     if (typeof app?.exit === 'function') {
@@ -102,7 +123,7 @@ function readStagedVersion(dir: string): string {
   return String(pkg.version);
 }
 
-function downloadAsset(asset: GitHubReleaseAsset, file: string): Promise<void> {
+function downloadAsset(asset: GitHubReleaseAsset, file: string, onProgress?: (percent: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     axios.get(asset.browser_download_url, {
       responseType: 'stream',
@@ -110,6 +131,13 @@ function downloadAsset(asset: GitHubReleaseAsset, file: string): Promise<void> {
       timeout: DOWNLOAD_TIMEOUT_MS
     }).then(response => {
       const writer = fs.createWriteStream(file, { mode: 0o600 });
+      let transferred = 0;
+      let lastPercent = -1;
+      response.data.on('data', (chunk: Buffer) => {
+        transferred += chunk.length;
+        const percent = asset.size > 0 ? Math.min(99, Math.floor(transferred / asset.size * 100)) : 0;
+        if (percent !== lastPercent) { lastPercent = percent; onProgress?.(percent); }
+      });
       response.data.pipe(writer);
       writer.on('finish', () => resolve());
       writer.on('error', reject);
@@ -141,7 +169,7 @@ function listArchive(file: string): Promise<string[]> {
 }
 
 function extractArchive(file: string, dest: string): Promise<string> {
-  return runTar(['--no-absolute-names', '-xzf', file, '-C', dest]);
+  return runTar(['-xzf', file, '-C', dest, '--no-same-owner', '--no-same-permissions']);
 }
 
 function runTar(args: string[]): Promise<string> {

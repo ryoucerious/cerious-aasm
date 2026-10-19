@@ -42,6 +42,9 @@ messagingService.on('download-app-update', async (_payload: unknown, sender: Mes
   try {
     await autoUpdateService.downloadUpdate();
     messagingService.sendToOriginator('download-app-update', { success: true }, sender);
+    if (autoUpdateService.installsAfterDownload() && autoUpdateService.isUpdateReady()) {
+      setTimeout(() => autoUpdateService.quitAndInstall(), 1000);
+    }
   } catch (error) {
     const message = errorMessage(error);
     console.error('[auto-update-handler] Error downloading update:', message);

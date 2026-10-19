@@ -162,6 +162,11 @@ export interface NodeCapabilities {
    * versions before it, and until its checks have started.
    */
   ark?: { installedBuild: string | null; latestBuild: string | null; updateAvailable: boolean };
+  /**
+   * Whether an app update started from another machine installs with no one at this one, and if
+   * not, why. Absent from versions before it.
+   */
+  appUpdate?: { unattended: boolean; reason: string | null };
 }
 
 export interface UserRecord {

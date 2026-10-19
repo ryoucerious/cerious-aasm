@@ -262,6 +262,8 @@ Environment=ELECTRON_DISABLE_SANDBOX=1
 WantedBy=multi-user.target
 ```
 
+The update icon beside the version in the web interface installs app updates. Run as root, as above, the service installs a new `.deb` or `.rpm` itself, then exits for systemd to start it again, so keep `Restart=on-failure` (or `always`). Run as another user, it needs to be allowed `sudo` without a password; otherwise the icon explains how to update by hand.
+
 **Note:** The `--no-sandbox` flag is required for headless mode on Linux due to Chrome sandbox restrictions. This is a security trade-off necessary for headless operation. For GUI mode simply run `cerious-aasm` without any flags (no `xvfb-run` needed if a desktop session is available).
 
 

@@ -1,10 +1,30 @@
 import { autoUpdater, UpdateInfo, ProgressInfo } from 'electron-updater';
+import * as fs from 'fs';
+import * as path from 'path';
 import { fetchLatestRelease, isNewerVersion, LATEST_RELEASE_PAGE } from '../utils/github-release.utils';
 import { messagingService } from './messaging.service';
 import { linuxPackageUpdaterService } from './linux-package-updater.service';
 import { platformService } from './platform.service';
-import { stageDockerRuntimeUpdate } from './docker-runtime-update';
+import { stageDockerRuntimeUpdate, findRuntimeAsset, relaunchInPlace, canApplyInPlace } from './docker-runtime-update';
 import { isRunningInDocker } from '../utils/platform.utils';
+import { clearHandOff, exitForInstaller, handOffExit, handOffLaunchArgs, restartApp, systemServiceUnit } from '../utils/app-relaunch';
+
+/** electron-updater's NSIS and AppImage updaters; install() reports whether it started. */
+type Installer = { install(isSilent?: boolean, isForceRunAfter?: boolean): boolean };
+
+export interface UnattendedUpdate {
+  unattended: boolean;
+  reason: string | null;
+}
+
+function isWritable(dir: string): boolean {
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export interface AppUpdateApplyResult {
   success: boolean;
@@ -16,36 +36,49 @@ export interface AppUpdateApplyResult {
 type UpdateStatus = Record<string, unknown>;
 
 /**
- * App updates from GitHub Releases:
- *   - Windows (NSIS), Linux AppImage and macOS: electron-updater, downloading only when the user asks.
- *   - Linux .deb/.rpm: LinuxPackageUpdaterService, installing with pkexec.
- *   - Headless and the web UI: a newer release is reported with steps to apply it, never installed.
+ * App updates from GitHub Releases, installed from the app (its window, the web interface, or
+ * another machine in the mesh) wherever the install can update itself:
+ *   - Windows (NSIS), Linux AppImage and macOS: electron-updater, downloading only when asked.
+ *   - Linux .deb/.rpm: LinuxPackageUpdaterService, installing as root.
+ *   - Docker: download a runtime archive and relaunch the app inside the running container.
+ *   - Anything else: report a newer release with manual installation steps.
+ * Headless installs restart with the command line they were started with.
  */
 export class AutoUpdateService {
   private updateDownloaded = false;
   private supported = true;
   private manualOnly = false;
   private useLinuxPackageUpdater = false;
+  private readonly docker = isRunningInDocker();
+  /** No one is at a window, so a download installs straight away, as in the container. */
+  private readonly headless = process.argv.includes('--headless');
+  private dockerDownload: Promise<AppUpdateApplyResult> | null = null;
   /** Replayed to renderers that connect after the event fired. */
   private lastStatus: UpdateStatus | null = null;
   private periodicCheck: NodeJS.Timeout | null = null;
 
   constructor() {
-    if (process.argv.includes('--headless')) {
-      this.manualOnly = true;
-      console.log('[auto-update] Headless mode reports updates and does not install them.');
-      return;
-    }
+    if (this.docker) return;
 
     // electron-updater handles only the AppImage on Linux.
     if (process.platform === 'linux' && !process.env.APPIMAGE) {
-      if (linuxPackageUpdaterService.isSupported()) {
+      if (linuxPackageUpdaterService.canInstall()) {
         this.useLinuxPackageUpdater = true;
+        linuxPackageUpdaterService.onStatus = status => this.broadcast(status);
         console.log('[auto-update] Using the Linux package updater for .deb/.rpm.');
+      } else if (this.headless) {
+        this.manualOnly = true;
+        console.log('[auto-update] This install cannot run its package manager as root; it reports updates without installing them.');
       } else {
         this.supported = false;
         console.log('[auto-update] Auto-update disabled: no supported package manager detected.');
       }
+      return;
+    }
+
+    if (this.headless && !this.isPackaged()) {
+      this.manualOnly = true;
+      console.log('[auto-update] An unpackaged headless run reports updates and does not install them.');
       return;
     }
 
@@ -57,9 +90,48 @@ export class AutoUpdateService {
     this.setupEventHandlers();
   }
 
+  /** To the app's windows and every web client: anyone may read update status. */
   private broadcast(payload: UpdateStatus): void {
+    if (this.manualOnly) payload = { manual: true, ...payload };
+    if (this.installsAfterDownload()) payload = { ...payload, inPlace: true };
     this.lastStatus = payload;
     messagingService.sendToAllRenderers('app-update-status', payload);
+    messagingService.broadcastToWebClients('app-update-status', payload);
+  }
+
+  /**
+   * Whether an update installs with no one at this machine, as one started from another machine in
+   * the mesh does, and if not, why. A UAC or password prompt would wait on its screen.
+   */
+  unattendedUpdate(): UnattendedUpdate {
+    if (this.docker) {
+      return canApplyInPlace()
+        ? { unattended: true, reason: null }
+        : { unattended: false, reason: 'This image cannot update in place. On its Docker host, run docker compose pull && docker compose up -d.' };
+    }
+    if (this.manualOnly || !this.supported) {
+      return { unattended: false, reason: 'This install cannot update itself. Install the latest package on it.' };
+    }
+    if (this.useLinuxPackageUpdater) {
+      return linuxPackageUpdaterService.installsUnattended()
+        ? { unattended: true, reason: null }
+        : { unattended: false, reason: 'Installing asks for an administrator password on its screen. Update it from its own window, or run it as root.' };
+    }
+    if (!this.isPackaged()) return { unattended: false, reason: 'A development run cannot update itself.' };
+    const appImage = process.platform === 'linux' ? process.env.APPIMAGE : undefined;
+    if (appImage && !isWritable(path.dirname(appImage))) {
+      return { unattended: false, reason: `It cannot replace its AppImage in ${path.dirname(appImage)}.` };
+    }
+    // Installed for all users, under Program Files: the installer needs an administrator to approve it.
+    if (process.platform === 'win32' && !isWritable(path.dirname(process.execPath))) {
+      return { unattended: false, reason: 'It is installed for all users, so Windows asks an administrator to approve the update on its screen. Update it from its own window.' };
+    }
+    return { unattended: true, reason: null };
+  }
+
+  /** One step: a finished download installs and restarts at once. */
+  installsAfterDownload(): boolean {
+    return this.docker || (this.headless && !this.manualOnly && this.supported);
   }
 
   private setupEventHandlers(): void {
@@ -113,7 +185,7 @@ export class AutoUpdateService {
 
   /** Looks for a newer release. Does nothing where updates are not supported. */
   async checkForUpdates(): Promise<void> {
-    if (this.manualOnly) {
+    if (this.manualOnly || this.docker) {
       await this.checkForManualUpdate();
       return;
     }
@@ -134,7 +206,17 @@ export class AutoUpdateService {
 
   /** Downloads an available update. Only after the user has asked for it. */
   async downloadUpdate(): Promise<void> {
-    if (this.manualOnly || !this.supported || this.useLinuxPackageUpdater) return;
+    if (this.docker) {
+      const result = await this.applyAvailableUpdate();
+      if (!result.success) throw new Error(result.error);
+      return;
+    }
+    if (this.manualOnly || !this.supported) return;
+    // Downloads as part of its check, so checking again retries a failed download.
+    if (this.useLinuxPackageUpdater) {
+      if (!linuxPackageUpdaterService.isUpdateReady()) await linuxPackageUpdaterService.checkForUpdates();
+      return;
+    }
     // Straight away, so the UI moves on before the first progress event (or an error) arrives.
     this.broadcast({ status: 'downloading', percent: 0 });
     try {
@@ -189,12 +271,23 @@ export class AutoUpdateService {
    */
   async applyAvailableUpdate(): Promise<AppUpdateApplyResult> {
     if (isRunningInDocker()) {
-      try {
-        const staged = await stageDockerRuntimeUpdate(this.currentVersion());
-        return { success: true, relaunch: true, version: staged.version };
-      } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Could not update the app.' };
-      }
+      if (this.dockerDownload) return this.dockerDownload;
+      this.dockerDownload = (async (): Promise<AppUpdateApplyResult> => {
+        this.updateDownloaded = false;
+        this.broadcast({ status: 'downloading', percent: 0 });
+        try {
+          const staged = await stageDockerRuntimeUpdate(this.currentVersion(), percent => this.broadcast({ status: 'downloading', percent }));
+          this.updateDownloaded = true;
+          this.broadcast({ status: 'downloaded', version: staged.version });
+          return { success: true, relaunch: true, version: staged.version };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not update the app.';
+          this.broadcast({ status: 'error', error: message });
+          return { success: false, error: message };
+        }
+      })();
+      try { return await this.dockerDownload; }
+      finally { this.dockerDownload = null; }
     }
     if (this.manualOnly || !this.supported) {
       return { success: false, error: 'This install cannot update itself. Install the latest package, then restart the service.' };
@@ -225,6 +318,10 @@ export class AutoUpdateService {
    * come from another machine in the mesh, or the web interface, with no one here to click Next.
    */
   quitAndInstall(): void {
+    if (this.docker) {
+      if (this.updateDownloaded) relaunchInPlace();
+      return;
+    }
     if (this.manualOnly) return;
 
     if (this.useLinuxPackageUpdater) {
@@ -234,9 +331,69 @@ export class AutoUpdateService {
 
     if (this.updateDownloaded) {
       console.log('[auto-update] Quitting to install the update');
-      autoUpdater.quitAndInstall(true, true);
+      this.installDownloadedUpdate();
     } else {
       console.warn('[auto-update] No update downloaded yet.');
+    }
+  }
+
+  private installDownloadedUpdate(): void {
+    const installer = autoUpdater as unknown as Partial<Installer>;
+    if (typeof installer.install !== 'function' || process.platform === 'darwin') {
+      autoUpdater.quitAndInstall(true, true);
+      return;
+    }
+    if (process.platform === 'linux' && process.env.APPIMAGE) {
+      this.installAppImage(installer as Installer, process.env.APPIMAGE);
+      return;
+    }
+    // The installer starts the app again once it has replaced it, with only --updated.
+    handOffLaunchArgs();
+    if (!installer.install(true, true)) {
+      clearHandOff();
+      return;
+    }
+    exitForInstaller();
+  }
+
+  /**
+   * electron-updater starts the new AppImage without the command line, so it is started only to
+   * finish installing and exits; this process then starts it again with its own arguments.
+   */
+  private installAppImage(installer: Installer, current: string): void {
+    let target = current;
+    const renamed = (file: string) => { target = file; };
+    const events = autoUpdater as unknown as NodeJS.EventEmitter;
+    events.on('appimage-filename-updated', renamed);
+    handOffExit();
+    let installed = false;
+    try {
+      installed = installer.install(true, false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[auto-update] Failed to install the AppImage:', message);
+      this.broadcast({ status: 'error', error: message });
+    } finally {
+      clearHandOff();
+      events.removeListener('appimage-filename-updated', renamed);
+    }
+    if (!installed) return;
+    // The new version's file name differs; the unit's ExecStart still names the old one.
+    if (target !== current && systemServiceUnit()) {
+      try {
+        fs.symlinkSync(target, current);
+      } catch (error) {
+        console.warn(`[auto-update] Could not link ${current} to ${target}:`, error);
+      }
+    }
+    restartApp(target);
+  }
+
+  private isPackaged(): boolean {
+    try {
+      return !!require('electron').app?.isPackaged;
+    } catch {
+      return false;
     }
   }
 
@@ -245,6 +402,7 @@ export class AutoUpdateService {
   }
 
   isUpdateReady(): boolean {
+    if (this.docker) return this.updateDownloaded;
     if (this.manualOnly) return false;
     if (this.useLinuxPackageUpdater) {
       return linuxPackageUpdaterService.isUpdateReady();
@@ -275,7 +433,7 @@ export class AutoUpdateService {
       version: remote,
       releaseNotes: release.body,
       releaseDate: release.published_at,
-      manual: true,
+      manual: !(this.docker && findRuntimeAsset(release.assets || []) && canApplyInPlace()),
       instructions: this.manualInstructions(remote),
       instructionsUrl: LATEST_RELEASE_PAGE,
     });
@@ -314,9 +472,11 @@ export class AutoUpdateService {
       ].join('\n');
     }
     return [
-      `Version ${version} is available. A headless install cannot update itself from this page.`,
+      `Version ${version} is available. This install cannot update itself from this page.`,
       '',
-      'Install the latest package from the releases page, then restart the service.',
+      'A .deb or .rpm install updates itself when the app runs as root (as a systemd service does) or may',
+      'run sudo without a password. Otherwise, install the latest package from the releases page, then',
+      'restart the service.',
     ].join('\n');
   }
 }

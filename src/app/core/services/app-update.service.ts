@@ -15,8 +15,10 @@ export interface AppUpdateStatus {
   releaseNotes?: string;
   releaseDate?: string;
   error?: string;
-  /** Set when this client must be updated outside the app. */
+  /** Set when the host must be updated outside the app. */
   manual?: boolean;
+  /** The host installs and restarts as soon as the download finishes (Docker and headless installs). */
+  inPlace?: boolean;
   /** How to apply the update. Shown instead of downloading. */
   instructions?: string;
   instructionsUrl?: string;

@@ -11,7 +11,7 @@ import { messagingService } from './messaging.service';
 import { LinuxPackageUpdaterService } from './linux-package-updater.service';
 
 // Real files in a sandbox: the point of these tests is where the package lands and who can reach it.
-jest.mock('fs', () => jest.requireActual('fs'));
+jest.mock('fs', () => ({ ...jest.requireActual('fs') }));
 jest.mock('path', () => jest.requireActual('path'));
 jest.mock('crypto', () => jest.requireActual('crypto'));
 jest.mock('os', () => ({ ...jest.requireActual('os'), tmpdir: jest.fn() }));
@@ -183,6 +183,31 @@ describe('LinuxPackageUpdaterService', () => {
   });
 
   describe('quitAndInstall', () => {
+    const originalGetuid = Object.getOwnPropertyDescriptor(process, 'getuid');
+    const originalArgv = process.argv;
+
+    function runAs(uid: number, ...args: string[]): void {
+      Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
+      process.argv = ['/opt/Cerious AASM/cerious-aasm.bin', ...args];
+    }
+
+    let cgroup: jest.SpyInstance;
+
+    beforeEach(() => {
+      runAs(1000);
+      // Outside a systemd service, whatever runs the tests.
+      const realRead = fs.readFileSync;
+      cgroup = jest.spyOn(jest.requireMock<typeof fs>('fs'), 'readFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) =>
+        file === '/proc/self/cgroup' ? '0::/user.slice/session-1.scope\n' : (realRead as Function)(file, ...rest)) as typeof fs.readFileSync);
+    });
+
+    afterEach(() => {
+      cgroup.mockRestore();
+      if (originalGetuid) Object.defineProperty(process, 'getuid', originalGetuid);
+      else delete (process as { getuid?: unknown }).getuid;
+      process.argv = originalArgv;
+    });
+
     function installer() {
       const child = new EventEmitter();
       jest.mocked(spawn).mockReset().mockReturnValue(child as unknown as ChildProcess);
@@ -214,6 +239,41 @@ describe('LinuxPackageUpdaterService', () => {
       expect(downloadDirs(sandbox)).toEqual([]);
       expect(app.relaunch).toHaveBeenCalled();
       expect(app.exit).toHaveBeenCalledWith(0);
+    });
+
+    // A systemd service usually runs as root, with no one to answer a polkit prompt.
+    it('runs the package manager directly as root', async () => {
+      runAs(0, '--headless');
+      const { service, file } = await downloaded();
+      installer();
+
+      service.quitAndInstall();
+
+      expect(spawn).toHaveBeenCalledWith('dpkg', ['-i', file], { stdio: 'inherit', detached: true });
+    });
+
+    it('installs headless through sudo when it needs no password', async () => {
+      runAs(1000, '--headless', '--port=3000');
+      const { service, file } = await downloaded();
+      const child = installer();
+
+      expect(service.canInstall()).toBe(true);
+      service.quitAndInstall();
+      expect(execSync).toHaveBeenCalledWith('sudo -n true', expect.anything());
+      expect(spawn).toHaveBeenCalledWith('sudo', ['-n', 'dpkg', '-i', file], { stdio: 'inherit', detached: true });
+      child.emit('exit', 0);
+
+      expect(app.relaunch).toHaveBeenCalledWith(expect.objectContaining({ args: ['--headless', '--port=3000'] }));
+    });
+
+    it('cannot install headless when sudo asks for a password', () => {
+      runAs(1000, '--headless');
+      jest.mocked(execSync).mockImplementation(command => {
+        if (String(command).startsWith('sudo')) throw new Error('a password is required');
+        return Buffer.from('');
+      });
+
+      expect(new LinuxPackageUpdaterService().canInstall()).toBe(false);
     });
 
     // Dismissing the password prompt must leave the package there for another try.

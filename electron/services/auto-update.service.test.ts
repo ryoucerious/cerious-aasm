@@ -21,16 +21,31 @@ jest.mock('axios', () => ({
 jest.mock('./messaging.service', () => ({
   messagingService: {
     sendToAllRenderers: jest.fn(),
+    broadcastToWebClients: jest.fn(),
   },
 }));
 
 jest.mock('./linux-package-updater.service', () => ({
   linuxPackageUpdaterService: {
     isSupported: jest.fn(() => false),
+    canInstall: jest.fn(() => false),
     checkForUpdates: jest.fn(),
     quitAndInstall: jest.fn(),
     isUpdateReady: jest.fn(() => false),
   },
+}));
+
+// /.dockerenv would make the suite take the container path when it runs in the test image.
+jest.mock('../utils/platform.utils', () => ({
+  ...jest.requireActual('../utils/platform.utils'),
+  isRunningInDocker: () => process.env.AASM_DOCKER === '1',
+}));
+
+jest.mock('../utils/app-relaunch', () => ({
+  ...jest.requireActual('../utils/app-relaunch'),
+  restartApp: jest.fn(),
+  exitForInstaller: jest.fn(),
+  systemServiceUnit: jest.fn(() => null),
 }));
 
 import { messagingService } from './messaging.service';
@@ -105,7 +120,14 @@ describe('AutoUpdateService', () => {
       }
     }
 
+    // A .deb or .rpm install that is neither root nor allowed sudo has nothing to install with.
+    function asLinuxPackageWithoutRoot(): void {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      delete process.env.APPIMAGE;
+    }
+
     it('in headless mode, offers the release of the pre-release it runs', async () => {
+      asLinuxPackageWithoutRoot();
       await inHeadlessMode(async () => {
         const { app } = require('electron');
         app.getVersion.mockReturnValue('1.2.0-beta.1');
@@ -125,6 +147,7 @@ describe('AutoUpdateService', () => {
     });
 
     it('in headless mode, reports a release it cannot fetch', async () => {
+      asLinuxPackageWithoutRoot();
       await inHeadlessMode(async () => {
         require('axios').default.get.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
         const { messagingService: bus } = require('./messaging.service');
@@ -132,7 +155,44 @@ describe('AutoUpdateService', () => {
 
         await service.checkForUpdates();
 
-        expect(bus.sendToAllRenderers).toHaveBeenLastCalledWith('app-update-status', { status: 'error', error: 'Could not check for an update.' });
+        expect(bus.sendToAllRenderers).toHaveBeenLastCalledWith('app-update-status', { manual: true, status: 'error', error: 'Could not check for an update.' });
+      });
+    });
+
+    it('a packaged headless Windows install checks with electron-updater and installs after downloading', async () => {
+      await inHeadlessMode(async () => {
+        require('electron').app.isPackaged = true;
+        (mockAutoUpdater.checkForUpdates as jest.Mock<any>).mockResolvedValue(undefined);
+        const { messagingService: bus } = require('./messaging.service');
+        const service = new (require('./auto-update.service').AutoUpdateService)();
+
+        await service.checkForUpdates();
+        const available = mockAutoUpdater.on.mock.calls.filter((call: any[]) => call[0] === 'update-available').pop()?.[1];
+        (available as Function)({ version: '2.0.0' });
+
+        expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalled();
+        expect(service.installsAfterDownload()).toBe(true);
+        expect(bus.broadcastToWebClients).toHaveBeenLastCalledWith('app-update-status', expect.objectContaining({ status: 'available', version: '2.0.0', inPlace: true }));
+        expect(service.getLastStatus()).not.toHaveProperty('manual');
+      });
+    });
+
+    it('a headless .deb or .rpm install that can run its package manager as root installs it', async () => {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      delete process.env.APPIMAGE;
+      await inHeadlessMode(async () => {
+        const { linuxPackageUpdaterService } = require('./linux-package-updater.service');
+        linuxPackageUpdaterService.canInstall.mockReturnValue(true);
+        const { messagingService: bus } = require('./messaging.service');
+        const service = new (require('./auto-update.service').AutoUpdateService)();
+
+        expect(service.installsAfterDownload()).toBe(true);
+        linuxPackageUpdaterService.onStatus({ status: 'downloaded', version: '2.0.0' });
+        expect(bus.broadcastToWebClients).toHaveBeenCalledWith('app-update-status', { status: 'downloaded', version: '2.0.0', inPlace: true });
+
+        linuxPackageUpdaterService.isUpdateReady.mockReturnValue(true);
+        service.quitAndInstall();
+        expect(linuxPackageUpdaterService.quitAndInstall).toHaveBeenCalled();
       });
     });
 
@@ -223,6 +283,149 @@ describe('AutoUpdateService', () => {
 
         expect(mockAutoUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
       });
+    });
+
+    function loadPackaged(): any {
+      require('electron').app.isPackaged = true;
+      return require('./auto-update.service');
+    }
+
+    function downloaded(): void {
+      const handler = mockAutoUpdater.on.mock.calls.filter((call: any[]) => call[0] === 'update-downloaded').pop()?.[1];
+      (handler as Function)({ version: '2.0.0' });
+    }
+
+    describe('with an installer that reports whether it started', () => {
+      const install = jest.fn<(isSilent?: boolean, isForceRunAfter?: boolean) => boolean>();
+      const origArgv = process.argv;
+      const origAppImage = process.env.APPIMAGE;
+
+      beforeEach(() => {
+        Object.assign(mockAutoUpdater, { install, removeListener: jest.fn() });
+        process.argv = ['C:\\Cerious AASM\\Cerious AASM.exe', '--headless', '--port=8080'];
+      });
+
+      afterEach(() => {
+        delete (mockAutoUpdater as any).install;
+        delete (mockAutoUpdater as any).removeListener;
+        delete process.env.AASM_RELAUNCH;
+        process.argv = origArgv;
+        if (origAppImage === undefined) delete process.env.APPIMAGE;
+        else process.env.APPIMAGE = origAppImage;
+      });
+
+      // NSIS starts the app again with only --updated; the headless flags go with it.
+      it('hands the command line to the Windows installer, then exits for it', () => {
+        jest.isolateModules(() => {
+          const relaunch = require('../utils/app-relaunch');
+          const { autoUpdateService } = loadPackaged();
+          downloaded();
+          install.mockImplementation(() => {
+            expect(JSON.parse(process.env.AASM_RELAUNCH!)).toEqual({ args: ['--headless', '--port=8080'] });
+            return true;
+          });
+
+          autoUpdateService.quitAndInstall();
+
+          expect(install).toHaveBeenCalledWith(true, true);
+          expect(relaunch.exitForInstaller).toHaveBeenCalled();
+          expect(mockAutoUpdater.quitAndInstall).not.toHaveBeenCalled();
+        });
+      });
+
+      it('stays running when the Windows installer does not start', () => {
+        jest.isolateModules(() => {
+          const relaunch = require('../utils/app-relaunch');
+          const { autoUpdateService } = loadPackaged();
+          downloaded();
+          install.mockReturnValue(false);
+
+          autoUpdateService.quitAndInstall();
+
+          expect(relaunch.exitForInstaller).not.toHaveBeenCalled();
+          expect(process.env.AASM_RELAUNCH).toBeUndefined();
+        });
+      });
+
+      it('replaces an AppImage, lets the new one exit, and restarts it with the command line', () => {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        process.env.APPIMAGE = '/opt/Cerious-AASM-1.0.0.AppImage';
+        jest.isolateModules(() => {
+          const relaunch = require('../utils/app-relaunch');
+          const { autoUpdateService } = loadPackaged();
+          downloaded();
+          install.mockImplementation(() => {
+            expect(JSON.parse(process.env.AASM_RELAUNCH!)).toEqual({ exit: true });
+            const renamed = mockAutoUpdater.on.mock.calls.filter((call: any[]) => call[0] === 'appimage-filename-updated').pop()?.[1];
+            (renamed as Function)('/opt/Cerious-AASM-2.0.0.AppImage');
+            return true;
+          });
+
+          autoUpdateService.quitAndInstall();
+
+          expect(install).toHaveBeenCalledWith(true, false);
+          expect(process.env.AASM_RELAUNCH).toBeUndefined();
+          expect(relaunch.restartApp).toHaveBeenCalledWith('/opt/Cerious-AASM-2.0.0.AppImage');
+        });
+      });
+    });
+  });
+
+  // Settings, Mesh only offers an app update to machines that install it with no one there.
+  describe('unattendedUpdate', () => {
+    const access = jest.fn();
+
+    beforeEach(() => {
+      access.mockReset();
+    });
+
+    function load(): any {
+      jest.doMock('fs', () => ({ ...jest.requireActual('fs'), accessSync: access }));
+      require('electron').app.isPackaged = true;
+      return require('./auto-update.service').autoUpdateService;
+    }
+
+    it('installs for the current user on Windows with no one there', () => {
+      access.mockImplementation(() => undefined);
+      jest.isolateModules(() => {
+        expect(load().unattendedUpdate()).toEqual({ unattended: true, reason: null });
+      });
+    });
+
+    it('needs an administrator at a Windows machine installed for all users', () => {
+      access.mockImplementation(() => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); });
+      jest.isolateModules(() => {
+        const result = load().unattendedUpdate();
+        expect(result.unattended).toBe(false);
+        expect(result.reason).toContain('installed for all users');
+      });
+    });
+
+    it('needs someone to type the password for a .deb or .rpm installed through pkexec', () => {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      delete process.env.APPIMAGE;
+      jest.isolateModules(() => {
+        const { linuxPackageUpdaterService } = require('./linux-package-updater.service');
+        linuxPackageUpdaterService.canInstall.mockReturnValue(true);
+        linuxPackageUpdaterService.installsUnattended = jest.fn(() => false);
+        const result = load().unattendedUpdate();
+        expect(result.unattended).toBe(false);
+        expect(result.reason).toContain('administrator password');
+      });
+    });
+
+    it('cannot update an install that only shows instructions', () => {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      delete process.env.APPIMAGE;
+      const origArgv = process.argv;
+      process.argv = [...origArgv, '--headless'];
+      try {
+        jest.isolateModules(() => {
+          expect(load().unattendedUpdate()).toMatchObject({ unattended: false });
+        });
+      } finally {
+        process.argv = origArgv;
+      }
     });
   });
 

@@ -44,6 +44,8 @@ interface MeshNode {
   capabilities?: {
     serverPorts?: { portsOpen: boolean | null };
     ark?: { installedBuild: string | null; latestBuild: string | null; updateAvailable: boolean };
+    /** Whether an app update installs with no one at that machine; absent from older versions. */
+    appUpdate?: { unattended: boolean; reason: string | null };
   };
 }
 
@@ -251,6 +253,20 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
   updateBlock(node: MeshNode): string {
     if (!node.connected) return `${node.name} cannot be reached.`;
     if (node.nodeId !== this.status?.nodeId && this.status?.degraded) return 'Updating another machine waits until enough machines can be reached.';
+    return '';
+  }
+
+  /**
+   * Why the app on a machine cannot be updated from here; empty when it can. One that would wait on
+   * a UAC or password prompt is updated from its own window instead.
+   */
+  appUpdateBlock(node: MeshNode): string {
+    const blocked = this.updateBlock(node);
+    if (blocked) return blocked;
+    const appUpdate = node.capabilities?.appUpdate;
+    if (appUpdate?.unattended === false) {
+      return `${node.name} cannot update without someone there. ${appUpdate.reason || ''}`.trim();
+    }
     return '';
   }
 

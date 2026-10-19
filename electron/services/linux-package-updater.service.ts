@@ -12,6 +12,7 @@ import {
   type GitHubReleaseAsset
 } from '../utils/github-release.utils';
 import { messagingService } from './messaging.service';
+import { restartApp } from '../utils/app-relaunch';
 
 type PackageFormat = 'deb' | 'rpm';
 
@@ -25,7 +26,7 @@ const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 // Older versions downloaded into a fixed "cerious-aasm-update" folder; it is cleared up too.
 const DOWNLOAD_DIR_PATTERN = /^cerious-aasm-update(-|$)/;
 
-function commandExists(command: 'dpkg' | 'rpm'): boolean {
+function commandExists(command: 'dpkg' | 'rpm' | 'sudo'): boolean {
   try {
     execSync(`which ${command}`, { stdio: 'ignore' });
     return true;
@@ -90,14 +91,30 @@ function removeStaleDownloads(): void {
   }
 }
 
+// A headless install has no polkit agent to ask for a password; sudo may be allowed without one.
+function canSudoWithoutPassword(): boolean {
+  if (!commandExists('sudo')) return false;
+  try {
+    execSync('sudo -n true', { stdio: 'ignore', timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Updates .deb and .rpm installs, which electron-updater cannot: finds the package in the latest
- * GitHub release, downloads it as soon as it is found, and on request installs it with pkexec so
- * the user sees the system's own password prompt, then relaunches.
+ * GitHub release, downloads it as soon as it is found, and on request installs it as root, then
+ * restarts. Run as root (a systemd service) it calls the package manager directly; on a desktop
+ * through pkexec, so the user sees the system's own password prompt; headless through sudo -n.
  */
 export class LinuxPackageUpdaterService {
   private readonly packageFormat: PackageFormat | null;
   private download: DownloadedPackage | null = null;
+  private elevation: string[] | null | undefined;
+
+  /** Where status goes. The app update service sends it on to the web clients too. */
+  onStatus: (status: Record<string, unknown>) => void = status => messagingService.sendToAllRenderers('app-update-status', status);
 
   constructor() {
     this.packageFormat = process.platform === 'linux' ? detectPackageFormat() : null;
@@ -105,6 +122,27 @@ export class LinuxPackageUpdaterService {
 
   isSupported(): boolean {
     return this.packageFormat !== null;
+  }
+
+  /** Whether this process can run the package manager as root. */
+  canInstall(): boolean {
+    return this.isSupported() && this.elevationCommand() !== null;
+  }
+
+  /** Whether it installs without a prompt: as root, or through sudo -n. pkexec asks on the screen. */
+  installsUnattended(): boolean {
+    const elevation = this.isSupported() ? this.elevationCommand() : null;
+    return !!elevation && elevation[0] !== 'pkexec';
+  }
+
+  /** The prefix that runs the package manager as root, or null when nothing can. */
+  private elevationCommand(): string[] | null {
+    if (this.elevation === undefined) {
+      if (process.getuid?.() === 0) this.elevation = [];
+      else if (!process.argv.includes('--headless')) this.elevation = ['pkexec'];
+      else this.elevation = canSudoWithoutPassword() ? ['sudo', '-n'] : null;
+    }
+    return this.elevation;
   }
 
   isUpdateReady(): boolean {
@@ -150,26 +188,31 @@ export class LinuxPackageUpdaterService {
     }
   }
 
-  /** Installs the downloaded package with pkexec, then relaunches. A failed install keeps it for another try. */
+  /** Installs the downloaded package as root, then restarts. A failed install keeps it for another try. */
   quitAndInstall(): void {
     const download = this.download;
     if (!download) {
       console.warn('[linux-package-updater] No update downloaded yet.');
       return;
     }
+    const elevation = this.elevationCommand();
+    if (!elevation) {
+      this.sendStatus({ status: 'error', error: 'This install cannot run the package manager as root. Install the package by hand, then restart the service.' });
+      return;
+    }
 
-    const [command, ...args] = this.packageFormat === 'deb'
-      ? ['pkexec', 'dpkg', '-i', download.file]
-      : ['pkexec', 'rpm', '-U', '--force', download.file];
+    const [command, ...args] = [
+      ...elevation,
+      ...(this.packageFormat === 'deb' ? ['dpkg', '-i', download.file] : ['rpm', '-U', '--force', download.file])
+    ];
     console.log(`[linux-package-updater] Installing: ${command} ${args.join(' ')}`);
 
     const child = spawn(command, args, { stdio: 'inherit', detached: true });
     child.on('exit', code => {
       if (code === 0) {
-        console.log('[linux-package-updater] Package installed; relaunching');
+        console.log('[linux-package-updater] Package installed; restarting');
         this.discardDownload();
-        app.relaunch();
-        app.exit(0);
+        restartApp();
         return;
       }
       console.error(`[linux-package-updater] Install failed with exit code ${code}`);
@@ -185,7 +228,7 @@ export class LinuxPackageUpdaterService {
   }
 
   private sendStatus(status: Record<string, unknown>): void {
-    messagingService.sendToAllRenderers('app-update-status', status);
+    this.onStatus(status);
   }
 
   /** The asset for this package format, preferably built for this architecture. */

@@ -1046,6 +1046,11 @@ export class MeshService {
         }
       }
     }
+    // A UAC or password prompt would wait there with the app stopped. Versions before it say nothing.
+    const appUpdate = nodeId === localId ? autoUpdateService.unattendedUpdate() : target.capabilities?.appUpdate;
+    if (kind === 'app' && appUpdate?.unattended === false) {
+      return { success: false, error: `${target.name} cannot update without someone there. ${appUpdate.reason || ''}`.trim() };
+    }
     const command: ControlCommand = {
       commandId: randomUUID(),
       correlationId: randomUUID(),
@@ -1402,6 +1407,11 @@ export class MeshService {
       if (current.operation === 'set-address') return this.changeOwnAddress(meshAddressOf(args));
       if (current.operation === 'update-ark') return beginClusterUpdate();
       if (current.operation === 'update-app') {
+        // The sender went by this machine's last heartbeat; this is what holds now.
+        const unattended = autoUpdateService.unattendedUpdate();
+        if (!unattended.unattended) {
+          return { success: false, error: `This machine cannot update without someone there. ${unattended.reason || ''}`.trim() };
+        }
         const applied = await autoUpdateService.applyAvailableUpdate();
         return {
           success: applied.success,

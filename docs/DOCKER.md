@@ -206,7 +206,7 @@ The web interface on port 3000 is separate and can sit behind an ordinary HTTPS 
 
 Settings, Mesh lists every machine and can start an ARK update or an app update on the one you pick. Each machine updates its own install.
 
-An app update inside this container downloads `cerious-aasm-runtime.tar.gz` from the release, writes it onto the data volume, and restarts the app process. The container keeps running, so you do not run `docker compose pull` for that. Server data in the volumes stays put. Update one voting machine at a time: restarting the app also restarts that machine's vote.
+Click the update icon beside the app version in the web interface to download and install an available app update. It downloads `cerious-aasm-runtime.tar.gz` from the release, shows progress, writes it onto the data volume, and restarts the app process automatically. The container keeps running, so you do not run `docker compose pull` for that. The web interface briefly disconnects while the app restarts; refresh it after reconnecting to load the updated interface. Server data in the volumes stays put. Update one voting machine at a time: restarting the app also restarts that machine's vote. Releases without a runtime archive still show the image-update instructions.
 
 A release published before this archive existed, or an image you built yourself, still updates from the Docker host:
 

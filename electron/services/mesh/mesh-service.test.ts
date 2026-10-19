@@ -74,7 +74,9 @@ jest.mock('../auth/user-database.service', () => ({
     verifyCredentials: jest.fn(async () => null)
   }
 }));
-jest.mock('../auto-update.service', () => ({ autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn() } }));
+jest.mock('../auto-update.service', () => ({
+  autoUpdateService: { applyAvailableUpdate: jest.fn(), quitAndInstall: jest.fn(), unattendedUpdate: jest.fn(() => ({ unattended: true, reason: null })) }
+}));
 // The reachability probe opens a real connection; the clock arithmetic stays real.
 jest.mock('./diagnostics', () => ({ ...jest.requireActual('./diagnostics'), probeTcp: jest.fn(async () => ({ ok: true, rttMs: 1 })) }));
 jest.mock('../ark-update.service', () => ({ beginClusterUpdate: jest.fn(), arkUpdateProgress: jest.fn(() => null), arkBuildStatus: jest.fn(() => null) }));
@@ -107,6 +109,7 @@ import { RqliteSupervisor, rqliteProblem } from './rqlite-supervisor';
 import { RqliteClient } from './rqlite-client';
 import { peerDownload, peerRequest, peerUpload, probeTls, startPeerServer, subscribeEvents } from './peer-server';
 import { messagingService } from '../messaging.service';
+import { autoUpdateService } from '../auto-update.service';
 import { localRuntime } from '../runtime/local-runtime';
 import { runArkApiAction } from '../ark-api-actions';
 import { userDatabaseService } from '../auth/user-database.service';
@@ -3541,6 +3544,40 @@ describe('MeshService', () => {
       await expect(service.requestNodeUpdate(LOCAL, 'ark', 'admin'))
         .resolves.toEqual({ success: false, error: 'Dallas01 is updating ARK. Update one machine at a time.' });
       expect(beginClusterUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  // A UAC or password prompt would wait on a machine no one is at, with its app stopped.
+  describe('updating the app on a machine no one is at', () => {
+    const REMOTE = '33333333-3333-4333-8333-333333333333';
+    const reason = 'It is installed for all users, so Windows asks an administrator to approve the update on its screen. Update it from its own window.';
+
+    beforeEach(async () => {
+      await repo.upsertNode(nodeRow(LOCAL, '1'));
+      const remote = nodeRow(REMOTE, '3', 'https://10.0.0.3:4747');
+      await repo.upsertNode({ ...remote, name: 'Office01', capabilities: { ...remote.capabilities, appUpdate: { unattended: false, reason } } });
+      jest.mocked(peerRequest).mockResolvedValue({ status: 200, body: { success: true } });
+      await service.resumeIfJoined();
+      jest.mocked(peerRequest).mockClear();
+    });
+
+    it('refuses a machine that says it would wait for a prompt, and sends it nothing', async () => {
+      await expect(service.requestNodeUpdate(REMOTE, 'app', 'admin'))
+        .resolves.toEqual({ success: false, error: `Office01 cannot update without someone there. ${reason}` });
+      expect(jest.mocked(peerRequest).mock.calls.some(([options]) => options.url.endsWith('/v1/command'))).toBe(false);
+    });
+
+    it('checks for itself when asked, whatever its last heartbeat said', async () => {
+      jest.mocked(autoUpdateService.unattendedUpdate).mockReturnValue({ unattended: false, reason: 'Installing asks for an administrator password on its screen.' });
+
+      const result = await service.executeLocalCommand({
+        commandId: 'update-1', correlationId: 'c', actor: 'admin', targetNode: LOCAL, operation: 'update-app', serverId: LOCAL,
+        expiry: Date.now() + 60_000, issuedAt: Date.now(), expectedRevision: null
+      });
+      jest.mocked(autoUpdateService.unattendedUpdate).mockReturnValue({ unattended: true, reason: null });
+
+      expect(result).toMatchObject({ success: false, error: 'This machine cannot update without someone there. Installing asks for an administrator password on its screen.' });
+      expect(autoUpdateService.applyAvailableUpdate).not.toHaveBeenCalled();
     });
   });
 

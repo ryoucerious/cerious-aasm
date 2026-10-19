@@ -90,11 +90,20 @@ export class SidebarComponent implements OnInit, OnDestroy {
   appUpdateIcon = 'download';
   appUpdateBusy = false;
   appUpdatePercent = 0;
-  /** Browser and headless installs explain the update instead of applying it. */
+  /** Installs that cannot update themselves explain how to, instead of applying it. */
   appUpdateExplain = false;
   appUpdateInstructions = '';
   appUpdateInstructionsUrl = '';
   showUpdateHelp = false;
+  /** The update button asks first: installing restarts the app and stops this machine's servers. */
+  showConfirmAppUpdate = false;
+  appUpdateConfirmTitle = '';
+  appUpdateConfirmText = '';
+  appUpdateConfirmLabel = '';
+  appUpdateConfirmRestarts = false;
+  private appUpdateConfirmAction: 'download' | 'install' | null = null;
+  private appUpdateInPlace = false;
+  private appUpdateVersion = 'the update';
   private appUpdateState: string | null = null;
 
   overviewTabs: ServerTabDef[] = [];
@@ -158,18 +167,20 @@ export class SidebarComponent implements OnInit, OnDestroy {
     this.subs.push(this.appUpdate.status$.subscribe(status => {
       this.appUpdateState = status?.status ?? null;
       this.appUpdatePending = AppUpdateService.isPending(status);
-      this.appUpdateExplain = !this.ipc.isElectron || !!status?.manual;
+      this.appUpdateExplain = !!status?.manual;
       this.appUpdateInstructions = status?.instructions || '';
       this.appUpdateInstructionsUrl = status?.instructionsUrl || '';
       this.appUpdateBusy = !this.appUpdateExplain && status?.status === 'downloading';
       this.appUpdatePercent = Math.round(status?.percent ?? 0);
       this.appUpdateIcon = this.appUpdateExplain ? 'info' : (status?.status === 'downloaded' ? 'system_update_alt' : 'download');
       const version = status?.version ? `v${status.version}` : 'the update';
+      this.appUpdateInPlace = !!status?.inPlace;
+      this.appUpdateVersion = version;
       if (this.appUpdateExplain) this.appUpdateTitle = `How to update to ${version}`;
       else if (status?.status === 'downloaded') this.appUpdateTitle = `Install ${version}`;
       else if (status?.status === 'downloading') this.appUpdateTitle = `Downloading ${version}… ${this.appUpdatePercent}%`;
       else if (status?.status === 'error') this.appUpdateTitle = status.error ? `Update failed: ${status.error}. Click to retry.` : 'Update failed. Click to retry.';
-      else this.appUpdateTitle = `Download ${version}`;
+      else this.appUpdateTitle = status?.inPlace ? `Download and install ${version}` : `Download ${version}`;
       this.cdr.markForCheck();
     }));
 
@@ -280,8 +291,41 @@ export class SidebarComponent implements OnInit, OnDestroy {
       this.cdr.markForCheck();
       return;
     }
-    if (this.appUpdateState === 'downloaded') this.appUpdate.install();
-    else if (this.appUpdateState === 'available' || this.appUpdateState === 'error') this.appUpdate.download();
+    const version = this.appUpdateVersion;
+    if (this.appUpdateState === 'downloaded') {
+      this.askAppUpdate('install', `Install ${version}`, `Install ${version} now?`, 'Install and restart', true);
+    } else if (this.appUpdateState === 'available' || this.appUpdateState === 'error') {
+      if (this.appUpdateInPlace) {
+        this.askAppUpdate('download', `Update to ${version}`,
+          `Download and install ${version}? The app restarts as soon as the download finishes.`, 'Download and install', true);
+      } else {
+        this.askAppUpdate('download', `Download ${version}`,
+          `Download ${version}? Nothing is installed until you click the update button again.`, 'Download', false);
+      }
+    }
+  }
+
+  private askAppUpdate(action: 'download' | 'install', title: string, text: string, label: string, restarts: boolean): void {
+    this.appUpdateConfirmAction = action;
+    this.appUpdateConfirmTitle = title;
+    this.appUpdateConfirmText = text;
+    this.appUpdateConfirmLabel = label;
+    this.appUpdateConfirmRestarts = restarts;
+    this.showConfirmAppUpdate = true;
+    this.cdr.markForCheck();
+  }
+
+  confirmAppUpdate(): void {
+    const action = this.appUpdateConfirmAction;
+    this.cancelAppUpdate();
+    if (action === 'install') this.appUpdate.install();
+    else if (action === 'download') this.appUpdate.download();
+  }
+
+  cancelAppUpdate(): void {
+    this.showConfirmAppUpdate = false;
+    this.appUpdateConfirmAction = null;
+    this.cdr.markForCheck();
   }
 
   closeUpdateHelp(): void {
