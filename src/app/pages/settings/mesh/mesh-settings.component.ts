@@ -7,6 +7,7 @@ import { MESH_ADDRESS_TIMEOUT_MS, MessagingService } from '../../../core/service
 import { NotificationService } from '../../../core/services/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { BusyService } from '../../../core/services/busy.service';
+import { IpcService } from '../../../core/services/ipc.service';
 import { PERMISSIONS } from '../../../core/models/auth.model';
 import { copyToClipboard } from '../../../core/utils/clipboard.utils';
 import { formatRelativeTime } from '../../../core/utils/format.utils';
@@ -53,6 +54,7 @@ interface MeshStatus {
   enabled: boolean;
   degraded: boolean;
   meshName: string | null;
+  meshId?: string | null;
   nodeId: string | null;
   nodeName: string | null;
   voterCount: number;
@@ -126,7 +128,8 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
     private notification: NotificationService,
     private auth: AuthService,
     private busyOverlay: BusyService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private ipc: IpcService
   ) {}
 
   ngOnInit(): void {
@@ -317,6 +320,11 @@ export class MeshSettingsComponent implements OnInit, OnDestroy {
 
   get canRemoveNodes(): boolean {
     return this.auth.can(PERMISSIONS.NODES_REMOVE);
+  }
+
+  /** While reconnecting, the desktop app on this machine may always leave, as the backend allows. */
+  get canLeaveWhileReconnecting(): boolean {
+    return this.canRemoveNodes || this.ipc.isElectron;
   }
 
   /** Making an enrollment token: Admins only, as the backend has it. */

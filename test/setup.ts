@@ -44,6 +44,11 @@ jest.mock('electron', () => ({
     openExternal: jest.fn(),
     showItemInFolder: jest.fn(),
   },
+  safeStorage: {
+    isEncryptionAvailable: jest.fn(() => true),
+    encryptString: jest.fn((value: string) => Buffer.from(`enc:${value}`, 'utf8')),
+    decryptString: jest.fn((value: Buffer) => Buffer.from(value).toString('utf8').replace(/^enc:/, '')),
+  },
 }));
 
 jest.mock('child_process', () => ({

@@ -95,6 +95,15 @@ export class GlobalConfigService implements OnDestroy {
     this.persist();
   }
 
+  get rememberMeDays() {
+    return this.config?.rememberMeDays ?? 30;
+  }
+  set rememberMeDays(val: number) {
+    if (!this.config) return;
+    this.config.rememberMeDays = val;
+    this.persist();
+  }
+
   get serverDataDir() {
     return this.config?.serverDataDir ?? '';
   }

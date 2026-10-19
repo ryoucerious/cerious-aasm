@@ -24,6 +24,8 @@ const mockDefaultConfig: GlobalConfig = {
   updateWarningMinutes: 15,
   serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
+  backupCopiesLocation: '',
+  rememberMeDays: 30,
 };
 
 const mockCustomConfig: GlobalConfig = {
@@ -38,6 +40,8 @@ const mockCustomConfig: GlobalConfig = {
   updateWarningMinutes: 15,
   serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
+  backupCopiesLocation: '',
+  rememberMeDays: 30,
 };
 
 function errnoError(code: string): NodeJS.ErrnoException {

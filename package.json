@@ -1,6 +1,6 @@
 {
   "name": "cerious-aasm",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "A desktop application for managing ARK: Survival Ascended dedicated servers with cross-platform support.",
   "author": {
     "name": "r YOU cerious",
@@ -133,7 +133,9 @@
         {
           "from": "resources/rqlite/windows-amd64",
           "to": "rqlite/windows-amd64",
-          "filter": ["rqlited.exe"]
+          "filter": [
+            "rqlited.exe"
+          ]
         }
       ]
     },
@@ -168,7 +170,9 @@
         {
           "from": "resources/rqlite/linux-amd64",
           "to": "rqlite/linux-amd64",
-          "filter": ["rqlited"]
+          "filter": [
+            "rqlited"
+          ]
         }
       ],
       "maintainer": "r YOU cerious",

@@ -3,13 +3,13 @@ import type { WebContents } from 'electron';
 import type { ApiProcessSender, MessageSender, WebSocketClient } from '../../types/messaging.types';
 import { InstanceKey, instanceKeyForChannel, isChannelAllowed, permissionForChannel } from './channel-permissions';
 import { meshDesktopIdentity } from './desktop-session';
-import { localNode, meshServer, securityVersionStale } from '../mesh/mesh-hooks';
+import { localNode, meshReconnecting, meshServer, securityVersionStale } from '../mesh/mesh-hooks';
 import { instanceVisibleTo, machineScopeRefusal } from './pool-access';
 import { getInstance } from '../../utils/ark/instance.utils';
 
 /** Channels the desktop window may use after a mesh is on and before anyone has signed in. */
 const DESKTOP_BEFORE_SIGN_IN = new Set([
-  'mesh-login', 'mesh-logout', 'mesh-bootstrap-admin', 'get-mesh-status', 'get-current-user', 'create-mesh', 'join-mesh'
+  'mesh-login', 'mesh-logout', 'mesh-bootstrap-admin', 'get-mesh-status', 'get-remembered-login', 'get-current-user', 'create-mesh', 'join-mesh'
 ]);
 
 export interface SenderIdentity {
@@ -95,6 +95,12 @@ export function authorizeChannel(channel: string, sender: MessageSender, payload
   }
 
   if (identity.isAdmin) return { allowed: true };
+
+  // Without its mesh database this machine may have no account that can sign in or that holds
+  // nodes.remove, and would otherwise be stuck in the mesh. Someone at this machine can always leave.
+  if (channel === 'leave-mesh-anyway' && isDesktopWindow(sender) && meshReconnecting()) {
+    return { allowed: true };
+  }
 
   if (!identity.user) {
     if (identity.isLocalDesktop && DESKTOP_BEFORE_SIGN_IN.has(channel)) {

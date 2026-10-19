@@ -1,6 +1,8 @@
-import { identifySender } from '../services/auth/permission-gate';
+import { identifySender, isDesktopWindow } from '../services/auth/permission-gate';
 import { meshService } from '../services/mesh/mesh-service';
 import { ensureNodeIdentity } from '../services/runtime/node-identity';
+import type { MessageSender } from '../types/messaging.types';
+import { clearRememberedLogin, loadRememberedLogin, saveRememberedLogin } from '../utils/remembered-login.utils';
 import { onRequest } from './handler.utils';
 
 /** The address typed in on Create or Join, if any: where the others reach this machine. */
@@ -16,26 +18,50 @@ onRequest('get-mesh-status', async () => {
   return meshService.status();
 });
 
-onRequest('mesh-login', async payload => {
-  const user = await meshService.loginDesktop(String(payload.username || ''), String(payload.password || ''));
+onRequest('mesh-login', async (payload, { sender }) => {
+  const username = String(payload.username || '');
+  const password = String(payload.password || '');
+  const user = await meshService.loginDesktop(username, password);
   if (!user) return { success: false, error: 'Those credentials were not accepted.' };
+  rememberDesktopLogin(sender, payload.remember === true, username, password);
   return { success: true, user };
 });
 
-onRequest('mesh-bootstrap-admin', async payload => {
+onRequest('mesh-bootstrap-admin', async (payload, { sender }) => {
   try {
-    const user = await meshService.bootstrapAdmin(String(payload.username || ''), String(payload.password || ''));
+    const username = String(payload.username || '');
+    const password = String(payload.password || '');
+    const user = await meshService.bootstrapAdmin(username, password);
     if (!user) return { success: false, error: 'An account already exists. Sign in with it.' };
+    rememberDesktopLogin(sender, payload.remember === true, username, password);
     return { success: true, user };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Could not create the admin account.' };
   }
 });
 
-onRequest('mesh-logout', () => {
+onRequest('mesh-logout', (_payload, { sender }) => {
   meshService.logoutDesktop();
+  if (isDesktopWindow(sender)) clearRememberedLogin();
   return { success: true };
 });
+
+/** The saved password stays on this machine. A web client never receives it. */
+onRequest('get-remembered-login', (_payload, { sender }) => {
+  if (!isDesktopWindow(sender)) return { username: '', password: '' };
+  return loadRememberedLogin() ?? { username: '', password: '' };
+});
+
+function rememberDesktopLogin(sender: MessageSender, remember: boolean, username: string, password: string): void {
+  if (!isDesktopWindow(sender)) return;
+  if (!remember) {
+    clearRememberedLogin();
+    return;
+  }
+  if (!saveRememberedLogin({ username, password })) {
+    console.warn('[login] Could not store the password; this machine cannot encrypt it.');
+  }
+}
 
 onRequest('create-mesh', async payload => {
   try {

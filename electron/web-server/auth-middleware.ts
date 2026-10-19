@@ -4,7 +4,10 @@ import type { AuthenticatedUser } from '../types/auth.types';
 import { messagingService } from '../services/messaging.service';
 import { SOCKET_CLOSE } from '../types/messaging.types';
 import { SESSION_MAX_AGE_MS, SessionData, deleteSession, getSession, setSession } from '../utils/session-store.utils';
+import { DEFAULT_REMEMBER_ME_DAYS, loadGlobalConfig, validRememberMeDays } from '../utils/global-config.utils';
 import { getAuthConfig, legacyLoginFingerprint } from './auth-config';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SESSION_COOKIE = 'session';
 const PUBLIC_API_PATHS = new Set(['/login', '/logout', '/auth-status']);
@@ -64,16 +67,28 @@ export function sessionAuth(req: express.Request, res: express.Response, next: e
 export type SessionOwner = (Pick<AuthenticatedUser, 'id' | 'roleId' | 'permissions'> & { securityVersion?: number }) | { loginFingerprint: string };
 
 /**
- * The account is stored on the session so the WebSocket handshake can attach an identity without a
- * database round trip.
+ * How long a remembered sign-in lasts. Read from the global config on each sign-in, so a change in
+ * Settings applies to the next sign-in without restarting the web server.
  */
-export function createSession(req: express.Request, res: express.Response, username: string, owner: SessionOwner): void {
+export function rememberMeDurationMs(): number {
+  return (validRememberMeDays(loadGlobalConfig().rememberMeDays) ?? DEFAULT_REMEMBER_ME_DAYS) * DAY_MS;
+}
+
+/**
+ * The account is stored on the session so the WebSocket handshake can attach an identity without a
+ * database round trip. A remembered session keeps its cookie across browser restarts for the
+ * configured days; any other ends with the browser, and on the server after SESSION_MAX_AGE_MS.
+ */
+export function createSession(req: express.Request, res: express.Response, username: string, owner: SessionOwner, remember = false): void {
   const token = generateSessionToken();
+  const created = new Date();
+  const lifetimeMs = remember ? rememberMeDurationMs() : SESSION_MAX_AGE_MS;
+  const expiresAt = new Date(created.getTime() + lifetimeMs);
   const session: SessionData = 'loginFingerprint' in owner
-    ? { username, created: new Date(), loginFingerprint: owner.loginFingerprint }
-    : { username, created: new Date(), userId: owner.id, roleId: owner.roleId, permissions: owner.permissions, securityVersion: owner.securityVersion };
+    ? { username, created, expiresAt, loginFingerprint: owner.loginFingerprint }
+    : { username, created, expiresAt, userId: owner.id, roleId: owner.roleId, permissions: owner.permissions, securityVersion: owner.securityVersion };
   setSession(token, session);
-  res.cookie(SESSION_COOKIE, token, { ...cookieOptions(req), maxAge: SESSION_MAX_AGE_MS });
+  res.cookie(SESSION_COOKIE, token, remember ? { ...cookieOptions(req), maxAge: lifetimeMs } : cookieOptions(req));
 }
 
 export function destroySession(req: express.Request, res: express.Response): void {

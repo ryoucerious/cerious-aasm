@@ -212,6 +212,18 @@ describe('SettingsPageComponent', () => {
     });
   });
 
+  it('saves a remember-me duration in range and refuses one out of range', () => {
+    const saved: number[] = [];
+    Object.defineProperty(config, 'rememberMeDays', { set: (days: number) => saved.push(days), get: () => 30, configurable: true });
+
+    component.onRememberMeDaysChange('14');
+    component.onRememberMeDaysChange('0');
+    component.onRememberMeDaysChange('400');
+
+    expect(saved).toEqual([14]);
+    expect(notification.warning).toHaveBeenCalledTimes(2);
+  });
+
   it('asks the folder picker to wait for the user, not for the default request timeout', () => {
     ipc.isElectron = true;
     create();

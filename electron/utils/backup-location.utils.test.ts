@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getDefaultInstallDir } from './platform.utils';
-import { checkedBackupDirectory, validateBackupLocation } from './backup-location.utils';
+import { checkedBackupCopiesDirectory, checkedBackupDirectory, prepareBackupCopiesDirectory, prepareBackupDirectory, validateBackupLocation } from './backup-location.utils';
 import { BackupPathUtils } from './backup.utils';
 
 describe('Backup location confinement (real filesystem)', () => {
@@ -17,8 +17,53 @@ describe('Backup location confinement (real filesystem)', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  it.each(['../escape', '/tmp', 'C:/backups', 'C:\\backups', '\\\\host\\share', 'a/../b', 'a//b', 'a\\b', 'a:stream', 'NUL', 'com1', 'a.', 'a ', {}, null, 12])('rejects unsafe input %p', value => {
+  it.each(['../escape', 'a/../b', 'a//b', 'a\\b', 'a:stream', 'NUL', 'com1', 'a.', 'a /b', {}, null, 12])('rejects unsafe input %p', value => {
     expect(() => validateBackupLocation(value)).toThrow();
+  });
+  it('trims a relative folder', () => {
+    expect(validateBackupLocation('  archive/daily  ')).toBe('archive/daily');
+  });
+  it('rejects a path that is absolute only on another platform', () => {
+    const foreign = process.platform === 'win32' ? '/tmp' : 'C:/backups';
+    expect(() => validateBackupLocation(foreign)).toThrow();
+  });
+  it('keeps a server\'s backups under an absolute path, in that server\'s own folder', () => {
+    const disk = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-abs-'));
+    try {
+      expect(validateBackupLocation(disk)).toBe(path.resolve(disk));
+      expect(checkedBackupDirectory('a1', disk)).toBe(path.join(path.resolve(disk), 'a1'));
+      expect(prepareBackupDirectory('a1', disk)).toBe(path.join(path.resolve(disk), 'a1'));
+      expect(fs.existsSync(path.join(disk, 'a1'))).toBe(true);
+    } finally {
+      fs.rmSync(disk, { recursive: true, force: true });
+    }
+  });
+  it('rejects an absolute path that climbs out with ..', () => {
+    const climbed = `${os.tmpdir()}${path.sep}aasm${path.sep}..${path.sep}other`;
+    expect(() => validateBackupLocation(climbed)).toThrow();
+  });
+  it('refuses a junction used as an absolute backup location', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-outside-'));
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-link-'));
+    const link = path.join(linkParent, 'backups');
+    try {
+      fs.symlinkSync(outside, link, 'junction');
+      expect(() => checkedBackupDirectory('a1', link)).toThrow(/real directories/);
+      expect(fs.readdirSync(outside)).toEqual([]);
+    } finally {
+      fs.rmSync(linkParent, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+  it('keeps backup copies at an absolute path and refuses a relative one', () => {
+    const disk = fs.mkdtempSync(path.join(os.tmpdir(), 'aasm-copies-'));
+    try {
+      expect(prepareBackupCopiesDirectory(disk)).toBe(path.resolve(disk));
+      expect(checkedBackupCopiesDirectory(disk)).toBe(path.resolve(disk));
+      expect(() => prepareBackupCopiesDirectory('archive/daily')).toThrow(/absolute/);
+    } finally {
+      fs.rmSync(disk, { recursive: true, force: true });
+    }
   });
   it('inherits the app default, overrides per server, and isolates servers', () => {
     const server = path.join(root, 'servers', 'a1');

@@ -140,8 +140,8 @@ export class AuthService {
    * Signs in to the web UI. On success the socket reconnects under the new session before this
    * resolves, so the pages behind the login do not ask for their data down a refused socket.
    */
-  async login(username: string, password: string): Promise<LoginResult> {
-    if (this.ipc.isElectron) return this.finishDesktopSignIn('mesh-login', username, password);
+  async login(username: string, password: string, remember = false): Promise<LoginResult> {
+    if (this.ipc.isElectron) return this.finishDesktopSignIn('mesh-login', username, password, remember);
 
     let response: Response;
     try {
@@ -149,7 +149,7 @@ export class AuthService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, remember })
       });
     } catch {
       return { success: false, status: 0 };
@@ -193,12 +193,12 @@ export class AuthService {
   }
 
   /** Creates the first mesh admin when the mesh has no accounts, then signs that account in. */
-  bootstrapMeshAdmin(username: string, password: string): Promise<LoginResult> {
-    return this.finishDesktopSignIn('mesh-bootstrap-admin', username, password);
+  bootstrapMeshAdmin(username: string, password: string, remember = false): Promise<LoginResult> {
+    return this.finishDesktopSignIn('mesh-bootstrap-admin', username, password, remember);
   }
 
-  private async finishDesktopSignIn(channel: string, username: string, password: string): Promise<LoginResult> {
-    const res = await this.send<{ success?: boolean; error?: string }>(channel, { username, password });
+  private async finishDesktopSignIn(channel: string, username: string, password: string, remember = false): Promise<LoginResult> {
+    const res = await this.send<{ success?: boolean; error?: string }>(channel, { username, password, remember });
     if (!res?.success) return { success: false, status: 401, ...(res?.error ? { error: res.error } : {}) };
     await this.refresh();
     return { success: true, status: 200 };

@@ -97,7 +97,12 @@ jest.mock('./handlers/activity-handler', () => ({}));
 jest.mock('./handlers/player-history-handler', () => ({}));
 jest.mock('./handlers/mesh-handler', () => ({}));
 jest.mock('./services/mesh/mesh-service', () => ({
-  meshService: { noteMembership: jest.fn(), resumeIfJoined: jest.fn(async () => undefined), stop: jest.fn(async () => undefined) },
+  meshService: {
+    noteMembership: jest.fn(),
+    resumeIfJoined: jest.fn(async () => undefined),
+    restoreRememberedDesktop: jest.fn(async () => undefined),
+    stop: jest.fn(async () => undefined)
+  },
 }));
 
 class FakeWebContents extends EventEmitter {

@@ -1,5 +1,5 @@
 import { authorizeChannel, identifySender, isDesktopWindow } from './permission-gate';
-import { noteLocalNode, noteMeshServers, noteSecurityVersion, registerMeshAuth } from '../mesh/mesh-hooks';
+import { noteLocalNode, noteMeshServers, noteSecurityVersion, registerMeshAuth, setMeshReconnecting } from '../mesh/mesh-hooks';
 import { setMeshDesktopMode } from './desktop-session';
 import type { ApiProcessSender, WebSocketClient } from '../../types/messaging.types';
 import { ALL_PERMISSIONS, AuthenticatedUser, BUILT_IN_ROLES } from '../../types/auth.types';
@@ -83,8 +83,29 @@ describe('authorizeChannel', () => {
     expect(authorizeChannel('get-host-resources', desktop)).toEqual({ allowed: false, error: 'You must sign in to do that.' });
     expect(authorizeChannel('get-current-user', desktop)).toEqual({ allowed: true });
     expect(authorizeChannel('mesh-login', desktop)).toEqual({ allowed: true });
+    expect(authorizeChannel('get-remembered-login', desktop)).toEqual({ allowed: true });
     expect(authorizeChannel('mesh-bootstrap-admin', desktop)).toEqual({ allowed: true });
     expect(authorizeChannel('mesh-bootstrap-admin', web(null))).toEqual({ allowed: false, error: 'You must sign in to do that.' });
+  });
+
+  describe('leaving a mesh that has not reconnected', () => {
+    afterEach(() => setMeshReconnecting(() => false));
+
+    it('lets the desktop leave while reconnecting, signed in or not, whatever its role', () => {
+      setMeshDesktopMode(true);
+      setMeshReconnecting(() => true);
+
+      expect(authorizeChannel('leave-mesh-anyway', desktop)).toEqual({ allowed: true });
+    });
+
+    it('keeps it to nodes.remove once the mesh is back, and always for a browser', () => {
+      setMeshDesktopMode(true);
+      expect(authorizeChannel('leave-mesh-anyway', desktop).allowed).toBe(false);
+
+      setMeshReconnecting(() => true);
+      expect(authorizeChannel('leave-mesh-anyway', web(account('viewer', ['servers.view']))).allowed).toBe(false);
+      expect(authorizeChannel('leave-mesh-anyway', web(null)).allowed).toBe(false);
+    });
   });
 
   it('follows the permission map for everyone else', () => {

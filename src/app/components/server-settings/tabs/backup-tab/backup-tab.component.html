@@ -6,13 +6,18 @@
 
       <div class="settings-section">
         <h5>Backup Location</h5>
-        <p class="section-desc">Choose a folder inside this server's backup area on its hosting machine.</p>
+        <p class="section-desc">Choose where this server's backups are written on its hosting machine.</p>
         <div class="form-group span-all">
           <label class="form-control-label" for="serverBackupLocation">Backup folder override</label>
-          <input id="serverBackupLocation" #location class="form-control input" [value]="backupLocation"
-                 (blur)="location.value !== backupLocation && backupLocationChange.emit(location.value)"
-                 maxlength="160" placeholder="Use app default" aria-describedby="serverBackupLocationHelp serverBackupLocationArchives" />
-          <div id="serverBackupLocationHelp" class="form-control-label desc">Leave blank to use the app default. For a custom folder, use letters, numbers, spaces, hyphens or underscores, with / between folders (for example, archive/daily).</div>
+          <div class="settings-input-row">
+            <input id="serverBackupLocation" #location class="form-control input" [value]="backupLocation"
+                   (blur)="location.value !== backupLocation && backupLocationChange.emit(location.value)"
+                   maxlength="1024" placeholder="Use app default" aria-describedby="serverBackupLocationHelp serverBackupLocationArchives" />
+            <button class="btn btn-secondary" type="button" (click)="selectBackupDirectory(location)" [disabled]="!isElectron" title="Choose a folder">
+              <i class="material-icons">folder_open</i>
+            </button>
+          </div>
+          <div id="serverBackupLocationHelp" class="form-control-label desc">Leave blank to use the app default. A relative folder, such as archive/daily, stays inside this server's backup area. A full path, such as D:\ARK Backups, can be any folder on this machine or a network share; this server's backups go in a subfolder named after its server ID, so several servers can share one folder.</div>
           <div id="serverBackupLocationArchives" class="form-control-label desc">Existing backups stay in their original folder. Select that folder again to access them.</div>
         </div>
       </div>

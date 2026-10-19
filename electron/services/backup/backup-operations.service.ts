@@ -66,7 +66,18 @@ export class BackupOperationsService {
    * into the shared install (Content ~70 GB, Engine ~3 GB) must be skipped, not read into memory.
    */
   private async addToZip(zip: AdmZip, sourcePath: string, relativePath: string): Promise<void> {
-    const items = await fs.promises.readdir(sourcePath);
+    let items: string[];
+    try {
+      items = await fs.promises.readdir(sourcePath);
+    } catch (error) {
+      // The server removed a directory between listing its parent and reading it. The instance
+      // root itself missing is a real failure.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && relativePath) {
+        console.warn(`[backup-operations] Skipping ${sourcePath}: it disappeared while the server was running`);
+        return;
+      }
+      throw error;
+    }
 
     // The exe and DLLs directly in Win64 (~200 MB) are copied from the shared install on every
     // start. Its subfolders, ArkApi with the user's plugins among them, are kept.
@@ -75,7 +86,11 @@ export class BackupOperationsService {
     for (const item of items) {
       const itemPath = path.join(sourcePath, item);
       const itemRelativePath = relativePath ? path.join(relativePath, item) : item;
-      const stats = await fs.promises.lstat(itemPath);
+      // SaveWorld writes a timestamped .arkrbf and deletes it when the save lands. Listing it and
+      // then finding it gone is why a backup of a running server failed with ENOENT on lstat.
+      if (/\.arkrbf$/i.test(item)) continue;
+      const stats = await this.lstatOrGone(itemPath);
+      if (!stats) continue;
 
       if (item.toLowerCase().includes('backup') || stats.isSymbolicLink()
         || /^(logs|crashreports)$/i.test(item) || /\.(log|pid|lock)$/i.test(item)) {
@@ -90,17 +105,64 @@ export class BackupOperationsService {
         }
         await this.addToZip(zip, itemPath, itemRelativePath);
       } else if (stats.isFile() && !isWin64Dir) {
-        zip.addFile(itemRelativePath, await this.readSnapshotFile(itemPath));
+        const contents = await this.readSnapshotFile(itemPath);
+        if (contents) zip.addFile(itemRelativePath, contents);
       }
     }
   }
 
+  /**
+   * lstat, or null when a file the server created and then deleted is gone. A world, profile,
+   * tribe or config that disappears is still a failed backup: those are the files a restore needs.
+   */
+  private async lstatOrGone(itemPath: string): Promise<fs.Stats | null> {
+    const stats = await this.retryMissing(itemPath, target => fs.promises.lstat(target));
+    if (stats) return stats;
+    if (this.isPersistentData(itemPath)) {
+      const error = new Error(`ENOENT: no such file or directory, lstat '${itemPath}'`) as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    }
+    console.warn(`[backup-operations] Skipping ${itemPath}: it disappeared while the server was running`);
+    return null;
+  }
+
+  /** World, player, tribe and config files. A backup that omits one of these is not a backup. */
+  private isPersistentData(filePath: string): boolean {
+    return /\.(ark|arkprofile|arktribe|arktributetribe|json|ini)$/i.test(filePath);
+  }
+
+  /** One short wait, for a file SaveWorld replaces. Anything still missing stays missing. */
+  private async retryMissing<T>(filePath: string, read: (filePath: string) => Promise<T>): Promise<T | null> {
+    try {
+      return await read(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+    try {
+      return await read(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    }
+  }
+
   /** SaveWorld can briefly lock a world file on Windows. Never silently omit persistent data. */
-  private async readSnapshotFile(filePath: string): Promise<Buffer> {
+  private async readSnapshotFile(filePath: string): Promise<Buffer | null> {
     for (let attempt = 0; ; attempt++) {
       try { return await fs.promises.readFile(filePath); }
       catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          const recovered = await this.retryMissing(filePath, target => fs.promises.readFile(target));
+          if (recovered) return recovered;
+          if (!this.isPersistentData(filePath)) {
+            console.warn(`[backup-operations] Skipping ${filePath}: it disappeared while the server was running`);
+            return null;
+          }
+          throw error;
+        }
         if (attempt >= 4 || !['EBUSY', 'EPERM', 'EACCES'].includes(code || '')) throw error;
         await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
       }

@@ -15,11 +15,18 @@ import { openSqliteDatabase, SqliteExecutor, type ExecutorStatus, type SqliteHan
 import { hashArgon2id, hashToken } from './passwords';
 import { meshServer, meshSignInRequired, setMeshMember } from './mesh-hooks';
 import { meshDesktopIdentity, setMeshDesktopMode } from '../auth/desktop-session';
+import { clearRememberedLogin, loadRememberedLogin } from '../../utils/remembered-login.utils';
 import { isServerMoving } from '../../utils/ark/ark-server/ark-server-state.utils';
 import { knownClusters, rememberClusters } from '../clusters/cluster-registry';
 import { certificateCoversHost, certificateSerial, createMeshCa, generateKeyPair, signNodeCertificate } from './certificates';
 import { PROTOCOL_VERSION, type NodeRecord } from '../../types/mesh.types';
 
+jest.mock('../../utils/remembered-login.utils', () => ({
+  loadRememberedLogin: jest.fn(() => null),
+  clearRememberedLogin: jest.fn(),
+  saveRememberedLogin: jest.fn(() => true),
+  canRememberLogin: jest.fn(() => true)
+}));
 jest.mock('../../utils/platform.utils', () => ({
   getDefaultInstallDir: jest.fn(),
   getFreeMemory: jest.fn(() => 8 * 1024 ** 3),
@@ -3904,6 +3911,19 @@ describe('MeshService', () => {
       await service.resumeIfJoined();
 
       expect(await service.status()).toMatchObject({ enabled: false, reconnecting: true, meshId: 'mesh-1', nodeId: LOCAL });
+      expect((await service.status()).warning).toContain('Waiting for another member to send this machine its copy');
+      expect(service.reconnecting()).toBe(true);
+    });
+
+    it('can still leave while it waits for its copy, and is standalone after', async () => {
+      rqlite.loaded = false;
+      await service.resumeIfJoined();
+
+      await service.leaveWithoutQuorum();
+
+      expect(service.reconnecting()).toBe(false);
+      expect(await service.status()).toMatchObject({ enabled: false, meshId: null });
+      expect((await service.status()).reconnecting).toBeUndefined();
     });
 
     it('stops waiting for its copy, and stops rqlited, when the app stops the mesh', async () => {
@@ -3977,6 +3997,27 @@ describe('MeshService', () => {
         service.logoutDesktop();
 
         expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: null }));
+      });
+
+      it('signs back in with the remembered password', async () => {
+        jest.mocked(loadRememberedLogin).mockReturnValue({ username: 'ada', password: 'pw' });
+        jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(ada as never);
+
+        await service.restoreRememberedDesktop();
+
+        expect(userDatabaseService.verifyCredentials).toHaveBeenCalledWith('ada', 'pw');
+        expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: ada }));
+        expect(clearRememberedLogin).not.toHaveBeenCalled();
+      });
+
+      it('forgets a remembered password the account copy refuses', async () => {
+        jest.mocked(loadRememberedLogin).mockReturnValue({ username: 'ada', password: 'old' });
+        jest.mocked(userDatabaseService.verifyCredentials).mockResolvedValue(null);
+
+        await service.restoreRememberedDesktop();
+
+        expect(meshDesktopIdentity()).toEqual(expect.objectContaining({ user: null }));
+        expect(clearRememberedLogin).toHaveBeenCalled();
       });
     });
 

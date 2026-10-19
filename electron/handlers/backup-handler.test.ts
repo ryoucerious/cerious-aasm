@@ -31,8 +31,13 @@ jest.mock('../services/backup/backup-copies.service', () => ({
 jest.mock('../services/mesh/mesh-service', () => ({
   meshService: { queryRemote: jest.fn(async () => null), forwardIfRemote: jest.fn(async () => null), fetchBackupCopy: jest.fn(), fetchBackupForDownload: jest.fn(async () => null) }
 }));
-jest.mock('../services/auth/permission-gate', () => ({ identifySender: jest.fn(() => ({ user: null })) }));
+jest.mock('../services/auth/permission-gate', () => ({ identifySender: jest.fn(() => ({ user: null, permissions: [], isAdmin: true })) }));
+jest.mock('../utils/backup-location.utils', () => ({
+  isAbsoluteBackupLocation: (value: string) => value.startsWith('/'),
+  validateBackupLocation: (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+}));
 import { backupCopies } from '../services/backup/backup-copies.service';
+import { identifySender } from '../services/auth/permission-gate';
 import { meshService } from '../services/mesh/mesh-service';
 import { setHostRouter } from '../services/host-routing';
 
@@ -145,6 +150,42 @@ describe('backup-handler', () => {
         expect(replies(channel)).toEqual([{ success: false, error: 'Invalid instance ID', requestId }]);
       }
     );
+  });
+
+  describe('save-backup-settings location', () => {
+    const backupsOnly = { user: { username: 'bob' }, permissions: ['backups.create'], isAdmin: false };
+
+    beforeEach(() => {
+      mockBackup.saveBackupSettings.mockResolvedValue({ success: true, message: 'Saved' });
+      mockBackup.getBackupSettings.mockResolvedValue({ success: true, settings: { ...settings, backupLocation: '/mnt/kept' } });
+    });
+
+    async function save(identity: object, backupLocation: string) {
+      jest.mocked(identifySender).mockReturnValueOnce(identity as ReturnType<typeof identifySender>);
+      await handlers['save-backup-settings']({ instanceId: 'a1', settings: { ...settings, backupLocation }, requestId: 'r1' }, sender);
+      return replies('save-backup-settings')[0];
+    }
+
+    it('refuses a new absolute folder from someone who can only make backups', async () => {
+      const reply = await save(backupsOnly, '/mnt/elsewhere');
+
+      expect(mockBackup.saveBackupSettings).not.toHaveBeenCalled();
+      expect(reply).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('change settings') }));
+    });
+
+    it.each([['a relative folder', 'nightly'], ['the absolute folder already set', '/mnt/kept']])(
+      'lets someone who can only make backups save %s', async (_label, location) => {
+        expect(await save(backupsOnly, location)).toEqual(expect.objectContaining({ success: true }));
+      }
+    );
+
+    it.each([
+      ['an Admin', { user: { username: 'ada' }, permissions: [], isAdmin: true }],
+      ['someone who can change settings', { user: { username: 'cy' }, permissions: ['backups.create', 'settings.manage'], isAdmin: false }]
+    ])('lets %s choose a new absolute folder', async (_label, identity) => {
+      expect(await save(identity, '/mnt/elsewhere')).toEqual(expect.objectContaining({ success: true }));
+      expect(mockBackup.getBackupSettings).not.toHaveBeenCalled();
+    });
   });
 
   describe('delete-backup', () => {

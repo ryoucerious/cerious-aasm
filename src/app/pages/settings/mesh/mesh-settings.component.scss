@@ -7,6 +7,17 @@
   word-break: break-all;
 }
 
+.mesh-reconnecting-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+
+  dt { color: var(--text-secondary); }
+  dd { margin: 0; word-break: break-all; }
+}
+
 .mesh-node-list {
   display: flex;
   flex-direction: column;

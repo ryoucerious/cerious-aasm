@@ -1,9 +1,10 @@
 import * as path from 'path';
-import { prepareBackupDirectory, validateBackupLocation } from '../utils/backup-location.utils';
+import { isAbsoluteBackupLocation, prepareBackupCopiesDirectory, prepareBackupDirectory, validateBackupLocation } from '../utils/backup-location.utils';
 import * as fs from 'fs';
 import * as bcrypt from 'bcrypt';
 import type { ChildProcess } from 'child_process';
 import * as globalConfigUtils from '../utils/global-config.utils';
+import { MAX_REMEMBER_ME_DAYS, MIN_REMEMBER_ME_DAYS, validRememberMeDays } from '../utils/global-config.utils';
 import type { GlobalConfig } from '../utils/global-config.utils';
 import { validatePort, sanitizeString } from '../utils/validation.utils';
 import { getDefaultInstallDir } from '../utils/platform.utils';
@@ -46,8 +47,15 @@ export class SettingsService {
       delete incoming.authenticationPasswordSet;
       if (incoming.backupLocation !== undefined) {
         incoming.backupLocation = validateBackupLocation(incoming.backupLocation);
-        // Individual server folders are checked again when resolved on their hosting machine.
-        prepareBackupDirectory();
+        // An absolute path is created and checked here. A relative one stays inside the app backup
+        // area; each server's folder is checked again when resolved on its hosting machine.
+        if (isAbsoluteBackupLocation(incoming.backupLocation)) prepareBackupDirectory(undefined, incoming.backupLocation);
+        else prepareBackupDirectory();
+      }
+      if (incoming.backupCopiesLocation !== undefined) {
+        incoming.backupCopiesLocation = incoming.backupCopiesLocation
+          ? prepareBackupCopiesDirectory(incoming.backupCopiesLocation)
+          : '';
       }
 
       if (!canChangeLogin) {
@@ -57,6 +65,10 @@ export class SettingsService {
 
       if (incoming.webServerPort !== undefined && !validatePort(incoming.webServerPort)) {
         return { success: false, error: 'Invalid web server port' };
+      }
+
+      if (incoming.rememberMeDays !== undefined && validRememberMeDays(incoming.rememberMeDays) === undefined) {
+        return { success: false, error: `Remember me must be a whole number of days from ${MIN_REMEMBER_ME_DAYS} to ${MAX_REMEMBER_ME_DAYS}` };
       }
 
       if (incoming.serverDataDir && typeof incoming.serverDataDir === 'string') {

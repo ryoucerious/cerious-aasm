@@ -132,7 +132,17 @@ describe('AuthService', () => {
 
       const init = fetchSpy.calls.mostRecent().args[1] as RequestInit;
       expect(fetchSpy.calls.mostRecent().args[0]).toBe('/api/login');
-      expect(JSON.parse(String(init.body))).toEqual({ username: 'ann', password: '  pass word  ' });
+      expect(JSON.parse(String(init.body))).toEqual({ username: 'ann', password: '  pass word  ', remember: false });
+    });
+
+    it('asks for a remembered session when remember me is checked', async () => {
+      const fetchSpy = respond(200, { success: true });
+      const service = create(false);
+
+      await service.login('ann', 'secret', true);
+
+      const init = fetchSpy.calls.mostRecent().args[1] as RequestInit;
+      expect(JSON.parse(String(init.body)).remember).toBeTrue();
     });
 
     it('reconnects under the new session, and knows who is signed in, before it resolves', async () => {

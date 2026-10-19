@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { checkedBackupCopiesDirectory } from '../../utils/backup-location.utils';
 import { loadGlobalConfig } from '../../utils/global-config.utils';
 import { getDefaultInstallDir } from '../../utils/platform.utils';
 
@@ -36,7 +37,11 @@ const SAFE_NAME = /^[\w.-]+\.zip$/;
  */
 export class BackupCopiesService {
   constructor(
-    private root: () => string = () => path.join(loadGlobalConfig().serverDataDir || getDefaultInstallDir(), 'backup-copies'),
+    private root: () => string = () => {
+      const configured = loadGlobalConfig().backupCopiesLocation;
+      if (configured) return checkedBackupCopiesDirectory(configured);
+      return path.join(loadGlobalConfig().serverDataDir || getDefaultInstallDir(), 'backup-copies');
+    },
     private now: () => number = Date.now
   ) {}
 

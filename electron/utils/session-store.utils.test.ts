@@ -86,6 +86,19 @@ describe('session-store.utils', () => {
     expect(getSession('token-1')).toEqual(saved);
   });
 
+  it('keeps a remembered session across a restart until its own expiry, past the one-day default', () => {
+    const created = new Date();
+    const expiresAt = new Date(created.getTime() + 30 * SESSION_MAX_AGE_MS);
+    setSession('token-1', session({ created, expiresAt }));
+
+    restart();
+    jest.spyOn(Date, 'now').mockReturnValue(created.getTime() + 2 * SESSION_MAX_AGE_MS);
+    expect(getSession('token-1')?.expiresAt).toEqual(expiresAt);
+
+    jest.spyOn(Date, 'now').mockReturnValue(expiresAt.getTime() + 1);
+    expect(getSession('token-1')).toBeUndefined();
+  });
+
   it('saves a versioned store that only the owner can read', () => {
     setSession('token-1', session());
 

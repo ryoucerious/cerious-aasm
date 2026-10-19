@@ -21,6 +21,7 @@ const loginAttempts = new Map<string, AttemptWindow>();
 
 export async function loginHandler(req: express.Request, res: express.Response) {
   const { username, password } = req.body ?? {};
+  const remember = req.body?.remember === true;
   const validation = validateAuthInput(username, password);
   if (!validation.valid) {
     res.status(400).json({ success: false, error: validation.error });
@@ -46,7 +47,7 @@ export async function loginHandler(req: express.Request, res: express.Response) 
   const account = await verifyWithUserDatabase(cleanUsername, password);
   if (account) {
     loginAttempts.delete(limiterKey);
-    createSession(req, res, account.username, account);
+    createSession(req, res, account.username, account, remember);
     res.json({ success: true, message: 'Login successful', user: account });
     return;
   }
@@ -58,7 +59,7 @@ export async function loginHandler(req: express.Request, res: express.Response) 
   if (hasLegacyLogin && cleanUsername === authConfig.username && passwordMatches) {
     loginAttempts.delete(limiterKey);
     // From the snapshot the password was checked against: the login may have changed during the hash.
-    createSession(req, res, cleanUsername, { loginFingerprint: legacyLoginFingerprint(authConfig) });
+    createSession(req, res, cleanUsername, { loginFingerprint: legacyLoginFingerprint(authConfig) }, remember);
     res.json({ success: true, message: 'Login successful' });
     return;
   }

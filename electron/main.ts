@@ -538,7 +538,8 @@ app.on('ready', async () => {
 
   await prepareAccounts();
   await meshService.resumeIfJoined().catch(error => console.error('[main] Mesh did not resume:', error));
-  // The window asks who is signed in as soon as it opens, so the mesh decision has to come first.
+  // Before the window asks who is signed in, so a remembered mesh login is already in place.
+  await meshService.restoreRememberedDesktop().catch(error => console.error('[main] Remembered login was not restored:', error));
   createWindow();
   initializeBackupSystem().catch(error => console.error('[main] Backup system failed to start:', error));
   automationService.initializeAutomation();

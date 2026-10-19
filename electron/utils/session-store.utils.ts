@@ -5,7 +5,7 @@ import { getDefaultInstallDir } from './platform.utils';
 import { writeFileAtomic } from './fs.utils';
 import type { Permission } from '../types/auth.types';
 
-/** A session older than this is refused and pruned. */
+/** How long a session lasts without "remember me", and for one saved before sessions carried an expiry. */
 export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const STORE_VERSION = 2;
@@ -20,6 +20,8 @@ const KEY_PATTERN = /^[0-9a-f]{64}$/;
 export interface SessionData {
   username: string;
   created: Date;
+  /** Refused from this moment on. Absent means `created` plus SESSION_MAX_AGE_MS. */
+  expiresAt?: Date;
   userId?: string;
   roleId?: string;
   permissions?: Permission[];
@@ -32,6 +34,7 @@ interface StoredSession {
   token: string;
   username: string;
   created: string;
+  expiresAt?: string;
   userId?: string;
   roleId?: string;
   permissions?: string[];
@@ -168,9 +171,11 @@ function toSession(entry: StoredSession): SessionData | null {
   if (typeof entry?.token !== 'string' || typeof entry.username !== 'string' || Number.isNaN(created.getTime())) {
     return null;
   }
+  const expiresAt = typeof entry.expiresAt === 'string' ? new Date(entry.expiresAt) : undefined;
   return {
     username: entry.username,
     created,
+    expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : undefined,
     userId: typeof entry.userId === 'string' ? entry.userId : undefined,
     roleId: typeof entry.roleId === 'string' ? entry.roleId : undefined,
     permissions: Array.isArray(entry.permissions)
@@ -188,6 +193,7 @@ function saveSessions(): void {
       token,
       username: session.username,
       created: session.created.toISOString(),
+      expiresAt: session.expiresAt?.toISOString(),
       userId: session.userId,
       roleId: session.roleId,
       permissions: session.permissions,
@@ -203,7 +209,8 @@ function saveSessions(): void {
 }
 
 function isExpired(session: SessionData, now = Date.now()): boolean {
-  return now - session.created.getTime() > SESSION_MAX_AGE_MS;
+  const expiresAt = session.expiresAt?.getTime() ?? session.created.getTime() + SESSION_MAX_AGE_MS;
+  return now > expiresAt;
 }
 
 function cleanupExpiredSessions(): void {

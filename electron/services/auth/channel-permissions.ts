@@ -192,6 +192,7 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-mesh-status': null,
   'mesh-login': null,
   'mesh-logout': null,
+  'get-remembered-login': null,
   'mesh-bootstrap-admin': null,
   'create-mesh': PERMISSIONS.MESH_CONFIGURE,
   'join-mesh': PERMISSIONS.MESH_CONFIGURE,

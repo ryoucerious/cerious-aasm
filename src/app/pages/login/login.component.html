@@ -28,6 +28,13 @@
           placeholder="Enter password"
         />
       </div>
+      <div class="form-group">
+        <label class="form-control-label toggle-label remember-login">
+          <input type="checkbox" class="toggle-switch" [(ngModel)]="remember" />
+          <span class="slider"></span>
+          <span class="toggle-text">Remember me</span>
+        </label>
+      </div>
       <div class="login-error" *ngIf="errorMessage" role="alert">
         <i class="material-icons">error_outline</i>
         <span>{{ errorMessage }}</span>

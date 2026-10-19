@@ -22,6 +22,7 @@ import { arkUpdateProgress, beginClusterUpdate } from '../ark-update.service';
 import { relaunchInPlace } from '../docker-runtime-update';
 import { sampleHostResources } from '../host-resources';
 import { setMeshDesktopMode, setMeshDesktopUser } from '../auth/desktop-session';
+import { clearRememberedLogin, loadRememberedLogin } from '../../utils/remembered-login.utils';
 import type { SenderIdentity } from '../auth/permission-gate';
 import { collectCapabilities, ensureNodeIdentity, nodeIdentityPath, readNodeIdentity, writeNodeIdentity, type NodeIdentityFile } from '../runtime/node-identity';
 import type { InstanceConfig } from '../../types/server-instance.types';
@@ -41,7 +42,7 @@ import { createMeshCa, generateKeyPair, signNodeCertificate, certificateCoversHo
 import { executeCommand } from './command-router';
 import { providerForProfile } from './cluster-storage';
 import { clockSkewMs, probeTcp, wgInstalled, wireguardConfig, wireguardPrivateKey, applyWireguard } from './diagnostics';
-import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshWriteBlock, noteLocalNode, noteMeshListenPorts, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
+import { meshServer, meshServers, registerMeshAuth, setMeshMember, setMeshReconnecting, setMeshWriteBlock, noteLocalNode, noteMeshListenPorts, noteMeshServers, noteSecurityVersion, type MeshWriteOp } from './mesh-hooks';
 import { latestAccountsBeforeJoin, localLoginToCarry, machineAdminName, readAccountsSnapshot, type CarriedLogin } from './machine-admin';
 import { MeshRepository } from './mesh-repository';
 import { SCHEMA_VERSION } from './schema';
@@ -207,12 +208,18 @@ export class MeshService {
     this.claimMembership();
     const secrets = readSecrets();
     if (!secrets) {
-      if (fs.existsSync(secretsPath())) this.scheduleResume();
-      else console.error('[mesh] This node is in a mesh but its rqlite credentials are missing.');
+      if (fs.existsSync(secretsPath())) {
+        this.resumeProblem = 'This machine could not read its mesh credentials. Trying again every 30 seconds.';
+        this.scheduleResume();
+      } else {
+        this.resumeProblem = 'This machine\'s mesh credentials are missing, so it cannot reconnect. Leave the mesh, then join again with a new token.';
+        console.error('[mesh] This node is in a mesh but its rqlite credentials are missing.');
+      }
       return;
     }
     const certs = readCertPaths();
     if (!certs) {
+      this.resumeProblem = 'This machine\'s mesh certificates are missing, so it cannot reconnect. Leave the mesh, then join again with a new token.';
       console.error('[mesh] This node is in a mesh but its certificate files are missing.');
       return;
     }
@@ -224,11 +231,13 @@ export class MeshService {
       // elected without this node's vote.
       if (!await new MeshRepository(client).hasCopy()) {
         if (!this.waitingCopy) console.log('[mesh] Waiting for the other members to bring this node\'s copy of the mesh up to date.');
+        this.resumeProblem = 'Waiting for another member to send this machine its copy of the mesh. Start the other machine and check that the two can reach each other on the network.';
         this.waitingCopy = client;
         this.scheduleResume(COPY_RETRY_MS);
         return;
       }
       this.waitingCopy = null;
+      this.resumeProblem = null;
       this.repo = new MeshRepository(client);
       this.rqlite = client;
       this.secrets = secrets;
@@ -247,6 +256,7 @@ export class MeshService {
     } catch (error) {
       console.error('[mesh] Could not resume the mesh; trying again in 30 s:', error);
       await this.stop();
+      this.resumeProblem = `Could not start this machine's copy of the mesh (${messageOf(error)}). Trying again every 30 seconds.`;
       this.scheduleResume();
     }
   }
@@ -269,6 +279,8 @@ export class MeshService {
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
   /** rqlited, started and ready, while this node waits for its copy of the mesh to be filled in. */
   private waitingCopy: RqliteClient | null = null;
+  /** Why the last resume did not get this node back into its mesh, shown while it reconnects. */
+  private resumeProblem: string | null = null;
 
   private scheduleResume(delayMs = RESUME_RETRY_MS): void {
     if (this.resumeTimer) return;
@@ -833,6 +845,24 @@ export class MeshService {
     const user = this.repo ? await this.verifyLogin(username, password) : await this.verifyMirroredLogin(username, password);
     if (user) this.adoptDesktop(user);
     return user;
+  }
+
+  /**
+   * Signs the desktop back in from the password it was asked to remember. A wrong password is
+   * forgotten. A mesh that cannot be asked yet keeps it for the next launch.
+   */
+  async restoreRememberedDesktop(): Promise<void> {
+    if (!readNodeIdentity()?.meshId) return;
+    const saved = loadRememberedLogin();
+    if (!saved) return;
+    const user = await this.loginDesktop(saved.username, saved.password);
+    if (user) return;
+    if (this.repo) {
+      const decision = partitionDecision(await this.repo.hasQuorum(), 'login');
+      if (!decision.allow) return;
+    }
+    clearRememberedLogin();
+    console.warn('[mesh] Remembered login was not accepted; sign in again.');
   }
 
   /**
@@ -2319,6 +2349,11 @@ export class MeshService {
     });
   }
 
+  /** In a mesh by node.json, without a running copy of the mesh database to show or change it. */
+  reconnecting(): boolean {
+    return !this.repo && !!this.identity()?.meshId;
+  }
+
   async status(): Promise<MeshStatus> {
     const identity = this.identity();
     if (!this.repo && identity?.meshId) {
@@ -2328,7 +2363,8 @@ export class MeshService {
         blocker: this.meshBlocker(),
         meshId: identity.meshId,
         reconnecting: true,
-        warning: 'This machine is in a mesh and is reconnecting to the other members. A mesh of two needs both machines running to get going again.'
+        warning: this.resumeProblem
+          ?? 'This machine is in a mesh and is reconnecting to the other members. A mesh of two needs both machines running to get going again.'
       };
     }
     if (!this.repo || !identity?.meshId) {
@@ -2436,6 +2472,7 @@ export class MeshService {
       if (this.attachedIdentity) this.attachedIdentity = left;
     }
     await this.stop();
+    this.resumeProblem = null;
     noteLocalNode(null);
     setMeshMember(false);
     setMeshDesktopMode(false);
@@ -3386,6 +3423,8 @@ export class MeshService {
 }
 
 export const meshService = new MeshService();
+
+setMeshReconnecting(() => meshService.reconnecting());
 
 setInventoryMerge(instances => meshService.withMeshServers(instances));
 

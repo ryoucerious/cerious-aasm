@@ -128,6 +128,17 @@ export function meshAuth(): MeshAuthApi | null {
   return auth;
 }
 
+let reconnecting: () => boolean = () => false;
+
+export function setMeshReconnecting(next: () => boolean): void {
+  reconnecting = next;
+}
+
+/** In a mesh by its own record, but its copy of the mesh database is not running yet. */
+export function meshReconnecting(): boolean {
+  return reconnecting();
+}
+
 export function setMeshWriteBlock(next: (op: MeshWriteOp) => string | null): void {
   writeBlock = next;
 }

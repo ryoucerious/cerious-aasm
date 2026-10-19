@@ -79,6 +79,18 @@ describe('SettingsService', () => {
       expect(save).toHaveBeenCalledWith(expect.objectContaining({ authenticationPassword: '  new secret  ' }));
     });
 
+    it('saves a remember-me duration in whole days from 1 to 365', async () => {
+      await expect(service.updateGlobalConfig({ ...stored, rememberMeDays: 90 }, ADMIN)).resolves.toMatchObject({ success: true });
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ rememberMeDays: 90 }));
+    });
+
+    it.each([0, 366, 2.5, '30'])('refuses a remember-me duration of %p', async days => {
+      const result = await service.updateGlobalConfig({ ...stored, rememberMeDays: days }, ADMIN);
+
+      expect(result).toEqual({ success: false, error: 'Remember me must be a whole number of days from 1 to 365' });
+      expect(save).not.toHaveBeenCalled();
+    });
+
     it('never stores the authenticationPasswordSet flag', async () => {
       await service.updateGlobalConfig({ ...stored, authenticationPasswordSet: true }, ADMIN);
 

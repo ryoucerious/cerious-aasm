@@ -7,6 +7,7 @@ import { NotificationService } from '../../../core/services/notification.service
 import { AuthService } from '../../../core/services/auth.service';
 import { MockNotificationService } from '../../../../../test/mocks/mock-notification.service';
 import { BusyService } from '../../../core/services/busy.service';
+import { IpcService } from '../../../core/services/ipc.service';
 
 describe('MeshSettingsComponent', () => {
   let fixture: ComponentFixture<MeshSettingsComponent>;
@@ -21,8 +22,11 @@ describe('MeshSettingsComponent', () => {
   let replies: Record<string, unknown>;
   /** mesh-status as the backend pushes it: after every heartbeat, with new objects each time. */
   let statusEvents: Subject<unknown>;
+  /** Whether the page runs in the desktop app rather than a browser. */
+  let isElectron: boolean;
 
   beforeEach(() => {
+    isElectron = false;
     denied = new Set<string>();
     canManageNodes = true;
     renameReply = null;
@@ -41,6 +45,7 @@ describe('MeshSettingsComponent', () => {
       providers: [
         { provide: MessagingService, useValue: { sendMessage, receiveMessage: (channel: string) => (channel === 'mesh-status' ? statusEvents : NEVER) } },
         { provide: NotificationService, useValue: notification },
+        { provide: IpcService, useValue: { get isElectron() { return isElectron; } } },
         { provide: AuthService, useValue: { can: (permission: string) => !denied.has(permission) && (permission !== 'nodes.manage' || canManageNodes), identity: { accountsInUse: true }, refresh: async () => undefined } }
       ]
     }).compileComponents();
@@ -87,6 +92,38 @@ describe('MeshSettingsComponent', () => {
     expect(page.textContent).not.toContain('This install is standalone');
     expect(page.textContent).not.toContain('Create a mesh');
     expect(page.textContent).not.toContain('Join a mesh');
+  });
+
+  it('offers to leave while reconnecting, for when the other machines are gone for good', async () => {
+    const page = await open({ ...standalone, reconnecting: true, meshId: 'mesh-1', nodeName: 'PC 1' });
+    replies['leave-mesh-anyway'] = { success: true };
+
+    expect(page.querySelector('.mesh-reconnecting-facts')?.textContent).toContain('PC 1');
+    expect(page.querySelector('.mesh-reconnecting-facts')?.textContent).toContain('mesh-1');
+    page.querySelector<HTMLButtonElement>('.mesh-reconnecting button')!.click();
+    fixture.detectChanges();
+    Array.from(page.querySelectorAll<HTMLButtonElement>('.action-group-modal button')).find(button => button.textContent?.trim() === 'Leave anyway')!.click();
+
+    expect(sendMessage).toHaveBeenCalledWith('leave-mesh-anyway', {});
+  });
+
+  // Reconnecting, the desktop may have no account that signs in, or none that may remove machines.
+  it('offers to leave on the desktop while reconnecting, whatever the role allows', async () => {
+    denied = new Set(['nodes.remove']);
+    isElectron = true;
+
+    const page = await open({ ...standalone, reconnecting: true });
+
+    expect(page.querySelector('.mesh-reconnecting button')?.textContent).toContain('Leave anyway');
+  });
+
+  it('keeps leaving to those who may remove machines in a browser', async () => {
+    denied = new Set(['nodes.remove']);
+
+    const page = await open({ ...standalone, reconnecting: true });
+
+    expect(page.querySelector('.mesh-reconnecting')).not.toBeNull();
+    expect(page.querySelector('.mesh-reconnecting button')).toBeNull();
   });
 
   describe('naming a machine', () => {

@@ -2,6 +2,8 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BackupTabComponent } from './backup-tab.component';
 import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
 import { BackupCopiesService, BackupCopy } from '../../../../core/services/backup-copies.service';
+import { IpcService } from '../../../../core/services/ipc.service';
+import { MessagingService } from '../../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { of } from 'rxjs';
 
@@ -28,7 +30,9 @@ describe('BackupTabComponent', () => {
       imports: [BackupTabComponent],
       providers: [
         { provide: BackupCopiesService, useValue: copies },
-        { provide: NotificationService, useValue: notification }
+        { provide: NotificationService, useValue: notification },
+        { provide: IpcService, useValue: { isElectron: false } },
+        { provide: MessagingService, useValue: { sendMessage: () => of(null), receiveMessage: () => of(null) } }
       ]
     }).compileComponents();
     fixture = TestBed.createComponent(BackupTabComponent);

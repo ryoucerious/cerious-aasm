@@ -81,7 +81,17 @@ describe('auth-routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res._getJSONData()).toEqual({ success: true, message: 'Login successful', user: account });
-      expect(createSession).toHaveBeenCalledWith(req, res, 'jared', account);
+      expect(createSession).toHaveBeenCalledWith(req, res, 'jared', account, false);
+    });
+
+    it('remembers the sign-in only when the client asks with remember: true', async () => {
+      mockedVerifyWithUserDatabase.mockResolvedValue(account);
+
+      const remembered = await login({ username: 'jared', password: 'correct horse', remember: true });
+      expect(createSession).toHaveBeenLastCalledWith(remembered.req, remembered.res, 'jared', account, true);
+
+      const loose = await login({ username: 'jared', password: 'correct horse', remember: 'yes' });
+      expect(createSession).toHaveBeenLastCalledWith(loose.req, loose.res, 'jared', account, false);
     });
 
     it('passes the password on exactly as typed', async () => {
@@ -97,7 +107,7 @@ describe('auth-routes', () => {
       const { req, res } = await login({ username: 'admin', password: 'pass' });
 
       expect(res._getJSONData()).toEqual({ success: true, message: 'Login successful' });
-      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' });
+      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' }, false);
     });
 
     it('stamps a legacy session with the login the password was checked against', async () => {
@@ -109,7 +119,7 @@ describe('auth-routes', () => {
 
       const { req, res } = await login({ username: 'admin', password: 'old password' });
 
-      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' });
+      expect(createSession).toHaveBeenCalledWith(req, res, 'admin', { loginFingerprint: 'admin:legacy-hash' }, false);
     });
 
     it('refuses a wrong password', async () => {

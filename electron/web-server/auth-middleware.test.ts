@@ -18,6 +18,13 @@ jest.mock('./auth-config', () => ({ getAuthConfig: jest.fn(), legacyLoginFingerp
 jest.mock('../services/messaging.service', () => ({ messagingService: { closeWebSockets: jest.fn() } }));
 jest.mock('../utils/fs.utils');
 jest.mock('../utils/platform.utils', () => ({ getDefaultInstallDir: () => '/install' }));
+jest.mock('../utils/global-config.utils', () => ({
+  ...jest.requireActual('../utils/global-config.utils'),
+  loadGlobalConfig: jest.fn(() => ({ rememberMeDays: 30 }))
+}));
+import { loadGlobalConfig } from '../utils/global-config.utils';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const mockedGetAuthConfig = jest.mocked(getAuthConfig);
 jest.mocked(legacyLoginFingerprint).mockImplementation(() => {
@@ -98,13 +105,47 @@ describe('auth-middleware', () => {
       expect(getSession(res.cookies.session.value)?.userId).toBeUndefined();
     });
 
-    it('sets an HttpOnly, SameSite=Strict cookie that lasts as long as the session', () => {
+    it('sets an HttpOnly, SameSite=Strict cookie that ends with the browser when not remembered', () => {
       const res = httpMocks.createResponse();
+      const before = Date.now();
       createSession(request(), res, 'jared', { loginFingerprint: 'fp' });
 
-      expect(res.cookies.session.options).toEqual({
-        httpOnly: true, secure: false, sameSite: 'strict', maxAge: SESSION_MAX_AGE_MS
-      });
+      expect(res.cookies.session.options).toEqual({ httpOnly: true, secure: false, sameSite: 'strict' });
+      const expiresAt = getSession(res.cookies.session.value)!.expiresAt!.getTime();
+      expect(expiresAt).toBeGreaterThanOrEqual(before + SESSION_MAX_AGE_MS);
+      expect(expiresAt).toBeLessThanOrEqual(Date.now() + SESSION_MAX_AGE_MS);
+    });
+
+    it('keeps a remembered sign-in for the configured days, cookie and session alike', () => {
+      jest.mocked(loadGlobalConfig).mockReturnValue({ rememberMeDays: 7 } as never);
+      const res = httpMocks.createResponse();
+      createSession(request(), res, 'jared', { loginFingerprint: 'fp' }, true);
+
+      expect(res.cookies.session.options).toEqual({ httpOnly: true, secure: false, sameSite: 'strict', maxAge: 7 * DAY_MS });
+      const session = getSession(res.cookies.session.value)!;
+      expect(session.expiresAt!.getTime() - session.created.getTime()).toBe(7 * DAY_MS);
+    });
+
+    it('falls back to 30 days when the configured value is not usable', () => {
+      jest.mocked(loadGlobalConfig).mockReturnValue({ rememberMeDays: 0 } as never);
+      const res = httpMocks.createResponse();
+      createSession(request(), res, 'jared', { loginFingerprint: 'fp' }, true);
+
+      expect(res.cookies.session.options.maxAge).toBe(30 * DAY_MS);
+    });
+
+    it('honours a remembered session past a day and refuses it once its days run out', () => {
+      jest.mocked(loadGlobalConfig).mockReturnValue({ rememberMeDays: 30 } as never);
+      const res = httpMocks.createResponse();
+      createSession(request(), res, 'jared', { loginFingerprint: legacyLoginFingerprint() }, true);
+      const cookie = `session=${res.cookies.session.value}`;
+      const start = Date.now();
+
+      jest.spyOn(Date, 'now').mockReturnValue(start + 2 * DAY_MS);
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(true);
+
+      jest.spyOn(Date, 'now').mockReturnValue(start + 31 * DAY_MS);
+      expect(isAuthenticated(request({ headers: { cookie } }))).toBe(false);
     });
 
     it('marks the cookie Secure when the request came over HTTPS', () => {

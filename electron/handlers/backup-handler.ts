@@ -7,6 +7,9 @@ import { backupCopies } from '../services/backup/backup-copies.service';
 import { meshService } from '../services/mesh/mesh-service';
 import { identifySender } from '../services/auth/permission-gate';
 import { registerForwardable } from '../services/host-routing';
+import { isAbsoluteBackupLocation, validateBackupLocation } from '../utils/backup-location.utils';
+import { PERMISSIONS } from '../types/auth.types';
+import type { MessageSender } from '../types/messaging.types';
 
 const INVALID_ID = { success: false, error: 'Invalid instance ID' };
 
@@ -58,9 +61,27 @@ onRequest('get-backup-settings', async payload => {
   return fromResult(result, ({ settings }) => ({ settings }));
 }, { fallbackError: 'Failed to get backup settings', host: { idKey: 'instanceId', read: true } });
 
-onRequest('save-backup-settings', async payload => {
+const ABSOLUTE_LOCATION_REFUSED = 'Only an Admin, or someone who can change settings, can send backups to a folder outside the app.';
+
+/**
+ * Backups hold the saves and the INI passwords, so pointing them at any folder on the host or
+ * a share takes more than the right to make backups. Keeping the folder already set is fine.
+ */
+async function mayChooseBackupLocation(sender: MessageSender, instanceId: string, location: unknown): Promise<boolean> {
+  const identity = identifySender(sender);
+  if (identity.isAdmin || identity.permissions.includes(PERMISSIONS.SETTINGS_MANAGE)) return true;
+  const chosen = validateBackupLocation(location);
+  if (!isAbsoluteBackupLocation(chosen)) return true;
+  const current = await backupService.getBackupSettings(instanceId);
+  return current.success && current.settings?.backupLocation === chosen;
+}
+
+onRequest('save-backup-settings', async (payload, { sender }) => {
   const { instanceId, settings } = payload;
   if (!validateInstanceId(instanceId)) return INVALID_ID;
+  if (!await mayChooseBackupLocation(sender, instanceId, settings?.backupLocation)) {
+    return { success: false, error: ABSOLUTE_LOCATION_REFUSED };
+  }
   const result = await backupService.saveBackupSettings(instanceId, settings);
   return fromResult(result, ({ message }) => ({ message }));
 }, { fallbackError: 'Failed to save backup settings', host: { idKey: 'instanceId' } });

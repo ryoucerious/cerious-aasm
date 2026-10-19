@@ -21,8 +21,11 @@ export class LoginComponent implements OnInit {
 
   username = '';
   password = '';
+  /** Stay signed in. The web UI gets a session cookie for the days set under Settings; the desktop keeps the password encrypted. */
+  remember = false;
   errorMessage = '';
   isLoading = false;
+  private autoTried = false;
   /** A mesh with no accounts yet: this form creates the admin instead of checking a password. */
   creatingAdmin = false;
   /** The account this machine's own admin password signs in as, since it joined the mesh. */
@@ -39,6 +42,17 @@ export class LoginComponent implements OnInit {
       this.creatingAdmin = !!status?.enabled && status.hasAccounts === false;
       this.ownLogin = status?.ownLogin || '';
       if (this.ownLogin && !this.username) this.username = this.ownLogin;
+      this.cdr.markForCheck();
+    });
+    this.messaging.sendMessage<{ username?: string; password?: string }>('get-remembered-login', {}).subscribe(saved => {
+      if (!saved?.username) return;
+      this.username = saved.username;
+      this.remember = true;
+      if (saved.password && !this.autoTried && !this.creatingAdmin) {
+        this.password = saved.password;
+        this.autoTried = true;
+        void this.onLogin();
+      }
       this.cdr.markForCheck();
     });
   }
@@ -65,8 +79,8 @@ export class LoginComponent implements OnInit {
     this.isLoading = true;
     this.errorMessage = '';
     const result = this.creatingAdmin
-      ? await this.auth.bootstrapMeshAdmin(this.username.trim(), this.password)
-      : await this.auth.login(this.username.trim(), this.password);
+      ? await this.auth.bootstrapMeshAdmin(this.username.trim(), this.password, this.remember)
+      : await this.auth.login(this.username.trim(), this.password, this.remember);
     this.isLoading = false;
 
     if (result.success) {

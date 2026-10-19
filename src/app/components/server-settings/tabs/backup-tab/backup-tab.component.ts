@@ -4,6 +4,8 @@ import { BackupMetadata } from '../../../../core/interfaces/backup.interface';
 import { formatBytes, formatLocalDateTime } from '../../../../core/utils/format.utils';
 import { FieldMessages, FieldMessagesComponent } from '../../../field-messages/field-messages.component';
 import { BackupCopiesService, BackupCopy } from '../../../../core/services/backup-copies.service';
+import { IpcService } from '../../../../core/services/ipc.service';
+import { MessagingService } from '../../../../core/services/messaging/messaging.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 
 export type BackupFrequency = 'hourly' | 'daily' | 'weekly';
@@ -28,6 +30,30 @@ export class BackupTabComponent implements OnChanges {
   bringingBack = false;
   private readonly copies = inject(BackupCopiesService);
   private readonly notification = inject(NotificationService);
+  private readonly ipc = inject(IpcService);
+  private readonly messaging = inject(MessagingService);
+
+  get isElectron(): boolean {
+    return this.ipc.isElectron;
+  }
+
+  /** The folder picker writes an absolute path on the machine that hosts this server. */
+  selectBackupDirectory(location: HTMLInputElement): void {
+    if (!this.isElectron) return;
+    this.messaging.sendMessage<{ path?: string; error?: string }>(
+      'select-directory', { title: 'Select Backup Location' }, { timeoutMs: 10 * 60_000 }
+    ).subscribe({
+      next: result => {
+        if (result?.path && result.path !== this.backupLocation) {
+          location.value = result.path;
+          this.backupLocationChange.emit(result.path);
+        } else if (result?.error) {
+          this.notification.error(result.error, 'Directory Selection Failed');
+        }
+      },
+      error: () => this.notification.error('Failed to select directory', 'Error')
+    });
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['serverId']) this.loadCopy();

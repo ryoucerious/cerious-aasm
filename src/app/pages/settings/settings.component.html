@@ -106,11 +106,29 @@
     <div *ngIf="activeTab === 'storage'" class="settings-pane">
       <section class="settings-card">
         <h3 class="settings-card-title">Default Backup Location</h3>
-        <p class="settings-card-hint">Relative folder inside each server's app-managed backup area on this machine. Available in desktop, web and Docker installations. Leave blank for the original location. Servers may override this default.</p>
+        <p class="settings-card-hint">Where this machine writes server backups. Leave blank for the original location. A relative folder, such as archive/daily, stays inside the app backup area. An absolute path, such as D:\ARK Backups, uses that disk; each server gets its own folder there. Servers may override this default. Existing backups stay where they are.</p>
         <label for="appBackupLocation">Backup folder</label>
-        <input id="appBackupLocation" class="form-control input" [(ngModel)]="backupLocation" placeholder="For example: archives/daily" maxlength="160" />
-        <p class="settings-card-hint">Use letters, numbers, spaces, hyphens, underscores and / between folders. Existing backups stay in their original location; select that location again to access them. Docker stores these folders in the app data volume.</p>
+        <div class="settings-input-row">
+          <input id="appBackupLocation" class="form-control input" [(ngModel)]="backupLocation" placeholder="archive/daily or D:\ARK Backups" maxlength="1024" />
+          <button class="btn btn-secondary" type="button" (click)="selectBackupDirectory('backup')" [disabled]="!isElectron" title="Choose a folder">
+            <i class="material-icons">folder_open</i>
+          </button>
+        </div>
+        <p class="settings-card-hint">Relative folders use letters, numbers, spaces, hyphens, underscores and / . An absolute path is on the machine that hosts the servers. In Docker, that path has to be inside a mounted volume.</p>
         <button class="btn btn-primary" (click)="saveBackupLocation()">Save Backup Location</button>
+      </section>
+      <section class="settings-card">
+        <h3 class="settings-card-title">Backup Copies Location</h3>
+        <p class="settings-card-hint">Where this machine keeps the latest backup of servers that run on other machines of the mesh. Leave blank to keep them with the server data, or enter a full path to any folder on this machine or a network share. Existing copies stay where they are.</p>
+        <label for="appBackupCopiesLocation">Backup copies folder</label>
+        <div class="settings-input-row">
+          <input id="appBackupCopiesLocation" class="form-control input" [(ngModel)]="backupCopiesLocation" placeholder="E:\AASM Backup Copies" maxlength="1024" />
+          <button class="btn btn-secondary" type="button" (click)="selectBackupDirectory('copies')" [disabled]="!isElectron" title="Choose a folder">
+            <i class="material-icons">folder_open</i>
+          </button>
+        </div>
+        <p class="settings-card-hint">An absolute path on this machine. In Docker, that path has to be inside a mounted volume.</p>
+        <button class="btn btn-primary" (click)="saveBackupCopiesLocation()">Save Backup Copies Location</button>
       </section>
       <app-held-backup-copies></app-held-backup-copies>
       <section class="settings-card">
@@ -286,6 +304,28 @@
         <div *ngIf="authenticationEnabled && webServerRunning" class="ark-install-notice">
           <i class="material-icons">info</i>
           <span>Stop the web server to change these settings.</span>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h3 class="settings-card-title">Stay Signed In</h3>
+        <p class="settings-card-hint">
+          With "Remember me" on at sign-in, the browser stays signed in for this many days. With it off,
+          the sign-in ends when the browser closes.
+        </p>
+        <div class="form-group">
+          <label class="form-control-label" for="rememberMeDays">Remember me for (days)</label>
+          <input id="rememberMeDays"
+                 type="number"
+                 [ngModel]="rememberMeDays"
+                 (input)="rememberMeDays = +$event.target.value"
+                 (blur)="onRememberMeDaysChange($event.target.value)"
+                 class="form-control input"
+                 min="1"
+                 max="365"
+                 step="1"
+                 placeholder="30" />
+          <label class="form-control-label desc">From 1 to 365. A change applies from the next sign-in, even while the web server is running.</label>
         </div>
       </section>
 

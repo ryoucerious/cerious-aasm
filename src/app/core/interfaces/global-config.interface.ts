@@ -1,5 +1,7 @@
 export interface GlobalConfig {
   backupLocation?: string;
+  /** Absolute path for mesh backup copies. Empty keeps them next to the server data. */
+  backupCopiesLocation?: string;
   startWebServerOnLoad: boolean;
   webServerPort: number;
   authenticationEnabled: boolean;
@@ -12,4 +14,6 @@ export interface GlobalConfig {
   updateWarningMinutes?: number;
   serverStartDelaySeconds?: number;
   curseForgeApiKey?: string;
+  /** How long a web sign-in with "remember me" lasts. */
+  rememberMeDays?: number;
 }

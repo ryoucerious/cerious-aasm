@@ -111,4 +111,51 @@ describe('BackupOperationsService filesystem safety (real fs)', () => {
     expect(added.some(n => /TheIsland\.ark$/.test(n))).toBe(true);
     expect(added).toContain('config.json');
   });
+
+  it('addToZip leaves out a recovery file the running server is about to delete', async () => {
+    const save = path.join(instanceDir, 'ShooterGame', 'Saved', 'SavedArks', 'Astraeos_WP');
+    fs.mkdirSync(save, { recursive: true });
+    fs.writeFileSync(path.join(save, 'Astraeos_WP_19.10.2026_10.25.01.arkrbf'), 'partial');
+
+    const added: string[] = [];
+    await service.addToZip({ addFile: (name: string) => added.push(name) }, instanceDir, '');
+
+    expect(added.some(name => /\.arkrbf$/i.test(name))).toBe(false);
+    expect(added.some(name => /TheIsland\.ark$/.test(name))).toBe(true);
+  });
+
+  it('addToZip continues when a file disappears between listing and reading it', async () => {
+    const gone = path.join(instanceDir, 'notes.txt');
+    fs.writeFileSync(gone, 'temp');
+    const realLstat = fs.promises.lstat.bind(fs.promises);
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async target => {
+      if (String(target) === gone) {
+        const error = new Error(`ENOENT: no such file or directory, lstat '${gone}'`) as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return realLstat(target);
+    });
+
+    const added: string[] = [];
+    await service.addToZip({ addFile: (name: string) => added.push(name) }, instanceDir, '');
+
+    expect(added).not.toContain('notes.txt');
+    expect(added.some(name => /TheIsland\.ark$/.test(name))).toBe(true);
+  });
+
+  it('addToZip fails when the world file itself disappears', async () => {
+    const world = path.join(instanceDir, 'ShooterGame', 'Saved', 'SavedArks', 'TheIsland.ark');
+    const realLstat = fs.promises.lstat.bind(fs.promises);
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async target => {
+      if (String(target) === world) {
+        const error = new Error(`ENOENT: no such file or directory, lstat '${world}'`) as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return realLstat(target);
+    });
+
+    await expect(service.addToZip({ addFile: () => undefined }, instanceDir, '')).rejects.toThrow(/ENOENT/);
+  });
 });

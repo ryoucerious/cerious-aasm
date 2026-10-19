@@ -2,6 +2,33 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.3.2] - 2026-10-19
+
+Stay signed in with Remember me, keep backups on any folder or drive, and scheduled backups that no longer fail while a server is saving.
+
+> **Upgrading.**
+>
+> - Update every machine in a mesh to the same version.
+> - Existing relative backup locations keep working unchanged. Absolute paths are now accepted as well.
+> - Web sign-ins made before the update end after 24 hours, as before. Remember me applies from the next sign-in.
+
+### New Features & Improvements
+
+- **Remember Me at Sign-In**: The sign-in page has a Remember me toggle. In a browser, a remembered sign-in lasts 30 days by default, set from 1 to 365 days in Settings → Web Server → Stay Signed In; a change applies from the next sign-in, without restarting the web server. Without Remember me, the sign-in ends when the browser closes and never lasts more than 24 hours. In the desktop app of a mesh member, Remember me keeps the password encrypted by the operating system and signs in at launch; signing out forgets it.
+- **Backup Locations on Any Folder**: The app default in Settings → Storage and each server's Backups tab accept a full path to any folder on the machine or a network share, such as `D:\ARK Backups` or `\\nas\backups`, as well as relative folders. A folder button opens a picker in the desktop app. Each server's backups go in a subfolder named after its server ID, so several servers can share one folder.
+- **Backup Copies Location**: Settings → Storage can keep the latest backups of servers on other mesh machines in a folder of your choice instead of next to the server data. Existing copies stay where they are.
+- **A Way Out of a Mesh That Cannot Reconnect**: While this machine is in a mesh but its copy of the mesh is not running, Settings → Mesh shows the machine, the mesh ID and why it cannot reconnect: waiting for another member, missing or unreadable mesh credentials or certificates, or a mesh database that failed to start. The desktop app on that machine can always choose **Leave anyway** there, whoever is signed in; in a browser it still takes permission to remove machines.
+
+### Bug Fixes
+
+- **Scheduled Backups Failed While a Server Was Running**: ARK writes a temporary `.arkrbf` file while it saves the world and deletes it moments later, and a backup that listed it first failed with `ENOENT`. Backups now skip these files, along with any other file or folder that disappears while the backup runs. A save, profile, tribe or config file that disappears still fails the backup, so an incomplete archive is never reported as complete.
+- **Mesh Settings Were Empty While Reconnecting**: A machine that was in a mesh but not yet back in touch with it showed only a warning, with no details and no way to leave.
+
+### Security
+
+- **Absolute Backup Locations Need Change Settings**: Backups contain the world saves and the INI files, including admin and RCON passwords. Choosing a new absolute location for a server's backups takes an Admin or the Change settings permission; someone who may only create backups can still pick relative folders and keep a location already set. Absolute paths are checked as before: traversal, Windows device names, alternate data streams, symlinks and junctions are refused, and the folder must be readable and writable before it is saved.
+- **Remembered Sessions Expire on the Server**: A remembered browser sign-in carries its own expiry, kept with the encrypted session store, so the server refuses it after the configured days even if the browser still holds the cookie.
+
 ## [1.3.1] - 2026-10-18
 
 More control over backups, mods and automation, with fixes for cloning, plugin uploads and backups of running servers.

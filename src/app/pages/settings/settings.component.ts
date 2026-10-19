@@ -109,8 +109,10 @@ export class SettingsPageComponent implements OnInit {
   /** True once at least one account exists, so we know whether anyone could sign in. */
   accountsInUse = false;
   maxBackupDownloadSizeMB = 100;
+  rememberMeDays = 30;
   serverDataDir = '';
   backupLocation = '';
+  backupCopiesLocation = '';
   curseForgeApiKey = '';
 
   async saveCoreModKey(): Promise<void> {
@@ -126,7 +128,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   async saveBackupLocation(): Promise<void> {
-    const location = this.backupLocation;
+    const location = this.backupLocation.trim();
     try {
       const config = await this.configService.loadConfig();
       await this.configService.saveConfig({ ...config, backupLocation: location });
@@ -135,6 +137,40 @@ export class SettingsPageComponent implements OnInit {
     } catch (error) {
       this.notification.error(error instanceof Error ? error.message : 'Could not save backup location', 'Settings');
     }
+  }
+
+  async saveBackupCopiesLocation(): Promise<void> {
+    const location = this.backupCopiesLocation.trim();
+    try {
+      const config = await this.configService.loadConfig();
+      await this.configService.saveConfig({ ...config, backupCopiesLocation: location });
+      this.backupCopiesLocation = location;
+      this.notification.success('Backup copies location saved', 'Settings');
+    } catch (error) {
+      this.notification.error(error instanceof Error ? error.message : 'Could not save backup copies location', 'Settings');
+    }
+  }
+
+  selectBackupDirectory(target: 'backup' | 'copies') {
+    if (!this.isElectron) return;
+    const title = target === 'backup' ? 'Select Backup Location' : 'Select Backup Copies Location';
+    this.messaging.sendMessage<{ path?: string; error?: string }>(
+      'select-directory', { title }, { timeoutMs: DIRECTORY_DIALOG_TIMEOUT_MS }
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: result => {
+        if (result?.path) {
+          if (target === 'backup') this.backupLocation = result.path;
+          else this.backupCopiesLocation = result.path;
+          this.cdr.markForCheck();
+        } else if (result?.error) {
+          this.notification.error(result.error, 'Directory Selection Failed');
+        }
+      },
+      error: error => {
+        console.error('[settings] Failed to select directory:', error);
+        this.notification.error('Failed to select directory', 'Error');
+      }
+    });
   }
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
@@ -543,7 +579,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   getAppVersion() {
-    return environment.version || '1.3.1';
+    return environment.version || '1.3.2';
   }
 
   getPlatform() {
@@ -665,6 +701,21 @@ export class SettingsPageComponent implements OnInit {
     this.settingsDrawer.open('users');
   }
 
+  onRememberMeDaysChange(newValue: string) {
+    const days = Number(newValue);
+    if (Number.isInteger(days) && days >= 1 && days <= 365) {
+      if (days === this.configService.rememberMeDays) return;
+      this.rememberMeDays = days;
+      this.configService.rememberMeDays = days;
+      this.notification.success(`Remember me set to ${days} ${days === 1 ? 'day' : 'days'}`, 'Settings');
+    } else {
+      this.notification.warning('Enter a whole number of days between 1 and 365.', 'Settings');
+      setTimeout(() => {
+        this.rememberMeDays = this.configService.rememberMeDays;
+      }, 100);
+    }
+  }
+
   onMaxBackupDownloadSizeChange(newValue: string) {
     const sizeValue = parseInt(newValue, 10);
     if (!isNaN(sizeValue) && sizeValue >= 1 && sizeValue <= 2048) {
@@ -751,8 +802,10 @@ export class SettingsPageComponent implements OnInit {
     this.startWebServerOnLoad = !!config.startWebServerOnLoad;
     this.authenticationEnabled = !!config.authenticationEnabled;
     this.maxBackupDownloadSizeMB = config.maxBackupDownloadSizeMB ?? 100;
+    this.rememberMeDays = config.rememberMeDays ?? 30;
     this.serverDataDir = config.serverDataDir || '';
     this.backupLocation = config.backupLocation || '';
+    this.backupCopiesLocation = config.backupCopiesLocation || '';
     this.curseForgeApiKey = config.curseForgeApiKey || '';
     this.autoUpdateArkServer = !!config.autoUpdateArkServer;
     this.updateWarningMinutes = config.updateWarningMinutes || 15;

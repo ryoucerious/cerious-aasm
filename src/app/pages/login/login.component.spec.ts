@@ -73,7 +73,7 @@ describe('LoginComponent', () => {
 
     await component.onLogin();
 
-    expect(sentBody()).toEqual({ username: 'admin', password: '  pass word  ' });
+    expect(sentBody()).toEqual({ username: 'admin', password: '  pass word  ', remember: false });
   });
 
   it('treats a password of spaces as a password', async () => {
@@ -85,6 +85,17 @@ describe('LoginComponent', () => {
 
     expect(sentBody().password).toBe('   ');
     expect(component.errorMessage).toBe('Incorrect username or password. Please try again.');
+  });
+
+  it('asks the server to remember the sign-in when the box is checked', async () => {
+    spyOn(window, 'fetch').and.returnValue(Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 })));
+    component.username = 'ada';
+    component.password = 'secret';
+    component.remember = true;
+
+    await component.onLogin();
+
+    expect(sentBody()).toEqual({ username: 'ada', password: 'secret', remember: true });
   });
 
   it('should navigate to /dashboard on successful login', async () => {
@@ -224,5 +235,36 @@ describe('LoginComponent on a desktop in a mesh', () => {
 
     expect(login.hint).toBe('This machine is in a mesh. Sign in with your account.');
     expect(login.username).toBe('');
+  });
+
+  it('signs in with the password this machine was asked to remember', async () => {
+    const router = jasmine.createSpyObj('Router', ['navigate']);
+    router.navigate.and.returnValue(Promise.resolve(true));
+    const sent: unknown[][] = [];
+    await TestBed.configureTestingModule({
+      imports: [LoginComponent],
+      providers: [
+        { provide: MessagingService, useValue: {
+          sendMessage: (channel: string, payload?: unknown) => {
+            sent.push([channel, payload]);
+            if (channel === 'get-mesh-status') return of({ enabled: true, hasAccounts: true });
+            if (channel === 'get-remembered-login') return of({ username: 'ada', password: 'secret' });
+            if (channel === 'mesh-login') return of({ success: true });
+            return of(null);
+          },
+          receiveMessage: () => of(null)
+        } },
+        { provide: WebSocketService, useValue: { connected$: new BehaviorSubject(false) } },
+        { provide: IpcService, useValue: { isElectron: true } },
+        { provide: Router, useValue: router }
+      ]
+    }).compileComponents();
+    const fixture = TestBed.createComponent(LoginComponent);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const loginCall = sent.find(([channel]) => channel === 'mesh-login');
+    expect(loginCall?.[1]).toEqual(jasmine.objectContaining({ username: 'ada', password: 'secret', remember: true }));
+    expect(router.navigate).toHaveBeenCalledWith(['/dashboard']);
   });
 });

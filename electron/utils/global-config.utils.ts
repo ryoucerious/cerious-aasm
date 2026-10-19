@@ -5,8 +5,10 @@ import { readJsonOrQuarantine, writeJsonAtomic } from './fs.utils';
 import type { ServerPortRanges } from './ark/port-sets';
 
 export interface GlobalConfig {
-  /** Relative folder within each server's app-managed backup area. */
+  /** Relative folder inside the app backup area, or an absolute path to any folder. */
   backupLocation?: string;
+  /** Absolute path for mesh backup copies. Empty keeps them next to the server data. */
+  backupCopiesLocation?: string;
   startWebServerOnLoad: boolean;
   webServerPort: number;
   authenticationEnabled: boolean;
@@ -23,6 +25,19 @@ export interface GlobalConfig {
   curseForgeApiKey?: string;
   /** Where this machine's servers take their ports from; unset means the defaults. Ignored in Docker. */
   serverPorts?: ServerPortRanges;
+  /** How long a web sign-in with "remember me" lasts. */
+  rememberMeDays?: number;
+}
+
+export const DEFAULT_REMEMBER_ME_DAYS = 30;
+export const MIN_REMEMBER_ME_DAYS = 1;
+export const MAX_REMEMBER_ME_DAYS = 365;
+
+/** A whole number of days in range, else undefined. */
+export function validRememberMeDays(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_REMEMBER_ME_DAYS && value <= MAX_REMEMBER_ME_DAYS
+    ? value
+    : undefined;
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {
@@ -37,6 +52,8 @@ const DEFAULT_CONFIG: GlobalConfig = {
   updateWarningMinutes: 15,
   serverStartDelaySeconds: 60,
   curseForgeApiKey: '',
+  backupCopiesLocation: '',
+  rememberMeDays: DEFAULT_REMEMBER_ME_DAYS,
 };
 
 // loadGlobalConfig runs on almost every request, so a persistent failure is logged once.
