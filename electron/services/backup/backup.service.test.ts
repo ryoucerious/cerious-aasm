@@ -128,7 +128,7 @@ describe('BackupService', () => {
         .toBeLessThan(internals.operationsService.createBackupInternal.mock.invocationCallOrder[0]);
       internals.operationsService.createBackupInternal.mockClear();
       jest.mocked(getNormalizedInstanceState).mockReturnValueOnce('running');
-      jest.mocked(rconService.executeRconCommand).mockResolvedValueOnce({ success: false, error: 'Disconnected' });
+      jest.mocked(rconService.executeRconCommand).mockResolvedValueOnce({ success: false, instanceId: 'a1', error: 'Disconnected' });
       await expect(service.createBackup('a1', 'scheduled')).resolves.toMatchObject({ success: false });
       expect(internals.operationsService.createBackupInternal).not.toHaveBeenCalled();
     });

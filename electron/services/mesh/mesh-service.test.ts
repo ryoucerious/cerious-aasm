@@ -2220,7 +2220,7 @@ describe('MeshService', () => {
       it('acknowledges a sequenced restart only after the host completes startup', async () => {
         jest.mocked(localRuntime.state).mockReturnValue('running');
         jest.mocked(localRuntime.stop).mockResolvedValueOnce({ success: true });
-        jest.mocked(localRuntime.start).mockResolvedValueOnce({ started: true });
+        jest.mocked(localRuntime.start).mockResolvedValueOnce({ started: true, instanceId: 'a' });
         let ready!: () => void;
         jest.mocked(localRuntime.waitUntilRunning).mockImplementationOnce(() => new Promise(resolve => { ready = resolve; }));
         jest.mocked(restartCountdowns.beginAndWait).mockImplementationOnce(async (_id, _minutes, _all, restart) => { await restart(); return true; });

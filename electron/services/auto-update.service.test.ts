@@ -37,12 +37,12 @@ jest.mock('./linux-package-updater.service', () => ({
 
 // /.dockerenv would make the suite take the container path when it runs in the test image.
 jest.mock('../utils/platform.utils', () => ({
-  ...jest.requireActual('../utils/platform.utils'),
+  ...jest.requireActual<object>('../utils/platform.utils'),
   isRunningInDocker: () => process.env.AASM_DOCKER === '1',
 }));
 
 jest.mock('../utils/app-relaunch', () => ({
-  ...jest.requireActual('../utils/app-relaunch'),
+  ...jest.requireActual<object>('../utils/app-relaunch'),
   restartApp: jest.fn(),
   exitForInstaller: jest.fn(),
   systemServiceUnit: jest.fn(() => null),
@@ -380,7 +380,7 @@ describe('AutoUpdateService', () => {
     });
 
     function load(): any {
-      jest.doMock('fs', () => ({ ...jest.requireActual('fs'), accessSync: access }));
+      jest.doMock('fs', () => ({ ...jest.requireActual<object>('fs'), accessSync: access }));
       require('electron').app.isPackaged = true;
       return require('./auto-update.service').autoUpdateService;
     }
