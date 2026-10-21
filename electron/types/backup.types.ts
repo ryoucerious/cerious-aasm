@@ -7,6 +7,8 @@ export interface BackupSettings {
   time: string; // HH:MM format
   dayOfWeek?: number; // 0-6, Sunday to Saturday
   maxBackupsToKeep: number;
+  /** Also archive ARK's dated world copies. Unset or false keeps one world per map. */
+  includeAllWorldSaves?: boolean;
 }
 
 export interface BackupMetadata {

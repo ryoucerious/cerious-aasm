@@ -23,6 +23,19 @@
       </div>
 
       <div class="settings-section">
+        <h5>Backup Contents</h5>
+        <p class="section-desc">What each backup, manual or scheduled, keeps of the world saves.</p>
+        <div class="form-group span-all">
+          <label class="form-control-label toggle-label">
+            <input type="checkbox" class="toggle-switch" [checked]="includeAllWorldSaves" (change)="onIncludeAllWorldSavesToggle($event)" />
+            <span class="slider"></span>
+            <span class="toggle-text">Include every dated world save</span>
+          </label>
+          <div class="form-control-label desc">Off, a backup keeps one world per map, with every player profile and tribe file: the current save, or ARK's newest dated copy when the current one is being written. On, it also keeps all of ARK's dated copies, which can add gigabytes on a long-running map.</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <h5>Manual Backup</h5>
         <p class="section-desc">Create an immediate backup of your server files.</p>
 

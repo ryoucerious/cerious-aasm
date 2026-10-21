@@ -9,12 +9,22 @@ import { copyDirectory, moveFile, removeDirectory } from '../../utils/fs.utils';
 const ARCHIVE_TEMP_SUFFIX = '.zip.tmp';
 const RESTORE_TEMP_PREFIX = '.restore-';
 
+// ARK's own timestamped world copies, `<Map>_DD.MM.YYYY_HH.MM.SS.ark`, next to the live `<Map>.ark`.
+// A long-lived map keeps gigabytes of them, and the server rotates them while it runs.
+const DATED_WORLD = /^(.+)_\d{2}\.\d{2}\.\d{4}_\d{2}\.\d{2}\.\d{2}\.ark$/i;
+
+export interface BackupContentOptions {
+  /** Every dated world copy as well. Off, a backup holds one world per map: the live one, or the newest copy. */
+  allWorldSaves?: boolean;
+}
+
 export class BackupOperationsService {
   async createBackupInternal(
     instanceId: string,
     serverPath: string,
     type: 'manual' | 'scheduled',
-    customName?: string
+    customName?: string,
+    options: BackupContentOptions = {}
   ): Promise<BackupMetadata> {
     const backupDir = BackupPathUtils.getInstanceBackupDir(serverPath);
     await fs.promises.mkdir(backupDir, { recursive: true });
@@ -26,7 +36,7 @@ export class BackupOperationsService {
     const tempPath = `${filePath}.tmp`;
     try {
       const zip = new AdmZip();
-      await this.addToZip(zip, serverPath, '');
+      await this.addToZip(zip, serverPath, '', options);
       zip.writeZip(tempPath);
       moveFile(tempPath, filePath);
     } catch (error) {
@@ -65,7 +75,7 @@ export class BackupOperationsService {
    * Adds a directory's contents, skipping backup folders and links. lstat, not stat: the junctions
    * into the shared install (Content ~70 GB, Engine ~3 GB) must be skipped, not read into memory.
    */
-  private async addToZip(zip: AdmZip, sourcePath: string, relativePath: string): Promise<void> {
+  private async addToZip(zip: AdmZip, sourcePath: string, relativePath: string, options: BackupContentOptions = {}): Promise<void> {
     let items: string[];
     try {
       items = await fs.promises.readdir(sourcePath);
@@ -82,6 +92,8 @@ export class BackupOperationsService {
     // The exe and DLLs directly in Win64 (~200 MB) are copied from the shared install on every
     // start. Its subfolders, ArkApi with the user's plugins among them, are kept.
     const isWin64Dir = /[/\\]ShooterGame[/\\]Binaries[/\\]Win64$/i.test(sourcePath);
+    const worldCopies = options.allWorldSaves ? new Map<string, string[]>() : this.datedWorldsByMap(items);
+    const worldsAdded = new Set<string>();
 
     for (const item of items) {
       const itemPath = path.join(sourcePath, item);
@@ -89,6 +101,16 @@ export class BackupOperationsService {
       // SaveWorld writes a timestamped .arkrbf and deletes it when the save lands. Listing it and
       // then finding it gone is why a backup of a running server failed with ENOENT on lstat.
       if (/\.arkrbf$/i.test(item)) continue;
+      if (worldCopies.size > 0) {
+        if (DATED_WORLD.test(item) || /\.ark\.bak$/i.test(item)) continue;
+        const map = /^(.+)\.ark$/i.exec(item)?.[1];
+        const copies = map === undefined ? undefined : worldCopies.get(map);
+        if (map !== undefined && copies) {
+          worldsAdded.add(map);
+          await this.addWorld(zip, sourcePath, relativePath, map, copies);
+          continue;
+        }
+      }
       const stats = await this.lstatOrGone(itemPath);
       if (!stats) continue;
 
@@ -103,12 +125,78 @@ export class BackupOperationsService {
         if (this.isInstanceLogsDir(itemPath)) {
           continue;
         }
-        await this.addToZip(zip, itemPath, itemRelativePath);
+        await this.addToZip(zip, itemPath, itemRelativePath, options);
       } else if (stats.isFile() && !isWin64Dir) {
         const contents = await this.readSnapshotFile(itemPath);
         if (contents) zip.addFile(itemRelativePath, contents);
       }
     }
+
+    // Maps with dated copies but no live world listed.
+    for (const [map, copies] of worldCopies) {
+      if (!worldsAdded.has(map)) await this.addWorld(zip, sourcePath, relativePath, map, copies);
+    }
+  }
+
+  /** The dated world copies in a listing, by the map they belong to. */
+  private datedWorldsByMap(items: string[]): Map<string, string[]> {
+    const byMap = new Map<string, string[]>();
+    for (const item of items) {
+      const map = DATED_WORLD.exec(item)?.[1];
+      if (map !== undefined) byMap.set(map, [...(byMap.get(map) ?? []), item]);
+    }
+    return byMap;
+  }
+
+  /**
+   * One world for the map, always stored as `<map>.ark` so a restore needs no renaming: the live
+   * world when it reads back unchanged, else the newest dated copy that can still be read. A live
+   * world that changes during the read may be half written, and a restore from it can fail to load.
+   */
+  private async addWorld(zip: AdmZip, dir: string, relativeDir: string, map: string, copies: string[]): Promise<void> {
+    const entryName = relativeDir ? path.join(relativeDir, `${map}.ark`) : `${map}.ark`;
+    const live = await this.readUnchanged(path.join(dir, `${map}.ark`));
+    if (live) {
+      zip.addFile(entryName, live);
+      return;
+    }
+
+    const dated: Array<{ name: string; modifiedAt: number }> = [];
+    for (const name of copies) {
+      const stats = await this.retryMissing(path.join(dir, name), target => fs.promises.lstat(target));
+      if (stats?.isFile()) dated.push({ name, modifiedAt: stats.mtimeMs });
+    }
+    dated.sort((a, b) => b.modifiedAt - a.modifiedAt);
+    for (const { name } of dated) {
+      const contents = await this.readSnapshotFile(path.join(dir, name));
+      if (!contents) continue;
+      console.warn(`[backup-operations] Backing up ${name} as ${map}.ark: the live world was missing or being written`);
+      zip.addFile(entryName, contents);
+      return;
+    }
+
+    const error = new Error(`ENOENT: no readable copy of the world ${map} in '${dir}'`) as NodeJS.ErrnoException;
+    error.code = 'ENOENT';
+    throw error;
+  }
+
+  /** The file's contents, or null when it is missing or its size or time changed while it was read. */
+  private async readUnchanged(filePath: string): Promise<Buffer | null> {
+    const before = await this.retryMissing(filePath, target => fs.promises.lstat(target));
+    if (!before?.isFile()) return null;
+    let contents: Buffer | null;
+    try {
+      contents = await this.readSnapshotFile(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+    if (!contents) return null;
+    const after = await this.retryMissing(filePath, target => fs.promises.lstat(target));
+    if (!after || after.mtimeMs !== before.mtimeMs || after.size !== before.size || contents.length !== before.size) {
+      return null;
+    }
+    return contents;
   }
 
   /**
@@ -127,9 +215,12 @@ export class BackupOperationsService {
     return null;
   }
 
-  /** World, player, tribe and config files. A backup that omits one of these is not a backup. */
+  /**
+   * World, player, tribe and config files. A backup that omits one of these is not a backup. A dated
+   * world copy is not: the server deletes old ones as it saves.
+   */
   private isPersistentData(filePath: string): boolean {
-    return /\.(ark|arkprofile|arktribe|arktributetribe|json|ini)$/i.test(filePath);
+    return /\.(ark|arkprofile|arktribe|arktributetribe|json|ini)$/i.test(filePath) && !DATED_WORLD.test(path.basename(filePath));
   }
 
   /** One short wait, for a file SaveWorld replaces. Anything still missing stays missing. */

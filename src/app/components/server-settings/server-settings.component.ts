@@ -85,6 +85,7 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Input() backupTime = '02:00';
   @Input() backupDayOfWeek = 0;
   @Input() maxBackupsToKeep = 10;
+  @Input() includeAllWorldSaves = false;
   @Input() backupLocation = '';
   @Output() backupLocationChange = new EventEmitter<string>();
   @Input() backupList: BackupMetadata[] = [];
@@ -110,6 +111,7 @@ export class ServerSettingsComponent implements OnInit, OnDestroy, OnChanges {
   @Output() backupTimeChange = new EventEmitter<string>();
   @Output() backupDayOfWeekChange = new EventEmitter<number>();
   @Output() maxBackupsToKeepChange = new EventEmitter<number>();
+  @Output() includeAllWorldSavesChange = new EventEmitter<boolean>();
   @Output() restoreBackup = new EventEmitter<BackupMetadata>();
   @Output() downloadBackup = new EventEmitter<BackupMetadata>();
   @Output() deleteBackup = new EventEmitter<BackupMetadata>();

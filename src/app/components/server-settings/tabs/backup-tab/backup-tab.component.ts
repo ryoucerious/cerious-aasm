@@ -106,6 +106,7 @@ export class BackupTabComponent implements OnChanges {
   @Input() backupTime = '02:00';
   @Input() backupDayOfWeek = 0;
   @Input() maxBackupsToKeep = 10;
+  @Input() includeAllWorldSaves = false;
   @Input() backupLocation = '';
   @Output() backupLocationChange = new EventEmitter<string>();
   @Input() backupList: BackupMetadata[] = [];
@@ -120,6 +121,7 @@ export class BackupTabComponent implements OnChanges {
   @Output() backupTimeChange = new EventEmitter<string>();
   @Output() backupDaySelect = new EventEmitter<number>();
   @Output() maxBackupsToKeepChange = new EventEmitter<number>();
+  @Output() includeAllWorldSavesChange = new EventEmitter<boolean>();
   @Output() restoreBackup = new EventEmitter<BackupMetadata>();
   @Output() downloadBackup = new EventEmitter<BackupMetadata>();
   @Output() deleteBackup = new EventEmitter<BackupMetadata>();
@@ -193,6 +195,10 @@ export class BackupTabComponent implements OnChanges {
     const value = Math.min(MAX_BACKUPS_TO_KEEP, Math.max(MIN_BACKUPS_TO_KEEP, Math.round(typed)));
     input.value = String(value);
     this.maxBackupsToKeepChange.emit(value);
+  }
+
+  onIncludeAllWorldSavesToggle(event: Event): void {
+    this.includeAllWorldSavesChange.emit((event.target as HTMLInputElement).checked);
   }
 
   onRestoreBackup(backup: BackupMetadata): void {

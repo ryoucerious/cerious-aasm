@@ -262,6 +262,8 @@ Environment=ELECTRON_DISABLE_SANDBOX=1
 WantedBy=multi-user.target
 ```
 
+Restarting or stopping this service stops every game server it runs, whatever `KillMode` the unit sets: the app stops its servers when it exits, and stops any it finds left over from an earlier run when it starts. Servers set to auto-start on app launch start again once the service is back. Don't set `KillMode=process` expecting maps to stay up across a service restart; it only leaves them running until the next start of the app stops them.
+
 The update icon beside the version in the web interface installs app updates. Run as root, as above, the service installs a new `.deb` or `.rpm` itself, then exits for systemd to start it again, so keep `Restart=on-failure` (or `always`). Run as another user, it needs to be allowed `sudo` without a password; otherwise the icon explains how to update by hand.
 
 **Note:** The `--no-sandbox` flag is required for headless mode on Linux due to Chrome sandbox restrictions. This is a security trade-off necessary for headless operation. For GUI mode simply run `cerious-aasm` without any flags (no `xvfb-run` needed if a desktop session is available).

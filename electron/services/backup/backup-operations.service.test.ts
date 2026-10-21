@@ -132,6 +132,96 @@ describe('BackupOperationsService (real fs)', () => {
     });
   });
 
+  describe('world saves', () => {
+    const mapDir = () => path.join(serverPath, 'SavedArks', 'TheIsland_WP');
+
+    function save(name: string, content: string, modifiedAt?: Date): string {
+      const filePath = path.join(mapDir(), name);
+      fs.writeFileSync(filePath, content);
+      if (modifiedAt) fs.utimesSync(filePath, modifiedAt, modifiedAt);
+      return filePath;
+    }
+
+    function entries(filePath: string): Record<string, string> {
+      return Object.fromEntries(new AdmZip(filePath).getEntries()
+        .map(entry => [entry.entryName.replace(/\\/g, '/'), entry.getData().toString('utf8')]));
+    }
+
+    beforeEach(() => {
+      save('TheIsland_WP_19.10.2026_02.30.00.ark', 'older copy', new Date('2026-10-19T02:30:00'));
+      save('TheIsland_WP_20.10.2026_02.30.00.ark', 'newest copy', new Date('2026-10-20T02:30:00'));
+      save('TheIsland_WP_20.10.2026_02.30.00.arkrbf', 'partial');
+      save('123.arkprofile', 'player');
+      save('456.arktribe', 'tribe');
+    });
+
+    it('keeps one world per map with every profile and tribe', async () => {
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'Scoped');
+
+      expect(entries(made.filePath)).toEqual({
+        'config.json': '{"id":"a1","name":"Alpha"}',
+        'SavedArks/TheIsland_WP/TheIsland_WP.ark': 'world v1',
+        'SavedArks/TheIsland_WP/123.arkprofile': 'player',
+        'SavedArks/TheIsland_WP/456.arktribe': 'tribe'
+      });
+    });
+
+    it('stores the newest dated copy as the world when the live one changes during the read', async () => {
+      const live = path.join(mapDir(), 'TheIsland_WP.ark');
+      const realReadFile = fs.promises.readFile.bind(fs.promises);
+      jest.spyOn(fs.promises, 'readFile').mockImplementation(async (target, ...rest) => {
+        const contents = await realReadFile(target, ...rest as []);
+        if (String(target) === live) fs.writeFileSync(live, 'world v2, still being written');
+        return contents;
+      });
+
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'Mid save');
+
+      expect(entries(made.filePath)['SavedArks/TheIsland_WP/TheIsland_WP.ark']).toBe('newest copy');
+    });
+
+    it('stores the newest dated copy as the world when there is no live one', async () => {
+      fs.unlinkSync(path.join(mapDir(), 'TheIsland_WP.ark'));
+
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'No live');
+
+      const archived = entries(made.filePath);
+      expect(archived['SavedArks/TheIsland_WP/TheIsland_WP.ark']).toBe('newest copy');
+      expect(Object.keys(archived).some(name => /\d{2}\.\d{2}\.\d{4}/.test(name))).toBe(false);
+    });
+
+    it('falls back to an older copy when the newest is rotated away', async () => {
+      fs.unlinkSync(path.join(mapDir(), 'TheIsland_WP.ark'));
+      const newest = path.join(mapDir(), 'TheIsland_WP_20.10.2026_02.30.00.ark');
+      const realReadFile = fs.promises.readFile.bind(fs.promises);
+      jest.spyOn(fs.promises, 'readFile').mockImplementation(async (target, ...rest) => {
+        if (String(target) === newest) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${newest}'`), { code: 'ENOENT' });
+        return realReadFile(target, ...rest as []);
+      });
+
+      const made = await service.createBackupInternal('a1', serverPath, 'manual', 'Rotated');
+
+      expect(entries(made.filePath)['SavedArks/TheIsland_WP/TheIsland_WP.ark']).toBe('older copy');
+    });
+
+    it('keeps every dated copy when asked to, skipping one the server deletes meanwhile', async () => {
+      const older = path.join(mapDir(), 'TheIsland_WP_19.10.2026_02.30.00.ark');
+      const realLstat = fs.promises.lstat.bind(fs.promises);
+      jest.spyOn(fs.promises, 'lstat').mockImplementation(async target => {
+        if (String(target) === older) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${older}'`), { code: 'ENOENT' });
+        return realLstat(target);
+      });
+
+      const made = await service.createBackupInternal('a1', serverPath, 'scheduled', undefined, { allWorldSaves: true });
+
+      const names = Object.keys(entries(made.filePath));
+      expect(names).toContain('SavedArks/TheIsland_WP/TheIsland_WP.ark');
+      expect(names).toContain('SavedArks/TheIsland_WP/TheIsland_WP_20.10.2026_02.30.00.ark');
+      expect(names).not.toContain('SavedArks/TheIsland_WP/TheIsland_WP_19.10.2026_02.30.00.ark');
+      expect(names.some(name => name.endsWith('.arkrbf'))).toBe(false);
+    });
+  });
+
   describe('removeStaleTempFiles', () => {
     it('removes what an interrupted backup or restore left behind, and nothing else', async () => {
       archive('Keep.zip', { 'config.json': '{}' });

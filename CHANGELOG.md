@@ -2,6 +2,29 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.3.3] - 2026-10-21
+
+Smaller backups of long-running maps, scheduled backups that take turns, and backups that no longer fail when ARK rotates a world save.
+
+> **Upgrading.**
+>
+> - Update every machine in a mesh to the same version.
+> - New backups leave out ARK's dated world copies. To keep them all as before, turn on **Include every dated world save** in a server's Backups tab.
+> - Up to 3 scheduled backups now run at once; change this in Settings → Servers → Scheduled Backups.
+
+### New Features & Improvements
+
+- **Smaller Backups of Long-Running Maps**: A backup keeps one world per map, stored as `<Map>.ark`, along with every player profile and tribe file. ARK's dated world copies (`<Map>_DD.MM.YYYY_HH.MM.SS.ark`), which can reach several gigabytes on an old map, are left out. The current world is used when it reads back unchanged; if it changes during the read, which means the server is still writing it, the newest dated copy is stored in its place. A server's Backups tab has **Include every dated world save** to keep all of them as before.
+- **Scheduled Backups Take Turns**: Servers whose backups are due at the same time no longer all save and zip at once. Settings → Servers → Scheduled Backups sets how many run together (3 by default); the rest wait their turn. Manual backups never wait.
+
+### Bug Fixes
+
+- **Rotated World Copies Failed a Backup**: A dated world copy that ARK deleted while a backup ran failed the whole backup with `ENOENT`. It is now skipped, and when the copy chosen as a map's world is gone, the next newest is used.
+
+### Documentation
+
+- **systemd and Game Servers**: The installation guide explains that restarting the service stops every game server it runs, whatever `KillMode` is set, because the app stops its servers on exit and stops leftovers on start.
+
 ## [1.3.2] - 2026-10-19
 
 Stay signed in with Remember me, keep backups on any folder or drive, and scheduled backups that no longer fail while a server is saving.

@@ -108,6 +108,7 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
   get backupTime() { return this.backupUIService.currentState.backupTime; }
   get backupDayOfWeek() { return this.backupUIService.currentState.backupDayOfWeek; }
   get maxBackupsToKeep() { return this.backupUIService.currentState.maxBackupsToKeep; }
+  get includeAllWorldSaves() { return this.backupUIService.currentState.includeAllWorldSaves; }
   get backupLocation() { return this.backupUIService.currentState.backupLocation; }
 
   onBackupLocationChange(backupLocation: string) {
@@ -591,6 +592,11 @@ export class ServerComponent implements OnInit, OnDestroy, ServerPageState {
 
   onMaxBackupsToKeepChange(maxBackupsToKeep: number) {
     this.backupUIService.updateBackupSettings({ maxBackupsToKeep });
+    this.saveBackupSettings();
+  }
+
+  onIncludeAllWorldSavesChange(includeAllWorldSaves: boolean) {
+    this.backupUIService.updateBackupSettings({ includeAllWorldSaves });
     this.saveBackupSettings();
   }
 

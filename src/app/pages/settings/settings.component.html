@@ -208,6 +208,17 @@
           <label class="form-control-label desc">A longer wait keeps servers on a shared cluster from downloading the same mods at once.</label>
         </div>
       </section>
+      <section class="settings-card">
+        <h3 class="settings-card-title">Scheduled Backups</h3>
+        <p class="settings-card-hint">
+          Servers whose backups are due at the same time take turns, so they do not all save and
+          write to the disk at once. Manual backups never wait.
+        </p>
+        <div class="form-group">
+          <label class="form-control-label" for="maxConcurrentBackups">Backups at once</label>
+          <input id="maxConcurrentBackups" type="number" [ngModel]="maxConcurrentBackups" (change)="onMaxConcurrentBackupsChange($event.target.value)" class="form-control input" min="1" max="20" step="1" />
+        </div>
+      </section>
       <app-server-ports-settings></app-server-ports-settings>
       <section class="settings-card">
         <h3 class="settings-card-title">Server List</h3>

@@ -8,8 +8,13 @@ import { messagingService } from '../messaging.service';
 import { serverProcessService } from '../server-instance/server-process.service';
 import { serverLifecycleService } from '../server-instance/server-lifecycle.service';
 import { BackupMetadata, BackupSettings } from '../../types/backup.types';
+import { loadGlobalConfig } from '../../utils/global-config.utils';
 
 jest.mock('../../utils/ark/instance.utils');
+jest.mock('../../utils/global-config.utils', () => ({
+  ...jest.requireActual('../../utils/global-config.utils'),
+  loadGlobalConfig: jest.fn(() => ({}))
+}));
 jest.mock('../../utils/ark/ark-server/ark-server-state.utils', () => ({
   getNormalizedInstanceState: jest.fn(() => 'stopped'),
   setInstanceState: jest.fn()
@@ -136,7 +141,7 @@ describe('BackupService', () => {
       await expect(service.createBackup('a1', 'manual', 'Before update'))
         .resolves.toEqual({ success: true, backupId: 'b1', message: 'Backup created successfully' });
 
-      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', 'Before update');
+      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', 'Before update', { allWorldSaves: false });
       expect(internals.cleanupService.cleanupOldBackups).toHaveBeenCalledWith('/servers/a1', 5, expect.any(Function));
       expect(internals.cleanupService.cleanupArkSaveFiles).not.toHaveBeenCalled();
     });
@@ -169,13 +174,47 @@ describe('BackupService', () => {
     it.each(['../../../Startup/x', 'weekly', 42])('treats a type of %p as a manual backup', async type => {
       await service.createBackup('a1', type as never, 'Name');
 
-      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', 'Name');
+      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', 'Name', { allWorldSaves: false });
     });
 
     it('ignores a name that is not text', async () => {
       await service.createBackup('a1', 'manual', { length: 1 } as never);
 
-      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', undefined);
+      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', undefined, { allWorldSaves: false });
+    });
+
+    it('archives every dated world copy only when the server\'s settings ask for it', async () => {
+      internals.settingsService.getBackupSettingsInternal.mockResolvedValue({ ...savedSettings, includeAllWorldSaves: true });
+
+      await service.createBackup('a1', 'manual', 'All');
+
+      expect(internals.operationsService.createBackupInternal).toHaveBeenCalledWith('a1', '/servers/a1', 'manual', 'All', { allWorldSaves: true });
+    });
+
+    // Every server sharing a backup time used to save and zip at the same moment.
+    it('runs no more scheduled backups at once than the global limit, and never holds up a manual one', async () => {
+      jest.mocked(loadGlobalConfig).mockReturnValue({ maxConcurrentBackups: 2 } as never);
+      const finish: Array<() => void> = [];
+      internals.operationsService.createBackupInternal.mockImplementation((instanceId: string, _path: string, type: string) =>
+        type === 'manual'
+          ? Promise.resolve(metadata('m', instanceId))
+          : new Promise(resolve => finish.push(() => resolve(metadata('s', instanceId)))));
+
+      const scheduled = ['s1', 's2', 's3', 's4'].map(id => service.createBackup(id, 'scheduled'));
+      await flush();
+      expect(finish).toHaveLength(2);
+
+      await expect(service.createBackup('m1', 'manual')).resolves.toMatchObject({ success: true });
+
+      finish[0]();
+      await flush();
+      expect(finish).toHaveLength(3);
+      finish[1]();
+      finish[2]();
+      await flush();
+      expect(finish).toHaveLength(4);
+      finish[3]();
+      await expect(Promise.all(scheduled)).resolves.toEqual(Array(4).fill(expect.objectContaining({ success: true })));
     });
 
     it('reports an instance that does not exist', async () => {

@@ -140,6 +140,15 @@ export class GlobalConfigService implements OnDestroy {
     this.persist();
   }
 
+  get maxConcurrentBackups() {
+    return this.config?.maxConcurrentBackups ?? 3;
+  }
+  set maxConcurrentBackups(val: number) {
+    if (!this.config) return;
+    this.config.maxConcurrentBackups = val;
+    this.persist();
+  }
+
   private receive(config: GlobalConfig): void {
     this.config = config;
     this.received.next(config);

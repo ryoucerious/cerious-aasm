@@ -18,6 +18,7 @@ interface BackupUIState {
   /** 0 is Sunday. */
   backupDayOfWeek: number;
   maxBackupsToKeep: number;
+  includeAllWorldSaves: boolean;
   backupLocation: string;
   isCreatingBackup: boolean;
 }
@@ -38,6 +39,7 @@ export class BackupUIService {
     backupTime: '02:00',
     backupDayOfWeek: 1,
     maxBackupsToKeep: 10,
+    includeAllWorldSaves: false,
     backupLocation: '',
     isCreatingBackup: false
   };
@@ -142,6 +144,7 @@ export class BackupUIService {
           backupTime: response.settings.time || '02:00',
           backupDayOfWeek: response.settings.dayOfWeek ?? 1,
           maxBackupsToKeep: response.settings.maxBackupsToKeep || 10,
+          includeAllWorldSaves: response.settings.includeAllWorldSaves === true,
           backupLocation: response.settings.backupLocation || ''
         });
       },
@@ -162,6 +165,7 @@ export class BackupUIService {
       time: state.backupTime,
       dayOfWeek: state.backupDayOfWeek,
       maxBackupsToKeep: state.maxBackupsToKeep,
+      includeAllWorldSaves: state.includeAllWorldSaves,
       backupLocation: state.backupLocation
     };
 
@@ -281,11 +285,11 @@ export class BackupUIService {
     if (instanceId === this.shownInstanceId) return;
     this.shownInstanceId = instanceId;
     const {
-      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, backupLocation,
+      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, includeAllWorldSaves, backupLocation,
       showDeleteBackupModal, backupToDelete, showBackupNameModal, backupName, isCreatingBackup
     } = this.initialState;
     this.patchState({
-      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, backupLocation,
+      backupList, backupScheduleEnabled, backupFrequency, backupTime, backupDayOfWeek, maxBackupsToKeep, includeAllWorldSaves, backupLocation,
       showDeleteBackupModal, backupToDelete, showBackupNameModal, backupName, isCreatingBackup
     });
   }

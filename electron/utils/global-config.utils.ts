@@ -22,6 +22,8 @@ export interface GlobalConfig {
   updateWarningMinutes?: number;
   /** Seconds between servers when several start together. */
   serverStartDelaySeconds?: number;
+  /** How many scheduled backups may read the disk at once; the rest wait their turn. */
+  maxConcurrentBackups?: number;
   curseForgeApiKey?: string;
   /** Where this machine's servers take their ports from; unset means the defaults. Ignored in Docker. */
   serverPorts?: ServerPortRanges;
@@ -40,6 +42,16 @@ export function validRememberMeDays(value: unknown): number | undefined {
     : undefined;
 }
 
+export const DEFAULT_MAX_CONCURRENT_BACKUPS = 3;
+export const MAX_CONCURRENT_BACKUPS = 20;
+
+/** A whole number of backups in range, else undefined. */
+export function validMaxConcurrentBackups(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_CONCURRENT_BACKUPS
+    ? value
+    : undefined;
+}
+
 const DEFAULT_CONFIG: GlobalConfig = {
   startWebServerOnLoad: false,
   webServerPort: 3000,
@@ -51,6 +63,7 @@ const DEFAULT_CONFIG: GlobalConfig = {
   autoUpdateArkServer: false,
   updateWarningMinutes: 15,
   serverStartDelaySeconds: 60,
+  maxConcurrentBackups: DEFAULT_MAX_CONCURRENT_BACKUPS,
   curseForgeApiKey: '',
   backupCopiesLocation: '',
   rememberMeDays: DEFAULT_REMEMBER_ME_DAYS,

@@ -88,6 +88,8 @@ directly: wrap with `xvfb-run` yourself.
    ExecStart=/usr/bin/cerious-aasm --no-sandbox --headless --auth-enabled --username=<name> --port=3000
    Environment=AASM_PASSWORD=<password>
    ```
+   Restarting the service stops every game server it runs, with any `KillMode`; see
+   [Run as a systemd service](INSTALLATION.md#3-run-as-a-systemd-service).
 
 Authentication can also be set with `AASM_AUTH_ENABLED=true`, `AASM_USERNAME`, and
 `AASM_PASSWORD` environment variables instead of flags.

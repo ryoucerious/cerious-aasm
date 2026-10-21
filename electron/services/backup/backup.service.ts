@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { prepareBackupDirectory, validateBackupLocation } from '../../utils/backup-location.utils';
-import { loadGlobalConfig } from '../../utils/global-config.utils';
+import { DEFAULT_MAX_CONCURRENT_BACKUPS, loadGlobalConfig, validMaxConcurrentBackups } from '../../utils/global-config.utils';
 import { rconService } from '../rcon.service';
 import { BackupPathUtils } from '../../utils/backup.utils';
 import {
@@ -53,6 +53,8 @@ export class BackupService {
   private importService = new BackupImportService();
   private readonly instanceQueues = new Map<string, Promise<void>>();
   private readonly createdListeners = new Set<(backup: BackupMetadata) => void>();
+  private scheduledRunning = 0;
+  private readonly scheduledWaiting: Array<() => void> = [];
 
   /** Called with each backup once it is made. Returns a function that stops the calls. */
   onBackupCreated(listener: (backup: BackupMetadata) => void): () => void {
@@ -109,12 +111,16 @@ export class BackupService {
       const customName = typeof name === 'string' ? name : undefined;
 
       const metadata = await this.exclusive(instanceId, async () => {
-        if (getNormalizedInstanceState(instanceId).toLowerCase() === 'running') {
-          const saved = await rconService.executeRconCommand(instanceId, 'SaveWorld');
-          if (!saved.success) throw new Error('Could not save the running world before backup. Check the RCON connection.');
-        }
-        const created = await this.operationsService.createBackupInternal(instanceId, serverPath, backupType, customName);
         const settings = await this.settingsService.getBackupSettingsInternal(serverPath);
+        const created = await this.withDiskSlot(backupType, async () => {
+          if (getNormalizedInstanceState(instanceId).toLowerCase() === 'running') {
+            const saved = await rconService.executeRconCommand(instanceId, 'SaveWorld');
+            if (!saved.success) throw new Error('Could not save the running world before backup. Check the RCON connection.');
+          }
+          return this.operationsService.createBackupInternal(instanceId, serverPath, backupType, customName, {
+            allWorldSaves: settings?.includeAllWorldSaves === true
+          });
+        });
         if (settings && path.dirname(created.filePath) === BackupPathUtils.getInstanceBackupDir(serverPath)) {
           await this.cleanupService.cleanupOldBackups(serverPath, settings.maxBackupsToKeep, dir => this.operationsService.getInstanceBackupsInternal(dir));
           if (backupType === 'scheduled') {
@@ -252,6 +258,7 @@ export class BackupService {
       }
 
       const stored: BackupSettings = { ...settings, instanceId, maxBackupsToKeep: clampBackupsToKeep(settings.maxBackupsToKeep) };
+      if (settings.includeAllWorldSaves !== undefined) stored.includeAllWorldSaves = settings.includeAllWorldSaves === true;
       if (settings.backupLocation !== undefined) stored.backupLocation = validateBackupLocation(settings.backupLocation);
       await this.exclusive(instanceId, async () => {
         prepareBackupDirectory(instanceId, stored.backupLocation || loadGlobalConfig().backupLocation || '');
@@ -339,6 +346,26 @@ export class BackupService {
       return null;
     }
     return instanceUtils.getInstanceDir(instanceId);
+  }
+
+  /**
+   * Scheduled backups take turns: servers that share a backup time would otherwise all save and
+   * zip at once. Manual backups never wait. The limit is read on each acquire, so a change applies
+   * to the backups queued after it.
+   */
+  private async withDiskSlot<T>(type: 'manual' | 'scheduled', task: () => Promise<T>): Promise<T> {
+    if (type !== 'scheduled') return task();
+    const limit = () => validMaxConcurrentBackups(loadGlobalConfig().maxConcurrentBackups) ?? DEFAULT_MAX_CONCURRENT_BACKUPS;
+    while (this.scheduledRunning >= limit()) {
+      await new Promise<void>(resolve => this.scheduledWaiting.push(resolve));
+    }
+    this.scheduledRunning++;
+    try {
+      return await task();
+    } finally {
+      this.scheduledRunning--;
+      this.scheduledWaiting.shift()?.();
+    }
   }
 
   // One backup or restore per instance at a time: a scheduled backup must not overlap a manual one,

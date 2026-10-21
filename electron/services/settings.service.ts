@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as bcrypt from 'bcrypt';
 import type { ChildProcess } from 'child_process';
 import * as globalConfigUtils from '../utils/global-config.utils';
-import { MAX_REMEMBER_ME_DAYS, MIN_REMEMBER_ME_DAYS, validRememberMeDays } from '../utils/global-config.utils';
+import { MAX_CONCURRENT_BACKUPS, MAX_REMEMBER_ME_DAYS, MIN_REMEMBER_ME_DAYS, validMaxConcurrentBackups, validRememberMeDays } from '../utils/global-config.utils';
 import type { GlobalConfig } from '../utils/global-config.utils';
 import { validatePort, sanitizeString } from '../utils/validation.utils';
 import { getDefaultInstallDir } from '../utils/platform.utils';
@@ -69,6 +69,10 @@ export class SettingsService {
 
       if (incoming.rememberMeDays !== undefined && validRememberMeDays(incoming.rememberMeDays) === undefined) {
         return { success: false, error: `Remember me must be a whole number of days from ${MIN_REMEMBER_ME_DAYS} to ${MAX_REMEMBER_ME_DAYS}` };
+      }
+
+      if (incoming.maxConcurrentBackups !== undefined && validMaxConcurrentBackups(incoming.maxConcurrentBackups) === undefined) {
+        return { success: false, error: `Backups at once must be a whole number from 1 to ${MAX_CONCURRENT_BACKUPS}` };
       }
 
       if (incoming.serverDataDir && typeof incoming.serverDataDir === 'string') {

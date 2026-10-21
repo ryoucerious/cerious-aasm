@@ -13,6 +13,8 @@ export interface GlobalConfig {
   autoUpdateArkServer?: boolean;
   updateWarningMinutes?: number;
   serverStartDelaySeconds?: number;
+  /** How many scheduled backups may run at once. */
+  maxConcurrentBackups?: number;
   curseForgeApiKey?: string;
   /** How long a web sign-in with "remember me" lasts. */
   rememberMeDays?: number;

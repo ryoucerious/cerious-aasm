@@ -175,6 +175,7 @@ export class SettingsPageComponent implements OnInit {
   autoUpdateArkServer = false;
   updateWarningMinutes = 15;
   serverStartDelaySeconds = 60;
+  maxConcurrentBackups = 3;
 
   // Unlike the settings around it this is a per-device preference held in localStorage, not
   // part of the server-side global config (see ThemeService).
@@ -579,7 +580,7 @@ export class SettingsPageComponent implements OnInit {
   }
 
   getAppVersion() {
-    return environment.version || '1.3.2';
+    return environment.version || '1.3.3';
   }
 
   getPlatform() {
@@ -777,6 +778,20 @@ export class SettingsPageComponent implements OnInit {
     }
   }
 
+  onMaxConcurrentBackupsChange(val: string) {
+    const count = Number(val);
+    if (Number.isInteger(count) && count >= 1 && count <= 20) {
+      this.maxConcurrentBackups = count;
+      this.configService.maxConcurrentBackups = count;
+      this.notification.success(`Up to ${count} scheduled backups will run at once`, 'Settings');
+    } else {
+      this.notification.warning('Invalid number of backups (1-20).', 'Settings');
+      setTimeout(() => {
+        this.maxConcurrentBackups = this.configService.maxConcurrentBackups || 3;
+      }, 100);
+    }
+  }
+
   selectServerDataDir() {
     if (!this.isElectron) return;
     this.messaging.sendMessage<{ path?: string; error?: string }>(
@@ -810,6 +825,7 @@ export class SettingsPageComponent implements OnInit {
     this.autoUpdateArkServer = !!config.autoUpdateArkServer;
     this.updateWarningMinutes = config.updateWarningMinutes || 15;
     this.serverStartDelaySeconds = config.serverStartDelaySeconds || 60;
+    this.maxConcurrentBackups = config.maxConcurrentBackups || 3;
     this.cdr.markForCheck();
   }
 
