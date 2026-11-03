@@ -1,5 +1,6 @@
 import { arkApiPluginService } from './ark-api-plugin.service';
 import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 import { isReadOnlyArkApiAction, runArkApiAction } from './ark-api-actions';
 
 jest.mock('./ark-api-plugin.service', () => ({
@@ -8,10 +9,12 @@ jest.mock('./ark-api-plugin.service', () => ({
     removePlugin: jest.fn(),
     installPluginFromZipData: jest.fn(),
     installPluginFromUrl: jest.fn(async () => undefined),
-    downloadAsaApi: jest.fn(async () => undefined)
+    downloadAsaApi: jest.fn(async () => undefined),
+    uninstallAsaApi: jest.fn()
   }
 }));
 jest.mock('../utils/ark/ark-server/ark-server-paths.utils', () => ({ isAsaApiLoaderInstalled: jest.fn(() => true) }));
+jest.mock('../utils/ark/ark-server/ark-server-state.utils', () => ({ getNormalizedInstanceState: jest.fn(() => 'stopped') }));
 
 const plugins = jest.mocked(arkApiPluginService);
 
@@ -39,11 +42,17 @@ describe('ArkApi actions', () => {
     expect(plugins.downloadAsaApi).toHaveBeenCalledWith('isle', 'https://example.com/a.zip');
   });
 
-  it('refuses a ZIP larger than a plugin needs to be', async () => {
-    const tooLarge = 'A'.repeat(Math.ceil((50 * 1024 * 1024 + 1) / 3) * 4);
+  it('uninstalls AsaApi only from a server that is not running', async () => {
+    expect(await runArkApiAction('isle', 'uninstall', {})).toEqual({ success: true });
+    expect(plugins.uninstallAsaApi).toHaveBeenCalledWith('isle');
+    plugins.uninstallAsaApi.mockClear();
 
-    expect(await runArkApiAction('isle', 'install-zip', { zipData: tooLarge })).toEqual({ success: false, error: 'That ZIP is larger than 50 MB.' });
-    expect(plugins.installPluginFromZipData).not.toHaveBeenCalled();
+    for (const state of ['running', 'starting', 'stopping', 'queued']) {
+      jest.mocked(getNormalizedInstanceState).mockReturnValueOnce(state);
+      expect(await runArkApiAction('isle', 'uninstall', {})).toEqual({ success: false, error: 'Stop the server before uninstalling AsaApi.' });
+    }
+    expect(plugins.uninstallAsaApi).not.toHaveBeenCalled();
+    expect(isReadOnlyArkApiAction('uninstall')).toBe(false);
   });
 
   it('tells reads from changes, and refuses what it does not know', async () => {

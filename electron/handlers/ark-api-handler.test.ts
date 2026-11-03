@@ -198,15 +198,6 @@ describe('ark-api-handler', () => {
       expect(replies('install-plugin-from-zip')).toEqual([{ success: true, requestId: 'r1' }]);
     });
 
-    it('refuses a ZIP larger than a plugin needs to be', async () => {
-      const tooLarge = 'A'.repeat(Math.ceil((50 * 1024 * 1024 + 1) / 3) * 4);
-
-      await handlers['install-plugin-from-zip']({ instanceId: 'a1', zipData: tooLarge, requestId: 'r1' }, sender);
-
-      expect(mockPlugins.installPluginFromZipData).not.toHaveBeenCalled();
-      expect(replies('install-plugin-from-zip')).toEqual([{ success: false, error: 'That ZIP is larger than 50 MB.', requestId: 'r1' }]);
-    });
-
     it('replies with the reason the install fails', async () => {
       mockPlugins.readZipAsBase64.mockImplementationOnce(() => { throw new Error('Not a ZIP file'); });
 

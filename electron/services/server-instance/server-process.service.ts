@@ -28,6 +28,7 @@ import {
 } from '../../utils/ark/ark-server/ark-server-cleanup.utils';
 import type { InstanceConfig, ServerInstanceResult } from '../../types/server-instance.types';
 import { discordService } from '../discord.service';
+import { emitServerCrashed } from './crash-events';
 import { messagingService } from '../messaging.service';
 import { rconService } from '../rcon.service';
 
@@ -280,6 +281,7 @@ export class ServerProcessService {
     if (crashed) {
       const during = previousState === 'starting' ? ' during startup' : '';
       discordService.sendNotification(instanceId, 'crash', `Server crashed${during} (${exit})`);
+      emitServerCrashed(instanceId);
     } else {
       discordService.sendNotification(instanceId, 'stop', 'Server has stopped');
     }

@@ -19,6 +19,12 @@ export class ServerStateComponent implements OnChanges {
 
   private shownLength = 0;
   private shownLastLine: string | undefined;
+  /**
+   * Whether the view sticks to the newest line. Decided when the user scrolls, not when output
+   * arrives: measured then, a burst of lines taller than the threshold, or a page opened on a full
+   * buffer, looked like the user had scrolled up, and the view stopped following for good.
+   */
+  private following = true;
 
   get serverMessage(): string | null {
     return this.serverInstance?.message || null;
@@ -35,12 +41,17 @@ export class ServerStateComponent implements OnChanges {
     setTimeout(() => this.followOutput(), 50);
   }
 
+  /** Scrolling up to read stops following; scrolling back to the bottom picks it up again. */
+  onScroll(): void {
+    const element = this.logContainer?.nativeElement;
+    if (!element) return;
+    this.following = element.scrollHeight - (element.scrollTop + element.clientHeight) <= FOLLOW_THRESHOLD_PX;
+  }
+
   /** Scrolls to the newest line, unless the user has scrolled up to read. */
   private followOutput(): void {
     const element = this.logContainer?.nativeElement;
-    if (!element) return;
-    const distanceFromBottom = element.scrollHeight - (element.scrollTop + element.clientHeight);
-    if (distanceFromBottom > FOLLOW_THRESHOLD_PX) return;
+    if (!element || !this.following) return;
     element.scrollTop = element.scrollHeight;
     element.scrollTo(0, element.scrollHeight);
     element.lastElementChild?.scrollIntoView({ behavior: 'auto', block: 'end' });

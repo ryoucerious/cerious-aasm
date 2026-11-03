@@ -1,5 +1,6 @@
 import { serverInstanceService } from '../server-instance/server-instance.service';
 import { getStandardEventCallbacks } from '../server-instance/instance-events';
+import { onServerCrashed } from '../server-instance/crash-events';
 import { schedulerService } from '../scheduler.service';
 import { getInstance } from '../../utils/ark/instance.utils';
 import { loadGlobalConfig } from '../../utils/global-config.utils';
@@ -32,6 +33,7 @@ export class AutomationService {
     this.scheduledRestartService = new ScheduledRestartService(this.automations);
     this.instancesService = new AutomationInstancesService(this.automations);
     void this.instancesService.loadAutomationFromInstances();
+    onServerCrashed(serverId => this.crashDetectionService.handleCrash(serverId));
   }
 
   async configureAutostart(serverId: string, autoStartOnAppLaunch: boolean, autoStartOnBoot: boolean): Promise<AutomationConfigResult> {

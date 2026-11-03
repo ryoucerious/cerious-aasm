@@ -44,7 +44,6 @@ export class ArkApiPluginService {
   exportCloneFiles(instanceId: string): string {
     const base = this.cloneBase(instanceId);
     const zip = new AdmZip();
-    let total = 0;
     const add = (relative: string) => {
       const file = path.join(base, relative);
       if (!fs.existsSync(file)) return;
@@ -53,8 +52,6 @@ export class ArkApiPluginService {
       if (stat.isDirectory()) {
         for (const name of fs.readdirSync(file)) add(path.join(relative, name));
       } else if (stat.isFile()) {
-        total += stat.size;
-        if (total > 50 * 1024 * 1024) throw new Error('API files exceed the 50 MB clone transfer limit');
         zip.addFile(relative.replace(/\\/g, '/'), fs.readFileSync(file));
       }
     };
@@ -66,15 +63,12 @@ export class ArkApiPluginService {
   importCloneFiles(instanceId: string, data: string): void {
     const base = this.cloneBase(instanceId);
     const zip = new AdmZip(Buffer.from(data, 'base64'));
-    let total = 0;
     for (const entry of zip.getEntries()) {
       const name = entry.entryName.replace(/\\/g, '/');
       const parts = name.replace(/\/$/, '').split('/');
       if (!(name.startsWith('ArkApi/') || name === 'AsaApiLoader.exe')
         || parts.some(part => !part || part === '.' || part === '..' || /[<>:"|?*\x00-\x1f]|[. ]$/.test(part)
           || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(part))) throw new Error('Unsafe API clone archive');
-      total += entry.header.size;
-      if (total > 50 * 1024 * 1024) throw new Error('API files exceed the 50 MB clone limit');
       let target = base;
       for (const part of parts) {
         target = path.join(target, part);
@@ -154,6 +148,22 @@ export class ArkApiPluginService {
       throw new Error(`Plugin folder "${folderName}" not found.`);
     }
     fs.rmSync(targetDir, { recursive: true, force: true });
+  }
+
+  /**
+   * Uninstalls AsaApi: the loader, then the ArkApi folder with every plugin and its config. The
+   * loader goes first, so a folder that fails to go part way leaves a server that starts without
+   * the API rather than through a loader with half an API.
+   */
+  uninstallAsaApi(instanceId: string): void {
+    const win64 = this.cloneBase(instanceId);
+    const loader = path.join(win64, 'AsaApiLoader.exe');
+    const apiDir = path.join(win64, 'ArkApi');
+    for (const target of [loader, apiDir]) {
+      if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error('AsaApi paths must not contain links');
+    }
+    fs.rmSync(loader, { force: true });
+    fs.rmSync(apiDir, { recursive: true, force: true });
   }
 
   getLatestAsaApiRelease(): Promise<{ version: string; downloadUrl: string; name: string }> {

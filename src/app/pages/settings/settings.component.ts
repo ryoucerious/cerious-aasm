@@ -2,7 +2,7 @@ import { Component, ChangeDetectorRef, DestroyRef, OnInit, inject } from '@angul
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NgFor, NgIf, NgClass, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { Subscription, combineLatest } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { NotificationService } from '../../core/services/notification.service';
 import { IpcService } from '../../core/services/ipc.service';
@@ -10,6 +10,7 @@ import { WebSocketService } from '../../core/services/web-socket.service';
 import { INSTALL_TIMEOUT_MS, MessagingService } from '../../core/services/messaging/messaging.service';
 import { GlobalConfigService } from '../../core/services/global-config.service';
 import { LiveServersService } from '../../core/services/live-servers.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 import { ModalComponent } from '../../components/modal/modal.component';
 import { DrawerComponent } from '../../components/drawer/drawer.component';
 import { UsersSettingsComponent } from './users/users-settings.component';
@@ -226,6 +227,7 @@ export class SettingsPageComponent implements OnInit {
   private readonly auth = inject(AuthService);
   private readonly listPreferences = inject(ServerListPreferencesService);
   private readonly webSocket = inject(WebSocketService);
+  private readonly meshNodes = inject(MeshNodesService);
   private readonly destroyRef = inject(DestroyRef);
   private installSub?: Subscription;
   private arkInstallationRequest?: Subscription;
@@ -288,8 +290,10 @@ export class SettingsPageComponent implements OnInit {
       this.cdr.markForCheck();
     });
 
-    this.liveServers.servers$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(servers => {
-      this.hasRunningServers = servers.some(server => isBusyStatus(server.state));
+    // Only this machine's servers: an install replaces this machine's files, and a server running
+    // on another machine in the mesh holds none of them open.
+    combineLatest([this.liveServers.servers$, this.meshNodes.changed$]).pipe(takeUntilDestroyed(this.destroyRef)).subscribe(([servers]) => {
+      this.hasRunningServers = servers.some(server => this.meshNodes.isHere(server.nodeId) && isBusyStatus(server.state));
       this.cdr.markForCheck();
     });
 

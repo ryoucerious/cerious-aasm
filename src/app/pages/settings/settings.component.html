@@ -61,12 +61,12 @@
         </div>
         <div class="ark-install-notice warning" *ngIf="hasRunningServers">
           <i class="material-icons">warning</i>
-          Servers are running. Stop them all before installing or updating.
+          Servers on this machine are running. Stop them before installing or updating.
         </div>
 
         <div class="settings-card-actions">
           <button class="btn btn-primary" (click)="onInstallServer()" [disabled]="hasRunningServers"
-                  [title]="hasRunningServers ? 'Stop all servers (including any still shutting down) before installing or updating' : ''">
+                  [title]="hasRunningServers ? 'Stop the servers on this machine (including any still shutting down) before installing or updating' : ''">
             <i class="material-icons">download</i>
             {{ arkInstallation && !arkInstallation.installed ? 'Install ARK Server' : 'Update ARK Server' }}
           </button>

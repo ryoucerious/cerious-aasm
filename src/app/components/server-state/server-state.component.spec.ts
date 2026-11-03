@@ -60,9 +60,29 @@ describe('ServerStateComponent', () => {
 
   it('should not auto-scroll if user is not near bottom', fakeAsync(() => {
     const element = container(1000);
+    component.onScroll();
     show(['a', 'b', 'c'], ['a', 'b']);
     tick(50);
     expect(element.scrollTo).not.toHaveBeenCalled();
+  }));
+
+  // Measured after the lines landed, a burst this tall used to read as the user having scrolled up.
+  it('keeps following through a burst of output taller than the threshold', fakeAsync(() => {
+    const element = container(1000);
+    show(Array.from({ length: 50 }, (_, i) => `line ${i}`), ['a']);
+    tick(50);
+    expect(element.scrollTo).toHaveBeenCalledWith(0, 1000);
+  }));
+
+  it('follows again once the user scrolls back to the bottom', fakeAsync(() => {
+    const element = container(1000);
+    component.onScroll();
+    // A detached element cannot scroll, so its position is set by hand.
+    Object.defineProperty(element, 'scrollTop', { value: 900, writable: true });
+    component.onScroll();
+    show(['a', 'b', 'c'], ['a', 'b']);
+    tick(50);
+    expect(element.scrollTo).toHaveBeenCalled();
   }));
 
   it('keeps following the output once the buffer is full', fakeAsync(() => {

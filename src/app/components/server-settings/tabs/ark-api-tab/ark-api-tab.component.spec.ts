@@ -202,6 +202,27 @@ describe('ArkApiTabComponent', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it('uninstalls AsaApi once confirmed, then reloads the status and plugins', () => {
+    component.confirmUninstall();
+    expect(component.showConfirmUninstall).toBeTrue();
+
+    sendMessage.and.returnValue(of({ success: true }));
+    component.doUninstall();
+
+    expect(component.showConfirmUninstall).toBeFalse();
+    expect(component.uninstalling).toBeFalse();
+    expect(sendMessage).toHaveBeenCalledWith('uninstall-asaapi', { instanceId: 'test-server-1' });
+    expect(sendMessage).toHaveBeenCalledWith('get-asaapi-status', { instanceId: 'test-server-1' });
+    expect(sendMessage).toHaveBeenCalledWith('list-ark-api-plugins', { instanceId: 'test-server-1' });
+    expect(mockNotification.success).toHaveBeenCalled();
+  });
+
+  it('reports an uninstall the server refused', () => {
+    sendMessage.and.returnValue(of({ success: false, error: 'Stop the server before uninstalling AsaApi.' }));
+    component.doUninstall();
+    expect(mockNotification.error as jasmine.Spy).toHaveBeenCalledWith('Stop the server before uninstalling AsaApi.', 'AsaApi');
+  });
+
   it('should install plugin from URL', () => {
     component.pluginInstallUrl = 'http://plugin.zip';
     sendMessage.and.returnValue(of({ success: true }));

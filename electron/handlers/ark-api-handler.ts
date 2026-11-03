@@ -59,6 +59,11 @@ onRequest('remove-ark-api-plugin', (payload, { sender }) => {
   return arkApi(instanceId, 'remove', { folderName }, sender);
 });
 
+onRequest('uninstall-asaapi', (payload, { sender }) => {
+  if (!validateInstanceId(payload.instanceId)) return INVALID_ID;
+  return arkApi(payload.instanceId, 'uninstall', {}, sender);
+});
+
 onRequest('get-asaapi-latest', async () => {
   const release = await arkApiPluginService.getLatestAsaApiRelease();
   return { success: true, ...release };

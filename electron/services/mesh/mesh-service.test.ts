@@ -2685,11 +2685,11 @@ describe('MeshService', () => {
     it('says why the host could not make an ArkApi change', async () => {
       await place('isle', LOCAL);
       await service.resumeIfJoined();
-      jest.mocked(runArkApiAction).mockResolvedValue({ success: false, error: 'That ZIP is larger than 50 MB.' });
+      jest.mocked(runArkApiAction).mockResolvedValue({ success: false, error: 'Not a ZIP file' });
 
       const result = await service.executeLocalCommand(command('ark-api', { action: 'install-zip', zipData: 'x' }));
 
-      expect(result).toMatchObject({ success: false, error: 'That ZIP is larger than 50 MB.' });
+      expect(result).toMatchObject({ success: false, error: 'Not a ZIP file' });
     });
 
     it('saves an INI file on the host and records the merged config', async () => {

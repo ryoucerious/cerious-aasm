@@ -134,6 +134,7 @@ export const CHANNEL_PERMISSIONS: Record<string, ChannelRule> = {
   'get-asaapi-latest': PERMISSIONS.MODS_MANAGE,
   'list-ark-api-plugins': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'download-asaapi': byInstanceId(PERMISSIONS.MODS_MANAGE),
+  'uninstall-asaapi': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'remove-ark-api-plugin': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'install-plugin-from-zip': byInstanceId(PERMISSIONS.MODS_MANAGE),
   'install-plugin-from-url': byInstanceId(PERMISSIONS.MODS_MANAGE),

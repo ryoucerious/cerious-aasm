@@ -79,7 +79,7 @@ describe('channel-permissions', () => {
       'start-backup-scheduler': 'instanceId', 'stop-backup-scheduler': 'instanceId', 'get-scheduler-status': 'instanceId',
       'download-backup': 'instanceId',
       'get-asaapi-status': 'instanceId', 'list-ark-api-plugins': 'instanceId', 'remove-ark-api-plugin': 'instanceId',
-      'download-asaapi': 'instanceId', 'install-plugin-from-zip': 'instanceId', 'install-plugin-from-url': 'instanceId',
+      'download-asaapi': 'instanceId', 'uninstall-asaapi': 'instanceId', 'install-plugin-from-zip': 'instanceId', 'install-plugin-from-url': 'instanceId',
       'load-whitelist': 'instanceId', 'add-to-whitelist': 'instanceId', 'remove-from-whitelist': 'instanceId',
       'clear-whitelist': 'instanceId',
       'configure-autostart': 'serverId', 'configure-crash-detection': 'serverId', 'configure-discord-webhook': 'serverId',

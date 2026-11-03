@@ -14,6 +14,7 @@ import { ServerInstance } from '../../core/models/server-instance.model';
 import { GlobalConfig } from '../../core/interfaces/global-config.interface';
 import { ServerListPreferencesService } from '../../core/services/server-list-preferences.service';
 import { AuthService } from '../../core/services/auth.service';
+import { MeshNodesService } from '../../core/services/mesh-nodes.service';
 
 describe('SettingsPageComponent', () => {
   let component: SettingsPageComponent;
@@ -25,6 +26,7 @@ describe('SettingsPageComponent', () => {
   let config: { config$: Subject<Partial<GlobalConfig>>; savedPorts: number[] };
   let connected$: BehaviorSubject<boolean>;
   let servers$: BehaviorSubject<ServerInstance[]>;
+  let meshNodes: { changed$: BehaviorSubject<void>; here: string | null; isHere: (nodeId?: string | null) => boolean };
   let ipc: { isElectron: boolean; versions: { node: string; electron: string; chrome: string } | null };
 
   const sent = (channel: string) => messaging.sendMessage.calls.allArgs().filter(([name]) => name === channel);
@@ -48,6 +50,7 @@ describe('SettingsPageComponent', () => {
     connected$ = new BehaviorSubject(false);
     Object.defineProperty(config, 'webServerPort', { set: (port: number) => config.savedPorts.push(port), get: () => 3000 });
     servers$ = new BehaviorSubject<ServerInstance[]>([]);
+    meshNodes = { changed$: new BehaviorSubject<void>(undefined), here: null, isHere: nodeId => !nodeId || !meshNodes.here || nodeId === meshNodes.here };
     ipc = { isElectron: false, versions: null };
 
     await TestBed.configureTestingModule({
@@ -58,6 +61,7 @@ describe('SettingsPageComponent', () => {
         { provide: GlobalConfigService, useValue: config },
         { provide: WebSocketService, useValue: { connected$: connected$.asObservable() } },
         { provide: LiveServersService, useValue: { servers$: servers$.asObservable() } },
+        { provide: MeshNodesService, useValue: meshNodes },
         { provide: IpcService, useValue: ipc }
       ],
       schemas: [NO_ERRORS_SCHEMA]
@@ -238,6 +242,17 @@ describe('SettingsPageComponent', () => {
     expect(component.hasRunningServers).toBeTrue();
     servers$.next([{ id: 'a', name: 'A', state: 'stopped' }, { id: 'b', name: 'B', state: 'crashed' }]);
     expect(component.hasRunningServers).toBeFalse();
+  });
+
+  it('lets this machine install while servers run on other machines in the mesh', () => {
+    fixture.detectChanges();
+    servers$.next([{ id: 'a', name: 'A', state: 'running', nodeId: 'other' }, { id: 'b', name: 'B', state: 'stopped', nodeId: 'me' }]);
+    expect(component.hasRunningServers).toBeTrue();
+    meshNodes.here = 'me';
+    meshNodes.changed$.next();
+    expect(component.hasRunningServers).toBeFalse();
+    servers$.next([{ id: 'a', name: 'A', state: 'running', nodeId: 'other' }, { id: 'b', name: 'B', state: 'starting', nodeId: 'me' }]);
+    expect(component.hasRunningServers).toBeTrue();
   });
 
   it('shows the settings once GlobalConfigService knows them, however late', () => {

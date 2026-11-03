@@ -303,6 +303,24 @@ describe('ArkApiPluginService', () => {
     });
   });
 
+  describe('uninstallAsaApi', () => {
+    it('deletes the loader and the ArkApi folder, plugins included, and leaves the game alone', () => {
+      const win64 = path.join(tmpDir, 'inst1', 'ShooterGame', 'Binaries', 'Win64');
+      fs.mkdirSync(path.join(pluginDir, 'Permissions'), { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, 'Permissions', 'config.json'), '{}');
+      fs.writeFileSync(path.join(win64, 'AsaApiLoader.exe'), 'exe');
+      fs.writeFileSync(path.join(win64, 'ArkAscendedServer.exe'), 'game');
+
+      service.uninstallAsaApi('inst1');
+
+      expect(fs.readdirSync(win64)).toEqual(['ArkAscendedServer.exe']);
+    });
+
+    it('does nothing to a server without AsaApi', () => {
+      expect(() => service.uninstallAsaApi('inst1')).not.toThrow();
+    });
+  });
+
   describe('downloadAsaApi', () => {
     it('extracts AsaApi into the instance Win64 folder and removes the download', async () => {
       const zip = new AdmZip();

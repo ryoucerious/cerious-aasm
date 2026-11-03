@@ -24,6 +24,12 @@ export interface ServerAutomation {
   scheduledRestartTimer?: NodeJS.Timeout;
   restartAttempts: number;
   lastCrashTime?: Date;
+  /** A check due soon after a crash, or after the backoff of a failure that is not the server's. */
+  crashRetryTimer?: NodeJS.Timeout;
+  /** Restarts in a row after failures that were not the server's (mods CurseForge could not serve). */
+  recoverableRetries?: number;
+  /** The last crash was such a failure: its restart does not use up an attempt. */
+  recoverableCrash?: boolean;
   manuallyStopped: boolean;
   status: {
     isMonitoring: boolean;

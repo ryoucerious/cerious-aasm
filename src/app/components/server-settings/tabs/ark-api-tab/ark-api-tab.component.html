@@ -28,6 +28,11 @@
           <i class="material-icons">download</i>
           {{ installing ? 'Installing...' : 'Install / Update AsaApi' }}
         </button>
+        <button *ngIf="asaApiInstalled" class="btn btn-ghost" style="color:var(--danger);"
+                (click)="confirmUninstall()" [disabled]="uninstalling || installing">
+          <i class="material-icons">delete_forever</i>
+          {{ uninstalling ? 'Uninstalling...' : 'Uninstall AsaApi' }}
+        </button>
         <span *ngIf="latestVersion" style="color:var(--text-secondary);font-size:0.85rem;">
           Latest: <strong>{{ latestVersion }}</strong>
         </span>
@@ -128,6 +133,21 @@
   </div>
 
 </div>
+
+<app-modal [show]="showConfirmUninstall" [title]="'Uninstall AsaApi'" (close)="cancelUninstall()">
+  <div>
+    <p>Are you sure you want to uninstall AsaApi from this server?</p>
+    <p style="color:var(--text-secondary);font-size:0.85rem;">
+      This permanently deletes <code>AsaApiLoader.exe</code> and the whole <code>ArkApi</code> folder,
+      including {{ plugins.length === 1 ? '1 installed plugin' : plugins.length + ' installed plugins' }} and their configs.
+      The server must be stopped. It will start without the API afterwards.
+    </p>
+    <div class="action-group-modal" style="margin-top:1rem;">
+      <button class="btn" (click)="cancelUninstall()">Cancel</button>
+      <button class="btn" style="background:var(--danger);" (click)="doUninstall()">Uninstall</button>
+    </div>
+  </div>
+</app-modal>
 
 <app-modal [show]="showConfirmRemove" [title]="'Remove Plugin'" (close)="cancelRemove()">
   <div>

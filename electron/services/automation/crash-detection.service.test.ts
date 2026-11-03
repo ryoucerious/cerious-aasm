@@ -13,12 +13,15 @@ jest.mock('../server-instance/server-process.service', () => ({
 }));
 jest.mock('../discord.service', () => ({ discordService: { sendNotification: jest.fn() } }));
 jest.mock('../../utils/ark/instance.utils', () => ({ getInstance: jest.fn(), saveInstance: jest.fn() }));
+jest.mock('../../utils/ark/ark-server/ark-server-paths.utils', () => ({ getInstanceLogsDir: jest.fn(() => '/logs') }));
+jest.mock('../../utils/ark/ark-server/ark-server-logging.utils', () => ({ readLogTail: jest.fn(() => []) }));
 
 const { serverInstanceService } = jest.requireMock('../server-instance/server-instance.service');
 const { getStandardEventCallbacks } = jest.requireMock('../server-instance/instance-events');
 const { serverProcessService } = jest.requireMock('../server-instance/server-process.service');
 const { discordService } = jest.requireMock('../discord.service');
 const { getInstance, saveInstance } = jest.requireMock('../../utils/ark/instance.utils');
+const { readLogTail } = jest.requireMock('../../utils/ark/ark-server/ark-server-logging.utils');
 
 function makeAutomation(overrides: Partial<ServerAutomation['settings']> = {}): ServerAutomation {
   return {
@@ -48,6 +51,8 @@ describe('CrashDetectionService', () => {
 
   beforeEach(() => {
     jest.useFakeTimers();
+    getInstance.mockReset();
+    readLogTail.mockReset().mockReturnValue([]);
     automations = new Map();
     service = new CrashDetectionService(automations);
     serverInstanceService.startServerInstance.mockResolvedValue({ started: true, instanceId: 'id' });
@@ -232,5 +237,69 @@ describe('CrashDetectionService', () => {
 
     await expect(service['checkForCrash']('id')).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalled();
+  });
+
+  describe('handleCrash', () => {
+    it('restarts a crashed server within seconds, not on the next poll', async () => {
+      automations.set('id', makeAutomation({ crashDetectionInterval: 300 }));
+      service.startCrashDetection('id');
+      crashed();
+
+      service.handleCrash('id');
+      await jest.advanceTimersByTimeAsync(5000);
+
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(1);
+    });
+
+    // The incident: crash detection on in config.json, set there without configure-crash-detection.
+    it('takes crash detection from config.json and arms it when this run never did', async () => {
+      getInstance.mockReturnValue({ id: 'id', crashDetectionEnabled: true, crashDetectionInterval: 300, maxRestartAttempts: 3 });
+      crashed();
+
+      service.handleCrash('id');
+      expect(automations.get('id')!.status.isMonitoring).toBe(true);
+      await jest.advanceTimersByTimeAsync(5000);
+
+      expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a server alone when config.json has crash detection off', async () => {
+      automations.set('id', makeAutomation());
+      getInstance.mockReturnValue({ id: 'id', crashDetectionEnabled: false });
+      crashed();
+
+      service.handleCrash('id');
+      await jest.advanceTimersByTimeAsync(600_000);
+
+      expect(serverInstanceService.startServerInstance).not.toHaveBeenCalled();
+    });
+
+    it('keeps retrying a CurseForge mod failure with a backoff, without using up attempts', async () => {
+      automations.set('id', makeAutomation({ maxRestartAttempts: 1, crashDetectionInterval: 300 }));
+      service.startCrashDetection('id');
+      readLogTail.mockReturnValue(['LowLevelFatalError [ShooterGameInstance.cpp] Requested mods failed to load on server.']);
+      crashed();
+
+      for (const delay of [60_000, 120_000, 300_000, 600_000, 600_000]) {
+        const before = serverInstanceService.startServerInstance.mock.calls.length;
+        service.handleCrash('id');
+        await jest.advanceTimersByTimeAsync(delay - 1);
+        expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(before);
+        await jest.advanceTimersByTimeAsync(1);
+        expect(serverInstanceService.startServerInstance).toHaveBeenCalledTimes(before + 1);
+      }
+      expect(automations.get('id')!.restartAttempts).toBe(0);
+    });
+
+    it('logs why a crashed server is not restarted', async () => {
+      const automation = makeAutomation();
+      automation.manuallyStopped = true;
+      automations.set('id', automation);
+      crashed();
+
+      await service['checkForCrash']('id');
+
+      expect(console.log).toHaveBeenCalledWith('[crash-detection] Not restarting id yet: it was stopped by hand');
+    });
   });
 });

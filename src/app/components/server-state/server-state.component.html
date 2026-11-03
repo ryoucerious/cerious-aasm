@@ -12,7 +12,7 @@
     <p class="section-desc">{{ serverMessage || 'Live output from the running server.' }}</p>
 
     <div class="form-group span-all">
-      <div class="console-log-container" #logContainer>
+      <div class="console-log-container" #logContainer (scroll)="onScroll()">
         <ng-container *ngIf="logs && logs.length; else noLogs">
           <div class="console-log-line" *ngFor="let line of logs">
             {{ line }}

@@ -2,6 +2,28 @@
 
 All notable changes to Cerious AASM (ARK: Survival Ascended Server Manager) will be documented in this file.
 
+## [1.3.4] - 2026-11-02
+
+Uninstall AsaApi from a server, crash recovery that no longer misses a map that dies at startup, and a new mesh machine that can install ARK while the rest of the mesh keeps running.
+
+> **Upgrading.**
+>
+> - Update every machine in a mesh to the same version.
+> - Uninstalling AsaApi deletes the server's whole `ArkApi` folder, plugins and their configs included. Take a backup first if you may want them back.
+
+### New Features & Improvements
+
+- **Uninstall AsaApi**: The ArkApi tab has an **Uninstall AsaApi** button once AsaApi is installed. After a confirmation that names how many plugins go with it, it deletes `AsaApiLoader.exe` and the whole `ArkApi` folder, and the server starts on `ArkAscendedServer.exe` again. The server must be stopped first. It works for a server on any machine in the mesh, and needs the Manage mods permission.
+- **Crash Recovery Retries CurseForge Outages**: A server that exits because CurseForge could not list its mods (`Requested mods failed to load`, `serverUnreachable`) is restarted after 1, 2, 5 and then every 10 minutes for as long as CurseForge is down. These restarts do not count towards the maximum restart attempts.
+- **Crash Recovery Explains Itself**: Every time a crashed server is not restarted, the log says why: stopped by hand, server files updating, a restart already under way, waiting out a retry, or crash detection off.
+
+### Bug Fixes
+
+- **Crash Detection Missed Crashes**: A crash was only noticed on the next check, up to 5 minutes later, and a server whose settings reached `config.json` without the Automation page (moved from another machine, saved on a mesh peer, cloned or restored) could show crash detection on with nothing watching it. Crash detection now acts within seconds of the exit, reads the server's settings from `config.json` at that moment, and starts watching the server if it was not already.
+- **New Mesh Machine Could Not Install ARK**: Settings → ARK Installation refused to install or update while any server in the mesh was running, including servers on other machines, so a new member had to leave the mesh to install ARK. It now counts only this machine's servers.
+- **Console Stopped Following the Log**: The Console decided whether to keep scrolling after new lines arrived, so a burst of output, or opening the page on a full log, read as the user having scrolled up and the view stopped following for good. It now follows until you scroll up, and again once you scroll back to the bottom.
+- **Large Plugins Refused**: Plugin ZIPs and the ArkApi files copied when cloning a server were capped at 50 MB, so a large plugin, or a server with many plugins, could not be installed or cloned. The cap is gone. Clone archives are still limited to ArkApi files and the loader, and unsafe paths and linked folders are still refused.
+
 ## [1.3.3] - 2026-10-21
 
 Smaller backups of long-running maps, scheduled backups that take turns, and backups that no longer fail when ARK rotates a world save.

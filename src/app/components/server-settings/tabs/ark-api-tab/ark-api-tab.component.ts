@@ -40,6 +40,9 @@ export class ArkApiTabComponent implements OnChanges, OnDestroy {
   checkingLatest = false;
   installing = false;
 
+  showConfirmUninstall = false;
+  uninstalling = false;
+
   showConfirmRemove = false;
   pluginToRemove: PluginInfo | null = null;
 
@@ -101,6 +104,8 @@ export class ArkApiTabComponent implements OnChanges, OnDestroy {
     this.installing = false;
     this.installingFromUrl = false;
     this.installingFromZip = false;
+    this.uninstalling = false;
+    this.cancelUninstall();
     this.cancelRemove();
     this.loadPlugins();
     this.refreshAsaApiStatus();
@@ -165,6 +170,43 @@ export class ArkApiTabComponent implements OnChanges, OnDestroy {
       error: () => {
         this.installing = false;
         this.notification.error('Installation failed.', 'AsaApi');
+        this.cdr.markForCheck();
+      },
+    }));
+  }
+
+  confirmUninstall() {
+    this.showConfirmUninstall = true;
+    this.cdr.markForCheck();
+  }
+
+  cancelUninstall() {
+    this.showConfirmUninstall = false;
+    this.cdr.markForCheck();
+  }
+
+  /** Deletes AsaApiLoader.exe and the whole ArkApi folder, plugins and their configs included. */
+  doUninstall() {
+    const instanceId = this.serverInstance?.id;
+    this.cancelUninstall();
+    if (!instanceId) return;
+    this.uninstalling = true;
+    this.cdr.markForCheck();
+    this.serverActions.add(this.messaging.sendMessage<ActionReply>('uninstall-asaapi', { instanceId }).subscribe({
+      next: res => {
+        this.uninstalling = false;
+        if (res?.success) {
+          this.notification.success('AsaApi uninstalled. The server now starts without it.', 'AsaApi');
+          this.loadPlugins();
+          this.refreshAsaApiStatus();
+        } else {
+          this.notification.error(res?.error || 'Failed to uninstall AsaApi.', 'AsaApi');
+        }
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.uninstalling = false;
+        this.notification.error('Failed to uninstall AsaApi.', 'AsaApi');
         this.cdr.markForCheck();
       },
     }));

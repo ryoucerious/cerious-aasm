@@ -1,13 +1,11 @@
 import { arkApiPluginService } from './ark-api-plugin.service';
 import { isAsaApiLoaderInstalled } from '../utils/ark/ark-server/ark-server-paths.utils';
+import { getNormalizedInstanceState } from '../utils/ark/ark-server/ark-server-state.utils';
 
 /** What the ArkApi tab can ask of a server's machine. */
-export type ArkApiAction = 'status' | 'list' | 'remove' | 'install-zip' | 'install-url' | 'download-asaapi' | 'clone-export' | 'clone-import';
+export type ArkApiAction = 'status' | 'list' | 'remove' | 'install-zip' | 'install-url' | 'download-asaapi' | 'clone-export' | 'clone-import' | 'uninstall';
 
 const READ_ONLY: ReadonlySet<string> = new Set<ArkApiAction>(['status', 'list', 'clone-export']);
-
-/** Far above any plugin: a cap on what a client can make a machine decode and unpack. */
-const MAX_PLUGIN_ZIP_BYTES = 50 * 1024 * 1024;
 
 /** Reads go to another machine as a query; changes as a command, which the mesh logs. */
 export function isReadOnlyArkApiAction(action: string): boolean {
@@ -22,12 +20,9 @@ export async function runArkApiAction(instanceId: string, action: ArkApiAction, 
   switch (action) {
     case 'clone-export':
       return { success: true, zipData: arkApiPluginService.exportCloneFiles(instanceId) };
-    case 'clone-import': {
-      const zipData = String(args.zipData ?? '');
-      if (zipData.length * 3 / 4 > MAX_PLUGIN_ZIP_BYTES) throw new Error('API files exceed the 50 MB clone limit');
-      arkApiPluginService.importCloneFiles(instanceId, zipData);
+    case 'clone-import':
+      arkApiPluginService.importCloneFiles(instanceId, String(args.zipData ?? ''));
       return { success: true };
-    }
     case 'status': {
       const installed = isAsaApiLoaderInstalled(instanceId);
       return { success: true, installed, loaderExe: installed ? 'AsaApiLoader.exe' : null };
@@ -39,15 +34,21 @@ export async function runArkApiAction(instanceId: string, action: ArkApiAction, 
       arkApiPluginService.removePlugin(instanceId, folderName);
       return { success: true, folderName };
     }
-    case 'install-zip': {
-      const zipData = String(args.zipData ?? '');
-      if ((zipData.length * 3) / 4 > MAX_PLUGIN_ZIP_BYTES) return { success: false, error: 'That ZIP is larger than 50 MB.' };
-      arkApiPluginService.installPluginFromZipData(instanceId, zipData);
+    case 'install-zip':
+      arkApiPluginService.installPluginFromZipData(instanceId, String(args.zipData ?? ''));
       return { success: true };
-    }
     case 'install-url':
       await arkApiPluginService.installPluginFromUrl(instanceId, String(args.url ?? ''));
       return { success: true };
+    case 'uninstall': {
+      // A running server holds the API's DLLs open: the delete would stop part way.
+      const state = getNormalizedInstanceState(instanceId);
+      if (state !== 'stopped' && state !== 'crashed' && state !== 'error') {
+        return { success: false, error: 'Stop the server before uninstalling AsaApi.' };
+      }
+      arkApiPluginService.uninstallAsaApi(instanceId);
+      return { success: true };
+    }
     case 'download-asaapi':
       await arkApiPluginService.downloadAsaApi(instanceId, String(args.downloadUrl ?? ''));
       return { success: true };
